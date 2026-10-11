@@ -703,6 +703,12 @@ All entries are dated 2026-10-10; exact times are unproven unless noted. Full de
   - Result: D1 resolved
   - Evidence: This file, decisions #47–#48
   - Basis: Source-observed
+- **2026-10-11T23:55+00:00**
+  - Actor: Agent
+  - Activity: Phase 0.2: `git init`, first commit `1838513` (docs), public remote `JMLegere/universal-inbox`, `main` and `dev` pushed
+  - Result: Phase 0 complete
+  - Evidence: https://github.com/JMLegere/universal-inbox; `git ls-remote --heads origin`
+  - Basis: Source-observed
 
 ## 9. Sources and coverage check
 
