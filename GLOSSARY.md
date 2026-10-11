@@ -1,0 +1,60 @@
+# Universal Inbox
+
+A single-user console that tracks who owes whom what across Jeremy's professional messaging Platforms, modelled on Plain's thread queue.
+
+## Communication
+
+**Thread**:
+The unit of work, as in Plain: an email thread, or a time-based group of Slack messages (same sender within 2 hours, different senders within 1 hour).
+_Avoid_: Conversation, Ticket, Loop
+
+**Activity**:
+A timestamped, never-rewritten record of something that happened in a Thread, such as a message received or sent, an edit, a deletion, or a Status change.
+_Avoid_: Event, Interaction, Message (when meaning the record)
+
+**Case**:
+An optional grouping of Threads that serve one need across Platforms; it has no Status of its own.
+_Avoid_: Commitment, Issue, Project
+
+## Triage
+
+**Status**:
+Where a Thread stands, as in Plain: Todo (Needs first response, Needs next response, Investigating), Snoozed (Waiting for them, Paused for later), or Done (Done, Ignored).
+_Avoid_: State, Stage
+
+**Ignored**:
+A Done Status for noise that does not move when new messages arrive, until Jeremy un-ignores it.
+_Avoid_: Dismissed, Archived
+
+**Blocked**:
+A flag on a sending address (an email address or a Slack user) that makes new Threads from it start as Ignored; blocking a Person blocks all their addresses.
+_Avoid_: Spam, Blacklisted, Screened out, Ignored (for senders)
+
+**Triage**:
+Working the Todo queue.
+_Avoid_: Inbox zero, Processing
+
+## People
+
+**Person**:
+An individual Jeremy exchanges messages with: a Slack user and/or a set of email addresses.
+_Avoid_: Contact, Customer, User
+
+
+**Organization**:
+A company or group that Persons belong to.
+_Avoid_: Account, Company, Tenant
+
+## Sources
+
+**Platform**:
+The medium a message travels through, such as email, Slack, WhatsApp, LinkedIn, or tool comments.
+_Avoid_: Medium, Channel (when meaning the medium), Provider
+
+**Channel**:
+A container of Threads on a Platform, such as a Slack channel or DM.
+_Avoid_: Space, Room, Inbox
+
+**Connection**:
+One connected account on a Platform, such as one Gmail mailbox or one Slack workspace.
+_Avoid_: Source, Account, Integration
