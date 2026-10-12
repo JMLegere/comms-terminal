@@ -379,6 +379,12 @@ def _company_domains(db, person_id, automated: bool = False) -> set[str]:
         if bool(AUTOMATED.match(r[0])) == automated and r[0].rsplit("@", 1)[1] not in FREE_MAIL}
 
 
+def _matches(key: str, mine: set[str], theirs: set[str], automated: bool) -> bool:
+    """The same-person rule (#117) once a name key matches: people need a full name (two words or more) and a
+    shared company organization; automated senders a shared sender organization."""
+    return bool(key) and (automated or len(key.split()) >= 2) and bool(mine & theirs)
+
+
 def _same_person(db, name: str, value: str, kind: str) -> int | None:
     """The existing Person this sender is (#117): the same name and the same organization. For people, a full
     name (two words or more) and a company domain; for automated senders (noreply, notifications, …) the same
@@ -389,10 +395,11 @@ def _same_person(db, name: str, value: str, kind: str) -> int | None:
         return None
     automated = bool(AUTOMATED.match(value))
     domain = value.rsplit("@", 1)[1]
-    if domain in FREE_MAIL or (not automated and len(key.split()) < 2):
+    if domain in FREE_MAIL:
         return None
     for p in db.execute("SELECT id, display_name FROM persons").fetchall():
-        if _name_key(p["display_name"]) == key and _org(domain) in _company_domains(db, p["id"], automated):
+        if _name_key(p["display_name"]) == key and _matches(key, {_org(domain)}, _company_domains(db, p["id"], automated),
+                                                            automated):
             return p["id"]
     return None
 
@@ -431,12 +438,11 @@ def merge_duplicates(db) -> list[tuple[str, str]]:
     gone = set()
     for i, a in enumerate(people):
         for b in people[i + 1:]:
-            if a["id"] in gone or b["id"] in gone or _name_key(a["display_name"]) != _name_key(b["display_name"]):
+            key = _name_key(a["display_name"])
+            if a["id"] in gone or b["id"] in gone or key != _name_key(b["display_name"]):
                 continue
-            people_match = (len(_name_key(a["display_name"]).split()) >= 2
-                            and _company_domains(db, a["id"]) & _company_domains(db, b["id"]))
-            senders_match = _company_domains(db, a["id"], True) & _company_domains(db, b["id"], True)
-            if people_match or senders_match:
+            if any(_matches(key, _company_domains(db, a["id"], auto), _company_domains(db, b["id"], auto), auto)
+                   for auto in (False, True)):
                 merge_persons(db, a["id"], b["id"])
                 gone.add(b["id"])
                 merged.append((a["display_name"], b["display_name"]))
