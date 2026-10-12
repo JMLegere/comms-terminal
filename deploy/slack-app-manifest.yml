@@ -1,0 +1,45 @@
+# Slack app for Universal Inbox (Plain's model: a bot in selected channels, plus Jeremy's user token for DMs
+# and replies). Create it at https://api.slack.com/apps → Create New App → From a manifest, then install it
+# with scripts/oauth_slack.py (docs/runbook.md §3). Scopes match scripts/oauth_slack.py.
+display_information:
+  name: Universal Inbox
+  description: Jeremy's single inbox for email and Slack.
+features:
+  bot_user:
+    display_name: Universal Inbox
+    always_online: false
+oauth_config:
+  redirect_urls:
+    - https://hooks.agentmaple.com/slack/oauth
+  scopes:
+    bot:
+      - channels:history
+      - groups:history
+      - channels:read
+      - groups:read
+      - users:read
+      - users:read.email
+    user:
+      - im:history
+      - mpim:history
+      - im:read
+      - mpim:read
+      - channels:read
+      - groups:read
+      - chat:write
+      - users:read
+      - users:read.email
+settings:
+  event_subscriptions:
+    request_url: https://hooks.agentmaple.com/hooks/slack
+    bot_events:
+      - message.channels
+      - message.groups
+      - tokens_revoked
+      - app_uninstalled
+    user_events:
+      - message.im
+      - message.mpim
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false

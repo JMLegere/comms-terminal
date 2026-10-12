@@ -3,7 +3,7 @@
 ## 1. Document control
 
 - **Title**: Universal Inbox MVP (Gmail + Slack)
-- **Status**: **Draft (revision 3).** This revision adopts Plain's status model and integration architecture and adds replying from the console (decisions #51–#56). Behavior follows Plain unless a deviation is stated with its reason. The technical design in §4–§5 is **Approved** (D1, decision #67). Each phase needs its own implementation authorization; connecting is blocked on D3 (§6). D2 is resolved (SSH, #71).
+- **Status**: **Draft (revision 3).** This revision adopts Plain's status model and integration architecture and adds replying from the console (decisions #51–#56). Behavior follows Plain unless a deviation is stated with its reason. The technical design in §4–§5 is **Approved** (D1, decision #67). Each phase needs its own implementation authorization. D2 is resolved (SSH, #71); D3 is resolved (Cloudflare Tunnel, Email Routing with an Email Worker, Resend; #102). Phases 0–5 and the 6.1 and 6.3 builds are done; 6.2 and 6.4 are Jeremy's connect steps in `docs/runbook.md`.
 - **Owner / authority**: Jeremy Legere (single user and product owner)
 - **Created**: 2026-10-10T20:04+00:00
 - **Updated**: 2026-10-12T00:38+00:00
@@ -400,13 +400,13 @@ Design: `docs/design/console.md` (approved). Verify each step with Textual's tes
 
 ### Phase 6 — Package and demo
 
-- **6.1 `deploy/universal-inbox.service` plus a credential runbook.**
-  - Authorization: point-of-risk approval to install the system unit.
-- **6.2 Set up the ingress and mail services per D3.** The console needs only SSH (D2).
-  - Authorization: point-of-risk approval for each external account, DNS record, and routing rule.
-- **6.3 Build demo on synthetic data.**
+- **6.1 `deploy/universal-inbox.service` plus a credential runbook.** **Built** 2026-10-12: unit (`systemd-analyze verify` clean), `docs/runbook.md`, package installed with `uv tool install`.
+  - Authorization: point-of-risk approval to install the system unit. Installing needs `sudo`; Jeremy runs runbook §3–§4.
+- **6.2 Set up the ingress and mail services per D3.** The console needs only SSH (D2). **Built** 2026-10-12: `deploy/cloudflared/config.yml`, `deploy/email-worker/` (checked against the real hook by `tests/test_email_worker.py`), `deploy/slack-app-manifest.yml`, runbook §6.
+  - Authorization: point-of-risk approval for each external account, DNS record, and routing rule. Jeremy performs them (runbook §6); none has been made.
+- **6.3 Build demo on synthetic data.** **Built** 2026-10-12: `scripts/demo.py` runs the real hooks server and reply socket with demo credentials, signed fixture requests over HTTP, and fake Resend and Slack endpoints; 7/7 scenarios pass (`tests/test_demo.py`).
   - Walk AS-1, AS-3, AS-4, AS-6, AS-11, AS-13, and AS-17 using fixture-fed channels and fake send endpoints.
-  - Exit: Jeremy accepts.
+  - Exit: Jeremy accepts (`uv run python scripts/demo.py --step --keep`, runbook §7).
 - **6.4 After the build, Jeremy connects real accounts** (FR-1), then checks health on live data.
 - **Rollback.** Stop the service and remove the Workspace routing rule. Gmail keeps every message; Slack keeps every message.
 
@@ -416,9 +416,7 @@ Design: `docs/design/console.md` (approved). Verify each step with Textual's tes
   - Approved 2026-10-11 (#47); reopened by #53 and #55; re-approved 2026-10-12 (#67).
   - Owner: Jeremy. Blocks: no.
 - **D2: Console access path.** **Resolved** 2026-10-12: SSH to Workbox (decision #71).
-- **D3: Ingress, inbound mail service, and outbound mail provider.**
-  - Outbound provider: **Resend** (decision #70). Still open: ingress (Cloudflare Tunnel candidate) and inbound mail service (Cloudflare Email Routing with an Email Worker candidate). Constraint: $10/month.
-  - Owner: Jeremy. Blocks: connecting, not building.
+- **D3: Ingress, inbound mail service, and outbound mail provider.** **Resolved** 2026-10-12 (decision #102): Cloudflare Tunnel at `hooks.agentmaple.com`; Cloudflare Email Routing for `inbox.agentmaple.com` with an Email Worker (`deploy/email-worker/`); Resend for sending (#70). All free tiers, within $10/month.
 - **Open: BCC console replies to Jeremy's own address** so Gmail Sent stays complete (Plain's BCC feature). The copy arrives back through forwarding and is deduplicated by `Message-ID`.
   - Owner: Jeremy. Blocks: no.
 - **R1: Triage load with time-based grouping and DMs is unmeasured.**
@@ -800,6 +798,10 @@ All entries are dated 2026-10-10; exact times are unproven unless noted. Full de
   - Request / decision: Bcc on email replies is deferred. It needs the reply contract changed end to end (socket `POST /reply`, `inbox.reply`, the `Sender` protocol, `EmailSender`, `SlackSender`)
   - Source: Jeremy, "defer bcc, approved" (2026-10-12), which also approved decisions #88–#100
   - Status: Deferred
+- **102**
+  - Request / decision: D3 resolved: Cloudflare Tunnel publishes only `/hooks/email` and `/hooks/slack` at `hooks.agentmaple.com`; Cloudflare Email Routing receives `inbox.agentmaple.com` (apex MX stays Google) and an Email Worker signs and posts each raw message; Gmail forwards a copy there. Resend sends (#70)
+  - Source: Jeremy, ask tool answers 2026-10-12 (Cloudflare Tunnel; CF Email Routing + Worker; hooks. + inbox.)
+  - Status: Accepted
 
 ## 8. Work log
 
@@ -905,6 +907,12 @@ All entries are dated 2026-10-10; exact times are unproven unless noted. Full de
   - Result: `uv run pytest` → 60 passed. Mutation checks on queue refresh and reply-all prefill each fail a test. Real terminal: queue and Thread render; `j`/`k` and cursor restore work. Service smoke test: Slack `url_verification` 200, signed email 204, bad signature 401, socket mode 0600
   - Evidence: `uv run pytest -q`; screenshots in the session scratchpad
   - Basis: Source-observed
+- **2026-10-12T04:11:00+00:00**
+  - Actor: Agent
+  - Activity: Phase 6 build: systemd unit and runbook (6.1), D3 artifacts (tunnel config, Email Worker, Slack manifest; 6.2), synthetic-data demo (6.3)
+  - Result: 76 tests pass, including the demo (7/7 scenarios) and the Email Worker under Node against the real hook; no external account, DNS record, or system unit changed
+  - Evidence: `deploy/`, `docs/runbook.md`, `scripts/demo.py`, `tests/test_demo.py`, `tests/test_email_worker.py`
+  - Basis: Source-observed
 
 ## 9. Sources and coverage check
 
@@ -940,7 +948,7 @@ All entries are dated 2026-10-10; exact times are unproven unless noted. Full de
 
 **Coverage gaps**
 - The success measures can only be checked after Jeremy connects.
-- Connecting depends on D3.
+- Connecting is Jeremy's runbook §6 (D3 resolved, #102).
 - R7: email completeness has no verification method in the MVP.
 - AS-1 and AS-18 have no executable scenario: each describes something the system never receives (a Gmail read, a reply sent from Gmail). They are checked in the 6.3 demo.
 - R5 inferences are verified only in the 6.3 demo.

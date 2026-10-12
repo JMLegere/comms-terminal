@@ -1,0 +1,7 @@
+# Deploy: cd deploy/email-worker && npx wrangler deploy && npx wrangler secret put EMAIL_HOOK_SECRET
+name = "universal-inbox-email"
+main = "worker.js"
+compatibility_date = "2026-10-01"
+
+[vars]
+HOOK_URL = "https://hooks.agentmaple.com/hooks/email"

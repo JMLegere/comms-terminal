@@ -101,9 +101,10 @@ def reply_server(db_path: str, socket_path: str, senders: dict) -> UnixHTTPServe
         os.umask(old)
 
 
-def hooks_server(db_path: str, host: str, port: int) -> ThreadingHTTPServer:
+def hooks_server(db_path: str, host: str, port: int, client=None) -> ThreadingHTTPServer:
+    """`client` (Slack lookups) is swappable for the 6.3 demo; the service uses the real API."""
     email_secret, slack_secret = credential("email-hook-secret"), credential("slack-signing-secret")
-    client = slack.SlackClient(credential("slack-user-token").decode())
+    client = client or slack.SlackClient(credential("slack-user-token").decode())
 
     def email_hook(headers, body):
         db = inbox.connect(db_path)

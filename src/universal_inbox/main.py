@@ -14,9 +14,15 @@ def default_db() -> str:
                           str(Path.home() / ".local/share/universal-inbox/inbox.db"))
 
 
+SERVICE_SOCKET = "/run/universal-inbox/inbox.sock"  # deploy/universal-inbox.service
+
+
 def default_socket() -> str:
-    return os.environ.get("UNIVERSAL_INBOX_SOCKET",
-                          str(Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "universal-inbox.sock"))
+    if "UNIVERSAL_INBOX_SOCKET" in os.environ:
+        return os.environ["UNIVERSAL_INBOX_SOCKET"]
+    if Path(SERVICE_SOCKET).parent.is_dir():  # the installed service is running
+        return SERVICE_SOCKET
+    return str(Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "universal-inbox.sock")
 
 
 def main(argv=None) -> None:
