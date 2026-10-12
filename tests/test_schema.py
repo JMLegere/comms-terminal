@@ -37,3 +37,23 @@ def test_migrates_a_version_1_database_to_case_descriptions(tmp_path):
     inbox.migrate(db)
     assert db.execute("SELECT description FROM cases").fetchone()[0] == ""
     assert db.execute("PRAGMA user_version").fetchone()[0] == inbox.SCHEMA_VERSION
+
+
+def test_an_echo_of_a_sent_reply_is_not_stored_twice():
+    """Resend/SES rewrites the Message-ID, so a forwarded copy of Jeremy's reply is matched by text."""
+    from datetime import timedelta
+    at = datetime(2026, 10, 12, 4, 36, tzinfo=timezone.utc)
+    db = inbox.connect()
+    inbox.migrate(db)
+    with db:
+        cid = db.execute("INSERT INTO connections (platform, external_id, self_id, label, connected_at)"
+                         " VALUES ('email', 'me@x.io', 'me@x.io', 'Email', ?)", (at.isoformat(),)).lastrowid
+    ana = inbox.Identity("email", "ana@acme.com")
+    t = inbox.ingest(db, inbox.Incoming(cid, "me@x.io", "mailbox", "MESSAGE", "<a1@acme.com>", ana, at, "hi", [], "Hi"))
+    mine = inbox.Incoming(cid, "me@x.io", "mailbox", "MESSAGE", "<sent@x.io>", None, at + timedelta(minutes=5),
+                          "test reply", ["<a1@acme.com>"], "Re: Hi")
+    assert inbox.ingest(db, mine) is not None
+    echo = inbox.Incoming(cid, "me@x.io", "mailbox", "MESSAGE", "<ses-rewritten@amazonses.com>", None,
+                          at + timedelta(minutes=5, seconds=1), "test reply\r\n", ["<a1@acme.com>"], "Re: Hi")
+    assert inbox.ingest(db, echo) is None
+    assert db.execute("SELECT count(*) FROM activities WHERE thread_id = ?", (t.id,)).fetchone()[0] == 2

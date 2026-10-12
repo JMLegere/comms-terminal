@@ -804,6 +804,10 @@ All entries are dated 2026-10-10; exact times are unproven unless noted. Full de
   - Request / decision: D3 resolved: Cloudflare Tunnel publishes only `/hooks/email` and `/hooks/slack` at `hooks.agentmaple.com`; Cloudflare Email Routing receives `inbox.agentmaple.com` (apex MX stays Google) and an Email Worker signs and posts each raw message; Gmail forwards a copy there. Resend sends (#70)
   - Source: Jeremy, ask tool answers 2026-10-12 (Cloudflare Tunnel; CF Email Routing + Worker; hooks. + inbox.)
   - Status: Accepted
+- **103**
+  - Request / decision: Email connected live (Phase 6.4, email): Gmail forwards a copy to `jeremy@inbox.agentmaple.com`; Resend sends from `agentmaple.com` (DKIM and return-path records added in Cloudflare). Fixes found on live data: a `User-Agent` on outbound requests (Cloudflare in front of Resend rejected Python's default with 403/1010); provider error messages shown in the console; a copy of Jeremy's own reply coming back in is dropped by matching its text in the Thread, because Amazon SES (behind Resend) rewrites the Message-ID. Slack is deferred by Jeremy; the service runs email-only until its drop-in is installed
+  - Source: Jeremy, "finish phase 6", "skip Slack for now", live test email and reply 2026-10-12
+  - Status: Accepted
 
 ## 8. Work log
 

@@ -283,6 +283,24 @@ def _thread_for_message(db, channel_id, inc: Incoming, identity_id):
     return last["thread_id"] if timedelta(0) <= gap <= window else None
 
 
+ECHO_WINDOW = timedelta(days=1)
+
+
+def _echo_of_sent(db, thread_id: int, inc: Incoming) -> bool:
+    """A copy of Jeremy's own reply coming back in (he is copied, or a recipient forwards to him).
+
+    Resend sends through Amazon SES, which replaces the Message-ID we set, so the copy's native_id never
+    matches the stored reply; match on the same text from Jeremy in the same Thread within a day instead.
+    """
+    text = (inc.content or "").strip()
+    if not text:
+        return False
+    since = _iso(inc.occurred_at - ECHO_WINDOW)
+    return any((r["content"] or "").strip() == text for r in db.execute(
+        "SELECT content FROM activities WHERE thread_id = ? AND kind = 'MESSAGE' AND identity_id IS NULL"
+        " AND occurred_at >= ?", (thread_id, since)))
+
+
 def ingest(db, inc: Incoming) -> Thread | None:
     """Store one message, edit, or deletion; returns its Thread, or None for a
     duplicate or an edit/deletion of a message that was never stored."""
@@ -319,6 +337,8 @@ def ingest(db, inc: Incoming) -> Thread | None:
                 " status_changed_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (channel_id, inc.native_id, title, *status, _iso(at), _iso(at))).lastrowid
         else:
+            if inc.kind == "MESSAGE" and identity is None and _echo_of_sent(db, thread_id, inc):
+                return None
             t = get_thread(db, thread_id)
             nxt = _after_activity(t.status, t.status_detail, identity is None, inc.kind)
             if nxt:
