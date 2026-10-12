@@ -376,7 +376,7 @@ class ThreadActions:
         if tid is None:
             return
         current = inbox.get_thread(self.app.db, tid).status_detail
-        opts = [(d, f"[{GLYPH[d][1]}]{GLYPH[d][0]}[/] {GLYPH[d][2]}") for d in ("CREATED", "NEW_REPLY", "IN_PROGRESS")
+        opts = [(d, f"[{GLYPH[d][1]}]{GLYPH[d][0]}[/] {GLYPH[d][2]}") for d in inbox.VIEWS["Todo"]
                 if d != current]
         if current == "IGNORED":
             opts.append(("UNIGNORE", f"{ICON['TODO']} Un-ignore"))

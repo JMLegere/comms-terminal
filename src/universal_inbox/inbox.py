@@ -1,6 +1,6 @@
 """The inbox module: Threads, Status, Activities, Persons, Organizations, Blocks, and Cases.
 
-Interface: ingest, act, reply, wake, reconcile_email_threads; people operations block, add_identity, remove_identity.
+Interface: ingest, act, reply, wake, reopen_imported, reconcile_email_threads; people operations block, add_identity, remove_identity.
 Design: docs/design/api-and-database.md.
 """
 
@@ -269,7 +269,7 @@ def get_thread(db, thread_id: int) -> Thread:
 
 
 def _set_status(db, thread_id, status, detail, at, snoozed_until=None, before=None):
-    follow_up = _iso(at + WAIT) if detail == "WAITING_FOR_CUSTOMER" else None
+    follow_up = _follow_up(detail, at)
     db.execute(
         "UPDATE threads SET status = ?, status_detail = ?, status_changed_at = ?,"
         " snoozed_until = ?, detail_before_snooze = ?, follow_up_at = ? WHERE id = ?",
@@ -283,6 +283,27 @@ def _has_replied(db, thread_id) -> bool:
 
 
 # --- status rules (design §4) -------------------------------------------------
+
+def _initial_status(identity) -> tuple[str, str]:
+    """A new Thread's Status: Jeremy started it (#61), a Blocked sender (FR-7a), or anyone else (FR-6a)."""
+    if identity is None:
+        return ("SNOOZED", "WAITING_FOR_CUSTOMER")
+    return ("DONE", "IGNORED") if identity["blocked"] else ("TODO", "CREATED")
+
+
+def _follow_up(detail, at) -> str | None:
+    """Waiting for them ends after WAIT with no reply (#116)."""
+    return _iso(at + WAIT) if detail == "WAITING_FOR_CUSTOMER" else None
+
+
+def reopen_imported(db, thread_id: int) -> Thread:
+    """A one-time import leaves every touched Thread in Todo: Needs next response once Jeremy has replied,
+    else Needs first response."""
+    t = get_thread(db, thread_id)
+    if t.status == "TODO":
+        return t
+    return act(db, t.id, MarkTodo("NEW_REPLY" if _has_replied(db, t.id) else "CREATED"))
+
 
 def _after_activity(status, detail, from_jeremy, kind):
     """Status after an Activity on an existing Thread, or None for unchanged."""
@@ -803,14 +824,9 @@ def ingest(db, inc: Incoming) -> Thread | None:
 
         created = thread_id is None
         if thread_id is None:
-            if identity is None:
-                status = ("SNOOZED", "WAITING_FOR_CUSTOMER")  # decision #61
-            elif identity["blocked"]:
-                status = ("DONE", "IGNORED")  # FR-7a
-            else:
-                status = ("TODO", "CREATED")  # FR-6a
+            status = _initial_status(identity)
             title = inc.title or (inc.content or "").strip()[:80] or "(no subject)"
-            until = _iso(at + WAIT) if status[1] == "WAITING_FOR_CUSTOMER" else None
+            until = _follow_up(status[1], at)
             thread_id = db.execute(
                 "INSERT INTO threads (channel_id, native_thread_id, title, status, status_detail,"
                 " status_changed_at, created_at, follow_up_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",

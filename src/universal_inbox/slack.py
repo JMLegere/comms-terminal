@@ -268,10 +268,7 @@ def import_recent(db, connection, client, days: int) -> int:
             stored += 1
             threads.add(t.id)
     for tid in threads:
-        if inbox.get_thread(db, tid).status != "TODO":
-            replied = db.execute("SELECT 1 FROM activities WHERE thread_id = ? AND identity_id IS NULL"
-                                 " AND kind = 'MESSAGE'", (tid,)).fetchone()
-            inbox.act(db, tid, inbox.MarkTodo("NEW_REPLY" if replied else "CREATED"))
+        inbox.reopen_imported(db, tid)
     return stored
 
 
