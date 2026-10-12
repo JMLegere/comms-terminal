@@ -227,13 +227,9 @@ def is_email(view: dict) -> bool:
     return PLATFORMS[view["channel"]["platform"]].format == "email"
 
 
-def message_link(view: dict, m) -> str | None:
-    return PLATFORMS[view["channel"]["platform"]].link(m, view["channel"])
-
-
 def native_link(view: dict) -> str | None:
     """Opens the Thread in its service: the newest message that has a link."""
-    return next((link for m in reversed(view["messages"]) if (link := message_link(view, m))), None)
+    return view["link"]
 
 
 # --- small modal screens ---------------------------------------------------
@@ -638,7 +634,7 @@ class ThreadsPage(Page, ThreadActions):
         main.show_thread(selected)
         tv = main.thread_view
         if tv is not None and getattr(tv, "view", None) is not None and tv.view["thread"].id == selected:
-            tv.members = tv.view["_members"]
+            tv.members = tv.view["members"]
 
     def current_thread_id(self):
         if not getattr(self, "rows", None):
@@ -866,13 +862,13 @@ class MessageText(Static):
 def message_body(m, raw, slack: bool = False) -> render.Body:
     """The rendered body: from the raw message when it was kept (decision #106), Slack mrkdwn for Slack
     (#114), else the stored text."""
-    sha = m["data"].get("raw")
+    sha = m["raw"]
     if sha and raw is not None and not m["edited"]:
         body = render.load(str(raw / f"{sha}.eml"))
         if body is not None:
             return body
     body = render.from_slack(m["content"]) if slack else render.from_text(m["content"])
-    body.attachments = [tuple(a) for a in m["data"].get("attachments") or []]  # Fastmail and Slack list them as data
+    body.attachments = [tuple(a[:3]) for a in m["attachments"]]  # Fastmail, Slack, and Quo list them as data
     return body
 
 
@@ -887,12 +883,11 @@ def new_message_state() -> dict:
 
 
 def recipients(m, me: str, full: bool, at: str) -> str:
-    d = m["data"]
-    to, cc = d.get("to") or [], d.get("cc") or []
+    to, cc = m["to"], m["cc"]
     if not to and not cc:
         return ""
     if full:
-        rows = [("from", d.get("from") or me)] if m["who"] != "You" or d.get("from") else [("from", me)]
+        rows = [("from", m["from"] or me)] if m["who"] != "You" or m["from"] else [("from", me)]
         rows += [("to", ", ".join(to))] if to else []
         rows += [("cc", ", ".join(cc))] if cc else []
         rows += [("date", datetime.fromisoformat(at).astimezone().strftime("%a %b %-d %Y, %H:%M"))]
@@ -966,10 +961,9 @@ def message_widgets(v, st: dict | None = None, raw=None) -> list:
             if m["native_id"] in st["trim"]:
                 parts.append(MessageText(body.trimmed, classes="mtrim"))
         if body.attachments:
-            link = (message_link(v, m) or "") if email else ""
-            urls = [u for _, u in m["data"].get("media") or []]  # Quo media: each chip opens its own (signed) URL
-            chips = [f"[link='{urls[k] if k < len(urls) else link}'][#45707a]{ICON['attachment']} {render.chip(*a)}[/][/link]"
-                     for k, a in enumerate(body.attachments)]
+            urls = [a[3] for a in m["attachments"]]  # each chip opens its attachment, or the message in its service
+            chips = [f"[link='{(urls[k] if k < len(urls) else m['link']) or ''}'][#45707a]{ICON['attachment']} "
+                     f"{render.chip(*a)}[/][/link]" for k, a in enumerate(body.attachments)]
             parts.append(MessageText("\n".join(chips), classes="mchips"))
         return gutter_row(badge(m["who"]), Vertical(*parts, classes="msg"), "open")
 
@@ -1098,7 +1092,7 @@ class ThreadView(Horizontal):
         v = inbox.thread_view(self.app.db, self.thread_id)
         self.thread_id = v["thread"].id
         if self.members is None:
-            self.members = v["_members"]
+            self.members = v["members"]
         self.view = v
         head = thread_head(v)
         if self.has_class("narrow"):  # properties column hidden: keep who, where, and case under the title

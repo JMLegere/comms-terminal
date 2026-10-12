@@ -276,7 +276,7 @@ def test_thread_view_keeps_history_and_membership_coherent_across_wal_alias_chan
     root = inbox.ingest(db, historical(db, "<root@test>"))
     child = inbox.ingest(db, historical(db, "<child@test>", "<root@test>", occurred_at=AT + timedelta(minutes=1)))
     expected = inbox.thread_view(db, child.id)
-    assert expected["_members"] == [child.id]
+    assert expected["members"] == [child.id]
     physical, raw = activities(db), raw_bytes(db)
     writer = inbox.connect(str(tmp_path / "inbox.db"))
     merged = []
@@ -296,11 +296,11 @@ def test_thread_view_keeps_history_and_membership_coherent_across_wal_alias_chan
         db.set_trace_callback(None)
         writer.close()
     assert merged == [1] and view == expected
-    assert view["thread"].id == child.id and view["_members"] == [child.id]
+    assert view["thread"].id == child.id and view["members"] == [child.id]
     assert [m["native_id"] for m in view["messages"]] == ["<child@test>"]
     assert not db.in_transaction
     current = inbox.thread_view(db, child.id)
-    assert current["thread"].id == root.id and current["_members"] == [root.id, child.id]
+    assert current["thread"].id == root.id and current["members"] == [root.id, child.id]
     assert [m["native_id"] for m in current["messages"]] == ["<root@test>", "<child@test>"]
     assert activities(db) == physical and raw_bytes(db) == raw
 

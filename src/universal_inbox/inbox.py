@@ -1052,6 +1052,18 @@ def queue(db, view: str) -> list[dict]:
     return sorted(out, key=lambda x: x["last_at"], reverse=True)
 
 
+def _shaped(m: dict, platform, channel) -> dict:
+    """A message as the console shows it, whatever its Platform: raw source (email), recipients, a link that
+    opens it in the service, and attachments as (name, type, bytes, url); `data` stays for email reply-all."""
+    d = m["data"]
+    m["link"] = platform.link(m, channel)
+    urls = [u for _, u in d.get("media") or []]  # Quo media: each photo has its own signed URL
+    m["attachments"] = [(*a[:3], urls[k] if k < len(urls) else m["link"])
+                        for k, a in enumerate(d.get("attachments") or [])]
+    m["raw"], m["to"], m["cc"], m["from"] = d.get("raw"), d.get("to") or [], d.get("cc") or [], d.get("from")
+    return m
+
+
 def thread_view(db, thread_id: int) -> dict:
     """Timeline (latest edit wins; deleted messages have no content) and the sender's records."""
     with _read_snapshot(db):
@@ -1081,8 +1093,11 @@ def thread_view(db, thread_id: int) -> dict:
             person = person_view(db, pid) if pid else None
         people, others, orgs = _participants(db, acts)
         case = db.execute("SELECT title FROM cases WHERE id = ?", (t.case_id,)).fetchone() if t.case_id else None
+        platform = platforms.PLATFORMS[ch["platform"]]
+        msgs = [_shaped(m, platform, ch) for m in msgs]
         return {"thread": t, "channel": dict(ch), "messages": msgs, "person": person, "people": people,
-                "others": others, "organizations": orgs, "_members": snapshot(db, thread_id)["_members"],
+                "others": others, "organizations": orgs, "members": snapshot(db, thread_id)["_members"],
+                "link": next((m["link"] for m in reversed(msgs) if m["link"]), None),
                 "case": case["title"] if case else None, "where": _where(ch, None) if ch["kind"] != "mailbox" else "email"}
 
 
