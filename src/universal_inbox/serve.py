@@ -1,7 +1,7 @@
-"""The service: public hooks (/hooks/email, /hooks/slack), the local reply socket (POST /reply), and wake().
+"""The service: public hooks (/hooks/email, /hooks/slack, /hooks/quo), the local reply socket (POST /reply), and wake().
 
 Credentials come from systemd's $CREDENTIALS_DIRECTORY (LoadCredentialEncrypted=):
-email-hook-secret, slack-signing-secret, slack-user-token, resend-api-key, fastmail-oauth.
+email-hook-secret, slack-signing-secret, slack-user-token, resend-api-key, fastmail-oauth, quo-webhook-secret.
 """
 
 import json
@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from . import email, fastmail, inbox, slack
+from . import email, fastmail, inbox, quo, slack
 
 
 def credential(name: str) -> bytes | None:
@@ -123,6 +123,8 @@ def reply_server(db_path: str, socket_path: str, senders: dict) -> UnixHTTPServe
 def hooks_server(db_path: str, host: str, port: int, client=None) -> ThreadingHTTPServer:
     """`client` (Slack lookups) is swappable for the 6.3 demo; the service uses the real API."""
     email_secret, slack_secret = credential("email-hook-secret"), credential("slack-signing-secret")
+    quo_secret = credential("quo-webhook-secret")
+    quo_log = Path(db_path).parent / "quo-events.jsonl"
     token = credential("slack-user-token")
     client = client or (slack.SlackClient(token.decode()) if token else None)
 
@@ -151,7 +153,13 @@ def hooks_server(db_path: str, host: str, port: int, client=None) -> ThreadingHT
             db.close()
         return status, "text/plain", text.encode()
 
-    return ThreadingHTTPServer((host, port), _handler({"/hooks/email": email_hook, "/hooks/slack": slack_hook}))
+    def quo_hook(headers, body):
+        if quo_secret is None:
+            return 503, "text/plain", b"quo not connected"
+        return quo.handle_hook(quo_log, headers, body, quo_secret, datetime.now(timezone.utc)), "text/plain", b""
+
+    return ThreadingHTTPServer((host, port), _handler({"/hooks/email": email_hook, "/hooks/slack": slack_hook,
+                                                       "/hooks/quo": quo_hook}))
 
 
 def wake_loop(db_path: str, stop: threading.Event, every: float = 60) -> None:

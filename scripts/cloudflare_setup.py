@@ -5,7 +5,7 @@ Reads a scoped API token from --token-file (never printed). It needs:
   Zone agentmaple.com: Zone Read, DNS Edit, Zone Settings Edit (enables Email Routing), Email Routing Rules Edit
 
 Creates, when missing:
-  1. A remotely managed tunnel "universal-inbox" whose only public paths are /hooks/email and /hooks/slack.
+  1. A remotely managed tunnel "universal-inbox" whose only public paths are /hooks/email, /hooks/slack and /hooks/quo.
      Its run token goes to --tunnel-token-out (0600) for `cloudflared service install` (runbook §6.1).
   2. DNS: hooks.agentmaple.com → the tunnel (proxied CNAME).
   3. Email Routing for inbox.agentmaple.com (Cloudflare adds that subdomain's MX and SPF; the apex is untouched).
@@ -95,7 +95,7 @@ def main(argv=None) -> int:
     else:
         tunnel_id = cf.call("POST", f"/accounts/{account_id}/cfd_tunnel", {"name": TUNNEL, "config_src": "cloudflare"})["id"]
     cf.call("PUT", f"/accounts/{account_id}/cfd_tunnel/{tunnel_id}/configurations", {"config": {"ingress": [
-        {"hostname": HOOKS, "path": "^/hooks/(email|slack)$", "service": "http://127.0.0.1:8787"},
+        {"hostname": HOOKS, "path": "^/hooks/(email|slack|quo)$", "service": "http://127.0.0.1:8787"},
         {"service": "http_status:404"}]}})
     run_token = cf.call("GET", f"/accounts/{account_id}/cfd_tunnel/{tunnel_id}/token")
     out = Path(a.tunnel_token_out).expanduser()
