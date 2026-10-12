@@ -37,9 +37,23 @@ def test_migrates_a_version_1_database(tmp_path):
                " status_changed_at TEXT NOT NULL) STRICT")
     db.execute("INSERT INTO threads (status_detail, status_changed_at) VALUES"
                " ('WAITING_FOR_CUSTOMER', '2026-10-01T09:30:00.250000+00:00'), ('CREATED', '2026-10-01T09:30:00+00:00')")
+    db.execute("CREATE TABLE connections (id INTEGER PRIMARY KEY, platform TEXT NOT NULL CHECK (platform IN"
+               " ('email', 'slack')), external_id TEXT NOT NULL UNIQUE, self_id TEXT NOT NULL, label TEXT NOT NULL,"
+               " connected_at TEXT NOT NULL, auth_ok INTEGER NOT NULL DEFAULT 1, last_error TEXT) STRICT")
+    db.execute("INSERT INTO connections (platform, external_id, self_id, label, connected_at)"
+               " VALUES ('slack', 'T0', 'U0', 'Slack', '2026-10-01T00:00:00+00:00')")
+    db.execute("CREATE TABLE identities (id INTEGER PRIMARY KEY, person_id INTEGER, kind TEXT NOT NULL CHECK (kind IN"
+               " ('email', 'slack_user')), value TEXT NOT NULL, blocked INTEGER NOT NULL DEFAULT 0, UNIQUE (kind, value)) STRICT")
+    db.execute("INSERT INTO identities (kind, value) VALUES ('email', 'ana@acme.com')")
     db.execute("PRAGMA user_version = 1")
     inbox.migrate(db)
     assert db.execute("SELECT description FROM cases").fetchone()[0] == ""
+    # v5 (SMS): rebuilt tables keep their rows and accept the new platform and identity kind
+    assert db.execute("SELECT platform, external_id FROM connections").fetchall() == [("slack", "T0")]
+    assert db.execute("SELECT kind, value FROM identities").fetchall() == [("email", "ana@acme.com")]
+    db.execute("INSERT INTO connections (platform, external_id, self_id, label, connected_at)"
+               " VALUES ('sms', '+15068324154', '+15068324154', 'Quo', '2026-10-12T00:00:00+00:00')")
+    db.execute("INSERT INTO identities (kind, value) VALUES ('phone', '+15066092430')")
     # v3 (#116): threads already Waiting get a follow-up 5 days after they began waiting, in _iso's format
     assert [r[0] for r in db.execute("SELECT follow_up_at FROM threads ORDER BY id")] == [
         "2026-10-06T09:30:00.250000+00:00", None]

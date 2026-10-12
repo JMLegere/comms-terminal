@@ -13,7 +13,7 @@ store=/etc/credstore.encrypted
 
 # 1. Credentials (scripts/oauth_fastmail.py writes fastmail-oauth.json; it is stored as fastmail-oauth)
 [[ -f "$conf/fastmail-oauth.json" ]] && mv "$conf/fastmail-oauth.json" "$conf/fastmail-oauth"
-for name in email-hook-secret resend-api-key slack-signing-secret slack-user-token fastmail-oauth quo-webhook-secret; do
+for name in email-hook-secret resend-api-key slack-signing-secret slack-user-token fastmail-oauth quo-webhook-secret quo-api-key; do
   if [[ -f "$conf/$name" ]]; then
     systemd-creds encrypt --name="$name" "$conf/$name" "$store/universal-inbox.$name"
     shred -u "$conf/$name"
@@ -37,7 +37,7 @@ if [[ -f "$store/universal-inbox.fastmail-oauth" ]]; then
     /etc/systemd/system/universal-inbox.service.d/fastmail.conf
   echo "Fastmail enabled"
 fi
-if [[ -f "$store/universal-inbox.quo-webhook-secret" ]]; then
+if [[ -f "$store/universal-inbox.quo-webhook-secret" && -f "$store/universal-inbox.quo-api-key" ]]; then
   install -D -m 0644 "$repo/deploy/universal-inbox.service.d/quo.conf" \
     /etc/systemd/system/universal-inbox.service.d/quo.conf
   echo "Quo enabled"

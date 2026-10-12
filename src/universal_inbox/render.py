@@ -395,7 +395,7 @@ def _size(n: int) -> str:
 
 def chip(name: str, ctype: str, size: int) -> str:
     kind = ctype.split("/")[-1].upper()[:6]
-    return f"{escape(name)} · {kind} · {_size(size)}"
+    return f"{escape(name)} · {kind}" + (f" · {_size(size)}" if size else "")  # size 0 = unknown (Quo media)
 
 
 def from_raw(raw: bytes) -> Body:

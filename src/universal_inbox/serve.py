@@ -1,7 +1,8 @@
 """The service: public hooks (/hooks/email, /hooks/slack, /hooks/quo), the local reply socket (POST /reply), and wake().
 
 Credentials come from systemd's $CREDENTIALS_DIRECTORY (LoadCredentialEncrypted=):
-email-hook-secret, slack-signing-secret, slack-user-token, resend-api-key, fastmail-oauth, quo-webhook-secret.
+email-hook-secret, slack-signing-secret, slack-user-token, resend-api-key, fastmail-oauth, quo-webhook-secret,
+quo-api-key.
 """
 
 import json
@@ -42,6 +43,9 @@ def senders_from_credentials(db, fm: fastmail.Client | None = None) -> dict:
     out = {}
     if token := credential("slack-user-token"):
         out["slack"] = slack.SlackSender(token.decode())
+    sms = db.execute("SELECT external_id FROM connections WHERE platform = 'sms'").fetchone()
+    if sms and (key := credential("quo-api-key")):
+        out["sms"] = quo.QuoSender(key.decode(), sms["external_id"])
     if mailbox and (key := credential("resend-api-key")):
         out["email"] = email.EmailSender(key.decode(), mailbox["self_id"])
     fm_conn = db.execute("SELECT id FROM connections WHERE label = ?", (fastmail.LABEL,)).fetchone()
@@ -124,7 +128,6 @@ def hooks_server(db_path: str, host: str, port: int, client=None) -> ThreadingHT
     """`client` (Slack lookups) is swappable for the 6.3 demo; the service uses the real API."""
     email_secret, slack_secret = credential("email-hook-secret"), credential("slack-signing-secret")
     quo_secret = credential("quo-webhook-secret")
-    quo_log = Path(db_path).parent / "quo-events.jsonl"
     token = credential("slack-user-token")
     client = client or (slack.SlackClient(token.decode()) if token else None)
 
@@ -156,7 +159,12 @@ def hooks_server(db_path: str, host: str, port: int, client=None) -> ThreadingHT
     def quo_hook(headers, body):
         if quo_secret is None:
             return 503, "text/plain", b"quo not connected"
-        return quo.handle_hook(quo_log, headers, body, quo_secret, datetime.now(timezone.utc)), "text/plain", b""
+        db = inbox.connect(db_path)
+        try:
+            status = quo.handle_hook(db, connection_id(db, "sms"), headers, body, quo_secret, datetime.now(timezone.utc))
+        finally:
+            db.close()
+        return status, "text/plain", b""
 
     return ThreadingHTTPServer((host, port), _handler({"/hooks/email": email_hook, "/hooks/slack": slack_hook,
                                                        "/hooks/quo": quo_hook}))

@@ -25,6 +25,8 @@ ICON = {
     # platforms and conversation kinds
     "email": "\U000f01f0",          # md-email_outline
     "slack": "\U000f04b1",          # md-slack
+    "sms": "\U000f011c",            # md-cellphone (the Quo Work number)
+    "phone": "\U000f011c",          # md-cellphone (a Phone identity)
     "im": "\U000f0ede",             # md-chat_outline (Slack DM)
     "mpim": "\U000f0b58",           # md-account_group_outline (Slack group DM)
     "mailbox": "\U000f01f0",        # md-email_outline

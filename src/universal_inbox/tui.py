@@ -211,8 +211,11 @@ def glyph(detail: str) -> str:
 
 
 def conn_name(c) -> str:
-    """How a Connection is named: its address for email, else the platform."""
-    return c["external_id"] if c["platform"] == "email" else c["platform"].capitalize()
+    """How a Connection is named: its address for email or number for SMS, else the platform."""
+    return c["external_id"] if c["platform"] in ("email", "sms") else c["platform"].capitalize()
+
+
+IDENTITY_ICON = {"email": "email", "slack_user": "slack", "phone": "phone"}
 
 
 def conn_icon(c) -> str:
@@ -227,6 +230,8 @@ def native_link(view: dict) -> str | None:
         return message_link(msgs[-1])
     if ch["platform"] == "slack":
         return f"slack://channel?team={ch['external_id']}&id={ch['native_id']}"
+    if ch["platform"] == "sms":
+        return next((m["data"]["link"] for m in reversed(msgs) if m.get("data", {}).get("link")), None)
     return None
 
 
@@ -971,7 +976,9 @@ def message_widgets(v, st: dict | None = None, raw=None) -> list:
                 parts.append(MessageText(body.trimmed, classes="mtrim"))
         if body.attachments:
             link = message_link(m) if email else ""
-            chips = [f"[link='{link}'][#45707a]{ICON['attachment']} {render.chip(*a)}[/][/link]" for a in body.attachments]
+            urls = [u for _, u in m["data"].get("media") or []]  # Quo media: each chip opens its own (signed) URL
+            chips = [f"[link='{urls[k] if k < len(urls) else link}'][#45707a]{ICON['attachment']} {render.chip(*a)}[/][/link]"
+                     for k, a in enumerate(body.attachments)]
             parts.append(MessageText("\n".join(chips), classes="mchips"))
         return gutter_row(badge(m["who"]), Vertical(*parts, classes="msg"), "open")
 
@@ -1067,7 +1074,8 @@ def thread_head(v) -> str:
     head = f"[b #45707a]{escape(t.title)}[/]   [{color}]{g} {label}[/]"
     link, plat = native_link(v), v["channel"]["platform"]
     if link:
-        app = "Fastmail" if "fastmail.com" in link else "Gmail" if "mail.google.com" in link else plat.capitalize()
+        app = ("Fastmail" if "fastmail.com" in link else "Gmail" if "mail.google.com" in link
+               else "Quo" if plat == "sms" else plat.capitalize())
         head += f"\n[#928374]{ICON[plat]} [link='{link}']open in {app}[/link] {ICON['open']} (o)[/]"
     return head
 
@@ -1270,7 +1278,7 @@ class OrganizationPage(ThreadListPage):
         people = inbox.organization_view(self.app.db, self.domain)["people"]
         self.app.main.show_side("\n\n".join(
             f"[@click=app.open_person({p['id']})][b underline]{escape(p['name'])}[/][/]\n"
-            + "\n".join(f"[#928374]{ICON['email'] if i['kind'] == 'email' else ICON['slack']} {escape(i['value'])}[/]"
+            + "\n".join(f"[#928374]{ICON[IDENTITY_ICON[i['kind']]]} {escape(i['value'])}[/]"
                         for i in p["identities"])
             for p in people) or "[#928374]No people yet.[/]")
 
@@ -1303,7 +1311,7 @@ class PersonPage(Page):
         table = self.query_one(DataTable)
         table.clear()
         for i in p["identities"]:
-            kind = ICON["email"] if i["kind"] == "email" else ICON["slack"]
+            kind = ICON[IDENTITY_ICON[i["kind"]]]
             table.add_row(f"[#654735]{kind}[/]", escape(i["value"]),
                           f"[#c14a4a]{ICON['blocked']} blocked[/]" if i["blocked"] else "")
         threads = "\n".join(f"[@click=app.open_thread({t.id})]{glyph(t.status_detail)} [underline]{escape(t.title)}[/][/]"
@@ -1340,7 +1348,7 @@ class PersonPage(Page):
         def added(text):
             if not text:
                 return
-            kind = "email" if "@" in text else "slack_user"
+            kind = "email" if "@" in text else "phone" if text.startswith("+") else "slack_user"
             try:
                 inbox.add_identity(self.app.db, self.person_id, kind, text)
             except inbox.IdentityTaken:
@@ -1433,6 +1441,9 @@ RECOVERY = {  # platform -> {healthy: what it means / what to do}
     "email": {True: "Receiving forwarded mail and sending replies.",
               False: "[#c14a4a]Mail may not be arriving or sending.[/] Check the forwarding rule and the Resend key; "
                      "this clears on the next successful message."},
+    "sms": {True: "Receiving Texts from Quo and sending replies.",
+            False: "[#c14a4a]Texts may not be sending.[/] Check the Quo API key and the webhook in Quo's settings; "
+                   "this clears on the next successful reply."},
     "slack": {True: "Receiving Slack events and sending replies.",
               False: "[#c14a4a]Slack messages are not arriving.[/] Reconnect: run scripts/oauth_slack.py on Workbox, "
                      "then restart universal-inbox serve."},

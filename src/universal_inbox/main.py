@@ -37,6 +37,7 @@ def main(argv=None) -> None:
     i.add_argument("--email", help="Jeremy's forwarded address, e.g. jeremy@agentmaple.com")
     i.add_argument("--slack-team", help="Slack team ID")
     i.add_argument("--slack-user", help="Jeremy's Slack user ID")
+    i.add_argument("--sms", help="the Quo Work number, E.164 (+1…), for the SMS Connection")
     i.add_argument("--fastmail", help="Jeremy's Fastmail address (a second email Connection, polled over MCP)")
     si = sub.add_parser("slack-import", help="one-time import of recent Slack, through the live filter")
     si.add_argument("--days", type=int, default=7)
@@ -64,6 +65,9 @@ def main(argv=None) -> None:
             if a.slack_team and a.slack_user:
                 db.execute("INSERT OR IGNORE INTO connections (platform, external_id, self_id, label, connected_at)"
                            " VALUES ('slack', ?, ?, 'Slack', ?)", (a.slack_team, a.slack_user, now))
+            if a.sms:
+                db.execute("INSERT OR IGNORE INTO connections (platform, external_id, self_id, label, connected_at)"
+                           " VALUES ('sms', ?, ?, 'Quo', ?)", (a.sms, a.sms, now))
         print(f"Connections in {a.db}: " + ", ".join(r[0] for r in db.execute("SELECT platform FROM connections")))
     elif a.cmd == "slack-import":
         # Run with the service's credential, e.g. sudo systemd-run --uid=jerry --pipe --wait

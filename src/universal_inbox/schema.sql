@@ -1,8 +1,8 @@
 CREATE TABLE connections (
   id                INTEGER PRIMARY KEY,
-  platform          TEXT NOT NULL CHECK (platform IN ('email', 'slack')),
-  external_id       TEXT NOT NULL UNIQUE,  -- email address or Slack team ID
-  self_id           TEXT NOT NULL,         -- Jeremy's address or Slack user ID
+  platform          TEXT NOT NULL CHECK (platform IN ('email', 'slack', 'sms')),
+  external_id       TEXT NOT NULL UNIQUE,  -- email address, Slack team ID, or Quo Work number
+  self_id           TEXT NOT NULL,         -- Jeremy's address, Slack user ID, or Work number
   label             TEXT NOT NULL,
   connected_at      TEXT NOT NULL,
   auth_ok           INTEGER NOT NULL DEFAULT 1 CHECK (auth_ok IN (0, 1)),
@@ -95,7 +95,7 @@ CREATE TABLE persons (
 CREATE TABLE identities (
   id           INTEGER PRIMARY KEY,
   person_id    INTEGER REFERENCES persons (id),  -- NULL = detached
-  kind         TEXT NOT NULL CHECK (kind IN ('email', 'slack_user')),
+  kind         TEXT NOT NULL CHECK (kind IN ('email', 'slack_user', 'phone')),
   value        TEXT NOT NULL,
   blocked      INTEGER NOT NULL DEFAULT 0 CHECK (blocked IN (0, 1)),
   UNIQUE (kind, value)

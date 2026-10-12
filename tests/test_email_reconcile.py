@@ -660,7 +660,7 @@ def test_schema3_migration_preserves_records_raw_and_append_only_guards(tmp_path
                            " VALUES (?, ?, 'MESSAGE', ?, ?, 'Original body', ?)", (tid, tid, AT.isoformat(), mid, json.dumps({"raw": pointer})))
         physical, raw = activities(db), raw_bytes(db)
         inbox.migrate(db)
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 4
+        assert db.execute("PRAGMA user_version").fetchone()[0] == inbox.SCHEMA_VERSION
         assert activities(db) == physical and raw_bytes(db) == raw
         assert [inbox.get_thread(db, tid).id for tid in (1, 2)] == [1, 2]
         assert inbox.reconcile_email_threads(db, apply=True)["merged"] == 1
@@ -680,11 +680,11 @@ def test_schema3_migration_preserves_records_raw_and_append_only_guards(tmp_path
 def test_migrate_rejects_newer_schema_without_downgrading_or_mutating(db):
     inbox.ingest(db, incoming("<root@test>"))
     with db:
-        db.execute("PRAGMA user_version = 5")
+        db.execute(f"PRAGMA user_version = {inbox.SCHEMA_VERSION + 1}")
     before = persisted(db)
     with pytest.raises((ValueError, RuntimeError)):
         inbox.migrate(db)
-    assert db.execute("PRAGMA user_version").fetchone()[0] == 5
+    assert db.execute("PRAGMA user_version").fetchone()[0] == inbox.SCHEMA_VERSION + 1
     assert persisted(db) == before
 
 

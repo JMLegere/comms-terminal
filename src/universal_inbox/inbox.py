@@ -17,7 +17,7 @@ from email import policy
 from email.parser import BytesHeaderParser
 from typing import Protocol
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 WAIT = timedelta(days=5)  # Waiting for them ends after this with no reply: back to Todo to follow up (#116)
 MIGRATIONS = {  # version -> statement that upgrades an existing database to it
     2: "ALTER TABLE cases ADD COLUMN description TEXT NOT NULL DEFAULT ''",
@@ -54,6 +54,32 @@ CREATE VIEW thread_activities AS
 SELECT a.id, COALESCE(t.merged_into, a.thread_id) AS thread_id,
        a.kind, a.occurred_at, a.identity_id, a.native_id, a.target_id, a.content, a.data
 FROM activities a JOIN threads t ON t.id = a.thread_id;""",
+    # SMS Connection (Quo): widen two CHECKs by SQLite's table rebuild; migrate() turns foreign keys off around it.
+    # Nothing references the *_new names, so the renames need no schema-wide rewrite (legacy_alter_table).
+    5: """PRAGMA legacy_alter_table = ON;
+CREATE TABLE connections_new (
+  id INTEGER PRIMARY KEY,
+  platform TEXT NOT NULL CHECK (platform IN ('email', 'slack', 'sms')),
+  external_id TEXT NOT NULL UNIQUE, self_id TEXT NOT NULL, label TEXT NOT NULL, connected_at TEXT NOT NULL,
+  auth_ok INTEGER NOT NULL DEFAULT 1 CHECK (auth_ok IN (0, 1)), last_error TEXT
+) STRICT;
+INSERT INTO connections_new SELECT id, platform, external_id, self_id, label, connected_at, auth_ok, last_error
+FROM connections;
+DROP TABLE connections;
+ALTER TABLE connections_new RENAME TO connections;
+CREATE TABLE identities_new (
+  id INTEGER PRIMARY KEY,
+  person_id INTEGER REFERENCES persons (id),
+  kind TEXT NOT NULL CHECK (kind IN ('email', 'slack_user', 'phone')),
+  value TEXT NOT NULL,
+  blocked INTEGER NOT NULL DEFAULT 0 CHECK (blocked IN (0, 1)),
+  UNIQUE (kind, value)
+) STRICT;
+INSERT INTO identities_new SELECT id, person_id, kind, value, blocked FROM identities;
+DROP TABLE identities;
+ALTER TABLE identities_new RENAME TO identities;
+CREATE INDEX identities_person ON identities (person_id);
+PRAGMA legacy_alter_table = OFF;""",
 }
 
 # ponytail: fixed list; extend when a free-mail sender forms an Organization by mistake.
@@ -82,7 +108,7 @@ class StaleThreadSnapshot(ValueError):
 
 @dataclass(frozen=True)
 class Identity:
-    kind: str  # "email" or "slack_user"
+    kind: str  # "email", "slack_user", or "phone"
     value: str
     display_name: str | None = None
     profile_email: str | None = None
@@ -192,11 +218,19 @@ def migrate(db: sqlite3.Connection) -> None:
         return
     sql = (Path(__file__).with_name("schema.sql")).read_text() if version == 0 else ";\n".join(
         MIGRATIONS[v] for v in range(version + 1, SCHEMA_VERSION + 1))
+    fk = db.execute("PRAGMA foreign_keys").fetchone()[0]
+    db.execute("PRAGMA foreign_keys = OFF")  # table rebuilds (5) drop and rename parents; checked before commit
     try:
-        db.executescript(f"BEGIN IMMEDIATE;\n{sql}\nPRAGMA user_version = {SCHEMA_VERSION};\nCOMMIT;")
+        db.executescript(f"BEGIN IMMEDIATE;\n{sql}\nPRAGMA user_version = {SCHEMA_VERSION};")
+        if db.execute("PRAGMA foreign_key_check").fetchone():
+            raise ValueError("migration would leave a broken foreign key")
+        db.execute("COMMIT")
     except Exception:
         db.rollback()
         raise
+    finally:
+        db.execute("PRAGMA legacy_alter_table = OFF")
+        db.execute(f"PRAGMA foreign_keys = {fk}")
 
 
 def _iso(dt: datetime) -> str:
@@ -943,6 +977,8 @@ def _sender(db, identity_id):
 
 def _where(channel, identity) -> str:
     kind = channel["kind"]
+    if kind == "im" and dict(channel).get("platform") == "sms":
+        return f"SMS · {channel['name'] or channel['native_id']}"
     if kind == "im":
         return f"DM · {channel['name']}" if channel["name"] else "Slack DM"
     if kind == "mpim":
@@ -957,12 +993,12 @@ def queue(db, view: str) -> list[dict]:
     """Rows for a Status view. Todo: longest-waiting first; others: most recent first."""
     details = VIEWS[view]
     rows = db.execute(
-        "SELECT t.id, t.title, t.status, t.status_detail, t.case_id, ch.kind, ch.name, ch.native_id,"
+        "SELECT t.id, t.title, t.status, t.status_detail, t.case_id, ch.kind, ch.name, ch.native_id, c.platform,"
         " (SELECT max(occurred_at) FROM thread_activities a WHERE a.thread_id = t.id) AS last_at,"
         " (SELECT max(occurred_at) FROM thread_activities a WHERE a.thread_id = t.id AND a.identity_id IS NOT NULL) AS last_in,"
         " (SELECT identity_id FROM thread_activities a WHERE a.thread_id = t.id AND a.identity_id IS NOT NULL"
         "   ORDER BY occurred_at, id LIMIT 1) AS first_identity"
-        f" FROM threads t JOIN channels ch ON ch.id = t.channel_id"
+        f" FROM threads t JOIN channels ch ON ch.id = t.channel_id JOIN connections c ON c.id = ch.connection_id"
         f" WHERE t.merged_into IS NULL AND t.status_detail IN ({','.join('?' * len(details))})", details).fetchall()
     out = []
     for r in rows:
