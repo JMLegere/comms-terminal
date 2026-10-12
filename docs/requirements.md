@@ -24,7 +24,7 @@ Status: MVP confirmed 2026-10-10; revised 2026-10-12 to follow Plain's status mo
   - Todo: Needs first response, Needs next response, Investigating.
   - Snoozed: Waiting for them, Paused for later.
   - Done: Done, Ignored.
-  - Jeremy's reply moves a Thread to Waiting for them.
+  - Jeremy's reply moves a Thread to Waiting for them. Deviation (#116): with no reply in 5 days it returns to Todo (Needs next response) to follow up; there is no key to wait without replying.
   - Any activity from the other side, including edits and deletions, returns a Snoozed or Done Thread to Todo / Needs next response.
   - Ignored does not move.
   - Rules Plain does not state (confirmed): a second message before Jeremy's first reply keeps Needs first response; a message on Investigating gives Needs next response; un-ignore gives Needs next response if Jeremy has replied, else Needs first response; a timed snooze returns to the Todo detail it had before.

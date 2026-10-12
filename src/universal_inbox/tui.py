@@ -281,7 +281,7 @@ HELP = [  # (group, [(keys, what it does)]) — the full key map; Gmail-style wh
                      ("6 – 9", "People, Organizations, Cases, Channels"), ("u", "back (esc also works)")]),
     ("Thread", [("r", "reply to the sender   ctrl+enter sends · esc keeps the draft"), ("a", "reply all"),
                 ("e", "done: it returns if they write again"), ("b", "snooze until a time (it also returns when they write)"),
-                ("w", "wait for them: it returns when they reply"), ("m", "ignore: it stays out of Todo (m again un-ignores)"),
+("m", "ignore: it stays out of Todo (m again un-ignores)"),
                 ("l", "add to a case"), ("s", "change status: needs a response, investigating"),
                 ("p", "open the person"), ("o", "open in Gmail, Fastmail, or Slack"), ("z", "undo the last change"),
                 ("; / :", "expand / collapse every message (click a message or ••• to toggle one)"),
@@ -354,9 +354,6 @@ class ThreadActions:
 
     def action_done(self):
         self._act(inbox.Done(), "Done. It returns to Todo if they write again.")
-
-    def action_wait(self):
-        self._act(inbox.Wait(), "Waiting for them. It returns to Todo when they reply.")
 
     def action_ignore(self):
         tid = self.current_thread_id()
@@ -537,7 +534,7 @@ class Page(Vertical):
 
 THREAD_KEYS = [  # Thread actions, Gmail-style (decision #93); shared by the Threads list and a Case
     Binding("r", "reply('sender')", "reply"), Binding("a", "reply('all')", "reply all"),
-    Binding("e", "done", "done"), Binding("b", "pause", "snooze"), Binding("w", "wait", "wait"),
+    Binding("e", "done", "done"), Binding("b", "pause", "snooze"),
     Binding("m", "ignore", "ignore"), Binding("l", "case", "case"), Binding("s", "status", "status"),
     Binding("p", "person", show=False), Binding("o", "link", show=False),
 ]
@@ -798,7 +795,7 @@ class ReplyBox(Vertical):
         self.remove_class("open")
         self.show_idle(self.view)
         self.app.undo = None  # a sent message cannot be unsent
-        self.app.notify("Sent. Waiting for them: it returns to Todo when they reply.")
+        self.app.notify("Sent. Waiting for them: back to Todo when they reply, or in 5 days to follow up.")
         page = self.app.main.page
         if page is not None:
             page.after_change()
@@ -995,7 +992,9 @@ def details_markup(v, db) -> str:
     t, p = v["thread"], v["person"]
     g, color, label = GLYPH[t.status_detail]
     head = lambda icon, text: f"[#928374]{ICON[icon]} {text}[/]"  # noqa: E731
-    lines = [head("status", "status"), f"[{color}]{g} {label}[/]", ""]
+    end = t.follow_up_at or t.snoozed_until
+    until = f" [#928374]until {stamp(end)}[/]" if t.status == "SNOOZED" and end else ""
+    lines = [head("status", "status"), f"[{color}]{g} {label}[/]{until}", ""]
     if p:
         lines += [head("person", "person"), f"[@click=app.open_person({p['id']})][b underline]{escape(p['name'])}[/][/]"]
         lines += [(f"[#c14a4a]{ICON['blocked']}[/] " if i["blocked"] else "")
@@ -1413,7 +1412,7 @@ class ConnectionPage(Page):
 
 
 KEY_GROUP = {  # bottom bar order: move · reply · triage · organize · general
-    "j": 0, "escape": 0, "u": 0, "r": 1, "a": 1, "ctrl+enter": 1, "e": 2, "b": 2, "w": 2, "m": 2,
+    "j": 0, "escape": 0, "u": 0, "r": 1, "a": 1, "ctrl+enter": 1, "e": 2, "b": 2, "m": 2,
     "l": 3, "s": 3, "z": 4, "question_mark": 4, "q": 4,
 }
 

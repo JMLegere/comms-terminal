@@ -38,6 +38,13 @@ def _at(ts: str) -> datetime:
     return datetime.fromtimestamp(float(ts), timezone.utc)
 
 
+def _title(text: str | None) -> str | None:
+    """A Thread title from Slack text: rendered, first line, without markup (#115)."""
+    from .render import plain, slack_markup
+    line = next((ln.strip() for ln in plain(slack_markup(text or "")).splitlines() if ln.strip()), "")
+    return line[:80] or None
+
+
 def parse(event: dict, connection, rules, client, thread_member=lambda channel, ts: None) -> inbox.Incoming | None:
     """One Slack message event -> Incoming, or None when not selected or not a message.
 
@@ -76,14 +83,17 @@ def parse(event: dict, connection, rules, client, thread_member=lambda channel, 
         mentioned = f"<@{self_id}>" in (content or "")
         if not (mentioned or member or (reply and client.in_thread(channel, thread_ts, self_id))):
             return None
-    sender = None if user == self_id else inbox.Identity("slack_user", user, profile_email=client.user_email(user))
+    sender = None if user == self_id else inbox.Identity("slack_user", user, client.real_name(user),
+                                                         profile_email=client.user_email(user))
     refs = [f"{channel}:{thread_ts}"] + ([member] if member else []) if reply else []
     return inbox.Incoming(
         connection_id=connection["id"], channel=channel, channel_kind=kind, kind=kind_,
         native_id=native_id, sender=sender, occurred_at=_at(event.get("event_ts", ts)),
         content=client.name_mentions(content) if content else content, thread_ref=refs,
-        data={"channel": channel, "ts": ts, **({"thread_ts": thread_ts} if thread_ts else {}),
-              **({"attachments": files} if files else {})})
+        title=_title(content) if kind_ == "MESSAGE" and not reply else None,
+        data={"channel": channel, "ts": ts, "kind": kind, **({"thread_ts": thread_ts} if thread_ts else {}),
+              **({"attachments": files} if files else {})},
+        channel_name=client.conversation_label(channel, kind))
 
 
 USER_AGENT = "universal-inbox/0.1 (+https://github.com/JMLegere/universal-inbox)"
@@ -110,11 +120,25 @@ class SlackClient:
     def __init__(self, token: str, get=_get):
         self.token, self.get, self._names, self._users, self._threads = token, get, {}, {}, {}
 
-    def conversation_name(self, channel: str) -> str | None:
+    def _info(self, channel: str) -> dict:
         if channel not in self._names:
             r = self.get("https://slack.com/api/conversations.info", self.token, {"channel": channel})
-            self._names[channel] = r.get("channel", {}).get("name") if r.get("ok") else None
+            self._names[channel] = r.get("channel", {}) if r.get("ok") else {}
         return self._names[channel]
+
+    def conversation_name(self, channel: str) -> str | None:
+        return self._info(channel).get("name") or None
+
+    def conversation_label(self, channel: str, kind: str) -> str | None:
+        """A friendly name: the channel's name, the other person in a DM, or the people in a group DM."""
+        info = self._info(channel)
+        if kind == "im":
+            return self.user_name(info["user"]) if info.get("user") else None
+        if kind == "mpim":  # Slack names these "mpdm-ana--bo--jeremy-1"
+            name = info.get("name") or ""
+            people = name.removeprefix("mpdm-").rsplit("-", 1)[0].split("--") if name.startswith("mpdm-") else []
+            return ", ".join(people) or info.get("purpose", {}).get("value") or None
+        return info.get("name") or None
 
     def _profile(self, user: str) -> dict:
         if user not in self._users:
@@ -124,6 +148,13 @@ class SlackClient:
 
     def user_email(self, user: str) -> str | None:
         return self._profile(user).get("profile", {}).get("email")
+
+    def real_name(self, user: str) -> str | None:
+        """First and last name, for the Person (Jeremy, 2026-10-12); the handle only when Slack has none."""
+        u = self._profile(user)
+        p = u.get("profile", {})
+        full = " ".join(x for x in (p.get("first_name"), p.get("last_name")) if x)
+        return p.get("real_name_normalized") or p.get("real_name") or full or self.user_name(user)
 
     def user_name(self, user: str) -> str | None:
         u = self._profile(user)
@@ -145,6 +176,105 @@ class SlackClient:
         return self._threads[key]
 
 
+KIND_OF = {"is_im": "im", "is_mpim": "mpim", "is_private": "group"}
+
+
+def refresh_names(db, client) -> int:
+    """Friendly names stored before names were kept (run at service start): Slack Channels, and Persons
+    still named by their Slack user ID."""
+    for r in db.execute("SELECT p.id, i.value FROM persons p JOIN identities i ON i.person_id = p.id"
+                        " WHERE i.kind = 'slack_user' AND p.display_name = i.value").fetchall():
+        name = client.real_name(r["value"])
+        if name and name != r["value"]:
+            with db:
+                db.execute("UPDATE persons SET display_name = ? WHERE id = ?", (name, r["id"]))
+    rows = db.execute("SELECT ch.id, ch.native_id, ch.kind FROM channels ch JOIN connections c ON c.id = ch.connection_id"
+                      " WHERE c.platform = 'slack' AND ch.name IS NULL").fetchall()
+    done = 0
+    for r in rows:
+        name = client.conversation_label(r["native_id"], r["kind"])
+        if name:
+            with db:
+                db.execute("UPDATE channels SET name = ? WHERE id = ?", (name, r["id"]))
+            done += 1
+    return done
+
+
+def conversations(client) -> list[dict]:
+    """Every conversation Jeremy is a member of: channels, private channels, DMs, and group DMs."""
+    out, cursor = [], ""
+    while True:
+        r = client.get("https://slack.com/api/users.conversations", client.token, {
+            "types": "public_channel,private_channel,im,mpim", "exclude_archived": "true", "limit": 200,
+            **({"cursor": cursor} if cursor else {})})
+        if not r.get("ok"):
+            raise RuntimeError(f"users.conversations failed: {r.get('error')}")
+        out += r.get("channels", [])
+        cursor = r.get("response_metadata", {}).get("next_cursor")
+        if not cursor:
+            return out
+
+
+def _pages(client, method, params):
+    cursor = ""
+    while True:
+        r = client.get(f"https://slack.com/api/{method}", client.token, {**params, "limit": 200,
+                                                                          **({"cursor": cursor} if cursor else {})})
+        if not r.get("ok"):
+            raise RuntimeError(f"{method} failed: {r.get('error')}")
+        yield from r.get("messages", [])
+        cursor = r.get("response_metadata", {}).get("next_cursor")
+        if not cursor or not r.get("has_more", True):
+            return
+
+
+def history_events(client, since: datetime):
+    """Message events for the last stretch of history, as the Events API would have sent them."""
+    oldest = f"{since.timestamp():.6f}"
+    for c in conversations(client):
+        kind = next((k for flag, k in KIND_OF.items() if c.get(flag)), "channel")
+        for m in _pages(client, "conversations.history", {"channel": c["id"], "oldest": oldest}):
+            yield c["id"], kind, m
+            if m.get("reply_count") and m.get("thread_ts") == m.get("ts"):
+                for r in _pages(client, "conversations.replies", {"channel": c["id"], "ts": m["ts"], "oldest": oldest}):
+                    if r.get("ts") != m["ts"]:
+                        yield c["id"], kind, r
+
+
+def import_recent(db, connection, client, days: int) -> int:
+    """One-time import (Jeremy, 2026-10-12): the last `days` of Slack through the live filter, oldest first,
+    so Threads form as they would have live; then every touched Thread goes to Todo, as Jeremy asked.
+    Returns the number of messages stored."""
+    since = datetime.now(timezone.utc).timestamp() - days * 86400
+    rules = [(r["kind"], r["value"]) for r in db.execute(
+        "SELECT kind, value FROM channel_rules WHERE connection_id = ?", (connection["id"],))]
+    events = sorted(({"type": "message", "channel": ch, "channel_type": kind, "user": m.get("user"),
+                      "text": m.get("text"), "ts": m["ts"], "event_ts": m["ts"], "subtype": m.get("subtype"),
+                      "files": m.get("files"), **({"thread_ts": m["thread_ts"]} if m.get("thread_ts") else {})}
+                     for ch, kind, m in history_events(client, datetime.fromtimestamp(since, timezone.utc))),
+                    key=lambda e: float(e["ts"]))
+
+    def thread_member(channel, thread_ts):
+        r = db.execute("SELECT native_id FROM activities WHERE kind = 'MESSAGE' AND (native_id = ? OR"
+                       " (json_extract(data, '$.channel') = ? AND json_extract(data, '$.thread_ts') = ?)) LIMIT 1",
+                       (f"{channel}:{thread_ts}", channel, thread_ts)).fetchone()
+        return r["native_id"] if r else None
+
+    stored, threads = 0, set()
+    for e in events:
+        inc = parse(e, connection, rules, client, thread_member)
+        t = inbox.ingest(db, inc) if inc is not None else None
+        if t is not None:
+            stored += 1
+            threads.add(t.id)
+    for tid in threads:
+        if inbox.get_thread(db, tid).status != "TODO":
+            replied = db.execute("SELECT 1 FROM activities WHERE thread_id = ? AND identity_id IS NULL"
+                                 " AND kind = 'MESSAGE'", (tid,)).fetchone()
+            inbox.act(db, tid, inbox.MarkTodo("NEW_REPLY" if replied else "CREATED"))
+    return stored
+
+
 class SlackSender:
     """Posts replies with Jeremy's user token, so they appear under his name (FR-4c)."""
 
@@ -155,7 +285,12 @@ class SlackSender:
         channel = next((h["data"]["channel"] for h in history if "channel" in h["data"]), None)
         if channel is None:
             raise inbox.SendFailed("slack send failed: Thread has no Slack channel")
-        thread_ts = next((h["data"]["thread_ts"] for h in history if h["data"].get("thread_ts")), None)
+        # Reply inside the Slack thread: in a channel the Thread is one Slack thread, rooted at its first
+        # message (#115); in a DM or group DM only when the conversation is already a Slack thread.
+        first = history[0]["data"] if history else {}
+        in_channel = first.get("kind", "channel" if not channel.startswith("D") else "im") in ("channel", "private")
+        thread_ts = first.get("thread_ts") or (first.get("ts") if in_channel else None) or next(
+            (h["data"]["thread_ts"] for h in history if h["data"].get("thread_ts")), None)
         payload = {"channel": channel, "text": text, **({"thread_ts": thread_ts} if thread_ts else {})}
         try:
             r = self.post("https://slack.com/api/chat.postMessage", self.token, payload)

@@ -14,17 +14,24 @@ class Client:
     def conversation_name(self, channel):
         return {"C1": "general", "C2": "customer-acme"}.get(channel)
 
+
     def user_email(self, user):
         return None
 
     def name_mentions(self, text):
         return text.replace(f"<@{ME}>", f"<@{ME}|Jeremy>")
 
+    def real_name(self, user):
+        return None
+
+    def conversation_label(self, channel, kind):
+        return self.conversation_name(channel)
+
     def in_thread(self, channel, thread_ts, user):
         return (channel, thread_ts) in self.threads and user == ME
 
 
-def setup():
+def setup():  # noqa: D103
     db = inbox.connect()
     inbox.migrate(db)
     with db:
@@ -81,3 +88,91 @@ def test_slack_formatting_renders_like_email():
     shown = render.plain(render.slack_markup(text))
     assert shown == "Hey @Jeremy, see the plan ↗ docs.acme.com now please code @here #general\n│ quoted line\n5 < 6 & ok"
     assert "[b]now[/b]" in render.slack_markup(text)
+
+
+def test_import_replays_history_through_the_live_filter_into_todo():
+    db, conn = setup()
+    now = datetime.now(timezone.utc).timestamp()
+    ts = lambda m: f"{now - m * 60:.6f}"  # noqa: E731
+    pages = {
+        "users.conversations": {"ok": True, "channels": [{"id": "C1"}, {"id": "C2"}, {"id": "D1", "is_im": True}]},
+        ("conversations.history", "C1"): [{"user": "U1", "text": "lunch?", "ts": ts(50)},
+                                          {"user": "U1", "text": f"<@{ME}> review?", "ts": ts(40)}],
+        ("conversations.history", "C2"): [{"user": "U2", "text": "deal update", "ts": ts(30), "reply_count": 1,
+                                           "thread_ts": ts(30)}],
+        ("conversations.replies", "C2"): [{"user": "U2", "text": "deal update", "ts": ts(30), "thread_ts": ts(30)},
+                                          {"user": ME, "text": "nice", "ts": ts(20), "thread_ts": ts(30)}],
+        ("conversations.history", "D1"): [{"user": "U3", "text": "hey", "ts": ts(10)}],
+    }
+
+    def get(url, token, params):
+        method = url.rsplit("/", 1)[1]
+        if method == "users.conversations":
+            return pages[method]
+        if method == "conversations.info":
+            return {"ok": True, "channel": {"name": {"C1": "general", "C2": "business"}.get(params["channel"])}}
+        if method == "users.info":
+            return {"ok": True, "user": {"name": params["user"]}}
+        return {"ok": True, "messages": pages[(method, params["channel"])], "has_more": False}
+
+    inbox.add_channel_rule(db, conn["id"], "channel", "business")
+    n = slack.import_recent(db, conn, slack.SlackClient("x", get=get), 7)
+    assert n == 4  # the mention, the #business thread (2), and the DM; #general chatter is skipped
+    rows = db.execute("SELECT status, status_detail FROM threads ORDER BY id").fetchall()
+    assert [r["status"] for r in rows] == ["TODO", "TODO", "TODO"]
+
+
+def test_channels_get_friendly_names():
+    db, conn = setup()
+
+    def get(url, token, params):
+        method = url.rsplit("/", 1)[1]
+        if method == "conversations.info":
+            return {"ok": True, "channel": {"C1": {"name": "business"}, "D1": {"user": "U3", "is_im": True},
+                                            "G1": {"name": "mpdm-ana--bo--jeremy-1"}}[params["channel"]]}
+        if method == "users.info":
+            return {"ok": True, "user": {"name": "ana.ruiz", "profile": {"display_name": "Ana"}}}
+        raise AssertionError(method)
+
+    c = slack.SlackClient("x", get=get)
+    assert c.conversation_label("C1", "channel") == "business"
+    assert c.conversation_label("D1", "im") == "Ana"
+    assert c.conversation_label("G1", "mpim") == "ana, bo, jeremy"
+    with db:  # a Channel stored before names were kept
+        db.execute("INSERT INTO channels (connection_id, native_id, kind) VALUES (?, 'D1', 'im')", (conn["id"],))
+    assert slack.refresh_names(db, c) == 1
+    ch = db.execute("SELECT * FROM channels").fetchone()
+    assert inbox._where(ch, None) == "DM · Ana"
+
+
+def test_people_are_named_first_and_last():
+    db, conn = setup()
+    profiles = {"U1": {"name": "ana.r", "profile": {"display_name": "Ana", "real_name": "Ana Ruiz"}}}
+
+    def get(url, token, params):
+        method = url.rsplit("/", 1)[1]
+        if method == "users.info":
+            return {"ok": True, "user": profiles[params["user"]]}
+        return {"ok": True, "channel": {"user": "U1"}}
+
+    c = slack.SlackClient("x", get=get)
+    ev = {"type": "message", "channel": "D1", "channel_type": "im", "user": "U1", "text": "hi", "ts": "1.0", "event_ts": "1.0"}
+    t = inbox.ingest(db, slack.parse(ev, conn, [], c))
+    assert inbox.thread_view(db, t.id)["person"]["name"] == "Ana Ruiz"
+    with db:  # a Person created before names were kept
+        db.execute("UPDATE persons SET display_name = 'U1'")
+    slack.refresh_names(db, c)
+    assert db.execute("SELECT display_name FROM persons").fetchone()[0] == "Ana Ruiz"
+
+
+def test_replies_post_inside_the_slack_thread():
+    sent = []
+    sender = slack.SlackSender("x", post=lambda url, token, payload: sent.append(payload) or {"ok": True, "ts": "9.9"})
+    channel_thread = [{"native_id": "C1:100.1", "data": {"channel": "C1", "ts": "100.1", "kind": "channel"}},
+                      {"native_id": "C1:100.5", "data": {"channel": "C1", "ts": "100.5", "kind": "channel",
+                                                          "thread_ts": "100.1"}}]
+    sender.send(None, "on it", [], [], channel_thread[:1])  # a top-level message with no replies yet
+    sender.send(None, "on it", [], [], channel_thread)
+    dm = [{"native_id": "D1:5.0", "data": {"channel": "D1", "ts": "5.0", "kind": "im"}}]
+    sender.send(None, "hi", [], [], dm)
+    assert [p.get("thread_ts") for p in sent] == ["100.1", "100.1", None]

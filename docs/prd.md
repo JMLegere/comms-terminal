@@ -836,6 +836,14 @@ All entries are dated 2026-10-10; exact times are unproven unless noted. Full de
   - Request / decision: Slack, before connecting: besides DMs, group DMs, and ruled channels, the user token also receives messages from every channel Jeremy belongs to (`message.channels`, `message.groups`; user scopes `channels:history`, `groups:history`), kept only when they mention him, reply in a thread already in the inbox, or reply in a thread he has posted in (`conversations.replies`, cached). Slack formatting renders like email: mentions as names (resolved at ingest), links as label plus domain, bold, italic, strike, code, quotes; files as Attachment chips. Links in the console open with Ctrl+Shift+click in Ghostty (Jeremy's choice over an in-app opener)
   - Source: Jeremy, "what's the best way to use universal inbox to manage slack as well?", "Build 3+4, then connect", "Use Ghostty's modifier-click" (2026-10-12)
   - Status: Accepted
+- **115**
+  - Request / decision: Slack channels mirror Slack threads one to one (Plain's "one-to-one" ingestion mode): a top-level message starts a Thread, its replies join it, and a reply from the console posts inside that Slack thread, rooted at the Thread's first message. DMs and group DMs keep Plain's default time-based grouping (same sender 2 hours, others 1 hour), since they have no threads to mirror; a Slack thread inside a DM is still followed. Slack Thread titles come from the rendered text. Found live: a reply went top-level into #dev because the Thread's first message carried no thread_ts; Jeremy deleted it. Also: Slack Persons are named first and last (`real_name`), Persons still named by an address or user ID take the real name when one arrives, channels keep friendly names (`#dev`, `DM · Logan`), and a one-time 7-day Slack import left 32 Threads in Todo
+  - Source: Jeremy, "this reply sent my message straight into #dev without replying in the slack thread. Slack has native threads that we should respect and normalize into our thread structure", "how does plain reply in slack", "the person should be the First Name last name", "import all messages … from the past 7 days", "into todo" (2026-10-12); Plain, https://www.plain.com/docs/product/channels/slack-ingestion-modes.md
+  - Status: Accepted
+- **116**
+  - Request / decision: Waiting for them only follows Jeremy's own message (a reply, or a Thread he starts); the `w` key is removed. Waiting ends after 5 days without a reply: the Thread returns to Todo as Needs next response, to follow up (Plain's Waiting for customer has no end; Gmail nudges and Superhuman reminders do). Stored in `threads.follow_up_at` (schema version 3, since `snoozed_until` is reserved for timed snoozes by a CHECK); existing Waiting Threads get 5 days from when they began waiting; the wake loop checks both every minute. The thread properties show "until <time>" for any Snoozed Thread
+  - Source: Jeremy, "how does 'waiting' work?", "i think we should remove the ability to press w. also it should have a default end time of 5 days" (2026-10-12)
+  - Status: Accepted
 
 ## 8. Work log
 
@@ -970,6 +978,12 @@ All entries are dated 2026-10-10; exact times are unproven unless noted. Full de
   - Activity: Fastmail made event-driven (#113: Worker `X-Inbox-To`, second routing rule, Fastmail rule created in Jeremy's browser, Sent-only poll, reply lookup by Message-ID); connection names and icons in the rail; Slack mentions and threads from any channel and Slack formatting (#114)
   - Result: 107 tests pass; Worker version 19cfa202 deployed; service restarted 15:50 UTC; Slack not yet connected
   - Evidence: `src/universal_inbox/fastmail.py`, `src/universal_inbox/slack.py`, `src/universal_inbox/render.py`, `tests/test_slack_mentions.py`, `tests/test_email_worker.py`
+  - Basis: Source-observed
+- **2026-10-12T16:40:12+00:00**
+  - Actor: Agent
+  - Activity: Slack connected (app A0C8LNM1YE6, events verified, rules #business #dev #incident), 7-day import, friendly channel and person names, one-to-one Slack threads in channels (#115); work moved to worktree `../universal-inbox-slack` (branch `slack-people`) while another session works in the main checkout
+  - Result: 116 tests pass in the worktree
+  - Evidence: `src/universal_inbox/slack.py`, `src/universal_inbox/inbox.py`, `tests/test_slack_mentions.py`, `features/slack.feature`
   - Basis: Source-observed
 
 ## 9. Sources and coverage check

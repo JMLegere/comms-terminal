@@ -28,6 +28,12 @@ class FakeClient:
     def name_mentions(self, text):
         return text
 
+    def real_name(self, user):
+        return None
+
+    def conversation_label(self, channel, kind):
+        return self.conversation_name(channel)
+
     def in_thread(self, channel, thread_ts, user):
         return False
 

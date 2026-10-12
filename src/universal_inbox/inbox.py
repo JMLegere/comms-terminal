@@ -14,9 +14,13 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Protocol
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
+WAIT = timedelta(days=5)  # Waiting for them ends after this with no reply: back to Todo to follow up (#116)
 MIGRATIONS = {  # version -> statement that upgrades an existing database to it
     2: "ALTER TABLE cases ADD COLUMN description TEXT NOT NULL DEFAULT ''",
+    3: "ALTER TABLE threads ADD COLUMN follow_up_at TEXT;"
+       " UPDATE threads SET follow_up_at = strftime('%Y-%m-%dT%H:%M:%f', status_changed_at, '+5 days') || '000+00:00'"
+       " WHERE status_detail = 'WAITING_FOR_CUSTOMER';",
 }
 
 # ponytail: fixed list; extend when a free-mail sender forms an Organization by mistake.
@@ -60,6 +64,7 @@ class Incoming:
     thread_ref: list[str] = field(default_factory=list)
     title: str | None = None
     data: dict = field(default_factory=dict)
+    channel_name: str | None = None  # a friendly name for the Channel (Slack #name, DM partner); kept current
 
 
 @dataclass(frozen=True)
@@ -71,6 +76,7 @@ class Thread:
     status_detail: str
     snoozed_until: str | None
     case_id: int | None
+    follow_up_at: str | None = None  # Waiting for them: back to Todo then with no reply (#116)
 
 
 @dataclass(frozen=True)
@@ -137,7 +143,7 @@ def migrate(db: sqlite3.Connection) -> None:
         db.executescript((Path(__file__).with_name("schema.sql")).read_text())
     else:
         for v in range(version + 1, SCHEMA_VERSION + 1):
-            db.execute(MIGRATIONS[v])
+            db.executescript(MIGRATIONS[v])
     db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 
@@ -151,7 +157,7 @@ def _now() -> datetime:
 
 def get_thread(db, thread_id: int) -> Thread:
     r = db.execute(
-        "SELECT id, channel_id, title, status, status_detail, snoozed_until, case_id"
+        "SELECT id, channel_id, title, status, status_detail, snoozed_until, case_id, follow_up_at"
         " FROM threads WHERE id = ?", (thread_id,)).fetchone()
     if r is None:
         raise KeyError(f"thread {thread_id}")
@@ -159,10 +165,11 @@ def get_thread(db, thread_id: int) -> Thread:
 
 
 def _set_status(db, thread_id, status, detail, at, snoozed_until=None, before=None):
+    follow_up = _iso(at + WAIT) if detail == "WAITING_FOR_CUSTOMER" else None
     db.execute(
         "UPDATE threads SET status = ?, status_detail = ?, status_changed_at = ?,"
-        " snoozed_until = ?, detail_before_snooze = ? WHERE id = ?",
-        (status, detail, _iso(at), snoozed_until, before, thread_id))
+        " snoozed_until = ?, detail_before_snooze = ?, follow_up_at = ? WHERE id = ?",
+        (status, detail, _iso(at), snoozed_until, before, follow_up, thread_id))
 
 
 def _has_replied(db, thread_id) -> bool:
@@ -206,6 +213,9 @@ def _identity_for(db, sender: Identity) -> sqlite3.Row:
     row = db.execute("SELECT * FROM identities WHERE kind = ? AND value = ?",
                      (sender.kind, value)).fetchone()
     if row is not None and row["person_id"] is not None:
+        if sender.display_name:  # a Person still named by its address or user ID gets the real name
+            db.execute("UPDATE persons SET display_name = ? WHERE id = ? AND display_name = ?",
+                       (sender.display_name, row["person_id"], value))
         return row
     person_id = None
     if sender.kind == "slack_user" and sender.profile_email:
@@ -261,6 +271,9 @@ def remove_identity(db, identity_id: int) -> None:
 def _channel_id(db, inc: Incoming) -> int:
     db.execute("INSERT OR IGNORE INTO channels (connection_id, native_id, kind) VALUES (?, ?, ?)",
                (inc.connection_id, inc.channel, inc.channel_kind))
+    if inc.channel_name:
+        db.execute("UPDATE channels SET name = ? WHERE connection_id = ? AND native_id = ? AND name IS NOT ?",
+                   (inc.channel_name, inc.connection_id, inc.channel, inc.channel_name))
     return db.execute("SELECT id FROM channels WHERE connection_id = ? AND native_id = ?",
                       (inc.connection_id, inc.channel)).fetchone()["id"]
 
@@ -272,7 +285,9 @@ def _thread_for_message(db, channel_id, inc: Incoming, identity_id):
                        (ref,)).fetchone()
         if r:
             return r["thread_id"]
-    if inc.channel_kind == "mailbox":
+    if inc.channel_kind in ("mailbox", "channel", "private"):
+        # Email threads by headers; Slack channels mirror Slack threads one to one, as Plain's "one-to-one"
+        # ingestion mode does (#115): a top-level message starts a Thread, its replies joined it above.
         return None
     last = db.execute(
         "SELECT a.thread_id, a.identity_id, a.occurred_at FROM activities a"
@@ -364,10 +379,11 @@ def ingest(db, inc: Incoming) -> Thread | None:
             else:
                 status = ("TODO", "CREATED")  # FR-6a
             title = inc.title or (inc.content or "").strip()[:80] or "(no subject)"
+            until = _iso(at + WAIT) if status[1] == "WAITING_FOR_CUSTOMER" else None
             thread_id = db.execute(
                 "INSERT INTO threads (channel_id, native_thread_id, title, status, status_detail,"
-                " status_changed_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (channel_id, inc.native_id, title, *status, _iso(at), _iso(at))).lastrowid
+                " status_changed_at, created_at, follow_up_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (channel_id, inc.native_id, title, *status, _iso(at), _iso(at), until)).lastrowid
         else:
             if inc.kind == "MESSAGE" and identity is None and _echo_of_sent(db, thread_id, inc):
                 return None
@@ -453,14 +469,18 @@ def reply(db, thread_id: int, text: str, sender: Sender,
 
 
 def wake(db, now: datetime) -> int:
-    """End timed snoozes that are due (FR-6d); returns how many woke."""
+    """End timed snoozes that are due (FR-6d), and waits with no reply after WAIT (#116: back to Todo as
+    Needs next response, to follow up); returns how many woke."""
     with db:
-        due = db.execute("SELECT id, detail_before_snooze FROM threads"
-                         " WHERE status_detail = 'WAITING_FOR_DURATION' AND snoozed_until <= ?",
-                         (_iso(now),)).fetchall()
+        due = db.execute("SELECT id, status_detail, detail_before_snooze FROM threads"
+                         " WHERE (status_detail = 'WAITING_FOR_DURATION' AND snoozed_until <= ?)"
+                         " OR (status_detail = 'WAITING_FOR_CUSTOMER' AND follow_up_at <= ?)",
+                         (_iso(now), _iso(now))).fetchall()
         for r in due:
-            detail = r["detail_before_snooze"] or (
-                "NEW_REPLY" if _has_replied(db, r["id"]) else "CREATED")
+            if r["status_detail"] == "WAITING_FOR_CUSTOMER":
+                detail = "NEW_REPLY"
+            else:
+                detail = r["detail_before_snooze"] or ("NEW_REPLY" if _has_replied(db, r["id"]) else "CREATED")
             _set_status(db, r["id"], "TODO", detail, now)
     return len(due)
 
@@ -532,9 +552,9 @@ def _sender(db, identity_id):
 def _where(channel, identity) -> str:
     kind = channel["kind"]
     if kind == "im":
-        return "Slack DM"
+        return f"DM · {channel['name']}" if channel["name"] else "Slack DM"
     if kind == "mpim":
-        return "Slack group"
+        return channel["name"] or "Slack group"
     if kind in ("channel", "private"):
         return "#" + (channel["name"] or channel["native_id"])
     domain = identity["value"].rsplit("@", 1)[-1] if identity and identity["kind"] == "email" else ""

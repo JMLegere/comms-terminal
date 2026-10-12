@@ -28,14 +28,21 @@ def test_activities_are_append_only_except_content_clearing_after_delete():
         db.execute("UPDATE threads SET status = 'DONE', status_detail = 'CREATED' WHERE id = ?", (thread.id,))
 
 
-def test_migrates_a_version_1_database_to_case_descriptions(tmp_path):
+def test_migrates_a_version_1_database(tmp_path):
     import sqlite3
     db = sqlite3.connect(tmp_path / "v1.db")
     db.execute("CREATE TABLE cases (id INTEGER PRIMARY KEY, title TEXT NOT NULL, created_at TEXT NOT NULL) STRICT")
     db.execute("INSERT INTO cases (title, created_at) VALUES ('Acme', '2026-10-01T00:00:00+00:00')")
+    db.execute("CREATE TABLE threads (id INTEGER PRIMARY KEY, status_detail TEXT NOT NULL,"
+               " status_changed_at TEXT NOT NULL) STRICT")
+    db.execute("INSERT INTO threads (status_detail, status_changed_at) VALUES"
+               " ('WAITING_FOR_CUSTOMER', '2026-10-01T09:30:00.250000+00:00'), ('CREATED', '2026-10-01T09:30:00+00:00')")
     db.execute("PRAGMA user_version = 1")
     inbox.migrate(db)
     assert db.execute("SELECT description FROM cases").fetchone()[0] == ""
+    # v3 (#116): threads already Waiting get a follow-up 5 days after they began waiting, in _iso's format
+    assert [r[0] for r in db.execute("SELECT follow_up_at FROM threads ORDER BY id")] == [
+        "2026-10-06T09:30:00.250000+00:00", None]
     assert db.execute("PRAGMA user_version").fetchone()[0] == inbox.SCHEMA_VERSION
 
 
@@ -67,3 +74,22 @@ def test_an_echo_of_a_sent_reply_is_not_stored_twice():
                             at + timedelta(minutes=6), "test reply, and one more thing", ["<a1@acme.com>"], "Re: Hi")
     assert inbox.ingest(db, longer) is not None
     assert db.execute("SELECT count(*) FROM activities WHERE thread_id = ?", (t.id,)).fetchone()[0] == 3
+
+
+
+def test_waiting_returns_to_todo_after_five_days_without_a_reply():
+    """#116: a reply puts the Thread in Waiting until they answer, or for 5 days, then it comes back to follow up."""
+    from datetime import timedelta
+    at = datetime(2026, 10, 12, 9, tzinfo=timezone.utc)
+    db = inbox.connect()
+    inbox.migrate(db)
+    with db:
+        cid = db.execute("INSERT INTO connections (platform, external_id, self_id, label, connected_at)"
+                         " VALUES ('email', 'me@x.io', 'me@x.io', 'Email', ?)", (at.isoformat(),)).lastrowid
+    mine = inbox.Incoming(cid, "me@x.io", "mailbox", "MESSAGE", "<m1@x.io>", None, at, "Proposal attached", [], "Proposal")
+    t = inbox.ingest(db, mine)
+    assert (t.status_detail, t.follow_up_at) == ("WAITING_FOR_CUSTOMER", "2026-10-17T09:00:00.000000+00:00")
+    assert inbox.wake(db, at + timedelta(days=4)) == 0
+    assert inbox.wake(db, at + timedelta(days=5)) == 1
+    t = inbox.get_thread(db, t.id)
+    assert (t.status, t.status_detail, t.follow_up_at) == ("TODO", "NEW_REPLY", None)

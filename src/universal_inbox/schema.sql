@@ -47,6 +47,7 @@ CREATE TABLE threads (
     CHECK (detail_before_snooze IN ('CREATED', 'NEW_REPLY', 'IN_PROGRESS')),
   case_id           INTEGER REFERENCES cases (id),
   created_at        TEXT NOT NULL,
+  follow_up_at      TEXT,            -- Waiting for them: back to Todo at this time with no reply (#116)
   UNIQUE (channel_id, native_thread_id),
   CHECK (
     (status = 'TODO'

@@ -5,7 +5,7 @@ A single-user console that tracks who owes whom what across Jeremy's professiona
 ## Communication
 
 **Thread**:
-The unit of work, as in Plain: an email thread, or a time-based group of Slack messages (same sender within 2 hours, different senders within 1 hour).
+The unit of work, as in Plain: an email thread; a Slack thread in a channel (a top-level message and its replies); or, in a Slack DM or group DM, a time-based group of messages (same sender within 2 hours, different senders within 1 hour).
 _Avoid_: Conversation, Ticket, Loop
 
 **Activity**:

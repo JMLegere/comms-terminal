@@ -38,6 +38,8 @@ def main(argv=None) -> None:
     i.add_argument("--slack-team", help="Slack team ID")
     i.add_argument("--slack-user", help="Jeremy's Slack user ID")
     i.add_argument("--fastmail", help="Jeremy's Fastmail address (a second email Connection, polled over MCP)")
+    si = sub.add_parser("slack-import", help="one-time import of recent Slack, through the live filter")
+    si.add_argument("--days", type=int, default=7)
     f = sub.add_parser("fastmail-import", help="one-time import of recent Fastmail Inbox and Sent, left in Todo")
     f.add_argument("--cred", default=str(Path.home() / ".config/universal-inbox/fastmail-oauth.json"))
     f.add_argument("--days", type=int, default=30)
@@ -63,6 +65,19 @@ def main(argv=None) -> None:
                 db.execute("INSERT OR IGNORE INTO connections (platform, external_id, self_id, label, connected_at)"
                            " VALUES ('slack', ?, ?, 'Slack', ?)", (a.slack_team, a.slack_user, now))
         print(f"Connections in {a.db}: " + ", ".join(r[0] for r in db.execute("SELECT platform FROM connections")))
+    elif a.cmd == "slack-import":
+        # Run with the service's credential, e.g. sudo systemd-run --uid=jerry --pipe --wait
+        #   -p LoadCredentialEncrypted=slack-user-token:/etc/credstore.encrypted/universal-inbox.slack-user-token …
+        from . import inbox, serve, slack
+        token = serve.credential("slack-user-token")
+        if token is None:
+            raise SystemExit("no slack-user-token credential (run through systemd-run; runbook §3)")
+        db = inbox.connect(a.db)
+        conn = db.execute("SELECT * FROM connections WHERE platform = 'slack'").fetchone()
+        if conn is None:
+            raise SystemExit("no Slack Connection: run `universal-inbox init --slack-team … --slack-user …` first")
+        n = slack.import_recent(db, conn, slack.SlackClient(token.decode()), a.days)
+        print(f"Slack: stored {n} messages from the last {a.days} days")
     elif a.cmd == "fastmail-import":
         from . import fastmail, inbox
         db = inbox.connect(a.db)

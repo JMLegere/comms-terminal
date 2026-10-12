@@ -107,7 +107,7 @@ The side rail stays visible on every screen (Thread, Person, Cases, Channels); o
 │ To: ana@acme.com   Cc: ops@acme.com        (ctrl+s send · esc cancel)            │
 │ ▌                                                                                │
 └──────────────────────────────────────────────────────────────────────────────────┘
- esc back  r reply  e done  z pause  w wait  s status  i ignore  c case  o link  p person
+ esc back  r reply  e done  z pause  s status  i ignore  c case  o link  p person
 ```
 
 - Timeline: messages oldest first, sender and time; Jeremy's messages labelled `You`. Edits show `(edited)`; a deleted message shows `message deleted` with no content (FR-2a).
@@ -136,7 +136,7 @@ Text-first, like a terminal mail client with Gmail's habits. No images in the co
 - `r` opens the box under the timeline; the conversation stays visible.
 - Email: `To` and `Cc` are prefilled reply-all (FR-3b) and editable with `tab` into a one-line field. Slack: no recipient line; the box shows the channel or DM.
 - `ctrl+enter` sends (#100; `ctrl+s` still works where a terminal cannot report `ctrl+enter`); `esc` closes the box and keeps the draft in memory for that Thread until the app exits.
-- While sending: the box shows `sending…`. On success the app returns to the queue with a toast `Sent → Waiting for them`. On failure the box stays open with the text and shows the error in red.
+- While sending: the box shows `sending…`. On success the app returns to the queue with a toast `Sent → Waiting for them` (back to Todo when they reply, or after 5 days to follow up, #116). On failure the box stays open with the text and shows the error in red.
 
 ### Status, Case, and Person pickers
 
@@ -156,7 +156,7 @@ Text-first, like a terminal mail client with Gmail's habits. No images in the co
 **Decision #93**: Gmail-style where Gmail has an equivalent.
 
 - Move: `←`/`→` focus the previous/next pane without opening an item or changing contents; `↑`/`↓` or `j`/`k` move in the main page. In the rail, `↑`/`↓` highlight and `enter` opens; in the thread pane, `↑`/`↓` scroll. `space`/`pgdn`/`pgup` scroll the thread, `u` or `esc` back, `1`–`5` Status views, `6`–`9` People, Organizations, Cases, Channels.
-- Thread (main list, focused thread pane, or selected Case card): `r` reply to the sender, `a` reply all (FR-3b's reply-all stays one key away), `e` Done (Gmail archive), `b` snooze (Gmail snooze), `m` Ignore (Gmail mute), `l` Case (Gmail label), `z` undo (Gmail undo), `w` wait for them, `s` change status, `p` Person, `o` open in Gmail or Slack, `ctrl+enter` send (#100).
+- Thread (main list, focused thread pane, or selected Case card): `r` reply to the sender, `a` reply all (FR-3b's reply-all stays one key away), `e` Done (Gmail archive), `b` snooze (Gmail snooze), `m` Ignore (Gmail mute), `l` Case (Gmail label), `z` undo (Gmail undo), `s` change status, `p` Person, `o` open in Gmail or Slack, `ctrl+enter` send (#100).
 - General: `?` all keys, `q` quit.
 - The footer lists every action for the page as plain text: key in blue, description in grey, no icons or blocks (#94).
 

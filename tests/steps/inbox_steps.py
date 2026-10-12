@@ -226,6 +226,13 @@ def ingest_in_reply_to(ctx, addr, mid):
     keep(ctx, inbox.ingest(ctx.db, email_in(ctx, addr, refs=[mid])))
 
 
+@when(parsers.parse('Ingest receives a Slack reply from "{user}" in that Slack thread at "{hhmm}"'))
+def slack_thread_reply(ctx, user, hhmm):
+    first = ctx.first[ctx.thread.id]
+    inc = slack_in(ctx, user, first.split(":", 1)[0], when=at(hhmm))
+    keep(ctx, inbox.ingest(ctx.db, inbox.Incoming(**{**inc.__dict__, "thread_ref": [first]})))
+
+
 @when(parsers.parse('Ingest receives a top-level Slack message from Jeremy in "{channel}" at "{hhmm}"'))
 def jeremy_post(ctx, channel, hhmm):
     ctx.thread_count = thread_count(ctx)

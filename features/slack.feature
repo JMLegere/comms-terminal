@@ -2,8 +2,10 @@ Feature: Slack
   Slack follows Plain (ADR 0002): a bot in selected channels and Jeremy's own DMs deliver events to /hooks/slack,
   and replies post from Jeremy's profile. Slack Verify (slack.verify) checks the signing secret. Slack Parse (slack.parse)
   turns an event into an Incoming, or nothing when the channel is not selected by Channel Rules (channel_rules);
-  DMs and group DMs are always selected. Ingest (inbox.ingest) groups top-level messages by time: same sender within
-  2 hours, or a different sender within 1 hour, of the Channel's latest Thread. The Slack Sender (slack.SlackSender) posts replies.
+  DMs and group DMs are always selected. In channels a Thread mirrors one Slack thread (Plain's one-to-one ingestion
+  mode, #115); in DMs and group DMs Ingest (inbox.ingest) groups top-level messages by time: same sender within
+  2 hours, or a different sender within 1 hour, of the Channel's latest Thread. The Slack Sender (slack.SlackSender)
+  posts replies inside the Slack thread.
 
   @AS-13 @FR-4a @FR-4b
   Scenario: Ingest groups a sender's messages within 2 hours into one Thread
@@ -17,8 +19,10 @@ Feature: Slack
   Scenario: Jeremy's own top-level post creates a waiting Thread
     When Ingest receives a top-level Slack message from Jeremy in "C0EXTACME" at "10:00"
     Then a Thread is created with Status "SNOOZED" and Status Detail "WAITING_FOR_CUSTOMER"
-    When Ingest receives a Slack message from "U0ANA" in "C0EXTACME" at "10:40"
+    When Ingest receives a Slack reply from "U0ANA" in that Slack thread at "10:40"
     Then that Thread has Status "TODO" and Status Detail "NEW_REPLY"
+    When Ingest receives a Slack message from "U0ANA" in "C0EXTACME" at "10:50"
+    Then that message is in a new Thread
 
   @AS-15 @FR-4 @FR-4a
   Scenario: Slack Parse applies Channel Rules and always selects DMs

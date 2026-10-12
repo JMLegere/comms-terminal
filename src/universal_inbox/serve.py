@@ -18,8 +18,9 @@ from . import email, fastmail, inbox, slack
 
 def credential(name: str) -> bytes | None:
     """A systemd credential, or None when this platform is not connected yet (its unit drop-in is absent)."""
-    path = Path(os.environ["CREDENTIALS_DIRECTORY"]) / name
-    return path.read_bytes().strip() if path.exists() else None
+    directory = os.environ.get("CREDENTIALS_DIRECTORY")
+    path = Path(directory) / name if directory else None
+    return path.read_bytes().strip() if path is not None and path.exists() else None
 
 
 def connection_id(db, platform: str) -> int | None:
@@ -176,6 +177,17 @@ def run(db_path: str, socket_path: str, host: str, port: int) -> None:
     threads.append(threading.Thread(target=wake_loop, args=(db_path, stop), daemon=True))
     if fm is not None:
         threads.append(threading.Thread(target=fastmail.poll_loop, args=(db_path, fm, stop), daemon=True))
+    if token := credential("slack-user-token"):
+        def names():
+            db = inbox.connect(db_path)
+            try:
+                slack.refresh_names(db, slack.SlackClient(token.decode()))
+            except (OSError, ValueError, KeyError) as e:
+                import logging
+                logging.getLogger("universal_inbox.slack").info("slack channel names not refreshed: %s", e)
+            finally:
+                db.close()
+        threads.append(threading.Thread(target=names, daemon=True))
     for t in threads:
         t.start()
     try:
