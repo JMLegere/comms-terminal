@@ -977,8 +977,8 @@ def _sender(db, identity_id):
 
 def _where(channel, identity) -> str:
     kind = channel["kind"]
-    if kind == "im" and dict(channel).get("platform") == "sms":
-        return f"SMS · {channel['name'] or channel['native_id']}"
+    if kind == "im" and dict(channel).get("platform") == "sms":  # the queue already shows the sender's number
+        return "SMS" if identity else f"SMS · {channel['name'] or channel['native_id']}"
     if kind == "im":
         return f"DM · {channel['name']}" if channel["name"] else "Slack DM"
     if kind == "mpim":

@@ -59,7 +59,7 @@ def test_texts_become_one_thread_and_a_phone_reply_answers_it():
     db, cid = setup()
     assert hook(db, cid, event("message.received", "AC1", "Need the drawings", ANA, [ME])) == 204
     rows = inbox.queue(db, "Todo")
-    assert [(r["title"], r["detail"], r["where"]) for r in rows] == [("Need the drawings", "CREATED", f"SMS · {ANA}")]
+    assert [(r["title"], r["detail"], r["where"]) for r in rows] == [("Need the drawings", "CREATED", "SMS")]
     assert [tuple(r) for r in db.execute("SELECT kind, value FROM identities")] == [("phone", ANA)]
     # Jeremy answers from the Quo app: message.delivered, no identity, same Thread, out of Todo
     hook(db, cid, event("message.delivered", "AC2", "Sending now", ME, [ANA], at="2026-10-12T21:19:00Z"), "msg_2")
