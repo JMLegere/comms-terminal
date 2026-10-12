@@ -52,7 +52,7 @@ def setup(connected_minutes_ago=60 * 24 * 40):
     inbox.migrate(db)
     with db:
         db.execute("INSERT INTO connections (platform, external_id, self_id, label, connected_at)"
-                   " VALUES ('email', ?, ?, 'Fastmail', ?)", (ME, ME, (NOW - timedelta(minutes=connected_minutes_ago)).isoformat()))
+                   " VALUES ('fastmail', ?, ?, 'Fastmail', ?)", (ME, ME, (NOW - timedelta(minutes=connected_minutes_ago)).isoformat()))
     return db, db.execute("SELECT * FROM connections").fetchone()
 
 
@@ -131,10 +131,10 @@ def test_reply_socket_routes_a_fastmail_thread_to_its_sender():
     fm = FakeFastmail([mail("M1", "T1", "Inbox", "ana@acme.com", "Pricing", "Hi", 30)])
     tid = fastmail.sync(db, fm, conn, NOW - timedelta(days=1), {ME})[0]
     status, out = _serve.handle_reply(db, json.dumps({"thread_id": tid, "text": "Yes"}).encode(),
-                                      {conn["id"]: fastmail.FastmailSender(fm), "email": object()})
+                                      _serve.Senders({"fastmail": fm}))  # the Fastmail adapter makes its sender
     assert status == 200 and fm.sent[0]["emailId"] == "M1"
-    status, out = _serve.handle_reply(db, json.dumps({"thread_id": tid, "text": "Yes"}).encode(), {"email": object()})
-    assert status == 503  # never falls back to the Gmail sender
+    status, out = _serve.handle_reply(db, json.dumps({"thread_id": tid, "text": "Yes"}).encode(), _serve.Senders())
+    assert status == 503  # no Fastmail client: never another Platform's sender
 
 
 class FakeHttp:

@@ -31,7 +31,7 @@ def ctx():
     inbox.migrate(db)
     with db:
         db.execute("INSERT INTO connections (id, platform, external_id, self_id, label, connected_at)"
-                   " VALUES (1, 'email', ?, ?, 'Email', '2026-10-12T00:00:00+00:00')", (MAILBOX, MAILBOX))
+                   " VALUES (1, 'gmail', ?, ?, 'Gmail', '2026-10-12T00:00:00+00:00')", (MAILBOX, MAILBOX))
         db.execute("INSERT INTO connections (id, platform, external_id, self_id, label, connected_at)"
                    " VALUES (2, 'slack', 'T0AGENTMAPLE', 'U0JEREMY', 'Slack', '2026-10-12T00:00:00+00:00')")
     return SimpleNamespace(db=db, thread=None, threads={}, persons={}, person=None, sender=FakeSender(),

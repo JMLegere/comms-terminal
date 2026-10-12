@@ -18,7 +18,7 @@ from email.utils import parseaddr, parsedate_to_datetime
 from pathlib import Path
 from zipfile import ZipFile
 
-from universal_inbox import email, inbox
+from universal_inbox import email, inbox, platforms
 
 MEMBERS = ("Takeout/Mail/Inbox.mbox", "Takeout/Mail/Sent.mbox")
 STATUS_COLUMNS = "status, status_detail, snoozed_until, detail_before_snooze"
@@ -86,7 +86,7 @@ def run(archive, db_path, connection_id, since, until, apply=False) -> dict:
         if db.execute("PRAGMA user_version").fetchone()[0] != inbox.SCHEMA_VERSION:
             raise ValueError("Import requires the current database schema")
         connection = db.execute("SELECT * FROM connections WHERE id = ?", (connection_id,)).fetchone()
-        if connection is None or connection["platform"] != "email":
+        if connection is None or connection["platform"] not in platforms.EMAIL:
             raise ValueError("Import requires an existing email Connection")
         self_id = connection["self_id"].lower()
         if (connection["external_id"].lower() != self_id or self_id.count("@") != 1

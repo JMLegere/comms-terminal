@@ -33,16 +33,17 @@ def setup(tmp_path):
 def test_handle_reply_statuses(tmp_path):
     path, tid = setup(tmp_path)
     db = inbox.connect(path)
-    assert serve.handle_reply(db, b"{}", {})[0] == 400
-    assert serve.handle_reply(db, json.dumps({"thread_id": 999, "text": "x"}).encode(), {})[0] == 404
-    status, body = serve.handle_reply(db, json.dumps({"thread_id": tid, "text": "x"}).encode(), {"slack": Sender(True)})
+    assert serve.handle_reply(db, b"{}", serve.Senders())[0] == 400
+    assert serve.handle_reply(db, json.dumps({"thread_id": 999, "text": "x"}).encode(), serve.Senders())[0] == 404
+    status, body = serve.handle_reply(db, json.dumps({"thread_id": tid, "text": "x"}).encode(),
+                                      serve.Senders(made={2: Sender(True)}))
     assert status == 502 and "invalid_auth" in body["error"]
 
 
 def test_reply_over_unix_socket(tmp_path):
     path, tid = setup(tmp_path)
     sock = str(tmp_path / "s.sock")
-    server = serve.reply_server(path, sock, {"slack": Sender()})
+    server = serve.reply_server(path, sock, serve.Senders(made={2: Sender()}))
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
         import os
@@ -75,7 +76,15 @@ def test_service_runs_with_email_only(tmp_path, monkeypatch):
     db_path = str(tmp_path / "inbox.db")
     db = inbox.connect(db_path)
     inbox.migrate(db)
-    assert set(_serve.senders_from_credentials(db)) == set()  # no email Connection yet, no Slack token
+    # A Connection added while the service runs gets its sender on first use, with no restart
+    with db:
+        db.execute("INSERT INTO connections (id, platform, external_id, self_id, label, connected_at)"
+                   " VALUES (1, 'gmail', 'me@x.io', 'me@x.io', 'Gmail', '2026-10-12T00:00:00+00:00')")
+        db.execute("INSERT INTO connections (id, platform, external_id, self_id, label, connected_at)"
+                   " VALUES (2, 'slack', 'T0', 'U0', 'Slack', '2026-10-12T00:00:00+00:00')")
+    senders, rows = _serve.Senders(), {r["id"]: r for r in db.execute("SELECT * FROM connections")}
+    assert type(senders.get(rows[1])).__name__ == "EmailSender" and senders.get(rows[1]).from_address == "me@x.io"
+    assert senders.get(rows[2]) is None  # no Slack token
     server = _serve.hooks_server(db_path, "127.0.0.1", 0)
     _threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
@@ -127,7 +136,7 @@ def test_email_hook_logs_its_outcome_without_content(caplog):
     inbox.migrate(db)
     with db:
         cid = db.execute("INSERT INTO connections (platform, external_id, self_id, label, connected_at) VALUES"
-                         " ('email', 'me@x.io', 'me@x.io', 'Email', '2026-10-12T00:00:00+00:00')").lastrowid
+                         " ('gmail', 'me@x.io', 'me@x.io', 'Gmail', '2026-10-12T00:00:00+00:00')").lastrowid
     now = datetime(2026, 10, 12, 10, tzinfo=timezone.utc)
 
     def post(raw):

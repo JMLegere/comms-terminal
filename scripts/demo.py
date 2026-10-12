@@ -190,10 +190,10 @@ def main(argv=None) -> int:
     inbox.migrate(db)
     stamp = datetime.now(timezone.utc).isoformat()
     with db:
-        db.execute("INSERT INTO connections (platform, external_id, self_id, label, connected_at)"
-                   " VALUES ('email', ?, ?, 'Email', ?)", (MAILBOX, MAILBOX, stamp))
-        db.execute("INSERT INTO connections (platform, external_id, self_id, label, connected_at)"
-                   " VALUES ('slack', ?, ?, 'Slack', ?)", (TEAM, ME, stamp))
+        gmail = db.execute("INSERT INTO connections (platform, external_id, self_id, label, connected_at)"
+                           " VALUES ('gmail', ?, ?, 'Gmail', ?)", (MAILBOX, MAILBOX, stamp)).lastrowid
+        slack_id = db.execute("INSERT INTO connections (platform, external_id, self_id, label, connected_at)"
+                              " VALUES ('slack', ?, ?, 'Slack', ?)", (TEAM, ME, stamp)).lastrowid
     db.close()
 
     # Demo secrets in a private directory, loaded the way systemd's LoadCredentialEncrypted= exposes them.
@@ -205,8 +205,8 @@ def main(argv=None) -> int:
     os.environ["CREDENTIALS_DIRECTORY"] = creds
 
     fakes = FakeEndpoints()
-    senders = {"email": EmailSender("re_demo", MAILBOX, post=fakes.resend),
-               "slack": SlackSender("xoxp-demo", post=fakes.slack_post)}
+    senders = serve.Senders(made={gmail: EmailSender("re_demo", MAILBOX, post=fakes.resend),
+                                  slack_id: SlackSender("xoxp-demo", post=fakes.slack_post)})
     servers = [serve.hooks_server(a.db, "127.0.0.1", a.port, client=slack.SlackClient("xoxp-demo", get=fakes.slack_get)),
                serve.reply_server(a.db, a.socket, senders)]
     for s in servers:

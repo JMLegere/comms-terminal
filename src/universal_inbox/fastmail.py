@@ -25,7 +25,6 @@ from . import inbox
 MCP = "https://api.fastmail.com/mcp"
 TOKEN = "https://api.fastmail.com/oauth/refresh"
 USER_AGENT = "universal-inbox/0.1 (+https://github.com/JMLegere/universal-inbox)"
-LABEL = "Fastmail"  # connections.label that marks the Fastmail Connection
 INBOUND = "fastmail@inbox.agentmaple.com"  # the Fastmail rule's "Send a copy to" address (#113)
 BOUNCES = ("mailer-daemon@", "postmaster@")
 log = logging.getLogger("universal_inbox.fastmail")
@@ -232,7 +231,7 @@ def poll_loop(db_path: str, client, stop: threading.Event, every: float = 600) -
     while True:
         db, conn = inbox.connect(db_path), None
         try:
-            conn = db.execute("SELECT * FROM connections WHERE label = ?", (LABEL,)).fetchone()
+            conn = db.execute("SELECT * FROM connections WHERE platform = 'fastmail'").fetchone()
             if conn is not None:
                 mine = mine or identities(client)
                 since = datetime.fromisoformat(conn["connected_at"])
@@ -263,6 +262,12 @@ def import_recent(db, client, connection, days: int) -> int:
 
 
 # --- outbound ------------------------------------------------------------------------------------
+
+def make_sender(connection, credential, shared):
+    """Uses the service's one Fastmail client (it rotates refresh tokens, so only one may exist)."""
+    client = shared.get("fastmail")
+    return FastmailSender(client) if client is not None else None
+
 
 class FastmailSender:
     """Replies through Fastmail's send_email (mode reply): Fastmail sets the threading headers, quotes the

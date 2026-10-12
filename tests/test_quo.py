@@ -34,7 +34,7 @@ def setup():
     inbox.migrate(db)
     with db:
         cid = db.execute("INSERT INTO connections (platform, external_id, self_id, label, connected_at)"
-                         " VALUES ('sms', ?, ?, 'Quo', ?)", (ME, ME, NOW.isoformat())).lastrowid
+                         " VALUES ('quo', ?, ?, 'Quo', ?)", (ME, ME, NOW.isoformat())).lastrowid
     return db, cid
 
 

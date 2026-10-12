@@ -1,6 +1,6 @@
 CREATE TABLE connections (
   id                INTEGER PRIMARY KEY,
-  platform          TEXT NOT NULL CHECK (platform IN ('email', 'slack', 'sms')),
+  platform          TEXT NOT NULL CHECK (platform IN ('gmail', 'fastmail', 'slack', 'quo')),  -- platforms.py
   external_id       TEXT NOT NULL UNIQUE,  -- email address, Slack team ID, or Quo Work number
   self_id           TEXT NOT NULL,         -- Jeremy's address, Slack user ID, or Work number
   label             TEXT NOT NULL,

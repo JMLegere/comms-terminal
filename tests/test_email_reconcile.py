@@ -23,8 +23,8 @@ def db(tmp_path, monkeypatch):
         db.executemany(
             "INSERT INTO connections (id, platform, external_id, self_id, label, connected_at)"
             " VALUES (?, ?, ?, ?, ?, ?)",
-            [(1, "email", SELF, SELF, "Mail", AT.isoformat()),
-             (2, "email", OTHER, OTHER, "Other mail", AT.isoformat()),
+            [(1, "gmail", SELF, SELF, "Mail", AT.isoformat()),
+             (2, "gmail", OTHER, OTHER, "Other mail", AT.isoformat()),
              (3, "slack", "TTEST", "USELF", "Slack", AT.isoformat())],
         )
     yield db
@@ -591,7 +591,7 @@ def test_reply_prepares_coherent_history_before_wal_merge_and_releases_snapshot_
     assert replied.id == root.id and replied.status_detail == "WAITING_FOR_CUSTOMER"
     assert sender.arguments == ("Prepared reply", ["ana@acme.test"], [])
     assert db.execute("SELECT thread_id FROM activities WHERE native_id = '<sent@test>'").fetchone()[0] == root.id
-    assert [tuple(r) for r in db.execute("SELECT id, last_error FROM connections WHERE platform = 'email' ORDER BY id")] == [
+    assert [tuple(r) for r in db.execute("SELECT id, last_error FROM connections WHERE platform = 'gmail' ORDER BY id")] == [
         (1, None), (2, "Other account error"),
     ]
     assert triage(db, child.id) == child_state

@@ -40,8 +40,10 @@ def test_migrates_a_version_1_database(tmp_path):
     db.execute("CREATE TABLE connections (id INTEGER PRIMARY KEY, platform TEXT NOT NULL CHECK (platform IN"
                " ('email', 'slack')), external_id TEXT NOT NULL UNIQUE, self_id TEXT NOT NULL, label TEXT NOT NULL,"
                " connected_at TEXT NOT NULL, auth_ok INTEGER NOT NULL DEFAULT 1, last_error TEXT) STRICT")
-    db.execute("INSERT INTO connections (platform, external_id, self_id, label, connected_at)"
-               " VALUES ('slack', 'T0', 'U0', 'Slack', '2026-10-01T00:00:00+00:00')")
+    db.executemany("INSERT INTO connections (platform, external_id, self_id, label, connected_at)"
+                   " VALUES (?, ?, ?, ?, '2026-10-01T00:00:00+00:00')",
+                   [("slack", "T0", "U0", "Slack"), ("email", "me@x.io", "me@x.io", "Email"),
+                    ("email", "me@fastmail.com", "me@fastmail.com", "Fastmail")])
     db.execute("CREATE TABLE identities (id INTEGER PRIMARY KEY, person_id INTEGER, kind TEXT NOT NULL CHECK (kind IN"
                " ('email', 'slack_user')), value TEXT NOT NULL, blocked INTEGER NOT NULL DEFAULT 0, UNIQUE (kind, value)) STRICT")
     db.execute("INSERT INTO identities (kind, value) VALUES ('email', 'ana@acme.com')")
@@ -49,10 +51,12 @@ def test_migrates_a_version_1_database(tmp_path):
     inbox.migrate(db)
     assert db.execute("SELECT description FROM cases").fetchone()[0] == ""
     # v5 (SMS): rebuilt tables keep their rows and accept the new platform and identity kind
-    assert db.execute("SELECT platform, external_id FROM connections").fetchall() == [("slack", "T0")]
+    # v6: Platforms are services; the email Platform splits by its Fastmail label
+    assert db.execute("SELECT platform, external_id FROM connections ORDER BY id").fetchall() == [
+        ("slack", "T0"), ("gmail", "me@x.io"), ("fastmail", "me@fastmail.com")]
     assert db.execute("SELECT kind, value FROM identities").fetchall() == [("email", "ana@acme.com")]
     db.execute("INSERT INTO connections (platform, external_id, self_id, label, connected_at)"
-               " VALUES ('sms', '+15068324154', '+15068324154', 'Quo', '2026-10-12T00:00:00+00:00')")
+               " VALUES ('quo', '+15068324154', '+15068324154', 'Quo', '2026-10-12T00:00:00+00:00')")
     db.execute("INSERT INTO identities (kind, value) VALUES ('phone', '+15066092430')")
     # v3 (#116): threads already Waiting get a follow-up 5 days after they began waiting, in _iso's format
     assert [r[0] for r in db.execute("SELECT follow_up_at FROM threads ORDER BY id")] == [
@@ -68,7 +72,7 @@ def test_an_echo_of_a_sent_reply_is_not_stored_twice():
     inbox.migrate(db)
     with db:
         cid = db.execute("INSERT INTO connections (platform, external_id, self_id, label, connected_at)"
-                         " VALUES ('email', 'me@x.io', 'me@x.io', 'Email', ?)", (at.isoformat(),)).lastrowid
+                         " VALUES ('gmail', 'me@x.io', 'me@x.io', 'Gmail', ?)", (at.isoformat(),)).lastrowid
     ana = inbox.Identity("email", "ana@acme.com")
     t = inbox.ingest(db, inbox.Incoming(cid, "me@x.io", "mailbox", "MESSAGE", "<a1@acme.com>", ana, at, "hi", [], "Hi"))
     mine = inbox.Incoming(cid, "me@x.io", "mailbox", "MESSAGE", "<sent@x.io>", None, at + timedelta(minutes=5),
@@ -99,7 +103,7 @@ def test_waiting_returns_to_todo_after_five_days_without_a_reply():
     inbox.migrate(db)
     with db:
         cid = db.execute("INSERT INTO connections (platform, external_id, self_id, label, connected_at)"
-                         " VALUES ('email', 'me@x.io', 'me@x.io', 'Email', ?)", (at.isoformat(),)).lastrowid
+                         " VALUES ('gmail', 'me@x.io', 'me@x.io', 'Gmail', ?)", (at.isoformat(),)).lastrowid
     mine = inbox.Incoming(cid, "me@x.io", "mailbox", "MESSAGE", "<m1@x.io>", None, at, "Proposal attached", [], "Proposal")
     t = inbox.ingest(db, mine)
     assert (t.status_detail, t.follow_up_at) == ("WAITING_FOR_CUSTOMER", "2026-10-17T09:00:00.000000+00:00")

@@ -138,6 +138,12 @@ def quoted(text: str, history: list[dict], self_address: str) -> dict:
     return {"text": plain, "html": rich}
 
 
+def make_sender(connection, credential, shared):
+    """The Gmail Connection's sender (Resend, from its address), or None until the key is installed."""
+    key = credential("resend-api-key")
+    return EmailSender(key.decode(), connection["self_id"]) if key else None
+
+
 class EmailSender:
     """Sends replies through Resend (decision #70). `post` is swappable for tests."""
 

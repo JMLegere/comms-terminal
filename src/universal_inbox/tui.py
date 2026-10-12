@@ -9,7 +9,6 @@ import json
 import re
 import socket
 from datetime import datetime, timedelta, timezone
-from urllib.parse import quote
 
 from rich.markup import escape
 from rich.style import Style
@@ -24,6 +23,7 @@ from textual.widgets.option_list import Option
 
 from . import inbox, render
 from .icons import ICON
+from .platforms import PLATFORMS
 
 DETAIL_STYLE = {  # Status detail -> (color, label); the glyph comes from icons.ICON
     "CREATED": ("#45707a", "Needs first response"),
@@ -211,28 +211,29 @@ def glyph(detail: str) -> str:
 
 
 def conn_name(c) -> str:
-    """How a Connection is named: its address for email or number for SMS, else the platform."""
-    return c["external_id"] if c["platform"] in ("email", "sms") else c["platform"].capitalize()
+    """How a Connection is named: its address or number, else its Platform's name."""
+    p = PLATFORMS[c["platform"]]
+    return c["external_id"] if p.by_address else p.title
 
 
 IDENTITY_ICON = {"email": "email", "slack_user": "slack", "phone": "phone"}
 
 
 def conn_icon(c) -> str:
-    if c["platform"] == "email":
-        return ICON["fastmail"] if c["label"] == "Fastmail" else ICON["google"]
-    return ICON[c["platform"]]
+    return ICON[PLATFORMS[c["platform"]].icon]
+
+
+def is_email(view: dict) -> bool:
+    return PLATFORMS[view["channel"]["platform"]].format == "email"
+
+
+def message_link(view: dict, m) -> str | None:
+    return PLATFORMS[view["channel"]["platform"]].link(m, view["channel"])
 
 
 def native_link(view: dict) -> str | None:
-    ch, msgs = view["channel"], view["messages"]
-    if ch["platform"] == "email" and msgs:
-        return message_link(msgs[-1])
-    if ch["platform"] == "slack":
-        return f"slack://channel?team={ch['external_id']}&id={ch['native_id']}"
-    if ch["platform"] == "sms":
-        return next((m["data"]["link"] for m in reversed(msgs) if m.get("data", {}).get("link")), None)
-    return None
+    """Opens the Thread in its service: the newest message that has a link."""
+    return next((link for m in reversed(view["messages"]) if (link := message_link(view, m))), None)
 
 
 # --- small modal screens ---------------------------------------------------
@@ -721,7 +722,7 @@ class ReplyBox(Vertical):
 
     @property
     def email(self) -> bool:
-        return self.view["channel"]["platform"] == "email"
+        return is_email(self.view)
 
     def show_idle(self, view):
         """Closed state: the saved draft, or where a reply would go."""
@@ -862,10 +863,6 @@ class MessageText(Static):
         return Style(underline=True)
 
 
-def gmail_link(native_id: str) -> str:
-    return f"https://mail.google.com/mail/u/0/#search/rfc822msgid%3A{quote(native_id.strip('<>'))}"
-
-
 def message_body(m, raw, slack: bool = False) -> render.Body:
     """The rendered body: from the raw message when it was kept (decision #106), Slack mrkdwn for Slack
     (#114), else the stored text."""
@@ -877,14 +874,6 @@ def message_body(m, raw, slack: bool = False) -> render.Body:
     body = render.from_slack(m["content"]) if slack else render.from_text(m["content"])
     body.attachments = [tuple(a) for a in m["data"].get("attachments") or []]  # Fastmail and Slack list them as data
     return body
-
-
-def fastmail_link(m) -> str:
-    return f"https://app.fastmail.com/mail/Inbox/{m['data']['fm_thread']}.{m['data']['fm_id']}"
-
-
-def message_link(m) -> str:
-    return fastmail_link(m) if m["data"].get("fm_id") else gmail_link(m["native_id"])
 
 
 def default_open(msgs) -> set[int]:
@@ -941,13 +930,14 @@ def message_widgets(v, st: dict | None = None, raw=None) -> list:
     msgs, tid = v["messages"], v["thread"].id
     st = st or new_message_state()
     me = (v["channel"].get("external_id") or "").lower()
-    email = v["channel"].get("platform") == "email"
+    email = is_email(v)
+    slack = PLATFORMS[v["channel"]["platform"]].format == "slack"
     dim = "#928374"
     opened = default_open(msgs)
     is_open = lambda i: msgs[i]["native_id"] in st["open"] or (i in opened and msgs[i]["native_id"] not in st["closed"])  # noqa: E731
 
     def collapsed(i, m):
-        snippet = "message deleted" if m["deleted"] else message_body(m, raw, not email).snippet
+        snippet = "message deleted" if m["deleted"] else message_body(m, raw, slack).snippet
         # Faded: older messages recede so the open ones read first (Jeremy, 2026-10-12).
         # The gutter badge says who; the row is just when and what (Jeremy, 2026-10-12).
         line = f"[@click=app.msg_toggle({tid},{message_action_id(m['native_id'])})][#a89984]{when(m['at']):<5} {escape(snippet)}[/][/]"
@@ -965,7 +955,7 @@ def message_widgets(v, st: dict | None = None, raw=None) -> list:
         if m["deleted"]:
             parts.append(MessageText(f"[i {dim}]{ICON['deleted']} message deleted[/]", classes="mbody"))
             return gutter_row(badge(m["who"]), Vertical(*parts, classes="msg"), "open")
-        body = message_body(m, raw, not email)
+        body = message_body(m, raw, slack)
         if body.invite:
             parts.append(MessageText(f"[{dim}]{ICON['calendar']} invitation[/]\n" + render.invite_card(body.invite),
                                      classes="mbody"))
@@ -976,7 +966,7 @@ def message_widgets(v, st: dict | None = None, raw=None) -> list:
             if m["native_id"] in st["trim"]:
                 parts.append(MessageText(body.trimmed, classes="mtrim"))
         if body.attachments:
-            link = message_link(m) if email else ""
+            link = (message_link(v, m) or "") if email else ""
             urls = [u for _, u in m["data"].get("media") or []]  # Quo media: each chip opens its own (signed) URL
             chips = [f"[link='{urls[k] if k < len(urls) else link}'][#45707a]{ICON['attachment']} {render.chip(*a)}[/][/link]"
                      for k, a in enumerate(body.attachments)]
@@ -1075,9 +1065,8 @@ def thread_head(v) -> str:
     head = f"[b #45707a]{escape(t.title)}[/]   [{color}]{g} {label}[/]"
     link, plat = native_link(v), v["channel"]["platform"]
     if link:
-        app = ("Fastmail" if "fastmail.com" in link else "Gmail" if "mail.google.com" in link
-               else "Quo" if plat == "sms" else plat.capitalize())
-        head += f"\n[#928374]{ICON[plat]} [link='{link}']open in {app}[/link] {ICON['open']} (o)[/]"
+        p = PLATFORMS[plat]
+        head += f"\n[#928374]{ICON[p.icon]} [link='{link}']open in {p.title}[/link] {ICON['open']} (o)[/]"
     return head
 
 
@@ -1450,17 +1439,6 @@ class ChannelsPage(TablePage):
             self.refresh_data()
 
 
-RECOVERY = {  # platform -> {healthy: what it means / what to do}
-    "email": {True: "Receiving forwarded mail and sending replies.",
-              False: "[#c14a4a]Mail may not be arriving or sending.[/] Check the forwarding rule and the Resend key; "
-                     "this clears on the next successful message."},
-    "sms": {True: "Receiving Texts from Quo and sending replies.",
-            False: "[#c14a4a]Texts may not be sending.[/] Check the Quo API key and the webhook in Quo's settings; "
-                   "this clears on the next successful reply."},
-    "slack": {True: "Receiving Slack events and sending replies.",
-              False: "[#c14a4a]Slack messages are not arriving.[/] Reconnect: run scripts/oauth_slack.py on Workbox, "
-                     "then restart universal-inbox serve."},
-}
 
 
 class ConnectionPage(Page):
@@ -1488,7 +1466,7 @@ class ConnectionPage(Page):
         state = f"[#6c782e]{ICON['ok']} OK[/]" if ok else f"[#c14a4a]{ICON['broken']} BROKEN[/]"
         detail = c["last_error"] or ("Slack revoked access (token revoked or app uninstalled)" if not c["auth_ok"] else "None.")
         self.query_one("#conn").update(
-            f"[b]{conn_icon(c)} {escape(conn_name(c))}[/]  {state}\n{RECOVERY[c['platform']][ok]}\n\n"
+            f"[b]{conn_icon(c)} {escape(conn_name(c))}[/]  {state}\n{PLATFORMS[c['platform']].healthy if ok else PLATFORMS[c['platform']].broken}\n\n"
             f"[#928374]account[/]\n{escape(c['external_id'])}\n\n"
             f"[#928374]connected[/]\n{stamp(c['connected_at'])}\n\n[#928374]last error[/]\n{escape(detail)}")
 
@@ -1583,7 +1561,7 @@ class CaseCard(Vertical):
         expanded |= self.query_one(ReplyBox).has_class("open")
         g, color, label = GLYPH[t.status_detail]
         plat = v["channel"]["platform"]
-        self.border_title = f"{ICON[plat]} [b]{escape(t.title)}[/] [#928374]· {escape(v['where'])}[/]"
+        self.border_title = f"{ICON[PLATFORMS[plat].icon]} [b]{escape(t.title)}[/] [#928374]· {escape(v['where'])}[/]"
         self.border_subtitle = f"[{color}]{g} {label}[/]"
         msgs_box = self.query_one(".msgs")
         if expanded:

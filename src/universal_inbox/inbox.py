@@ -17,7 +17,9 @@ from email import policy
 from email.parser import BytesHeaderParser
 from typing import Protocol
 
-SCHEMA_VERSION = 5
+from . import platforms
+
+SCHEMA_VERSION = 6
 WAIT = timedelta(days=5)  # Waiting for them ends after this with no reply: back to Todo to follow up (#116)
 MIGRATIONS = {  # version -> statement that upgrades an existing database to it
     2: "ALTER TABLE cases ADD COLUMN description TEXT NOT NULL DEFAULT ''",
@@ -79,6 +81,21 @@ INSERT INTO identities_new SELECT id, person_id, kind, value, blocked FROM ident
 DROP TABLE identities;
 ALTER TABLE identities_new RENAME TO identities;
 CREATE INDEX identities_person ON identities (person_id);
+PRAGMA legacy_alter_table = OFF;""",
+    # Platforms are services (GLOSSARY): the email Platform splits into gmail and fastmail; sms is quo.
+    6: """PRAGMA legacy_alter_table = ON;
+CREATE TABLE connections_new (
+  id INTEGER PRIMARY KEY,
+  platform TEXT NOT NULL CHECK (platform IN ('gmail', 'fastmail', 'slack', 'quo')),
+  external_id TEXT NOT NULL UNIQUE, self_id TEXT NOT NULL, label TEXT NOT NULL, connected_at TEXT NOT NULL,
+  auth_ok INTEGER NOT NULL DEFAULT 1 CHECK (auth_ok IN (0, 1)), last_error TEXT
+) STRICT;
+INSERT INTO connections_new SELECT id,
+  CASE WHEN platform = 'email' AND label = 'Fastmail' THEN 'fastmail' WHEN platform = 'email' THEN 'gmail'
+       WHEN platform = 'sms' THEN 'quo' ELSE platform END,
+  external_id, self_id, label, connected_at, auth_ok, last_error FROM connections;
+DROP TABLE connections;
+ALTER TABLE connections_new RENAME TO connections;
 PRAGMA legacy_alter_table = OFF;""",
 }
 
@@ -763,8 +780,9 @@ def ingest(db, inc: Incoming) -> Thread | None:
         channel_id = _channel_id(db, inc)
         sender = inc.sender
         if sender and sender.kind == "email" and db.execute(  # Jeremy's own address on any Connection (#117)
-                "SELECT 1 FROM connections WHERE platform = 'email' AND lower(self_id) = ?",
-                (sender.value.lower(),)).fetchone():
+                f"SELECT 1 FROM connections WHERE platform IN ({','.join('?' * len(platforms.EMAIL))})"
+                " AND lower(self_id) = ?",
+                (*platforms.EMAIL, sender.value.lower())).fetchone():
             sender = None
         identity = _identity_for(db, sender) if sender else None
         identity_id = identity["id"] if identity else None
@@ -983,8 +1001,9 @@ def _sender(db, identity_id):
 
 def _where(channel, identity) -> str:
     kind = channel["kind"]
-    if kind == "im" and dict(channel).get("platform") == "sms":  # the queue already shows the sender's number
-        return "SMS" if identity else f"SMS · {channel['name'] or channel['native_id']}"
+    dm = platforms.PLATFORMS.get(dict(channel).get("platform"))
+    if kind == "im" and dm and dm.dm_where:  # the queue already shows the sender's number
+        return dm.dm_where if identity else f"{dm.dm_where} · {channel['name'] or channel['native_id']}"
     if kind == "im":
         return f"DM · {channel['name']}" if channel["name"] else "Slack DM"
     if kind == "mpim":

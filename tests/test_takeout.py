@@ -66,7 +66,7 @@ def _database(tmp_path):
     with db:
         db.executemany(
             "INSERT INTO connections (id, platform, external_id, self_id, label, connected_at, last_error)"
-            " VALUES (?, 'email', ?, ?, 'Fixture', ?, 'fixture health error')",
+            " VALUES (?, 'gmail', ?, ?, 'Fixture', ?, 'fixture health error')",
             [(1, SELF, SELF, SINCE.isoformat()),
              (2, "other@fixture.invalid", "other@fixture.invalid", SINCE.isoformat())])
     return path, db

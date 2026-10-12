@@ -31,7 +31,7 @@ def hook(tmp_path, monkeypatch):
     inbox.migrate(db)
     with db:
         db.execute("INSERT INTO connections (platform, external_id, self_id, label, connected_at) VALUES"
-                   " ('email', 'jeremy@agentmaple.com', 'jeremy@agentmaple.com', 'Email', ?)",
+                   " ('gmail', 'jeremy@agentmaple.com', 'jeremy@agentmaple.com', 'Gmail', ?)",
                    (datetime.now(timezone.utc).isoformat(),))
     server = serve.hooks_server(db_path, "127.0.0.1", 0, client=slack.SlackClient("x", get=lambda *a: {}))
     threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -66,7 +66,7 @@ def test_the_envelope_recipient_picks_the_fastmail_connection(hook, tmp_path):
     url, secret, db = hook
     with db:
         fm = db.execute("INSERT INTO connections (platform, external_id, self_id, label, connected_at) VALUES"
-                        " ('email', 'legere@fastmail.com', 'legere@fastmail.com', 'Fastmail', ?)",
+                        " ('fastmail', 'legere@fastmail.com', 'legere@fastmail.com', 'Fastmail', ?)",
                         (datetime.now(timezone.utc).isoformat(),)).lastrowid
     assert run_worker(url, secret, tmp_path, "fastmail@inbox.agentmaple.com") == "accepted"
     row = db.execute("SELECT ch.connection_id FROM threads t JOIN channels ch ON ch.id = t.channel_id").fetchone()

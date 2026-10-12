@@ -11,9 +11,9 @@ def setup():
     db = inbox.connect()
     inbox.migrate(db)
     with db:
-        for addr, label in (("jeremy@agentmaple.com", "Email"), ("legere@fastmail.com", "Fastmail")):
+        for platform, addr, label in (("gmail", "jeremy@agentmaple.com", "Gmail"), ("fastmail", "legere@fastmail.com", "Fastmail")):
             db.execute("INSERT INTO connections (platform, external_id, self_id, label, connected_at)"
-                       " VALUES ('email', ?, ?, ?, ?)", (addr, addr, label, AT.isoformat()))
+                       " VALUES (?, ?, ?, ?, ?)", (platform, addr, addr, label, AT.isoformat()))
     return db
 
 

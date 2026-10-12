@@ -79,6 +79,11 @@ def _post(url, key, payload):
         return json.load(r)
 
 
+def make_sender(connection, credential, shared):
+    key = credential("quo-api-key")
+    return QuoSender(key.decode(), connection["external_id"]) if key else None
+
+
 class QuoSender:
     """Sends replies from the Work number through Quo's API; Quo files them in the conversation."""
 

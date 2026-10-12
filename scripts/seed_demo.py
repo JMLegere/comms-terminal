@@ -17,7 +17,7 @@ def seed(db, broken=False):
     now = datetime.now(timezone.utc)
     with db:
         db.execute("INSERT OR IGNORE INTO connections (id, platform, external_id, self_id, label, connected_at)"
-                   " VALUES (1, 'email', ?, ?, 'Email', ?)", (ME, ME, now.isoformat()))
+                   " VALUES (1, 'gmail', ?, ?, 'Gmail', ?)", (ME, ME, now.isoformat()))
         db.execute("INSERT OR IGNORE INTO connections (id, platform, external_id, self_id, label, connected_at)"
                    " VALUES (2, 'slack', 'T0AGENTMAPLE', 'U0JEREMY', 'Slack', ?)", (now.isoformat(),))
         db.execute("INSERT OR IGNORE INTO channels (connection_id, native_id, name, kind) VALUES (2, 'C0EXTACME', 'ext-acme', 'channel')")

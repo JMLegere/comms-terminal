@@ -275,6 +275,11 @@ def import_recent(db, connection, client, days: int) -> int:
     return stored
 
 
+def make_sender(connection, credential, shared):
+    token = credential("slack-user-token")
+    return SlackSender(token.decode()) if token else None
+
+
 class SlackSender:
     """Posts replies with Jeremy's user token, so they appear under his name (FR-4c)."""
 

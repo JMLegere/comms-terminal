@@ -5,6 +5,7 @@ email-hook-secret, slack-signing-secret, slack-user-token, resend-api-key, fastm
 quo-api-key.
 """
 
+import importlib
 import json
 import os
 import socketserver
@@ -14,7 +15,7 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from . import email, fastmail, inbox, quo, slack
+from . import email, fastmail, inbox, platforms, quo, slack
 
 
 def credential(name: str) -> bytes | None:
@@ -25,8 +26,8 @@ def credential(name: str) -> bytes | None:
 
 
 def connection_id(db, platform: str) -> int | None:
-    """The hook-fed Connection for a platform (the Gmail forward for email; Fastmail is polled)."""
-    r = db.execute("SELECT id FROM connections WHERE platform = ? AND label != ?", (platform, fastmail.LABEL)).fetchone()
+    """The Connection on a Platform (one each)."""
+    r = db.execute("SELECT id FROM connections WHERE platform = ?", (platform,)).fetchone()
     return r and r["id"]
 
 
@@ -36,36 +37,35 @@ def fastmail_client(db) -> fastmail.Client | None:
     return fastmail.Client.load(cred, state) if cred else None
 
 
-def senders_from_credentials(db, fm: fastmail.Client | None = None) -> dict:
-    """Sender per platform for inbox.reply; the Fastmail Connection's sender is keyed by its id."""
-    mailbox = db.execute("SELECT self_id FROM connections WHERE platform = 'email' AND label != ?",
-                         (fastmail.LABEL,)).fetchone()
-    out = {}
-    if token := credential("slack-user-token"):
-        out["slack"] = slack.SlackSender(token.decode())
-    sms = db.execute("SELECT external_id FROM connections WHERE platform = 'sms'").fetchone()
-    if sms and (key := credential("quo-api-key")):
-        out["sms"] = quo.QuoSender(key.decode(), sms["external_id"])
-    if mailbox and (key := credential("resend-api-key")):
-        out["email"] = email.EmailSender(key.decode(), mailbox["self_id"])
-    fm_conn = db.execute("SELECT id FROM connections WHERE label = ?", (fastmail.LABEL,)).fetchone()
-    if fm is not None and fm_conn is not None:
-        out[fm_conn["id"]] = fastmail.FastmailSender(fm)
-    return out
+class Senders:
+    """Reply senders per Connection, made by its Platform's adapter on first use: a Connection added while the
+    service runs can send without a restart. `shared` holds process-wide clients (Fastmail's)."""
+
+    def __init__(self, shared: dict | None = None, made: dict | None = None):
+        self.shared, self.made = shared or {}, dict(made or {})
+
+    def get(self, connection):
+        if connection["id"] not in self.made:
+            adapter = importlib.import_module(f".{platforms.PLATFORMS[connection['platform']].adapter}", __package__)
+            sender = adapter.make_sender(connection, credential, self.shared)
+            if sender is None:
+                return None
+            self.made[connection["id"]] = sender
+        return self.made[connection["id"]]
 
 
-def handle_reply(db, body: bytes, senders: dict) -> tuple[int, dict]:
+def handle_reply(db, body: bytes, senders: Senders) -> tuple[int, dict]:
     """POST /reply: {"thread_id", "text", "to", "cc"} -> (status, JSON body)."""
     try:
         req = json.loads(body)
         thread_id, text = int(req["thread_id"]), str(req["text"])
     except (ValueError, KeyError, TypeError):
         return 400, {"error": "expected thread_id and text"}
-    r = db.execute("SELECT c.id, c.platform, c.label FROM threads t JOIN channels ch ON ch.id = t.channel_id"
+    r = db.execute("SELECT c.* FROM threads t JOIN channels ch ON ch.id = t.channel_id"
                    " JOIN connections c ON c.id = ch.connection_id WHERE t.id = ?", (thread_id,)).fetchone()
     if r is None:
         return 404, {"error": "unknown thread"}
-    sender = senders.get(r["id"]) or (senders.get(r["platform"]) if r["label"] != fastmail.LABEL else None)
+    sender = senders.get(r)
     if sender is None:
         return 503, {"error": f"{r['label'] or r['platform']} is not connected for sending"}
     try:
@@ -106,7 +106,7 @@ class UnixHTTPServer(socketserver.ThreadingUnixStreamServer):
     daemon_threads = True
 
 
-def reply_server(db_path: str, socket_path: str, senders: dict) -> UnixHTTPServer:
+def reply_server(db_path: str, socket_path: str, senders: Senders) -> UnixHTTPServer:
     def reply(headers, body):
         db = inbox.connect(db_path)
         try:
@@ -136,10 +136,9 @@ def hooks_server(db_path: str, host: str, port: int, client=None) -> ThreadingHT
             return 503, "text/plain", b"email not connected"
         db = inbox.connect(db_path)
         try:
-            # The envelope recipient picks the Connection: Fastmail's rule copies to its own address (#113).
-            fm = db.execute("SELECT id FROM connections WHERE label = ?", (fastmail.LABEL,)).fetchone()
+            # The envelope recipient picks the Platform: Fastmail's rule copies to its own address (#113).
             to = (headers.get("X-Inbox-To") or "").lower()
-            conn_id = fm["id"] if fm and to == fastmail.INBOUND else connection_id(db, "email")
+            conn_id = connection_id(db, "fastmail" if to == fastmail.INBOUND else "gmail")
             status = email.handle_hook(db, conn_id, headers, body, email_secret, datetime.now(timezone.utc))
         finally:
             db.close()
@@ -161,7 +160,7 @@ def hooks_server(db_path: str, host: str, port: int, client=None) -> ThreadingHT
             return 503, "text/plain", b"quo not connected"
         db = inbox.connect(db_path)
         try:
-            status = quo.handle_hook(db, connection_id(db, "sms"), headers, body, quo_secret, datetime.now(timezone.utc))
+            status = quo.handle_hook(db, connection_id(db, "quo"), headers, body, quo_secret, datetime.now(timezone.utc))
         finally:
             db.close()
         return status, "text/plain", b""
@@ -185,7 +184,7 @@ def run(db_path: str, socket_path: str, host: str, port: int) -> None:
     db = inbox.connect(db_path)
     inbox.migrate(db)
     fm = fastmail_client(db)
-    senders = senders_from_credentials(db, fm)
+    senders = Senders({"fastmail": fm} if fm is not None else {})
     db.close()
     stop = threading.Event()
     servers = [hooks_server(db_path, host, port), reply_server(db_path, socket_path, senders)]

@@ -22,7 +22,7 @@ def seed_console(path, second_id=SECOND):
     with db:
         for cid, address in ((1, ME), (2, "other@example.test")):
             db.execute("INSERT INTO connections (id, platform, external_id, self_id, label, connected_at)"
-                       " VALUES (?, 'email', ?, ?, 'Email', ?)", (cid, address, address, now.isoformat()))
+                       " VALUES (?, 'gmail', ?, ?, 'Gmail', ?)", (cid, address, address, now.isoformat()))
     ids = {}
     for name, cid, address, mid, hours, sender in (
         ("keep", 1, ME, FIRST, 3, "first@example.test"),
