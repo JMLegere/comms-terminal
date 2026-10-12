@@ -65,9 +65,11 @@ ModalScreen { background: #7c6f64 25%; align: center middle; }
         padding: 1 1; scrollbar-size-vertical: 0; }
 #rail > .option-list--option { color: #654735; }
 #rail > .option-list--option-highlighted { background: #f5edca; text-style: none; }
+#rail:focus > .option-list--option-highlighted { background: #eee0b7; color: #4f3829; text-style: bold; }
 #rail > .option-list--option-hover { background: #eee0b7; }
 #rail > .option-list--option-disabled { color: #928374; }
 #main, #thread { height: 1fr; border: round #a89984; border-title-align: center; padding: 0 1; }
+#rail:focus, #main:focus-within, #thread:focus-within { border: round #45707a; }
 #main { width: 1fr; }
 #main.split { width: 2fr; }
 #thread { display: none; }
@@ -271,7 +273,10 @@ class Ask(ModalScreen):
 
 
 HELP = [  # (group, [(keys, what it does)]) — the full key map; Gmail-style where Gmail has one (#93)
-    ("Move around", [("j / k", "move down / up (↑/↓ also work; or click a row)"), ("space", "scroll the thread (pgup / pgdn)"),
+    ("Move around", [("j / k", "main page: move down / up (↑/↓ also work; or click a row)"),
+                     ("space", "scroll the thread (pgup / pgdn)"),
+                     ("← / →", "focus previous / next pane (no item opens)"),
+                     ("enter", "open the highlighted sidebar item"),
                      ("1 – 5", "Todo, Snoozed, Done, Ignored, All"),
                      ("6 – 9", "People, Organizations, Cases, Channels"), ("u", "back (esc also works)")]),
     ("Thread", [("r", "reply to the sender   ctrl+enter sends · esc keeps the draft"), ("a", "reply all"),
@@ -440,7 +445,7 @@ def health_ok(connection) -> bool:
 
 class Rail(OptionList):
     """Side rail (herdr/Plain style): a threads section with the Status views, browse, and connections."""
-    can_focus = False  # one cohesive view: clicks work, focus stays on the main panel
+    can_focus = True
 
     def refresh_rail(self):
         db, main = self.app.db, self.app.main
@@ -478,7 +483,11 @@ class Rail(OptionList):
             opts.append(Option(f"{mark}{conn_icon(c)} {label}{' ' * max(1, 22 - len(name))}{state}", id=f"conn:{c['id']}"))
         self.clear_options()
         self.add_options(opts)
-        self.highlighted = None
+        self.highlighted = self.get_option_index(main.section) if self.has_focus else None
+
+    def on_focus(self):
+        if self.option_count:
+            self.highlighted = self.get_option_index(self.app.main.section)
 
     def on_option_list_option_selected(self, event):
         self.app.main.go(event.option.id)
@@ -522,6 +531,8 @@ class Page(Vertical):
         focusable = self.query("DataTable")
         if focusable:
             focusable.first().focus()
+        else:
+            self.focus()
 
 
 THREAD_KEYS = [  # Thread actions, Gmail-style (decision #93); shared by the Threads list and a Case
@@ -533,7 +544,7 @@ THREAD_KEYS = [  # Thread actions, Gmail-style (decision #93); shared by the Thr
 
 
 class ThreadsPage(Page, ThreadActions):
-    """The Status view's list. The selected Thread shows beside it (the thread pane); focus stays here."""
+    """The Status view's list. The selected Thread shows beside it; arrows move focus between panes."""
 
     @property
     def RAIL(self):
@@ -1011,8 +1022,9 @@ def thread_head(v) -> str:
 
 
 class ThreadView(Horizontal):
-    """One Thread in the thread pane: conversation and reply on the left, properties on the right.
-    Nothing here takes focus except the reply fields; keys act from the list."""
+    """One Thread in the thread pane: focusable conversation and reply on the left, properties on the right."""
+    BINDINGS = [Binding(b.key, f"app.thread({b.action!r})", b.description, show=b.show)
+                for b in ThreadsPage.BINDINGS if b.action not in ("down", "up")]
 
     def __init__(self, thread_id: int):
         super().__init__(classes="threadview")
@@ -1020,7 +1032,7 @@ class ThreadView(Horizontal):
 
     def compose(self) -> ComposeResult:
         with Vertical(classes="convo"):
-            with VerticalScroll(classes="timeline", can_focus=False):
+            with VerticalScroll(classes="timeline", can_focus=True):
                 yield Static(classes="thead")
                 yield Vertical(classes="msgs")
             yield ReplyBox(self.thread_id)
@@ -1703,10 +1715,12 @@ SECTIONS = {"threads": ThreadsPage, "people": PeoplePage, "organizations": Organ
 
 
 class MainScreen(Screen):
-    """Rail | main panel | thread pane (Threads views). One view: focus stays on the main panel's list."""
+    """Rail | main panel | thread pane (Threads views). Arrows move focus without opening anything."""
     BINDINGS = [
         Binding("z", "app.undo", "undo"), Binding("question_mark", "app.help", "help", key_display="?"),
         Binding("q", "app.quit", "quit"), Binding("u", "back", show=False),
+        Binding("left", "focus_pane(-1)", show=False, priority=True),
+        Binding("right", "focus_pane(1)", show=False, priority=True),
         *[Binding(str(i + 1), f"go('view:{i}')", show=False) for i in range(5)],
         Binding("6", "go('people')", show=False), Binding("7", "go('organizations')", show=False),
         Binding("8", "go('cases')", show=False), Binding("9", "go('channels')", show=False),
@@ -1748,6 +1762,30 @@ class MainScreen(Screen):
 
     def action_back(self):
         self.back()
+
+    def check_action(self, action, parameters):
+        if action == "focus_pane":
+            return self.app.screen is self and not isinstance(self.focused, (Input, TextArea))
+        return True
+
+    def action_focus_pane(self, direction):
+        if not self.check_action("focus_pane", (direction,)):
+            return
+        tv = self.thread_view
+        if self.rail.has_focus:
+            if direction > 0:
+                self.focus_list()
+        elif tv is not None and tv.has_focus_within:
+            if direction < 0:
+                self.focus_list()
+        elif direction < 0:
+            self.rail.focus()
+        elif isinstance(self.current, ThreadsPage) and tv is not None:
+            timelines = tv.query(".timeline")
+            if timelines:
+                timeline = timelines.first()
+                if timeline.is_on_screen and self.query_one("#thread").display:
+                    timeline.focus()
 
     @property
     def section(self) -> str:
@@ -1930,11 +1968,11 @@ class Console(App):
     def action_back(self):
         self.main.back()
 
-    def action_thread(self, name):
-        """Run a Thread action from a link in the thread pane's properties."""
+    async def action_thread(self, name):
+        """Run a Thread action from the focused thread pane or a properties link."""
         page = self.main.page
         if isinstance(page, (ThreadsPage, CasePage)):
-            getattr(page, f"action_{name}")()
+            await self.run_action(name, page)
 
     def action_case_reply(self, index):
         page = self.main.page

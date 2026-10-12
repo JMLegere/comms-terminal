@@ -34,7 +34,7 @@ Workbox
 
 - **Palette**: bg0 `#f9f5d7` (background), bg1 `#f5edca` (rail, properties, reply fields), bg2 `#f3eac7` (statusline, footer), bg4 `#eee0b7` (selected row, key blocks), bg5 `#ebdbb2` (card borders); fg0 `#654735` (text), fg1 `#4f3829` (selected text); grey0 `#a89984` (panel borders, dim), grey1 `#928374` (muted), grey2 `#7c6f64` (statusline mode block); red `#c14a4a`, orange `#c35e0a`, yellow `#b47109`, green `#6c782e`, aqua `#4c7a5d`, blue `#45707a`, purple `#945e80`.
 - **Panel titles**: bg0 text on an accent block: inbox red, main blue, thread green.
-- **No focus highlight**: panel borders never change colour; the selected row (bg4, bold) and the rail's `▌` marker show where you are.
+- **Focus highlight**: the focused pane's border turns blue. The focused rail's keyboard highlight uses bg4 and bold text; the selected main row and the rail's current-section `▌` marker stay unchanged when focus moves.
 - **Bottom bar** (#94, #97): one line, flat like the reference vim/tmux bars: a grey2 mode block (with `› PAGE` when deeper than the rail section), then the page's keys grouped move · reply · triage · organize · general (key bold blue, description grey2, clickable), then Todo, Snoozed, and each Connection as thin text segments separated by `/`; a red block only when a Connection is broken. Keys drop from the busiest group when the terminal is narrow.
 - **Status detail colours**: Needs first response blue, Needs next response yellow, Investigating purple, waiting and paused grey, Done green, Ignored dim. Icons come from the icon mapper; colour never carries meaning alone.
 
@@ -42,7 +42,7 @@ Workbox
 
 **Revision 2026-10-12 (decisions #89–#92)** supersedes the preview, full-thread page, and details container below (#79):
 
-- **One cohesive view (#90)**: focus stays on the main panel's list. The rail and the thread pane never take focus; clicks in them still work. Only the reply fields take focus while you type; `esc` returns to the list. `1`–`5` switch Status views and `6`–`9` open People, Organizations, Cases, Channels from anywhere.
+- **One cohesive view (#90, updated for pane arrows)**: focus starts on the main page. `←`/`→` move between the rail, main page, and displayed Thread timeline, stopping at the edges; they keep the current section, row, Thread, and page stack unchanged. In the rail, `↑`/`↓` move the highlight; only `enter` or a click opens an item. Informational side panes are skipped. Text inputs keep their native cursor keys and modal screens keep their own navigation. Reply fields take focus while you type; `esc` returns to the list. `1`–`5` switch Status views and `6`–`9` open People, Organizations, Cases, Channels from anywhere.
 - **Thread pane is the thread view (#89)**: in a Status view the selected Thread always shows beside the list, laid out like a Linear issue: conversation and reply box on the left, properties (status, person, organization, case, channel) on the right in the same panel. There is no separate full-page Thread. `space` / `pgdn` / `pgup` scroll it. Below 84 columns the properties fold into one line under the title. Links elsewhere (a Person's Threads, an Organization's Threads) select the Thread in its Status view.
 - **Related Threads (#95)**: below the properties, "other threads with <Person>" and "other threads with <Organization>" (six each, then "N more…" to the Person or Organization page); clicking one selects it in its Status view.
 - **Channels (#94)**: rules on the left; the channels seen, grouped Syncing / Not syncing, in the right pane, the same structure as the Threads page.
@@ -74,7 +74,7 @@ Workbox
 ╰────────────────────────╯
 ```
 
-- Every region is its own rounded, bordered panel with its title on the border (herdr); the focused panel's border turns accent green.
+- Every region is its own rounded, bordered panel with its title on the border (herdr); the focused panel's border turns accent blue.
 - **Rail** sections: `threads` (Todo, Snoozed, Done, Ignored, All, with counts), `browse` (People, Organizations, Cases, Channels), `connections` (one line per Connection with its health icon). The current item has an accent bar. Status views live in the rail; there are no tabs above the list.
 - **Main panel**: the selected rail item's list, or a full Thread, Person, Organization, Case, or Connection page.
 - **Preview panel**: a single click on a Thread (or `space`) opens it read-only beside the list; `j`/`k` keep the preview in step; a second click, a double click, or `enter` opens it full; `esc` closes the preview.
@@ -155,8 +155,8 @@ Text-first, like a terminal mail client with Gmail's habits. No images in the co
 
 **Decision #93**: Gmail-style where Gmail has an equivalent.
 
-- Move: `↑`/`↓` or `j`/`k`, `space`/`pgdn`/`pgup` scroll the thread, `u` or `esc` back, `1`–`5` Status views, `6`–`9` People, Organizations, Cases, Channels.
-- Thread: `r` reply to the sender, `a` reply all (FR-3b's reply-all stays one key away), `e` Done (Gmail archive), `b` snooze (Gmail snooze), `m` Ignore (Gmail mute), `l` Case (Gmail label), `z` undo (Gmail undo), `w` wait for them, `s` change status, `p` Person, `o` open in Gmail or Slack, `ctrl+enter` send (#100).
+- Move: `←`/`→` focus the previous/next pane without opening an item or changing contents; `↑`/`↓` or `j`/`k` move in the main page. In the rail, `↑`/`↓` highlight and `enter` opens; in the thread pane, `↑`/`↓` scroll. `space`/`pgdn`/`pgup` scroll the thread, `u` or `esc` back, `1`–`5` Status views, `6`–`9` People, Organizations, Cases, Channels.
+- Thread (main list, focused thread pane, or selected Case card): `r` reply to the sender, `a` reply all (FR-3b's reply-all stays one key away), `e` Done (Gmail archive), `b` snooze (Gmail snooze), `m` Ignore (Gmail mute), `l` Case (Gmail label), `z` undo (Gmail undo), `w` wait for them, `s` change status, `p` Person, `o` open in Gmail or Slack, `ctrl+enter` send (#100).
 - General: `?` all keys, `q` quit.
 - The footer lists every action for the page as plain text: key in blue, description in grey, no icons or blocks (#94).
 
