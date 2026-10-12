@@ -7,10 +7,10 @@ Secrets are staged as 0600 files in `~/.config/universal-inbox/`, read in-proces
 ## 1. Package
 
 ```
-uv tool install --force /home/jerry/workspace/universal-inbox
+uv tool install --force --reinstall /home/jerry/workspace/universal-inbox
 ```
 
-Puts `universal-inbox` in `~/.local/bin`, which the unit runs. Re-run after pulling changes, then `sudo systemctl restart universal-inbox`.
+Puts `universal-inbox` in `~/.local/bin`, which the unit runs. Re-run after pulling changes, then `sudo systemctl restart universal-inbox`. Keep `--reinstall`: the version stays 0.1.0, and without it uv reuses its cached build of the old code.
 
 ## 2. Connect email (Slack later)
 

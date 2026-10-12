@@ -421,6 +421,8 @@ Design: `docs/design/console.md` (approved). Verify each step with Textual's tes
   - Owner: Jeremy. Blocks: no.
 - **R1: Triage load with time-based grouping and DMs is unmeasured.**
   - Mitigation: measure after Jeremy connects.
+- **R13: Credentials at rest depend on Workbox's disk.** `systemd-creds` encrypts with `/var/lib/systemd/credential.secret`, which is not on encrypted media (warning at install, 2026-10-12) and Workbox has no TPM in use. The encryption stops casual reads of `/etc/credstore.encrypted`, not someone with root or the disk.
+  - Mitigation: none in the MVP; disk encryption or a TPM-bound credential would close it. Owner: Jeremy. Blocks: no.
 - **R12: Slack events missed while the host is down are lost.** Slack retries a failed delivery a few times over several minutes, then gives up, and can turn off event delivery after sustained failures (Slack Events API docs, not re-read this session). Plain runs on always-on cloud infrastructure; this inbox runs on Workbox. Accepted in decision #66.
   - Mitigation: none in the MVP; host uptime.
 - **R5: Inferred Plain rules.** Slack reply-thread attachment, own-post groups, and unblock behavior are not stated in Plain's docs.
