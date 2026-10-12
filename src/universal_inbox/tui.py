@@ -84,6 +84,7 @@ DataTable > .datatable--header { background: #f9f5d7; color: #928374; }
 .convo { width: 1fr; }
 .timeline { height: 1fr; padding: 1 1; }
 .props { width: 34; height: 1fr; padding: 1 2; background: #f3eac7; border-left: solid #ebdbb2; }
+.props Static { text-wrap: nowrap; text-overflow: ellipsis; }  /* one line per entry, cut with … */
 .activity { width: 1fr; height: 1fr; padding: 1 1; }
 .casehead, .cards, .activityhead { height: auto; }
 .sectionhead { height: auto; padding: 1 0 0 0; }
