@@ -307,7 +307,7 @@ flowchart LR
 - **`pyproject.toml`**: Python ≥3.11, no runtime dependencies, `pytest` and `pytest-bdd` for development. **Current** (decision #49).
 - **`features/<domain>.feature`**: acceptance scenarios in Gherkin, one file per product domain, written against the four `inbox` calls and the adapters; `@wip` until steps pass. **Current.**
 - **`tests/test_features.py`**: binds every feature; step definitions go in `tests/steps/`. **Current.**
-- **`src/universal_inbox/inbox.py`**: the domain module. Public: `connect`, `migrate`, `ingest`, `act`, `reply`, `wake`, `block`, `add_identity`, `remove_identity`. Private: threading and Slack time grouping, Status rules, Person and Organization resolution, FR-2a content clearing.
+- **`src/universal_inbox/inbox.py`** and **`schema.sql`** (**Current**, Phase 1): the domain module. Public: `connect`, `migrate`, `ingest`, `act`, `reply`, `wake`, `block`, `add_identity`, `remove_identity`. Private: threading and Slack time grouping, Status rules, Person and Organization resolution, FR-2a content clearing.
 - **`src/universal_inbox/email.py`**: `verify`, `parse` (stdlib `email`; returns nothing for an auto-reply, FR-3a), `EmailSender`.
 - **`src/universal_inbox/slack.py`**: `verify`, `parse` (applies Channel selection), `SlackSender`, `user_email`.
 - **`src/universal_inbox/health.py`**: `connection_health(connection, now)`.
@@ -329,6 +329,7 @@ Every path is **Proposed** unless marked Current. D1 is approved (#67); each pha
 
 ### Phase 1 — Inbox module
 
+- **Status: done 2026-10-12.** `src/universal_inbox/inbox.py`, `schema.sql`; `tests/steps/inbox_steps.py`, `tests/test_schema.py`. 27 tests pass; 25 later-phase scenarios stay `@wip`.
 - **1.1 `pyproject.toml`.** Current (BDD setup).
 - **1.2 `inbox.connect` and `inbox.migrate`**: the schema in the design doc.
   - Requirements: FR-2, FR-2a, I-1, I-2, I-3, I-6.
@@ -827,6 +828,12 @@ All entries are dated 2026-10-10; exact times are unproven unless noted. Full de
   - Activity: Recorded #66 (no reconciliation), #67 (D1 re-approved), #68 (status rules), #69 (commit); updated design, features, and requirements
   - Result: Implementation unblocked phase by phase; committed to `dev`
   - Evidence: git log on `dev`
+  - Basis: Source-observed
+- **2026-10-12T01:51:49+00:00**
+  - Actor: Agent
+  - Activity: Phase 1: `inbox.py` (connect, migrate, ingest, act, reply, wake, block, add_identity, remove_identity, read helpers), `schema.sql`, step definitions, schema test; removed `@wip` from 26 Phase 1 scenarios. Sender signature gains `history`
+  - Result: `uv run pytest` → 27 passed, 25 deselected (`@wip`). Mutation checks: breaking the CREATED rule, the 2-hour window, or deletion clearing each fails one scenario
+  - Evidence: `uv run pytest -q`
   - Basis: Source-observed
 
 ## 9. Sources and coverage check

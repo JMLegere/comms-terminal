@@ -1,4 +1,3 @@
-@wip
 Feature: Email
   Email follows Plain (ADR 0002): inbound mail is forwarded to /hooks/email, and replies go out through the outbound mail provider.
   Email Verify (email.verify) checks the HMAC signature. Email Parse (email.parse) turns a raw message into an Incoming,
@@ -12,14 +11,14 @@ Feature: Email
     Then no new Thread is created
     And that Thread has 2 Activities
 
-  @AS-3 @FR-3b
+  @AS-3 @FR-3b @wip
   Scenario: The Email Sender sends a threaded reply-all
     Given a Thread whose last message "<a1@newco.io>" came from "prospect@newco.io" with CC "ops@newco.io"
     When Reply is called with "Thanks, booked for Tuesday." through the Email Sender
     Then the outbound mail provider receives a message from "jeremy@agentmaple.com" to "prospect@newco.io" with CC "ops@newco.io"
     And the message has In-Reply-To "<a1@newco.io>"
 
-  @AS-11 @FR-3a
+  @AS-11 @FR-3a @wip
   Scenario Outline: Email Parse returns nothing for each Plain auto-reply header
     When Email Parse reads a message with header "<name>: <value>"
     Then Email Parse returns nothing
@@ -41,17 +40,17 @@ Feature: Email
       | X-QQ-Auto-Reply                        | yes                 |
       | X-MS-Exchange-Generated-Message-Source | Mailbox Rules Agent |
 
-  @AS-11 @FR-3a
+  @AS-11 @FR-3a @wip
   Scenario: Email Parse keeps a message with Auto-Submitted no
     When Email Parse reads a message with header "Auto-Submitted: no"
     Then Email Parse returns an Incoming
 
-  @AS-11 @FR-3a
+  @AS-11 @FR-3a @wip
   Scenario: Email Parse keeps an out-of-office subject without a header signal
     When Email Parse reads a message with subject "Out of office: back Monday" and no auto-reply header
     Then Email Parse returns an Incoming
 
-  @AS-19 @NFR-4
+  @AS-19 @NFR-4 @wip
   Scenario: Email Verify rejects a request without a valid signature
     When a request reaches /hooks/email with a wrong X-Inbox-Signature
     Then the response is 401

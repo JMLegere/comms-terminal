@@ -1,4 +1,3 @@
-@wip
 Feature: Slack
   Slack follows Plain (ADR 0002): a bot in selected channels and Jeremy's own DMs deliver events to /hooks/slack,
   and replies post from Jeremy's profile. Slack Verify (slack.verify) checks the signing secret. Slack Parse (slack.parse)
@@ -21,7 +20,7 @@ Feature: Slack
     When Ingest receives a Slack message from "U0ANA" in "C0EXTACME" at "10:40"
     Then that Thread has Status "TODO" and Status Detail "NEW_REPLY"
 
-  @AS-15 @FR-4 @FR-4a
+  @AS-15 @FR-4 @FR-4a @wip
   Scenario: Slack Parse applies Channel Rules and always selects DMs
     Given Channel Rules:
       | Kind    | Value   |
@@ -35,7 +34,7 @@ Feature: Slack
       | G0FOUNDER |          | mpim    |
     And Slack Parse returns nothing for a message in "C0RANDOM" named "random"
 
-  @AS-17 @FR-4c
+  @AS-17 @FR-4c @wip
   Scenario: The Slack Sender posts in the reply-thread from Jeremy's profile
     Given a Thread in "C0EXTACME" that began in the Slack reply-thread "1728700000.000100"
     When Reply is called with "Fixed, deploying now." through the Slack Sender
@@ -50,7 +49,7 @@ Feature: Slack
     And that message has no content
     And the Thread has Status "TODO" and Status Detail "NEW_REPLY"
 
-  @NFR-4
+  @NFR-4 @wip
   Scenario: Slack Verify rejects an event with a bad signature
     When a request reaches /hooks/slack with a wrong X-Slack-Signature
     Then the response is 401

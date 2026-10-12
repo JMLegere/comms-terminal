@@ -1,4 +1,3 @@
-@wip
 Feature: Threads
   The inbox module (docs/design/api-and-database.md) owns Thread Status through four calls:
   Ingest (inbox.ingest) stores an incoming message, edit, or deletion; Act (inbox.act) applies Jeremy's keys;

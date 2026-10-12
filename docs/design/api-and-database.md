@@ -33,7 +33,7 @@ flowchart LR
 ```
 
 - **Seam: incoming.** Each adapter turns a platform payload into an `Incoming` value, or `None` when it is filtered (auto-reply, unselected channel, bad signature). `inbox.ingest` never sees platform formats.
-- **Seam: sending.** `inbox.reply` calls a `Sender` (`send(thread, text, to, cc) -> native_id`). Email and Slack are the two adapters, so the seam is real.
+- **Seam: sending.** `inbox.reply` calls a `Sender` (`send(thread, text, to, cc, history) -> native_id`; `history` is the Thread's messages, oldest first, as `native_id` and `data`, so email can set `In-Reply-To` / `References` and Slack can find `thread_ts`). Email and Slack are the two adapters, so the seam is real.
 - **Tests run against the four calls** with a fake `Sender`. The feature files bind to them.
 
 ## 2. The `inbox` interface
@@ -106,13 +106,13 @@ Action = Done | Snooze(until: datetime | None) | Wait | Investigate
 def verify(headers, body: bytes, secret: bytes, now: datetime) -> bool
 def parse(raw: bytes, connection) -> Incoming | None   # None for an auto-reply (FR-3a)
 class EmailSender:  # Sender over the outbound provider's REST API
-    def send(self, thread, text, to, cc) -> str        # returns the Message-ID
+    def send(self, thread, text, to, cc, history) -> str   # returns the Message-ID
 
 # slack.py
 def verify(headers, body: bytes, signing_secret: bytes, now: datetime) -> bool
 def parse(event: dict, connection, rules) -> Incoming | None   # None if not selected
 class SlackSender:  # Sender over chat.postMessage with Jeremy's user token
-    def send(self, thread, text, to, cc) -> str        # returns "<channel>:<ts>"
+    def send(self, thread, text, to, cc, history) -> str   # returns "<channel>:<ts>"
 ```
 
 ```python
@@ -175,7 +175,7 @@ Stored values are Plain's enum names. The console shows the product label.
 
 ## 5. Database
 
-SQLite, one file. `PRAGMA foreign_keys = ON`, `PRAGMA journal_mode = WAL`. Tables are `STRICT`; times are UTC ISO 8601 text; the schema version is `PRAGMA user_version`.
+SQLite, one file. The DDL below is copied in `src/universal_inbox/schema.sql`, which `inbox.migrate` runs; change both together. `PRAGMA foreign_keys = ON`, `PRAGMA journal_mode = WAL`. Tables are `STRICT`; times are UTC ISO 8601 text; the schema version is `PRAGMA user_version`.
 
 ```mermaid
 erDiagram

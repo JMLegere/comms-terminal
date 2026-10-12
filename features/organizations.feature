@@ -1,4 +1,3 @@
-@wip
 Feature: Organizations
   Ingest (inbox.ingest) creates an Organization (organizations, unique Domain) for a new sender's email domain,
   except free-mail domains. A Person's Organizations are those whose Domain matches one of the Person's email addresses.

@@ -1,4 +1,3 @@
-@wip
 Feature: People
   Ingest (inbox.ingest) finds or creates the Person for each sender. A Person is a row in persons with Identities
   (identities), each with a Kind ("email" or "slack_user") and a Value. A Slack sender carries a Profile Email.

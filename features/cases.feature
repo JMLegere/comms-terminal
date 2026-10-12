@@ -1,4 +1,3 @@
-@wip
 Feature: Cases
   A Case (cases) groups Threads; a Thread points to at most one Case (threads.case_id). A Case has no Status.
   Act (inbox.act) with Set Case adds a Thread to an existing Case, to a new Case, or removes it.
