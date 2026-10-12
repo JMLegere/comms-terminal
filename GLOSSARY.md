@@ -53,12 +53,12 @@ _Avoid_: Inbox zero, Processing
 ## People
 
 **Person**:
-An individual Jeremy exchanges messages with: a Slack user and/or a set of email addresses.
+An individual Jeremy exchanges messages with: a set of Identities: email addresses, Slack users, and phone numbers.
 _Avoid_: Contact, Customer, User
 
 
 **Identity**:
-One address a Person sends from: an email address or a Slack user.
+One address a Person sends from: an email address, a Slack user, or a phone number.
 _Avoid_: Address (when it may be a Slack user), Account, Handle
 
 **Organization**:
@@ -68,13 +68,17 @@ _Avoid_: Account, Company, Tenant
 ## Sources
 
 **Platform**:
-The medium a message travels through, such as email, Slack, WhatsApp, LinkedIn, or tool comments.
-_Avoid_: Medium, Channel (when meaning the medium), Provider
+The service a Connection runs through: Gmail, Fastmail, Slack, or Quo; later WhatsApp, LinkedIn, or tool comments. Each Platform has one adapter.
+_Avoid_: Medium, Channel (when meaning the service), Email (Gmail and Fastmail are separate Platforms)
+
+**Message format**:
+The shape of a message that Platforms can share: email (Gmail, Fastmail), Slack message, or SMS (Quo). Email addresses, mailbox threading by Message-ID and References, and reply-all belong to the email format, so one address is one Identity on every email Platform.
+_Avoid_: Platform (when meaning the format), Protocol
 
 **Channel**:
 A container of Threads on a Platform, such as a Slack channel or DM.
 _Avoid_: Space, Room, Inbox
 
 **Connection**:
-One connected account on a Platform, such as one forwarded email address or one Slack workspace.
+One connected account on a Platform, such as one forwarded Gmail address, one Slack workspace, or one Quo number.
 _Avoid_: Source, Account, Integration
