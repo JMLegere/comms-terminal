@@ -3,10 +3,10 @@
 ## 1. Document control
 
 - **Title**: Universal Inbox MVP (Gmail + Slack)
-- **Status**: **Draft (revision 2).** This revision applies Jeremy's 2026-10-10 review annotations. Behavior now follows Plain unless a deviation is stated with its reason. The technical design in §4–§5 is **Proposed**. D1 is resolved (2026-10-11, decision #47). Deployment is blocked on D2 (§6).
+- **Status**: **Draft (revision 3).** This revision adopts Plain's status model and integration architecture and adds replying from the console (decisions #51–#56). Behavior follows Plain unless a deviation is stated with its reason. The technical design in §4–§5 is **Approved** (D1, decision #67). Each phase needs its own implementation authorization; connecting is blocked on D3, and deployment on D2 (§6).
 - **Owner / authority**: Jeremy Legere (single user and product owner)
 - **Created**: 2026-10-10T20:04+00:00
-- **Updated**: 2026-10-11T23:48+00:00
+- **Updated**: 2026-10-12T00:38+00:00
 - **Topic**: MVP of a single-user, Plain-style Thread queue across Gmail and Slack
 - **Authority chain**:
   - `.agents/discovery/2026-10-10-universal-inbox.md`: validated problem and strategy.
@@ -15,7 +15,7 @@
   - `docs/adr/0001-purpose-built-thread-ledger.md`: strategy.
   - Jeremy's review annotations on this PRD (2026-10-10): anchor every behavior on Plain.
   - Plain behavior evidence: Plain docs and GraphQL schema, read 2026-10-10 (cited in §9).
-- **Implementation authorization**: **Phase 0 only** (Jeremy, 2026-10-11). Phases 1–6 and installing services each need separate explicit approval. Connecting real accounts is Jeremy's own step after the build (FR-1).
+- **Implementation authorization**: Phase 0 (done) and the BDD setup. Phases 1–6, external accounts, DNS changes, and installing services each need separate explicit approval. Connecting real accounts is Jeremy's own step after the build (FR-1).
 - **History limits**: Built from the full 2026-10-10 session plus the artifacts above. Exact times exist only for observed clock readings or file modification times.
 
 ## 2. Executive framing
@@ -30,28 +30,29 @@
 
 Source: discovery doc §Context.
 
-**Desired outcome.** One pull-only console that works like Plain for one person. Every connected Gmail and Slack Thread has a Status, Jeremy can prove nothing is missing, and the other side's reply always brings a Thread back.
+**Desired outcome.** One pull-only console that works like Plain for one person. Every connected email and Slack Thread has a Status, Jeremy replies from the console, and the other side's reply always brings a Thread back.
 
 **Audience.** Jeremy only.
 
 **MVP scope.**
-- Connectors for Gmail and Slack. Jeremy connects `jeremy@agentmaple.com` and the Agent Maple workspace himself after the build.
-- Read-only mirror, ingesting forward from connect (as Plain does).
-- Plain status logic.
+- An Email channel and a Slack channel built on Plain's integration architecture (decisions #53, #55, #56). Jeremy connects `jeremy@agentmaple.com` and the Agent Maple workspace himself after the build.
+- Ingestion is event-driven and forward from connect, as in Plain.
+- Replying from the console on both channels (decision #51).
+- Plain status logic: Status plus Status detail (decision #52).
 - Ignore and Block.
 - Cases.
 - Person and Organization records.
-- Completeness and sync health.
-- Plain keyboard.
+- Sync health (as in Plain: a Connection shows broken when it fails).
+- Plain keyboard, plus reply keys.
 - No notifications.
 
-**Non-goals.** Replying or sending from the console, task management (Linear), CRM pipeline, meeting notes (Tana), and auto-replies.
+**Non-goals.** Task management (Linear), CRM pipeline, meeting notes (Tana), and auto-replies.
 
 **Deferred.**
 - Tool comments, WhatsApp, LinkedIn.
 - Other mailboxes and workspaces.
 - Domain, category, or content rules.
-- Write-back.
+- Starting new conversations (new email, new DM), attachments, rich text, drafts, undo-send, signatures.
 - Cmd+K.
 - CRM / Tana / Linear context.
 - Plain's "Close the loop" (needs linked issues).
@@ -61,50 +62,56 @@ Source: discovery doc §Context.
 
 **Success measures.**
 1. **Zero silent drops.** Every connected Thread ends Done, Snoozed, or Ignored; none sits unhandled. (Jeremy's review: "every connected thread, not just ones needing my reply.")
-2. **One place to check.** Daily triage starts in one console.
+2. **One place to work.** Daily triage and replies happen in one console.
 
 **Measurable proxy (Proposed).** For 14 days after Jeremy connects:
-- The reconciliation mismatch count stays at 0.
 - No Connection stays broken unseen for more than 15 minutes.
 - Jeremy reports no dropped Thread from a covered Connection.
 
 **Dependencies.**
-- For building: none external.
-- For connecting, after the build, by Jeremy:
-  - A Google Workspace OAuth client of type Internal with read-only Gmail scope.
-  - A Slack internal app with a user token.
+- For building: none external. Every integration is exercised with synthetic payloads.
+- For connecting, after the build, by Jeremy (D3):
+  - A Google Workspace routing rule that copies mail for `jeremy@agentmaple.com` to the inbound address, keeping delivery to Gmail.
+  - An inbound mail service and an outbound mail provider, with SPF/DKIM DNS records on `agentmaple.com`.
+  - A public HTTPS ingress for the inbound mail and Slack event endpoints.
+  - A Slack app with a bot (selected channels) and Jeremy's user token (DMs and replies).
   - A host (Workbox proposed, D1).
 
 ## 3. Requirements and coverage
 
 Status key in brackets:
 - **C**: confirmed by Jeremy.
-- **PL**: copied from Plain's documented behavior, per Jeremy's "same as Plain" annotations.
+- **PL**: copied from Plain's documented behavior, per Jeremy's "same as Plain" decisions.
 - **P**: proposed here.
 - **D**: a deliberate deviation from Plain, with its reason.
 
 ### Connections and ingestion
 
-- **FR-1** [C]: Build a Gmail connector and a Slack connector. Connecting real accounts is not part of the build; Jeremy connects them afterwards.
-- **FR-2** [C]: Mirror each ingested native message as one Activity with its native ID. Never rewrite an Activity; an edit or deletion becomes a new Activity.
-  - [PL] When a Slack message is deleted, its stored content is removed and a minimal audit record is kept.
-- **FR-3** [PL]: **Email.** Every new inbound email creates a Thread; a reply in the same Gmail thread joins it.
-  - Auto-replies are filtered out. One is detected by at least one header signal (`Auto-Submitted`, `Precedence: auto_reply/bulk`, `X-Autoreply`); a subject pattern alone does not count.
-  - A filtered auto-reply is not stored, creates no Thread, and never reopens one.
-  - [D] Mail in Gmail Spam or Trash is not ingested. Reason: it is the Gmail equivalent of mail never forwarded to Plain.
-- **FR-4** [PL]: **Slack channels.** Only selected channels sync.
+- **FR-1** [C]: Build an Email channel and a Slack channel. Connecting real accounts is not part of the build; Jeremy connects them afterwards.
+- **FR-2** [C]: Mirror each ingested native message as one Activity with its native ID. An edit becomes an Edit Activity carrying the new content; a deletion becomes a Delete Activity. Activities are never rewritten, except for the content removal in FR-2a.
+  - **FR-2a** [PL]: When a Slack message is deleted, the Delete Activity references the deleted message's native ID and carries no content; it is the audit record. The content of the deleted message's earlier Activities (the message and any edits) is cleared, as in Plain's Slack data retention.
+- **FR-3** [PL]: **Email receiving.** Mail is forwarded in, as in Plain: a Google Workspace routing rule copies every message for `jeremy@agentmaple.com` to the inbound address and still delivers it to Gmail. The system never reads the Gmail mailbox.
+  - Every new inbound email creates a Thread; a reply that references an earlier message (`In-Reply-To` / `References`) joins its Thread.
+  - Mail Jeremy sends from Gmail directly is never seen (Plain assumes replies happen in Plain). Accepted in decision #55.
+- **FR-3a** [PL]: **Auto-reply filter.** An inbound email is an auto-reply when it carries one of Plain's header signals: `Auto-Submitted` (other than `no`), `Precedence: auto_reply` or `bulk`, `X-AutoReply`, `X-Autorespond`, `X-Amazon-Auto-Reply`, `X-amzn-vacation`, `X-SFDC-AutoResponse`, `X-ServiceNow-Generated`, `X-Front-Autoreply`, `X-CodeTwo-AutoResponse` / `X-C2AutoRespond`, `X-MDAutoResponse`, `X-QQ-Auto-Reply`, `X-MS-Exchange-Generated-Message-Source`. A matching subject prefix ("Automatic reply:", "Out of office:", and others) counts only together with a header signal.
+  - A filtered auto-reply is not stored, creates no Thread, and never moves one.
+- **FR-3b** [PL + D]: **Email sending.** A reply written in the console is sent through the outbound mail provider from `jeremy@agentmaple.com`, with `In-Reply-To` and `References` set so the recipient's client threads it.
+  - [D] Recipients default to reply-all (the original From, To, and CC, minus Jeremy), editable before sending. Reason: Plain drops CC'd recipients; Jeremy's conversations often include several people.
+  - [P] Console replies do not appear in Gmail's Sent folder unless BCC is configured (Plain's BCC addresses). Open item in §6.
+- **FR-4** [PL]: **Slack channels.** A bot joins the channels Jeremy selects, and their messages arrive as Slack events, as in Plain.
   - Jeremy selects channels by hand, or by name prefix/suffix rules (Plain's auto-join rules).
   - Unselected channels are not ingested (Plain's "disabled").
-- **FR-4a** [D]: **Slack DMs and group DMs** sync, following the same Thread rules. Reason: DMs carry most of Jeremy's Slack comms, and Plain never ingests them.
+- **FR-4a** [D]: **Slack DMs and group DMs** arrive as events on Jeremy's behalf (his user token), following the same Thread rules. Reason: DMs carry most of Jeremy's Slack comms, and a Plain bot cannot read them.
 - **FR-4b** [PL]: **Slack grouping is time-based** (Plain's default ingestion mode):
   - A new top-level message joins the conversation's latest Thread when it is from the same user within 2 hours, or from a different user within 1 hour, of that Thread's last message. Otherwise it starts a new Thread.
   - Replies in a Slack reply-thread attach to the Thread holding its parent message (inferred from Plain).
-  - A group started only by Jeremy's own message becomes a Thread when someone else posts into it (Plain's Teams rule; Slack behavior inferred).
+  - [D] A top-level message Jeremy posts starts a Thread in Snoozed / Waiting for them. Reason: it shows he is waiting on an answer (decision #61); replaces the Plain-inferred rule that his own post makes no Thread until someone else posts.
+- **FR-4c** [PL]: **Slack sending.** A reply written in the console posts to the Thread's conversation from Jeremy's Slack profile, "as if you typed it there". A Thread that began in a Slack reply-thread gets its reply in that reply-thread.
 - **FR-5** [PL]: **No history backfill.** Ingestion starts when a Connection is connected (Plain is forward-only).
 
 ### Status (Plain logic)
 
-- **FR-6** [PL]: Statuses and details:
+- **FR-6** [PL]: Every Thread has a Status and a Status detail (decision #52):
   - **Todo**:
     - *Needs first response*: a new Thread Jeremy has not replied to.
     - *Needs next response*: the other side replied after Jeremy.
@@ -116,25 +123,23 @@ Status key in brackets:
     - *Done*.
     - *Ignored*.
 - **FR-6a** [PL]: A new Thread starts in Todo / Needs first response.
-- **FR-6b** [PL]: Jeremy's reply moves the Thread to Snoozed / Waiting for them.
-  - An email Thread Jeremy starts begins in Waiting for them.
+- **FR-6b** [PL]: Jeremy's reply moves the Thread to Snoozed / Waiting for them. A reply sent from the console is recorded as an outbound Activity when it is sent.
 - **FR-6c** [PL]: Any activity from the other side moves a Snoozed or Done Thread to Todo / Needs next response. This includes messages, and [C] edits and deletions; Plain: "When any activity happens in a thread, it will move back to Todo."
 - **FR-6d** [PL]: A snooze ends at its time, or on the other side's next activity, and the Thread returns to Todo.
 - **FR-6e** [PL]: An Ignored Thread does not move Status on new activity until Jeremy un-ignores it.
 
 ### Ignore and Block
 
-- **FR-7** [C/PL]: **Ignore** is a Thread Status (Done / Ignored), set by Jeremy on a Thread. The Ignored view is a filter over Threads with Status Ignored.
+- **FR-7** [C/PL]: **Ignore** is the Done / Ignored Status detail, set by Jeremy on a Thread. The Ignored view is a filter over Threads with that Status detail.
 - **FR-7a** [C/PL]: **Block** applies to a sending address: an email address, or a Slack user.
-  - Blocking a Person blocks all of that Person's addresses.
-  - A new Thread whose inbound messages all come from blocked addresses is created directly as Ignored. This mirrors Plain's spam customers, whose threads "are automatically closed as ignored".
+  - A new Thread whose inbound messages all come from blocked addresses is created directly as Done / Ignored. This mirrors Plain's spam customers, whose threads "are automatically closed as ignored".
   - [P] Unblocking affects only future Threads; existing Threads stay Ignored until Jeremy un-ignores them.
 - **FR-8** [C]: Every new sender reaches the queue by default.
 
 ### People
 
 - **FR-10** [C]: A **Person** is a Slack user and/or a set of email addresses. Persons are created automatically when they first message Jeremy (Plain: "Customers that reach out to you will automatically be created"). An email address belongs to one Person.
-  - [P] A Slack user joins the Person holding the email address in their Slack profile. Jeremy can add addresses to a Person by hand.
+  - [P] A Slack user joins the Person holding the email address in their Slack profile. Jeremy can add an Identity (an email address or a Slack user) to a Person by hand, and remove one; an Identity that belongs to another Person is refused until he removes it there.
 - **FR-11** [C/PL]: **Organizations** are created automatically from email domains (Plain tenants match by domain).
   - [D] Free-mail domains (gmail.com, outlook.com, and similar) never form an Organization. Reason: Jeremy approved this in AS-12; Plain does not state a rule.
 - **FR-12** [C]: A Case is an optional grouping of Threads. A Thread is in at most one Case. A Case has no Status of its own and shows its Threads' Statuses.
@@ -144,18 +149,22 @@ Status key in brackets:
 
 - **FR-14** [PL + D]: **Keyboard**:
   - [PL] Plain's keys: J / K next and previous; E Done; Z Pause for later; W Wait for them; S change status (for example, Investigating).
+  - [P] R opens the reply box on the Thread; Cmd+Enter sends.
   - [D] I Ignore; C add to Case. Reason: Plain ignores through status changes and workflows, and has no Case.
-  - [D] Enter opens the Thread in Gmail or Slack. Reason: replying happens in the native app.
-- **FR-15** [C]: Nothing in the console changes Gmail or Slack.
+  - [D] Enter opens the Thread in Gmail or Slack. Reason: reading full context or attachments in the native app.
+- **FR-15** [C]: The console sends only replies Jeremy writes. It never edits, deletes, archives, or marks read anything in Gmail or Slack.
 
 ### Non-functional
 
-- **NFR-1** [C intent / P method]: **Completeness.** For each Connection, a reconciler compares the mirror with the source over a rolling window. Filtered auto-replies are recorded by ID so they do not count as missing. Any other missing message is a mismatch.
-- **NFR-2** [C]: **Sync health.** Warning after 15 minutes without a confirmed sync. Broken on an auth failure or any mismatch.
+- **NFR-1** [PL]: **Completeness** relies on event delivery, as in Plain: no polling or reconciliation on either channel (decisions #55, #66). See R7 and R12.
+- **NFR-2** [C / P]: **Sync health.**
+  - Slack: Broken when Slack reports the token revoked or the app uninstalled (`tokens_revoked`, `app_uninstalled` events), or a reply fails to post.
+  - Email: Broken on an inbound request that fails verification or a send failure.
+  - Silence on either channel cannot be told apart from a quiet inbox (R7, R12).
 - **NFR-3** [C]: **Pull only.** No notifications.
-- **NFR-4** [C intent / D2 path]: **Single user.** Reachable only by Jeremy.
-- **NFR-5** [P]: **Secrets.** Tokens are never logged or printed, and are never stored as plaintext user-service credentials (Ledgere precedent).
-- **NFR-8** [P]: **Simplicity.** A single process, the standard library first, and no added service without evidence that it is needed.
+- **NFR-4** [C intent / D2 path]: **Single user.** The console is reachable only by Jeremy. The public ingress exposes only the inbound mail and Slack event endpoints, and each request is verified (Slack signing secret; inbound mail shared secret).
+- **NFR-5** [P]: **Secrets.** Tokens and keys are never logged or printed, and are never stored as plaintext user-service credentials (Ledgere precedent).
+- **NFR-8** [P]: **Simplicity.** A single process, the standard library first, and no added service without evidence that it is needed. The inbound mail service, outbound provider, and ingress are needed by Plain's architecture (decision #55).
 
 ### Invariants
 
@@ -164,7 +173,7 @@ Status key in brackets:
 - **I-3**: a Thread is in at most one Case.
 - **I-4**: Status changes only through:
   - Jeremy's action
-  - Jeremy's own message (to Waiting for them)
+  - Jeremy's own message, from the console or Slack (to Waiting for them)
   - a snooze expiring
   - the other side's activity
   - Block, at Thread creation
@@ -173,65 +182,75 @@ Status key in brackets:
 
 ### Acceptance scenarios
 
+Executable form: `features/<domain>.feature` (Gherkin via pytest-bdd), each scenario tagged `@AS-n` plus its requirement IDs (decision #49).
+
 - **AS-1**: Jeremy reads an email in Gmail and forgets it. → The Thread stays Todo / Needs first response.
 - **AS-2**: Logan emails, then pings in a DM. → Two Todo Threads on Logan's Person record (via his Slack profile email). C groups them into a Case.
-- **AS-3**: Jeremy replies from Gmail. → Snoozed / Waiting for them.
+- **AS-3**: Jeremy replies to an email Thread from the console. → The reply is sent with `In-Reply-To`; the Thread is Snoozed / Waiting for them.
 - **AS-4**: The other side then replies. → Todo / Needs next response.
 - **AS-5**: A Done Slack Thread's message is edited by its author. → Todo / Needs next response.
-- **AS-6**: Jeremy blocks `alerts@signoz.io`, and a new alert arrives. → A new Thread is created directly as Ignored and is visible under the Ignored filter.
+- **AS-6**: Jeremy blocks `alerts@signoz.io`, and a new alert arrives. → A new Thread is created as Done / Ignored and is visible under the Ignored filter.
 - **AS-7**: A new prospect emails for the first time. → Todo / Needs first response; a Person is auto-created.
-- **AS-8**: The Gmail token is revoked. → Health shows broken within one sync cycle.
-- **AS-9**: The poller stops. → Health shows a warning at 15 minutes.
-- **AS-10**: A message exists in the source but not in the mirror. → Mismatch; health shows broken.
-- **AS-11**: An out-of-office reply arrives with `Auto-Submitted: auto-replied` on a Waiting Thread. → It is filtered and not stored; the Status stays Waiting.
+- **AS-8**: The Slack token is revoked. → Slack sends `tokens_revoked`; health shows broken.
+- **AS-9**: Removed (decision #66: no reconciliation).
+- **AS-10**: Removed (decision #66: no reconciliation).
+- **AS-11**: An out-of-office reply arrives with `Auto-Submitted: auto-replied` on a Waiting Thread. → It is filtered and not stored; the Thread stays Snoozed / Waiting for them.
 - **AS-12** [approved in review]: An email from `ana@acme.com`. → Person and Organization "acme.com" are formed. An email from `bob@gmail.com` forms no Organization.
 - **AS-13**: In a DM, Logan sends a message, then another 30 minutes later. → One Thread (same user within 2 hours). Logan writes again 3 hours later → a new Thread.
-- **AS-14**: Jeremy posts top-level in a selected channel and nobody answers. → No Thread. Someone replies within 1 hour → the group becomes a Thread in Todo.
+- **AS-14**: Jeremy posts top-level in a selected channel. → A Thread in Snoozed / Waiting for them. Someone replies 40 minutes later → Todo / Needs next response.
 - **AS-15**: A message in an unselected channel. → Not ingested; no Thread.
 - **AS-16**: Z with "indefinitely", then the other side writes. → Todo / Needs next response.
+- **AS-17**: Jeremy replies to a Slack Thread from the console. → The reply posts from his Slack profile in the Thread's conversation; the Thread is Snoozed / Waiting for them.
+- **AS-18**: Jeremy replies to an email directly in Gmail. → Not seen; the Thread stays Todo (accepted Plain limitation, decision #55).
+- **AS-19**: An inbound mail request arrives without the shared secret. → Rejected; nothing stored; email health shows broken.
+- **AS-20**: Logan deletes a Slack message on a Thread. → A Delete Activity is added; the message's stored content is cleared; the Thread moves to Todo / Needs next response (FR-6c).
 
 ### Traceability
 
-- **FR-2, FR-6–FR-8, FR-12, I-1..I-6**: steps 1.2, 1.3 → `tests/test_store.py`, `tests/test_status.py`.
-- **FR-10, FR-11, AS-12**: step 1.4 → `tests/test_people.py`.
-- **FR-1, FR-3, FR-5, AS-11**: steps 2.1–2.4 → `tests/test_gmail.py` with synthetic fixtures.
-- **FR-1, FR-4, FR-4a, FR-4b, FR-5, AS-13..AS-15**: steps 3.1–3.5 → `tests/test_slack.py` with synthetic fixtures.
-- **NFR-1, NFR-2, AS-8..AS-10**: steps 4.1–4.2 → `tests/test_health.py`.
-- **FR-13, FR-14, AS-1..AS-7, AS-16**: steps 5.1–5.4 → `tests/test_web.py`; build demo in step 6.4 on synthetic data.
-- **NFR-4, NFR-5**: steps 6.1–6.2 → service inspection; secret scan of logs.
+- **FR-2, FR-2a, FR-4b, FR-6–FR-8, FR-10–FR-12, I-1..I-6, AS-2, AS-4..AS-7, AS-12..AS-14, AS-16, AS-20**: steps 1.2–1.4 → `features/threads.feature`, `people.feature`, `organizations.feature`, `cases.feature`, and the Ingest scenarios in `email.feature` and `slack.feature`.
+- **FR-1, FR-3–FR-3b, FR-5, AS-3, AS-11, AS-19**: steps 2.1–2.2 → `features/email.feature`.
+- **FR-1, FR-4, FR-4a, FR-4c, AS-15, AS-17**: steps 3.1–3.4 → `features/slack.feature`.
+- **NFR-2, AS-8**: step 4.1 → `features/sync.feature`.
+- **FR-13, FR-14**: steps 5.1–5.5 → console tests; build demo in step 6.3 on synthetic data.
+- **NFR-4, NFR-5**: steps 6.1–6.3 → service and ingress inspection; secret scan of logs.
 - **Success measures**: after Jeremy connects → 14-day observation by Jeremy (a product measure, not an agent-held gate).
 
 ## 4. Architecture and solution shape
 
-**Current: N/A.** `universal-inbox/` holds only documents. There is no code, repository, or runtime.
+**Current: N/A.** `universal-inbox/` holds documents and the BDD setup. There is no product code or runtime.
 
-**Target: Approved (D1, 2026-10-11).**
-- Strategy C (ADR 0001).
-- One process with an embedded database and polling fits:
-  - one user
-  - two read-only sources
-  - a 15-minute freshness budget
-- Push is left out. Gmail push needs a public Pub/Sub endpoint, and Slack Socket Mode user events are unverified. A 60-second poll stays well inside the warning window.
+**Target: Approved (D1 re-approved 2026-10-12, decision #67).**
+- Strategy C (ADR 0001), with Plain's integration architecture (ADR 0002).
+- One process with an embedded database. Two private surfaces and one public one:
+  - **Public ingress** (two verified endpoints only): inbound mail, and Slack events.
+  - **Private console** (D2).
+  - **Outbound calls**: the mail provider's send API, and Slack's Web API.
 
 ### Alternatives considered
 
-- **Ingestion**: poll Gmail `history.list` and Slack `conversations.history` / `replies`, rather than Gmail Pub/Sub or Slack Socket Mode. No public endpoint and one code path.
+- **Email ingestion**: Plain-style forwarding (chosen, #55) rather than Gmail push via Pub/Sub or Gmail polling. Cost: Gmail-native replies are invisible and email completeness cannot be proven.
+- **Email sending**: outbound mail provider with SPF/DKIM on `agentmaple.com` (chosen, Plain) rather than the Gmail API. Cost: console replies are missing from Gmail Sent unless BCC'd.
+- **Slack delivery**: Events API over the public ingress (Proposed) rather than Socket Mode. The ingress exists anyway for email, and HTTP keeps the standard library; Socket Mode needs a WebSocket client dependency.
 - **Store**: SQLite (stdlib), rather than Postgres. One user and nothing to operate.
-- **Runtime**: Python 3.11+ with `uv` (as in Ledgere and agent-maple-backend), rather than Node 22. Matches the Workbox credential precedent, and the stdlib covers HTTP, JSON, SQLite, and serving.
-- **Console**: server-rendered HTML through stdlib `http.server` plus one small key-binding script, rather than an SPA. No build step and no dependency.
-- **APIs**: raw REST over `urllib`, rather than vendor SDKs. Few endpoints are needed, and OAuth refresh is one POST.
-- **Host**: Workbox as a root-managed systemd system service with `LoadCredentialEncrypted=`, rather than Cloudflare or a VPS. $0, data stays on Jeremy's hardware, and the credential boundary is already proven.
+- **Runtime**: Python 3.11+ with `uv`, rather than Node 22. The stdlib covers HTTP, JSON, MIME parsing (`email`), SQLite, and serving.
+- **Console**: server-rendered HTML through stdlib `http.server` plus one small key-binding script, rather than an SPA.
+- **APIs**: raw REST over `urllib`, rather than vendor SDKs.
+- **Acceptance tests**: Cucumber-style Gherkin run by `pytest-bdd`, rather than `behave`.
+- **Host**: Workbox as a root-managed systemd system service with `LoadCredentialEncrypted=`. Ingress, inbound mail service, and outbound provider: D3 (candidates: Cloudflare Tunnel, Cloudflare Email Routing with an Email Worker, Amazon SES or Resend), within the $10/month ceiling.
 
-**Complexity justification.** One process and one SQLite file. No queue, cache, framework, or external service.
+**Complexity justification.** One process and one SQLite file. The ingress and two mail services are what Plain's architecture requires; nothing else is added.
 
 ### L1 Context (Proposed)
 
 ```mermaid
 flowchart LR
-  J([Jeremy]) -->|triage via browser| UI[Universal Inbox]
-  UI -->|read-only REST| G[(Gmail API)]
-  UI -->|read-only Web API, user token| S[(Slack API)]
-  J -->|replies natively| G & S
+  J([Jeremy]) -->|triage and reply via browser| UI[Universal Inbox]
+  GW[(Google Workspace / Gmail)] -->|routing rule copies inbound mail| IM[(Inbound mail service)]
+  IM -->|HTTPS POST| UI
+  UI -->|send reply| OM[(Outbound mail provider)]
+  OM -->|SMTP| R([Recipients])
+  S[(Slack)] -->|Events API| UI
+  UI -->|chat.postMessage as Jeremy| S
 ```
 
 ### L2 Containers (Proposed)
@@ -240,192 +259,168 @@ flowchart LR
 flowchart TB
   subgraph Workbox[Workbox host]
     subgraph P[universal-inbox process]
-      POLL[Poller: Gmail + Slack adapters, reconciler]
-      WEB[Console HTTP server]
+      HOOKS[Hooks server: inbound mail, Slack events]
+      WEB[Console server]
     end
     DB[(SQLite file)]
     CRED[[systemd encrypted credentials]]
   end
-  CRED --> POLL
-  POLL --> DB
+  ING[Public ingress] --> HOOKS
+  IM[(Inbound mail service)] --> ING
+  SL[(Slack)] --> ING
+  CRED --> HOOKS & WEB
+  HOOKS --> DB
+  REC --> DB
+  REC --> SL
   WEB --> DB
-  POLL --> GA[(Gmail API)]
-  POLL --> SA[(Slack API)]
+  WEB -->|send reply| OM[(Outbound mail provider)]
+  WEB -->|post reply| SL
   Browser([Jeremy's browser]) --> WEB
 ```
 
 ### L3 Components (Proposed)
 
+One deep module, `inbox`, behind four calls; email and Slack are adapters behind two seams (decision #60). Detail: `docs/design/api-and-database.md`.
+
 ```mermaid
 flowchart LR
   subgraph Adapters
-    GM[gmail.py: poll, auto-reply filter, reconcile]
-    SL[slack.py: selected channels + DMs, poll, time-based grouping, edits/deletes, reconcile]
+    EM[email: verify, parse, EmailSender]
+    SK[slack: verify, parse, SlackSender]
   end
-  subgraph Core
-    ST[store.py: schema, Activities, Threads]
-    SM[status.py: Plain status rules]
-    PP[people.py: Persons, Orgs, blocks]
+  subgraph inbox[inbox module]
+    I1[ingest]
+    I2[act]
+    I3[reply]
+    I4[wake]
   end
-  HL[health.py]
-  WB[web.py + keys.js]
-  GM & SL -->|NewActivity| ST --> SM
-  ST --> PP
-  GM & SL -->|cursor, counts| HL
-  WB --> ST & SM & PP & HL
+  WEB[web: console + hooks] -->|raw mail, Slack event| EM & SK
+  EM & SK -->|Incoming| I1
+  WEB --> I2 & I3
+  I3 -->|Sender| EM & SK
+  MAIN[main: timer] --> I4
+  HL[health]
 ```
 
-### L4 Code map (Proposed; nothing exists yet)
+### L4 Code map (Proposed unless marked Current)
 
-- **`pyproject.toml`**: Python ≥3.11, no runtime dependencies, `pytest` for development.
-- **`src/universal_inbox/store.py`**: `connect`, `migrate`, `append_activity(db, NewActivity)` (idempotent on native ID and kind), `thread_for(...)`.
-- **`src/universal_inbox/status.py`**: pure `next_status(thread, event, blocked) -> (Status, Detail)`.
-  - Events: `NewThread`, `Inbound`, `Outbound`, `Edit`, `Delete`, `SnoozeExpired`, and `UserAction` (Done / PauseForLater(duration or indefinite) / WaitForThem / SetInvestigating / Ignore / Unignore).
-- **`src/universal_inbox/people.py`**: `person_for_identity`, `org_for_domain` (with `FREE_MAIL`), `add_address`, `block(address)`, `block_person`, `is_blocked`.
-- **`src/universal_inbox/gmail.py`**: `poll` (from stored `historyId`, starting at connect), `is_auto_reply(headers)`, `reconcile(window)`, `refresh_token`.
-- **`src/universal_inbox/slack.py`**: `selected_conversations` (manual list plus prefix/suffix rules, plus DMs), `poll`, `group(message, latest_thread)` (2-hour / 1-hour rule), `reconcile(window)`, `user_email`.
-- **`src/universal_inbox/health.py`**: `connection_health(db, now)`.
-- **`src/universal_inbox/web.py`** and **`static/keys.js`**:
-  - Routes: `/` (Todo), `/snoozed`, `/done`, `/t/<id>`, `/p/<id>`, `/o/<id>`, `/c/<id>`, `/channels`, `/health`.
-  - Status filters, including Ignored.
-- **`src/universal_inbox/main.py`**: poller thread plus HTTP server; reads credentials from `$CREDENTIALS_DIRECTORY`.
-- **`scripts/oauth_gmail.py`**, **`scripts/oauth_slack.py`**: consent helpers for Jeremy's post-build connect.
-- **`deploy/universal-inbox.service`**: systemd system unit.
-- **`tests/…`**: synthetic fixtures only.
+- **`pyproject.toml`**: Python ≥3.11, no runtime dependencies, `pytest` and `pytest-bdd` for development. **Current** (decision #49).
+- **`features/<domain>.feature`**: acceptance scenarios in Gherkin, one file per product domain, written against the four `inbox` calls and the adapters; `@wip` until steps pass. **Current.**
+- **`tests/test_features.py`**: binds every feature; step definitions go in `tests/steps/`. **Current.**
+- **`src/universal_inbox/inbox.py`**: the domain module. Public: `connect`, `migrate`, `ingest`, `act`, `reply`, `wake`, `block`, `add_identity`, `remove_identity`. Private: threading and Slack time grouping, Status rules, Person and Organization resolution, FR-2a content clearing.
+- **`src/universal_inbox/email.py`**: `verify`, `parse` (stdlib `email`; returns nothing for an auto-reply, FR-3a), `EmailSender`.
+- **`src/universal_inbox/slack.py`**: `verify`, `parse` (applies Channel selection), `SlackSender`, `user_email`.
+- **`src/universal_inbox/health.py`**: `connection_health(connection, now)`.
+- **`src/universal_inbox/web.py`** and **`static/keys.js`**: console pages and actions; `/hooks/email` and `/hooks/slack` on a separate listener.
+- **`src/universal_inbox/main.py`**: both listeners and `wake` every minute; reads credentials from `$CREDENTIALS_DIRECTORY`.
+- **`scripts/oauth_slack.py`**: consent helper for Jeremy's post-build connect.
+- **`deploy/universal-inbox.service`**: systemd system unit. Ingress and mail-service configuration per D3.
 
-**Proposed schema.**
-- `connections(id, platform, label, cursor, connected_at, last_sync_at, last_reconcile_at, mismatch_count, auth_ok)`
-- `channel_rules(connection_id, kind: channel / prefix / suffix, value)`
-- `threads(id, connection_id, conversation_id, native_thread_id, status, detail, snooze_until, case_id, subject, last_activity_at, last_actor)`
-- `activities(id, thread_id, native_id, kind, actor_identity, occurred_at, content)` — append-only
-- `filtered(connection_id, native_id, reason)` — auto-replies, for reconciliation
-- `persons(id, display_name)`
-- `identities(person_id, kind: email / slack_user, value UNIQUE, blocked)`
-- `organizations(id, domain UNIQUE, name)`
-- `person_orgs`
-- `cases(id, title)`
+**Schema and API.** `docs/design/api-and-database.md` (decisions #58–#61): 9 tables with constraints and append-only triggers, Plain Status enum values, Status rules, the `inbox` interface, adapters, and HTTP routes.
 
 ## 5. Phased execution plan
 
-Every path is **Proposed**. D1 is approved; each phase from Phase 1 on needs its own implementation authorization.
+Every path is **Proposed** unless marked Current. D1 is approved (#67); each phase needs its own implementation authorization.
 
-### Phase 0 — Decision and repository
+### Phase 0 — Decision and repository (done 2026-10-11)
 
-- **0.1 Resolve D1 (technical shape).**
-  - Exit: recorded in the ledger.
-- **0.2 Create the repository: `git init`, a remote, and a `dev` branch.**
-  - Exit: the first commit contains the docs.
-  - Authorization: explicit approval to create the repository and remote.
+- **0.1 Resolve D1.** Done (#47); reopened by #53 and #55; re-approved 2026-10-12 (#67).
+- **0.2 Repository.** Done: `JMLegere/universal-inbox`, `main` and `dev`.
 
-### Phase 1 — Domain core
+### Phase 1 — Inbox module
 
-- **1.1 `pyproject.toml`.**
-  - Verify: `uv run pytest -q` passes on an empty suite.
-- **1.2 `store.py`.**
-  - Requirements: FR-2, I-1, I-3.
-  - Verify: `tests/test_store.py` — an appended duplicate leaves one row; an edit adds an Activity; a deletion clears content and keeps the audit record.
-- **1.3 `status.py`.**
-  - Requirements: FR-6–FR-6e, FR-7, FR-7a, I-2, I-4, I-5.
-  - Verify: `tests/test_status.py` tables for every event against every Status and detail, including:
-    - Jeremy's reply → Waiting for them
-    - other side → Needs next response
-    - Ignored unmoved
-    - blocked sender → Ignored at creation
-    - a snooze expiry
-- **1.4 `people.py`.**
-  - Requirements: FR-7a, FR-10, FR-11, I-6, AS-12.
-  - Verify: `tests/test_people.py` — auto-created Person; a Slack user joins through their profile email; free-mail forms no Organization; blocking a Person blocks all of its addresses.
+- **1.1 `pyproject.toml`.** Current (BDD setup).
+- **1.2 `inbox.connect` and `inbox.migrate`**: the schema in the design doc.
+  - Requirements: FR-2, FR-2a, I-1, I-2, I-3, I-6.
+  - Verify: the schema's constraints and triggers (duplicate `native_id` stored once; Activities cannot be rewritten; content clears only after a deletion).
+- **1.3 `inbox.ingest`**: threading, Slack time grouping, Status rules on incoming activity, Person and Organization resolution.
+  - Requirements: FR-2, FR-2a, FR-4b, FR-6a, FR-6c, FR-6e, FR-7a, FR-8, FR-10, FR-11.
+  - Verify: `features/threads.feature`, `features/people.feature`, `features/organizations.feature`, and the Ingest scenarios in `features/email.feature` and `features/slack.feature`, with synthetic Incoming values.
+- **1.4 `inbox.act`, `inbox.reply`, `inbox.wake`, `inbox.block`, `inbox.add_identity`, `inbox.remove_identity`.**
+  - Requirements: FR-6b, FR-6d, FR-7, FR-7a, FR-10, FR-12, FR-14 (actions).
+  - Verify: `features/threads.feature`, `features/cases.feature`, `features/people.feature`, with a fake Sender.
 
-### Phase 2 — Gmail connector
+### Phase 2 — Email adapter
 
-- **2.1 `scripts/oauth_gmail.py`** with scope `gmail.readonly`, for Jeremy's post-build connect.
-  - Verify: it runs against a fake token endpoint in tests and prints no token.
-- **2.2 `gmail.poll`.**
-  - On connect, it records the current `historyId` with no backfill (FR-5), then ingests `messageAdded` from there.
-  - Outbound means the From address is Jeremy's.
-  - Spam and Trash are skipped.
-  - Requirements: FR-3, FR-5.
-  - Verify: fixtures for a new email, a reply in a thread, a sent email, and a message in Spam.
-- **2.3 `gmail.is_auto_reply`.**
-  - Requirement: FR-3, AS-11.
-  - Verify: fixtures — `Auto-Submitted` header → filtered and recorded in `filtered`; a subject of "Out of office" with no header → kept.
-- **2.4 `gmail.reconcile`.**
-  - Requirement: NFR-1.
-  - Verify: a missing ID gives a mismatch; a filtered ID gives none.
+- **2.1 `email.verify` and `email.parse`.**
+  - Requirements: FR-3, FR-3a, FR-5, AS-11, AS-19.
+  - Verify: `features/email.feature` with synthetic MIME messages.
+- **2.2 `email.EmailSender`.**
+  - Requirements: FR-3b, AS-3.
+  - Verify: against a fake provider endpoint: `In-Reply-To` / `References` and reply-all recipients.
 
-### Phase 3 — Slack connector
+### Phase 3 — Slack adapter
 
-- **3.1 `scripts/oauth_slack.py`** with user scopes for history and read across channels, groups, IMs, and MPIMs, plus `users:read` and `users:read.email`.
-- **3.2 `slack.selected_conversations`.**
-  - Requirements: FR-4, FR-4a.
-  - Verify: manual and prefix/suffix rules select channels; DMs and group DMs are always included; unselected channels are excluded.
-- **3.3 `slack.group` and `slack.poll`.**
-  - Requirements: FR-4b, FR-5.
-  - Verify: fixtures for the same user at 30 minutes and 3 hours (AS-13), a different user at 45 and 70 minutes, a reply-thread attaching to its parent's Thread, and a group started by Jeremy alone (AS-14).
-- **3.4 Edits and deletions.**
-  - Edits are detected by `edited.ts`; deletions are found during reconciliation.
-  - Requirements: FR-2, FR-6c.
-  - Verify: fixtures for each.
-- **3.5 `slack.reconcile` and `user_email`.**
-  - Requirements: NFR-1, FR-10.
-  - Verify: fixtures.
+- **3.1 `scripts/oauth_slack.py`**: bot scopes for selected channels, plus Jeremy's user scopes for DM history and events, `chat:write`, `users:read`, and `users:read.email`.
+- **3.2 `slack.verify` and `slack.parse`.**
+  - Requirements: FR-4, FR-4a, NFR-4, AS-15.
+  - Verify: `features/slack.feature` with synthetic events.
+- **3.3 `slack.SlackSender`.**
+  - Requirements: FR-4c, AS-17.
+  - Verify: against a fake Web API: Jeremy's user token and `thread_ts`.
+- **3.4 `slack.user_email`.**
+  - Requirements: FR-10.
 
 ### Phase 4 — Trust monitor
 
 - **4.1 `health.connection_health`.**
-  - Verify: 14 minutes is OK, 16 minutes is WARN, an auth failure is BROKEN, a mismatch is BROKEN.
-- **4.2 Poller loop in `main.py`.**
-  - Poll every 60 seconds and reconcile every 15 minutes (Proposed).
-  - Verify: a fake-clock scenario test.
+  - Requirements: NFR-2, AS-8.
+  - Verify: `features/sync.feature`: a `tokens_revoked` or `app_uninstalled` event, a failed Slack post, a failed email send, and a rejected inbound request each make health BROKEN.
 
 ### Phase 5 — Console
 
 - **5.1 Queue pages, Status filters (including Ignored), and Thread detail.**
-  - Verify: `tests/test_web.py`.
-- **5.2 Key actions** (J / K / E / Z / W / S / I / C / Enter).
+- **5.2 Key actions** (J / K / E / Z / W / S / I / C / R / Enter).
   - Requirement: FR-14.
-  - Verify: action tests through `status.py`.
-- **5.3 Person, Organization, Case, and Channels pages; Block on Person and address.**
+- **5.3 Reply box**: reply-all recipients for email, Cmd+Enter to send, send errors shown on the Thread.
+  - Requirements: FR-3b, FR-4c.
+- **5.4 Person, Organization, Case, and Channels pages; Block on Person and address.**
   - Requirements: FR-4, FR-7a, FR-12, FR-13.
-- **5.4 `/health`.**
+- **5.5 `/health`.**
   - Requirement: NFR-2.
 
 ### Phase 6 — Package and demo
 
 - **6.1 `deploy/universal-inbox.service` plus a credential runbook.**
   - Authorization: point-of-risk approval to install the system unit.
-- **6.2 Bind the console per D2.**
+- **6.2 Bind the console per D2; set up the ingress and mail services per D3.**
+  - Authorization: point-of-risk approval for each external account, DNS record, and routing rule.
 - **6.3 Build demo on synthetic data.**
-  - Open the console in Jeremy's browser.
-  - Walk AS-1, AS-3, AS-4, AS-6, AS-11, and AS-13 using a fixture-fed Connection.
-  - Explain what changed.
+  - Walk AS-1, AS-3, AS-4, AS-6, AS-11, AS-13, and AS-17 using fixture-fed channels and fake send endpoints.
   - Exit: Jeremy accepts.
-- **6.4 After the build, Jeremy connects real accounts** (FR-1), then checks health and reconciliation on live data.
-- **Rollback.** Stop the service. Gmail and Slack are never modified.
+- **6.4 After the build, Jeremy connects real accounts** (FR-1), then checks health on live data.
+- **Rollback.** Stop the service and remove the Workspace routing rule. Gmail keeps every message; Slack keeps every message.
 
 ## 6. Risks, unknowns, and approvals
 
-- **D1: Approve the technical shape in §4.**
-  - Impact: all phases.
-  - Owner: Jeremy.
-  - Status: **Resolved** 2026-10-11, approved as written (decision #47).
+- **D1: Technical shape in §4.**
+  - Approved 2026-10-11 (#47); reopened by #53 and #55; re-approved 2026-10-12 (#67).
+  - Owner: Jeremy. Blocks: no.
 - **D2: Console access path** (Workbox LAN, Tailscale, or other).
-  - Impact: NFR-4 and Phase 6.
-  - Owner: Jeremy.
-  - Blocks: deployment only.
+  - Impact: NFR-4 and Phase 6. Owner: Jeremy. Blocks: deployment only.
+- **D3: Ingress, inbound mail service, and outbound mail provider.**
+  - Candidates: Cloudflare Tunnel; Cloudflare Email Routing with an Email Worker; Amazon SES or Resend. Constraint: $10/month.
+  - Owner: Jeremy. Blocks: connecting, not building.
+- **Open: BCC console replies to Jeremy's own address** so Gmail Sent stays complete (Plain's BCC feature). The copy arrives back through forwarding and is deduplicated by `Message-ID`.
+  - Owner: Jeremy. Blocks: no.
 - **R1: Triage load with time-based grouping and DMs is unmeasured.**
   - Mitigation: measure after Jeremy connects.
-- **R2: Slack deletions are seen only during reconciliation.**
-  - Impact: up to one cycle of lag.
-  - Mitigation: accepted for the MVP.
-- **R3: Gmail `historyId` expiry after a long outage.**
-  - Mitigation: bounded re-list plus reconcile.
-- **R4: Slack poll cost grows with the number of selected conversations.**
-  - Mitigation: poll only conversations whose `latest` changed.
+- **R12: Slack events missed while the host is down are lost.** Slack retries a failed delivery a few times over several minutes, then gives up, and can turn off event delivery after sustained failures (Slack Events API docs, not re-read this session). Plain runs on always-on cloud infrastructure; this inbox runs on Workbox. Accepted in decision #66.
+  - Mitigation: none in the MVP; host uptime.
 - **R5: Inferred Plain rules.** Slack reply-thread attachment, own-post groups, and unblock behavior are not stated in Plain's docs.
   - Mitigation: confirm in the 6.3 demo.
-- **R6: OAuth consent on a headless host.**
+- **R6: Slack OAuth consent on a headless host.**
   - Mitigation: run consent from Jeremy's machine and pass tokens through the credential runbook.
+- **R7: Email completeness cannot be proven.** Forwarded mail has no source to reconcile against, and a broken routing rule looks like a quiet inbox. This weakens the discovery trust core ("provable completeness") for email. Accepted in #55.
+  - Mitigation (Proposed, needs approval): none in the MVP.
+- **R8: Replies sent from Gmail directly are invisible** (AS-18). The Thread stays Todo until Jeremy marks it.
+  - Mitigation: reply from the console.
+- **R9: Sending as `jeremy@agentmaple.com` through a third-party provider changes SPF/DKIM on `agentmaple.com`.** A wrong record can hurt company mail delivery.
+  - Mitigation: Jeremy approves each DNS change (Phase 6.2).
+- **R10: The public ingress is an attack surface.**
+  - Mitigation: two endpoints only, each request verified (NFR-4); console on a separate private listener.
+- **R11: Workspace routing may copy spam** that Gmail would file in Spam (unverified). Plain has the same exposure.
+  - Mitigation: Block and Ignore.
 
 ## 7. Discussion and decision ledger
 
@@ -652,6 +647,100 @@ All entries are dated 2026-10-10; exact times are unproven unless noted. Full de
   - Request / decision: Execute Phase 0; the repository remote is `JMLegere/universal-inbox`, public (agent recommended private)
   - Source: Jeremy, "execute phase 0" and ask tool answer
   - Status: Accepted
+- **49**
+  - Request / decision: Adopt Cucumber BDD. Acceptance scenarios become Gherkin features run by `pytest-bdd` (agent's choice over `behave`: one runner with the planned `pytest`)
+  - Source: Jeremy, "i want to adopt cucumber bdd for this project"
+  - Status: Accepted
+- **50**
+  - Request / decision: Organize feature files by product domain (threads, people, organizations, cases, slack, gmail, sync) instead of by job to be done. AS-2 splits into a people scenario and a cases scenario
+  - Source: Jeremy
+  - Status: Accepted
+  - Supersedes: one job to be done per feature file (#49 setup)
+- **51**
+  - Request / decision: Reply from inside the inbox, as in Plain, on both Gmail and Slack, in the MVP. Plain text replies; email defaults to reply-all; R opens the reply box. New conversations, attachments, rich text, drafts, and undo-send deferred
+  - Source: Jeremy, "i want to reply from inside this inbox similar to how plain works", and ask tool answer
+  - Status: Accepted
+  - Supersedes: read-only mirror (FR-15 rev 2), write-back deferral, `gmail.readonly` only
+- **52**
+  - Request / decision: Status follows Plain's architecture exactly: Status (Todo, Snoozed, Done) plus Status detail
+  - Source: Jeremy, "i want the same architecture as plain for status and integrations", and ask tool answer
+  - Status: Accepted
+  - Supersedes: feature-review annotations 1–2 (flatten Status, no Detail, Ignored as a Status)
+- **53**
+  - Request / decision: Ingestion is event-driven, as in Plain (email by forwarding, Slack by events), instead of polling. Slack reconciliation stays as the completeness backstop
+  - Source: Jeremy, "same architecture as plain ... integrations" (answers feature-review annotation 3)
+  - Status: Accepted
+  - Supersedes: 60-second polling (#47, D1)
+- **54**
+  - Request / decision: Keep Plain's auto-reply filter exactly: Plain's header list; a subject prefix counts only with a header
+  - Source: Jeremy, "same architecture as plain" (answers feature-review annotation 4, after the agent explained the filter's job)
+  - Status: Accepted
+- **55**
+  - Request / decision: Email follows Plain exactly: a Workspace routing rule forwards inbound mail to an inbound address, and replies are sent through an outbound mail provider with DNS records. The agent recommended Gmail push plus Gmail API sending; Jeremy chose Plain's model, accepting that Gmail-native replies are invisible and email completeness cannot be reconciled
+  - Source: Jeremy, ask tool answer
+  - Status: Accepted (trade-offs R7, R8, R9)
+  - Supersedes: Gmail API ingestion and `gmail.readonly` (#47); email part of NFR-1
+- **56**
+  - Request / decision: Slack follows Plain's bot model for selected channels (events) and posts replies from Jeremy's profile; DMs and group DMs stay, through events on Jeremy's behalf
+  - Source: Jeremy, ask tool answer
+  - Status: Accepted
+  - Supersedes: Slack polling (#47)
+- **57**
+  - Request / decision: A Slack deletion is itself an Activity (Delete Activity, no content), and it is the audit record; the deleted message's stored content is cleared (Plain retention). Removes FR-2's contradiction between "deletion becomes a new Activity" and "a minimal audit record is kept"
+  - Source: Jeremy, "shouldn't this also be an activity?", then "keep it, same as plain"
+  - Status: Accepted. Plain: "if a message is deleted in Slack, Plain deletes the message content. A minimal audit trail is kept, recording that a message existed and was deleted, without the content." (https://www.plain.com/docs/product/security/slack-data-retention.md, read 2026-10-12)
+- **58**
+  - Request / decision: API and database design in `docs/design/api-and-database.md`, shaped on Plain's GraphQL API (status enums, timeline entries, `replyToThread`). Closes the six open names (Case assignment, edit actor, filter reason, Group result, held Slack posts, Person–Organization link)
+  - Source: Jeremy, "create an api and database design"
+  - Status: Approved (#65)
+- **59**
+  - Request / decision: Cut the design to what requirements read (Occam's razor): no actor types, status-change Activities, send status, filtered-mail table, person–organization link table, or stored Thread summaries. Accepted gap: an email sent just before a crash may go unrecorded
+  - Source: Jeremy, "do we need these? what's the occam's razor design?" then "yes"
+  - Status: Accepted
+- **60**
+  - Request / decision: One deep `inbox` module with four calls (`ingest`, `act`, `reply`, `wake`); email and Slack as adapters behind an incoming seam and a sending seam; features bind to these calls
+  - Source: Jeremy, "yes" to the agent's deep-module proposal (from /mattpocock-skills:improve-codebase-architecture vocabulary)
+  - Status: Accepted
+- **61**
+  - Request / decision: Jeremy's own top-level Slack post starts a Thread in Snoozed / Waiting for them (deviation), replacing the Plain-inferred "no Thread until someone else posts"
+  - Source: Jeremy, ask tool answer
+  - Status: Accepted
+  - Supersedes: FR-4b own-post rule (rev 2–3), `held_messages`
+- **62**
+  - Request / decision: Remove `block_person`; Block applies to one Identity (an email address or a Slack user) only
+  - Source: Jeremy, design annotation 1, "I don't want this."
+  - Status: Accepted
+  - Supersedes: FR-7a "Blocking a Person blocks all of that Person's addresses" (#39)
+- **63**
+  - Request / decision: Rename `add_address` to `add_identity`; it adds an email address or a Slack user to a Person and refuses one that belongs to another Person (I-6)
+  - Source: Jeremy, design annotation 2, "should this be 'add_identity'?"
+  - Status: Accepted
+- **64**
+  - Request / decision: `add_identity` refuses an Identity owned by another Person; to move it, Jeremy first removes it from that Person (`remove_identity`, which detaches it and keeps its Activities)
+  - Source: Jeremy, "refuse is fine. we can do that by first removing from the other user"
+  - Status: Accepted
+- **65**
+  - Request / decision: API and database design approved (`docs/design/api-and-database.md`, decisions #58–#64)
+  - Source: Jeremy, "approved design"
+  - Status: Approved
+- **66**
+  - Request / decision: Follow Plain: no Slack reconciliation or polling. Completeness relies on event delivery on both channels; Slack health is Broken on `tokens_revoked` / `app_uninstalled` or a failed post. The agent recommended keeping reconciliation as a deviation for the discovery trust requirement; Jeremy chose Plain
+  - Source: Jeremy, "i want to follow plain, since ive used their platform and never encountered dropped messages"
+  - Status: Accepted (trade-off R12)
+  - Supersedes: NFR-1 Slack reconciliation, the 15-minute warning, AS-9, AS-10, R2, R4
+- **67**
+  - Request / decision: D1 re-approved: the technical shape in §4 and the approved design (Python stdlib, SQLite, one process with the `inbox` module, event-driven hooks on a public ingress, private console, Workbox)
+  - Source: Jeremy, "1 approved"
+  - Status: Approved
+  - Supersedes: D1 reopened
+- **68**
+  - Request / decision: Status rules Plain does not state: (1) the other side writing again before Jeremy's first reply keeps Needs first response; (2) the other side writing on Investigating gives Needs next response; (3) Unignore gives Needs next response if Jeremy has replied, else Needs first response; (4) a timed snooze ending returns the Thread to the Todo detail it had before (new column `detail_before_snooze`)
+  - Source: Jeremy, ask tool answers
+  - Status: Accepted
+- **69**
+  - Request / decision: Commit and push the docs, design, and BDD setup to `dev`
+  - Source: Jeremy, "3 approved"
+  - Status: Accepted
 
 ## 8. Work log
 
@@ -703,11 +792,41 @@ All entries are dated 2026-10-10; exact times are unproven unless noted. Full de
   - Result: D1 resolved
   - Evidence: This file, decisions #47–#48
   - Basis: Source-observed
-- **2026-10-11T23:55+00:00**
+- **2026-10-11T23:50:41+00:00**
   - Actor: Agent
   - Activity: Phase 0.2: `git init`, first commit `1838513` (docs), public remote `JMLegere/universal-inbox`, `main` and `dev` pushed
   - Result: Phase 0 complete
   - Evidence: https://github.com/JMLegere/universal-inbox; `git ls-remote --heads origin`
+  - Basis: Source-observed
+- **2026-10-11T23:54:38+00:00**
+  - Actor: Agent
+  - Activity: BDD setup: `pyproject.toml`, `uv.lock`, `.gitignore`, five feature files covering AS-1–AS-16, `tests/test_features.py`, `features/AGENTS.md`
+  - Result: 17 scenarios collected, all `@wip`; `uv run pytest -m wip` fails on missing step definitions, as expected
+  - Evidence: `uv run pytest -m wip --collect-only -q`
+  - Basis: Source-observed
+- **2026-10-12T00:38:20+00:00**
+  - Actor: Agent
+  - Activity: Read Plain's status, email, auto-reply, and Slack docs; recorded decisions #51–#56; rewrote §1–§6 as revision 3; added ADR 0002
+  - Result: Draft revision 3; D1 reopened; D3 opened
+  - Evidence: This file; revision 2 backup in the session scratchpad
+  - Basis: Source-observed
+- **2026-10-12 (time unproven)**
+  - Actor: Agent
+  - Activity: Decision #57: Slack deletion is a Delete Activity (the audit record); FR-2a; AS-20
+  - Result: FR-2 internal contradiction removed
+  - Evidence: This file
+  - Basis: Source-observed
+- **2026-10-12T01:24:39+00:00**
+  - Actor: Agent
+  - Activity: Design trimmed (#59), reshaped around the `inbox` module (#60), own-post rule (#61), Identity changes (#62–#64); features rewritten against the four calls; design approved (#65)
+  - Result: `docs/design/api-and-database.md` Approved; 48 scenarios collected, all `@wip`
+  - Evidence: `uv run pytest -m wip --collect-only -q`; schema executed in SQLite
+  - Basis: Source-observed
+- **2026-10-12T01:33:07+00:00**
+  - Actor: Agent
+  - Activity: Recorded #66 (no reconciliation), #67 (D1 re-approved), #68 (status rules), #69 (commit); updated design, features, and requirements
+  - Result: Implementation unblocked phase by phase; committed to `dev`
+  - Evidence: git log on `dev`
   - Basis: Source-observed
 
 ## 9. Sources and coverage check
@@ -725,6 +844,11 @@ All entries are dated 2026-10-10; exact times are unproven unless noted. Full de
   - Teams own-post rule: https://www.plain.com/docs/product/channels/microsoft-teams-installation.md
   - Email auto-replies and spam: https://www.plain.com/docs/product/channels/email-spam-and-auto-reply-detection.md and https://www.plain.com/docs/graphql/customers/spam.md
   - Customers: https://www.plain.com/docs/graphql/customers.md
+- **Plain docs (read 2026-10-12):**
+  - Statuses (status details and their SLA role): https://www.plain.com/docs/product/platform/threads/statuses.md
+  - Email setup, receiving by forwarding, BCC: https://www.plain.com/docs/product/channels/email.md, https://www.plain.com/docs/product/channels/email-receiving.md, https://www.plain.com/docs/product/channels/email-bcc-addresses.md
+  - Auto-reply header list: https://www.plain.com/docs/product/channels/email-spam-and-auto-reply-detection.md
+  - Slack bot, replies from your profile, in-Slack actions: https://www.plain.com/docs/product/channels/slack.md, https://www.plain.com/docs/product/channels/slack-in-slack-actions.md
   - Tenants: https://www.plain.com/docs/product/platform/tenants.md
   - Import: https://www.plain.com/docs/graphql/threads/import.md
   - Public GraphQL schema: https://core-api.uk.plain.com/graphql/v1/schema.graphql
@@ -739,9 +863,11 @@ All entries are dated 2026-10-10; exact times are unproven unless noted. Full de
 
 **Coverage gaps**
 - The success measures can only be checked after Jeremy connects.
-- NFR-4 depends on D2.
+- NFR-4 depends on D2; connecting depends on D3.
+- R7: email completeness has no verification method in the MVP.
+- AS-1 and AS-18 have no executable scenario: each describes something the system never receives (a Gmail read, a reply sent from Gmail). They are checked in the 6.3 demo.
 - R5 inferences are verified only in the 6.3 demo.
 
-**Downstream sync needed.** `docs/requirements.md` and `GLOSSARY.md` were updated alongside this revision. The discovery doc's decision log references this PRD for decisions 36–46.
+**Downstream sync needed.** `docs/requirements.md`, `GLOSSARY.md`, ADR 0002, the feature files, and the discovery decision log were updated alongside revision 3.
 
 **Implementation statement.** This `/prd` invocation performed no implementation. No code, repository, OAuth app, Slack app, credential, or service was created.

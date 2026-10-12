@@ -448,6 +448,8 @@ flowchart TB
 | 2026-10-10 | PRD review (docs/prd.md decisions 36–46): Plain behavior adopted for email, Slack (time-based grouping, selected channels), backfill (none), status details, snooze; DMs included as a deviation; Ignore separated from Block | Jeremy, PRD annotations and ask tool | Accepted | Earlier Thread-formation, backfill, own-reply, and channel decisions in this log |
 | 2026-10-10 | Rename Conversation to Thread. Unlike Plain, a Thread here is native message grouping and the Case is the need | Jeremy, unprompted | Accepted | Term "Conversation" (also on the two entries above) |
 | 2026-10-10 | The tool may be narrow and integrate with Tana, Slack, Linear, and others for adjacent jobs | Jeremy, unprompted | Accepted as constraint for Phase 2–3 | — |
+| 2026-10-12 | PRD revision 3 (docs/prd.md decisions 51–56): reply from the console on both channels; Plain status model (Status + Status detail); Plain integration architecture (email by forwarding and provider sending, Slack bot events, DMs via user events); event-driven ingestion. Email completeness can no longer be reconciled (ADR 0002) | Jeremy | Accepted | Read-only mirror; Gmail API polling; R2 provable completeness for email |
+| 2026-10-12 | PRD decision 66: no Slack reconciliation or polling, as in Plain; completeness relies on event delivery on both channels. Agent recommended keeping reconciliation for the trust core | Jeremy ("never encountered dropped messages" on Plain) | Accepted | R2 provable completeness and 15-minute sync warning |
 
 ## Sources
 

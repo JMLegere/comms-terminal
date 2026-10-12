@@ -1,0 +1,22 @@
+[project]
+name = "universal-inbox"
+version = "0.1.0"
+description = "Single-user, Plain-style Thread queue across Gmail and Slack"
+requires-python = ">=3.11"
+dependencies = []
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+bdd_features_base_dir = "features/"
+# Scenarios tagged @wip have no passing steps yet; run them with `-m wip`.
+addopts = "-m 'not wip'"
+markers = ["wip: scenario not yet implemented"]
+# Gherkin traceability tags (@AS-n, @FR-n, @NFR-n, @I-n) become marks; select them with -m.
+filterwarnings = ["ignore:Unknown pytest.mark.(AS|FR|NFR|I)-:pytest.PytestUnknownMarkWarning"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-bdd>=9.0.0",
+]
