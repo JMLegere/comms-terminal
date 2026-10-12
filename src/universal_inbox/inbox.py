@@ -19,7 +19,7 @@ from typing import Protocol
 
 from . import platforms
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 WAIT = timedelta(days=5)  # Waiting for them ends after this with no reply: back to Todo to follow up (#116)
 MIGRATIONS = {  # version -> statement that upgrades an existing database to it
     2: "ALTER TABLE cases ADD COLUMN description TEXT NOT NULL DEFAULT ''",
@@ -97,6 +97,12 @@ INSERT INTO connections_new SELECT id,
 DROP TABLE connections;
 ALTER TABLE connections_new RENAME TO connections;
 PRAGMA legacy_alter_table = OFF;""",
+    # One Organization key (_org): subdomain rows fold into their registrable domain, keeping a name Jeremy set.
+    7: """INSERT OR IGNORE INTO organizations (domain, name, created_at)
+SELECT org_key(domain), CASE WHEN max(name != domain) THEN max(CASE WHEN name != domain THEN name END)
+                             ELSE org_key(domain) END, min(created_at)
+FROM organizations WHERE org_key(domain) != domain GROUP BY org_key(domain);
+DELETE FROM organizations WHERE org_key(domain) != domain;""",
 }
 
 # ponytail: fixed list; extend when a free-mail sender forms an Organization by mistake.
@@ -212,6 +218,7 @@ def connect(path: str = ":memory:") -> sqlite3.Connection:
     db.row_factory = sqlite3.Row
     db.execute("PRAGMA foreign_keys = ON")
     db.execute("PRAGMA busy_timeout = 5000")  # the service and the console share the file
+    db.create_function("org_key", 1, _org, deterministic=True)
     if path != ":memory:":
         db.execute("PRAGMA journal_mode = WAL")
     return db
@@ -235,6 +242,7 @@ def migrate(db: sqlite3.Connection) -> None:
         return
     sql = (Path(__file__).with_name("schema.sql")).read_text() if version == 0 else ";\n".join(
         MIGRATIONS[v] for v in range(version + 1, SCHEMA_VERSION + 1))
+    db.create_function("org_key", 1, _org, deterministic=True)  # migration 7 (connect() also registers it)
     fk = db.execute("PRAGMA foreign_keys").fetchone()[0]
     db.execute("PRAGMA foreign_keys = OFF")  # table rebuilds (5) drop and rename parents; checked before commit
     try:
@@ -324,7 +332,7 @@ def _ensure_org(db, kind, value):
     domain = value.rsplit("@", 1)[1]
     if domain not in FREE_MAIL:
         db.execute("INSERT OR IGNORE INTO organizations (domain, name, created_at)"
-                   " VALUES (?, ?, ?)", (domain, domain, _iso(_now())))
+                   " VALUES (?, ?, ?)", (_org(domain), _org(domain), _iso(_now())))
 
 
 AUTOMATED = re.compile(r"^(no-?reply|do-?not-?reply|donotreply|noreply|service|notifications?|notify|alerts?|"
@@ -365,10 +373,19 @@ def _name_key(name: str) -> str:
     return " ".join(name.lower().split())
 
 
+# Public suffixes of two labels that Jeremy's correspondents use (Canadian provinces, UK, AU, NZ, …).
+# ponytail: hand list, not the full Public Suffix List; add tldextract if an Organization splits or merges wrongly
+TWO_LABEL_SUFFIXES = frozenset(
+    f"{p}.ca" for p in ("ab", "bc", "mb", "nb", "nf", "nl", "ns", "nt", "nu", "on", "pe", "qc", "sk", "yk", "gc")
+) | frozenset({"co.uk", "org.uk", "ac.uk", "gov.uk", "com.au", "net.au", "org.au", "gov.au", "co.nz",
+               "org.nz", "co.jp", "com.br", "co.in", "com.mx", "co.za"})
+
+
 def _org(domain: str) -> str:
-    """The organization a domain belongs to: accounts.google.com -> google.com."""
-    # ponytail: last two labels; misreads two-part suffixes (example.co.uk), add a suffix list if that matters
-    return ".".join(domain.lower().split(".")[-2:])
+    """The Organization key of a domain: the domain its company registers. accounts.google.com -> google.com,
+    ws-ts.nb.ca stays whole (nb.ca is a public suffix). Used to store, match, and join Organizations."""
+    labels = domain.lower().split(".")
+    return ".".join(labels[-3:] if ".".join(labels[-2:]) in TWO_LABEL_SUFFIXES else labels[-2:])
 
 
 def _company_domains(db, person_id, automated: bool = False) -> set[str]:
@@ -979,7 +996,7 @@ def person_threads(db, person_id: int) -> list[Thread]:
 def person_organizations(db, person_id: int) -> list[str]:
     return [r[0] for r in db.execute(
         "SELECT o.domain FROM organizations o JOIN identities i"
-        " ON i.kind = 'email' AND substr(i.value, instr(i.value, '@') + 1) = o.domain"
+        " ON i.kind = 'email' AND org_key(substr(i.value, instr(i.value, '@') + 1)) = o.domain"
         " WHERE i.person_id = ? ORDER BY o.domain", (person_id,))]
 
 
@@ -1033,7 +1050,7 @@ def _where(channel, identity) -> str:
     if kind in ("channel", "private"):
         return "#" + (channel["name"] or channel["native_id"])
     domain = identity["value"].rsplit("@", 1)[-1] if identity and identity["kind"] == "email" else ""
-    return domain if domain and domain not in FREE_MAIL else "email"
+    return _org(domain) if domain and domain not in FREE_MAIL else "email"
 
 
 def queue(db, view: str) -> list[dict]:
@@ -1132,8 +1149,8 @@ def _participants(db, acts) -> tuple[list[dict], list[str], list[str]]:
         pids += [p for p in found if p and p not in pids]
     people = [person_view(db, p) for p in pids]
     known = {d for p in people for d in p["organizations"]}
-    extra = {a.rsplit("@", 1)[1] for a in others if "@" in a} - FREE_MAIL
-    own = {m.rsplit("@", 1)[1] for m in mine if "@" in m}  # Agent Maple is not a counterparty
+    extra = {_org(d) for a in others if "@" in a and (d := a.rsplit("@", 1)[1]) not in FREE_MAIL}
+    own = {_org(m.rsplit("@", 1)[1]) for m in mine if "@" in m}  # Agent Maple is not a counterparty
     return people, others, sorted((known | extra) - own)
 
 
@@ -1206,7 +1223,7 @@ def organization_view(db, domain: str) -> dict:
     with _read_snapshot(db):
         pids = [r[0] for r in db.execute(
             "SELECT DISTINCT person_id FROM identities WHERE kind = 'email' AND person_id IS NOT NULL"
-            " AND substr(value, instr(value, '@') + 1) = ?", (domain,))]
+            " AND org_key(substr(value, instr(value, '@') + 1)) = ?", (domain,))]
         persons = [person_view(db, pid) for pid in pids]
         threads = {t.id: t for p in persons for t in p["threads"]}
         return {"domain": domain, "people": persons, "threads": sorted(threads.values(), key=lambda t: t.id)}

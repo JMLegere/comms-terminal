@@ -94,3 +94,13 @@ def test_thread_lists_everyone_involved():
     assert [p["name"] for p in v["people"]] == ["Janet Forbes", "John Debly"]
     assert v["others"] == ["bob@acme.com", "logan@agentmaple.com"]
     assert v["organizations"] == ["acme.com", "ws.ca"]  # Agent Maple's own domain is not a counterparty
+
+
+def test_organizations_use_the_registrable_domain():
+    db = setup()
+    mail(db, 1, "no-reply@accounts.google.com", "Google Takeout")
+    mail(db, 2, "pat@ws-ts.nb.ca", "Pat Doiron")  # nb.ca is a public suffix: the whole domain is the company
+    assert [r[0] for r in db.execute("SELECT domain FROM organizations ORDER BY domain")] == ["google.com", "ws-ts.nb.ca"]
+    google = db.execute("SELECT person_id FROM identities WHERE value = 'no-reply@accounts.google.com'").fetchone()[0]
+    assert inbox.person_organizations(db, google) == ["google.com"]
+    assert [p["name"] for p in inbox.organization_view(db, "google.com")["people"]] == ["Google Takeout"]

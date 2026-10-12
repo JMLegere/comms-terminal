@@ -47,10 +47,18 @@ def test_migrates_a_version_1_database(tmp_path):
     db.execute("CREATE TABLE identities (id INTEGER PRIMARY KEY, person_id INTEGER, kind TEXT NOT NULL CHECK (kind IN"
                " ('email', 'slack_user')), value TEXT NOT NULL, blocked INTEGER NOT NULL DEFAULT 0, UNIQUE (kind, value)) STRICT")
     db.execute("INSERT INTO identities (kind, value) VALUES ('email', 'ana@acme.com')")
+    db.execute("CREATE TABLE organizations (id INTEGER PRIMARY KEY, domain TEXT NOT NULL UNIQUE, name TEXT NOT NULL,"
+               " created_at TEXT NOT NULL) STRICT")
+    db.executemany("INSERT INTO organizations (domain, name, created_at) VALUES (?, ?, '2026-10-01T00:00:00+00:00')",
+                   [("accounts.google.com", "accounts.google.com"), ("google.com", "google.com"),
+                    ("ws-ts.nb.ca", "ws-ts.nb.ca"), ("mail.attio.com", "Attio")])
     db.execute("PRAGMA user_version = 1")
     inbox.migrate(db)
     assert db.execute("SELECT description FROM cases").fetchone()[0] == ""
     # v5 (SMS): rebuilt tables keep their rows and accept the new platform and identity kind
+    # v7: one Organization key; subdomains fold into the registrable domain, a public suffix (nb.ca) does not
+    assert [tuple(r) for r in db.execute("SELECT domain, name FROM organizations ORDER BY domain")] == [
+        ("attio.com", "Attio"), ("google.com", "google.com"), ("ws-ts.nb.ca", "ws-ts.nb.ca")]
     # v6: Platforms are services; the email Platform splits by its Fastmail label
     assert db.execute("SELECT platform, external_id FROM connections ORDER BY id").fetchall() == [
         ("slack", "T0"), ("gmail", "me@x.io"), ("fastmail", "me@fastmail.com")]
