@@ -21,7 +21,7 @@ D3 (decision #102): Cloudflare Tunnel publishes `https://hooks.agentmaple.com/ho
    - Zone permissions, zone `agentmaple.com` only: Zone Read; DNS Edit; Zone Settings Edit; Email Routing Rules Edit.
 
    Save it on Workbox from your own terminal: `mkdir -p ~/.config/universal-inbox; and umask 077; and nano ~/.config/universal-inbox/cloudflare-token` (fish; in bash use `&&`).
-2. **You:** in Resend, confirm `agentmaple.com` is a verified domain (Domains), create an API key with sending access, and save it the same way as `~/.config/universal-inbox/resend-api-key`.
+2. **You:** in Resend, create an API key with sending access and save it the same way as `~/.config/universal-inbox/resend-api-key`. `agentmaple.com` must be a verified Resend domain (done 2026-10-12): Resend → Domains → Add domain → `agentmaple.com` (North Virginia, return path `send`, tracking off) → Manual setup; its three records are a DKIM TXT at `resend._domainkey` and DNS-only CNAMEs `rsend` and `send` to `*.forge.rmta.net`. The apex MX and SPF are untouched.
 3. Generate the inbound mail secret and create the email Connection:
    ```
    bash -c 'umask 077; openssl rand -hex 32 > ~/.config/universal-inbox/email-hook-secret'
