@@ -1202,7 +1202,9 @@ class ThreadListPage(TablePage):
 
 
 class OrganizationPage(ThreadListPage):
+    """An Organization: its Threads in the list, its people in the right pane (Jeremy, 2026-10-12)."""
     RAIL = "organizations"
+    SIDE = f"{ICON['people']} people"
 
     def __init__(self, domain):
         super().__init__()
@@ -1213,10 +1215,14 @@ class OrganizationPage(ThreadListPage):
 
     def refresh_data(self):
         super().refresh_data()
+        if self.app.main.current is not self:
+            return
         people = inbox.organization_view(self.app.db, self.domain)["people"]
-        self.query_one("#below").update(f"\n[#928374]{ICON['people']} people[/]\n" + "\n".join(
-            f"[@click=app.open_person({p['id']})]{ICON['person']} [underline]{escape(p['name'])}[/][/]  "
-            f"[#928374]{escape(', '.join(i['value'] for i in p['identities']))}[/]" for p in people))
+        self.app.main.show_side("\n\n".join(
+            f"[@click=app.open_person({p['id']})][b underline]{escape(p['name'])}[/][/]\n"
+            + "\n".join(f"[#928374]{ICON['email'] if i['kind'] == 'email' else ICON['slack']} {escape(i['value'])}[/]"
+                        for i in p["identities"])
+            for p in people) or "[#928374]No people yet.[/]")
 
 
 class PersonPage(Page):
