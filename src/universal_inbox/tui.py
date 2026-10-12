@@ -898,8 +898,8 @@ def message_widgets(v, st: dict | None = None, raw=None) -> list:
     def collapsed(i, m):
         snippet = "message deleted" if m["deleted"] else message_body(m, raw, not email).snippet
         # Faded: older messages recede so the open ones read first (Jeremy, 2026-10-12).
-        line = (f"[@click=app.msg_toggle({tid},{i})][#a89984][b]{escape(m['who'])}[/]  {when(m['at']):>3}  "
-                f"{escape(snippet)}[/][/]")
+        # The gutter badge says who; the row is just when and what (Jeremy, 2026-10-12).
+        line = f"[@click=app.msg_toggle({tid},{i})][#a89984]{when(m['at']):<5} {escape(snippet)}[/][/]"
         return gutter_row(badge(m["who"], faded=True), MessageText(line, classes="mline"), "faded")
 
     def card(i, m):

@@ -122,7 +122,7 @@ Text-first, like a terminal mail client with Gmail's habits. No images in the co
 - Links: `View all tasks ↗ app.attio.com`, label a terminal hyperlink (OSC 8) opened with Ctrl+Shift+click in Ghostty (the console captures plain clicks; Shift hands the click to the terminal), domain from the real destination (known tracking redirects unwrapped); the click opens the original link.
 - Images: `[image: alt]`. Attachments: a chip under the message (name, type, size) that opens the message in Gmail.
 - Layout: a left gutter of initials badges (one colour per person, blue for Jeremy, grey when collapsed) to scan who said what; each open message is a card (header, blank line, body) at most ~100 columns wide; shown Trimmed content is grey under a left rule. Long link labels (whole task cards) are coloured, not underlined.
-- Collapse: messages after Jeremy's last reply, and the newest, are expanded; older ones are one faded line (sender, age, snippet, cut with …), and a long run shows as `N older messages`. Click toggles; `;` expands all, `:` collapses all.
+- Collapse: messages after Jeremy's last reply, and the newest, are expanded; older ones are one faded line (the gutter badge, then age and snippet, cut with …), and a long run shows as `N older messages`. Click toggles; `;` expands all, `:` collapses all.
 - Trimmed content (quoted text, signatures, boilerplate footers) folds behind `•••`; click to show.
 - Header: name, `Mon Oct 12, 10:15 · 2h ago` (relative only within 7 days), and `to …, cc …`; full addresses on expand.
 - Calendar invites: an event card (title, time in Jeremy's zone, organizer, attendee count). Forwarded mail: a nested message card, untrimmed.
