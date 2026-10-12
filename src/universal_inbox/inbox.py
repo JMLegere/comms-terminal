@@ -202,6 +202,81 @@ def _ensure_org(db, kind, value):
                    " VALUES (?, ?, ?)", (domain, domain, _iso(_now())))
 
 
+AUTOMATED = re.compile(r"^(no-?reply|do-?not-?reply|donotreply|noreply|service|notifications?|notify|alerts?|"
+                       r"mailer(-daemon)?|bounces?|support|team|info|hello|news(letter)?|updates?|billing|"
+                       r"invoices?|receipts?|accounts?|calendar|esignature[-\w]*|[a-z]-[0-9a-f]{20,})@", re.I)
+
+
+def person_name(name: str) -> str:
+    """How a Person is named: "First Last". Outlook's "Last, First" is turned around (Jeremy, 2026-10-12)."""
+    name = re.sub(r"\s+", " ", (name or "").strip().strip('"'))
+    m = re.fullmatch(r"([^,]+),\s*([^,]+)", name)
+    return f"{m.group(2)} {m.group(1)}" if m and "@" not in name else name
+
+
+def _name_key(name: str) -> str:
+    """Comparable form of a full name: First Last order, no accents, no "(via …)", lower case."""
+    import unicodedata
+    name = re.sub(r"\(.*?\)", "", person_name(name))
+    name = "".join(c for c in unicodedata.normalize("NFKD", name) if not unicodedata.combining(c))
+    return " ".join(name.lower().split())
+
+
+def _company_domains(db, person_id) -> set[str]:
+    return {r[0].rsplit("@", 1)[1] for r in db.execute(
+        "SELECT value FROM identities WHERE person_id = ? AND kind = 'email'", (person_id,))
+        if not AUTOMATED.match(r[0]) and r[0].rsplit("@", 1)[1] not in FREE_MAIL}
+
+
+def _same_person(db, name: str, value: str, kind: str) -> int | None:
+    """The existing Person this sender is: same full name (two words or more) and the same company domain.
+    Never for free-mail domains or automated senders, where a shared name proves nothing (#117)."""
+    key = _name_key(name or "")
+    if kind != "email" or len(key.split()) < 2 or AUTOMATED.match(value):
+        return None
+    domain = value.rsplit("@", 1)[1]
+    if domain in FREE_MAIL:
+        return None
+    for p in db.execute("SELECT id, display_name FROM persons").fetchall():
+        if _name_key(p["display_name"]) == key and domain in _company_domains(db, p["id"]):
+            return p["id"]
+    return None
+
+
+def merge_persons(db, keep: int, drop: int) -> None:
+    """One Person from two: `drop`'s Identities (and so its Threads) move to `keep`, which keeps the
+    fuller name."""
+    if keep == drop:
+        return
+    with db:
+        names = [r[0] for r in db.execute("SELECT display_name FROM persons WHERE id IN (?, ?) ORDER BY id = ?",
+                                          (keep, drop, drop))]
+        best = max(names, key=lambda n: ("@" not in n, len(_name_key(n).split()), len(n)))
+        db.execute("UPDATE identities SET person_id = ? WHERE person_id = ?", (keep, drop))
+        db.execute("DELETE FROM persons WHERE id = ?", (drop,))
+        db.execute("UPDATE persons SET display_name = ? WHERE id = ?", (person_name(best), keep))
+
+
+def merge_duplicates(db) -> list[tuple[str, str]]:
+    """Apply the same-person rule to everyone stored, and turn names to First Last; returns (kept, merged)."""
+    merged = []
+    with db:
+        for p in db.execute("SELECT id, display_name FROM persons").fetchall():
+            if person_name(p["display_name"]) != p["display_name"]:
+                db.execute("UPDATE persons SET display_name = ? WHERE id = ?", (person_name(p["display_name"]), p["id"]))
+    people = db.execute("SELECT id, display_name FROM persons ORDER BY id").fetchall()
+    gone = set()
+    for i, a in enumerate(people):
+        for b in people[i + 1:]:
+            if a["id"] in gone or b["id"] in gone or _name_key(a["display_name"]) != _name_key(b["display_name"]):
+                continue
+            if len(_name_key(a["display_name"]).split()) >= 2 and _company_domains(db, a["id"]) & _company_domains(db, b["id"]):
+                merge_persons(db, a["id"], b["id"])
+                gone.add(b["id"])
+                merged.append((a["display_name"], b["display_name"]))
+    return merged
+
+
 def _new_person(db, name) -> int:
     return db.execute("INSERT INTO persons (display_name, created_at) VALUES (?, ?)",
                       (name, _iso(_now()))).lastrowid
@@ -215,7 +290,7 @@ def _identity_for(db, sender: Identity) -> sqlite3.Row:
     if row is not None and row["person_id"] is not None:
         if sender.display_name:  # a Person still named by its address or user ID gets the real name
             db.execute("UPDATE persons SET display_name = ? WHERE id = ? AND display_name = ?",
-                       (sender.display_name, row["person_id"], value))
+                       (person_name(sender.display_name), row["person_id"], value))
         return row
     person_id = None
     if sender.kind == "slack_user" and sender.profile_email:
@@ -223,8 +298,10 @@ def _identity_for(db, sender: Identity) -> sqlite3.Row:
             "SELECT person_id FROM identities WHERE kind = 'email' AND value = ?"
             " AND person_id IS NOT NULL", (sender.profile_email.lower(),)).fetchone()
         person_id = owner and owner["person_id"]
+    if person_id is None and sender.display_name:
+        person_id = _same_person(db, sender.display_name, value, sender.kind)
     if person_id is None:
-        person_id = _new_person(db, sender.display_name or value)
+        person_id = _new_person(db, person_name(sender.display_name or value))
     if row is None:
         db.execute("INSERT INTO identities (person_id, kind, value) VALUES (?, ?, ?)",
                    (person_id, sender.kind, value))
@@ -356,7 +433,12 @@ def ingest(db, inc: Incoming) -> Thread | None:
                       (inc.kind, inc.native_id)).fetchone():
             return None
         channel_id = _channel_id(db, inc)
-        identity = _identity_for(db, inc.sender) if inc.sender else None
+        sender = inc.sender
+        if sender and sender.kind == "email" and db.execute(  # Jeremy's own address on any Connection (#117)
+                "SELECT 1 FROM connections WHERE platform = 'email' AND lower(self_id) = ?",
+                (sender.value.lower(),)).fetchone():
+            sender = None
+        identity = _identity_for(db, sender) if sender else None
         identity_id = identity["id"] if identity else None
         at = inc.occurred_at
 

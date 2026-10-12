@@ -844,6 +844,10 @@ All entries are dated 2026-10-10; exact times are unproven unless noted. Full de
   - Request / decision: Waiting for them only follows Jeremy's own message (a reply, or a Thread he starts); the `w` key is removed. Waiting ends after 5 days without a reply: the Thread returns to Todo as Needs next response, to follow up (Plain's Waiting for customer has no end; Gmail nudges and Superhuman reminders do). Stored in `threads.follow_up_at` (schema version 3, since `snoozed_until` is reserved for timed snoozes by a CHECK); existing Waiting Threads get 5 days from when they began waiting; the wake loop checks both every minute. The thread properties show "until <time>" for any Snoozed Thread
   - Source: Jeremy, "how does 'waiting' work?", "i think we should remove the ability to press w. also it should have a default end time of 5 days" (2026-10-12)
   - Status: Accepted
+- **117**
+  - Request / decision: People merge smartly. A new sender joins an existing Person when the full name (two words or more, compared without accents, "(via …)", or Outlook's "Last, First" order) matches and they share a company domain; never on free-mail domains or automated and relay senders (noreply, service@, notifications, relay addresses), where a shared name proves nothing. `inbox.merge_persons` joins two Persons (Identities move, the fuller name stays); `inbox.merge_duplicates` applies the rule to what is stored. Person names read First Last. Jeremy's own address on any email Connection is "You", whichever Connection the mail came through. Applied live: Hope Scheller's two addresses merged; Marc and Marc Savoie merged on Jeremy's word; "Last, First" names turned around; Jeremy's two addresses detached from the Person "Jeremy Legere" (stored Activities cannot be relabelled). Left apart on purpose: Tony Sheehan's TidyCal relay, the two Google Takeout senders. Backup before the change: `inbox.before-people-merge.db`
+  - Source: Jeremy, "can you smartly merge the people in the app", ask tool answers "Same person, merge" and "Yes, go" (2026-10-12)
+  - Status: Accepted
 
 ## 8. Work log
 
