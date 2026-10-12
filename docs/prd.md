@@ -406,8 +406,8 @@ Design: `docs/design/console.md` (approved). Verify each step with Textual's tes
   - Authorization: point-of-risk approval for each external account, DNS record, and routing rule. Jeremy performs them (runbook §6); none has been made.
 - **6.3 Build demo on synthetic data.** **Built** 2026-10-12: `scripts/demo.py` runs the real hooks server and reply socket with demo credentials, signed fixture requests over HTTP, and fake Resend and Slack endpoints; 7/7 scenarios pass (`tests/test_demo.py`).
   - Walk AS-1, AS-3, AS-4, AS-6, AS-11, AS-13, and AS-17 using fixture-fed channels and fake send endpoints.
-  - Exit: Jeremy accepts (`uv run python scripts/demo.py --step --keep`, runbook §7).
-- **6.4 After the build, Jeremy connects real accounts** (FR-1), then checks health on live data.
+  - Exit: Jeremy accepts (`uv run python scripts/demo.py --step --keep`, runbook §6). **Accepted** by Jeremy 2026-10-12.
+- **6.4 After the build, Jeremy connects real accounts** (FR-1), then checks health on live data. **Email connected and checked live** 2026-10-12 (decision #103). **Slack deferred** by Jeremy; runbook §3 when wanted.
 - **Rollback.** Stop the service and remove the Workspace routing rule. Gmail keeps every message; Slack keeps every message.
 
 ## 6. Risks, unknowns, and approvals
@@ -808,6 +808,10 @@ All entries are dated 2026-10-10; exact times are unproven unless noted. Full de
   - Request / decision: Email connected live (Phase 6.4, email): Gmail forwards a copy to `jeremy@inbox.agentmaple.com`; Resend sends from `agentmaple.com` (DKIM and return-path records added in Cloudflare). Fixes found on live data: a `User-Agent` on outbound requests (Cloudflare in front of Resend rejected Python's default with 403/1010); provider error messages shown in the console; a copy of Jeremy's own reply coming back in is dropped by matching its text in the Thread, because Amazon SES (behind Resend) rewrites the Message-ID. Slack is deferred by Jeremy; the service runs email-only until its drop-in is installed
   - Source: Jeremy, "finish phase 6", "skip Slack for now", live test email and reply 2026-10-12
   - Status: Accepted
+- **104**
+  - Request / decision: Phase 6.3 demo accepted; Phase 6 complete for email. Slack connection stays open (runbook §3)
+  - Source: Jeremy, "accepted" (2026-10-12)
+  - Status: Approved
 
 ## 8. Work log
 
