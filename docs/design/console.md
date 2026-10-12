@@ -121,7 +121,8 @@ Text-first, like a terminal mail client with Gmail's habits. No images in the co
 - Source: the raw message kept on Workbox (`raw/<sha256>.eml` beside the database); the HTML part converted to terminal text by `render.py` (standard library, chosen over `lynx -dump` in a bake-off, #110), plain as fallback. Messages from before raw storage render their stored text, with bare URLs shortened to `↗ domain` links.
 - Links: `View all tasks ↗ app.attio.com`, label clickable (OSC 8), domain from the real destination (known tracking redirects unwrapped); the click opens the original link.
 - Images: `[image: alt]`. Attachments: a chip under the message (name, type, size) that opens the message in Gmail.
-- Collapse: messages after Jeremy's last reply, and the newest, are expanded; older ones are one line (sender, snippet, date), and a long run shows as `N older messages`. Click toggles; `;` expands all, `:` collapses all.
+- Layout: a left gutter of initials badges (one colour per person, blue for Jeremy, grey when collapsed) to scan who said what; each open message is a card (header, blank line, body) at most ~100 columns wide; shown Trimmed content is grey under a left rule. Long link labels (whole task cards) are coloured, not underlined.
+- Collapse: messages after Jeremy's last reply, and the newest, are expanded; older ones are one faded line (sender, age, snippet, cut with …), and a long run shows as `N older messages`. Click toggles; `;` expands all, `:` collapses all.
 - Trimmed content (quoted text, signatures, boilerplate footers) folds behind `•••`; click to show.
 - Header: name, `Mon Oct 12, 10:15 · 2h ago` (relative only within 7 days), and `to …, cc …`; full addresses on expand.
 - Calendar invites: an event card (title, time in Jeremy's zone, organizer, attendee count). Forwarded mail: a nested message card, untrimmed.

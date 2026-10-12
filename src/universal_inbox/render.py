@@ -21,6 +21,7 @@ from rich.markup import escape
 
 DIM = "#928374"
 BAR = "#45707a"
+LINK = "#45707a"
 
 
 @dataclass
@@ -78,6 +79,8 @@ def link(href: str, label: str = "") -> str:
     if not plain(label).strip() or re.fullmatch(r"(https?://|www\.)\S+", plain(label).strip()):
         return f"[link='{safe}'][underline]↗ {escape(d or href)}[/underline][/link]"
     hint = "" if not d or d in plain(label).lower() else f" [{DIM}]↗ {escape(d)}[/]"
+    if len(plain(label)) > 40:  # a whole card or paragraph as a link: colour it, underlining walls of text is noise
+        return f"[link='{safe}'][{LINK}]{label}[/][/link]{hint}"
     return f"[link='{safe}'][underline]{label}[/underline][/link]{hint}"
 
 

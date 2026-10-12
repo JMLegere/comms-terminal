@@ -3,8 +3,10 @@
 It reads and writes the SQLite file through `inbox`; replies go through the service's local socket.
 """
 
+import hashlib
 import http.client
 import json
+import re
 import socket
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
@@ -95,6 +97,20 @@ DataTable > .datatable--header { background: #f9f5d7; color: #928374; }
 .card { border-title-color: #654735; border-subtitle-color: #654735; }
 .threadview.narrow .props { display: none; }
 .cardbody { height: auto; }
+/* Messages (#105-#109): open ones are cards at a readable width; older ones are faded rows. */
+.msgs { height: auto; max-width: 104; }
+.msg { width: 1fr; height: auto; background: #f5edca; padding: 1 2; }
+.mrow.open { margin: 0 0 1 0; }
+.mhead, .mbody, .mtoggle, .mtrim, .mchips, .mlines, .mline, .mrow { height: auto; }
+.gutter { width: 6; height: auto; }  /* initials badges: scan who said what down the left */
+.mrow.open .gutter { margin: 1 0 0 0; }
+.mbody { color: #4f3829; margin: 1 0 0 0; }
+.mtoggle { width: auto; margin: 1 0 0 0; }
+.mtrim { color: #7c6f64; border-left: outer #ebdbb2; padding: 0 0 0 1; margin: 1 0 0 0; }
+.mchips { margin: 1 0 0 0; }
+.mlines { margin: 0 0 1 0; }
+.mline { width: 1fr; text-wrap: nowrap; text-overflow: ellipsis; }
+.card .msg { background: #f9f5d7; }
 .composer { height: auto; border: round #a89984; background: #f9f5d7; padding: 0 1; margin: 1 2 1 0; }
 .composer > .idle { height: auto; color: #928374; }
 .composer.open > .idle { display: none; }
@@ -820,9 +836,25 @@ def recipients(m, me: str, full: bool, at: str) -> str:
     return escape("to " + short(to) + (", cc " + short(cc) if cc else ""))
 
 
-def messages_markup(v, st: dict | None = None, raw=None) -> str:
-    """A Thread's messages, Gmail-style (#105-#109): older ones collapse to a line, Trimmed content
-    folds behind •••, Attachments are chips that open the message in Gmail, invites show a card."""
+GUTTER_COLORS = ("#4c7a5d", "#945e80", "#c35e0a", "#b47109", "#6c782e", "#c14a4a")
+
+
+def badge(who: str, faded: bool = False) -> str:
+    """The gutter's initials badge: one colour per person, blue for Jeremy, grey when faded."""
+    words = [w for w in re.split(r"[\s@._-]+", who) if w]
+    ini = "Me" if who == "You" else ("".join(w[0] for w in words[:2]) or "?").upper()
+    color = "#a89984" if faded else "#45707a" if who == "You" else \
+        GUTTER_COLORS[int(hashlib.md5(who.encode()).hexdigest(), 16) % len(GUTTER_COLORS)]
+    return f"[b #f9f5d7 on {color}]{ini:^4}[/]"
+
+
+def gutter_row(gutter: str, content, cls: str = ""):
+    return Horizontal(MessageText(gutter, classes="gutter"), content, classes=f"mrow {cls}".strip())
+
+
+def message_widgets(v, st: dict | None = None, raw=None) -> list:
+    """A Thread's messages, Gmail-style (#105-#109): each open message is a card (header, body, •••,
+    Trimmed content under a rule, Attachment chips); older ones collapse to faded one-line rows."""
     msgs, tid = v["messages"], v["thread"].id
     st = st or new_message_state()
     me = (v["channel"].get("external_id") or "").lower()
@@ -833,41 +865,43 @@ def messages_markup(v, st: dict | None = None, raw=None) -> str:
 
     def collapsed(i, m):
         snippet = "message deleted" if m["deleted"] else message_body(m, raw).snippet
-        snippet = snippet[:70] + "…" if len(snippet) > 70 else snippet
-        who = ICON["reply"] if m["who"] == "You" else ICON["person"]
         # Faded: older messages recede so the open ones read first (Jeremy, 2026-10-12).
-        return (f"[@click=app.msg_toggle({tid},{i})][#a89984]{who} {escape(m['who'])}  "
-                f"{escape(snippet)}  {when(m['at'])}[/][/]")
+        line = (f"[@click=app.msg_toggle({tid},{i})][#a89984][b]{escape(m['who'])}[/]  {when(m['at']):>3}  "
+                f"{escape(snippet)}[/][/]")
+        return gutter_row(badge(m["who"], faded=True), MessageText(line, classes="mline"), "faded")
 
-    def expanded(i, m):
+    def card(i, m):
         age = datetime.now().astimezone() - datetime.fromisoformat(m["at"]).astimezone()
         meta = stamp(m["at"]) + (f" · {ago(m['at'])}" if age.days < 7 else "")
         meta += f"  {ICON['edited']} edited" if m["edited"] else ""
-        who = ICON["reply"] if m["who"] == "You" else ICON["person"]
-        lines = [f"[@click=app.msg_toggle({tid},{i})][#654735]{who}[/] [b]{escape(m['who'])}[/][/]  [{dim}]{meta}[/]"]
+        head = f"[@click=app.msg_toggle({tid},{i})][b #654735]{escape(m['who'])}[/][/]  [{dim}]{meta}[/]"
         rcpt = recipients(m, me, i in st["to"], m["at"]) if email else ""
         if rcpt:
-            lines.append(f"[@click=app.msg_to({tid},{i})][{dim}]{rcpt}[/][/]")
+            head += f"\n[@click=app.msg_to({tid},{i})][{dim}]{rcpt}[/][/]"
+        parts = [MessageText(head, classes="mhead")]
         if m["deleted"]:
-            return "\n".join(lines + [f"[i {dim}]{ICON['deleted']} message deleted[/]"])
+            parts.append(MessageText(f"[i {dim}]{ICON['deleted']} message deleted[/]", classes="mbody"))
+            return gutter_row(badge(m["who"]), Vertical(*parts, classes="msg"), "open")
         body = message_body(m, raw)
         if body.invite:
-            lines.append(f"[{dim}]{ICON['calendar']} invitation[/]\n" + render.invite_card(body.invite) + "\n")
-        lines.append(body.text)
+            parts.append(MessageText(f"[{dim}]{ICON['calendar']} invitation[/]\n" + render.invite_card(body.invite),
+                                     classes="mbody"))
+        if body.text:
+            parts.append(MessageText(body.text, classes="mbody"))
         if body.trimmed:
-            lines.append(f"[@click=app.msg_trim({tid},{i})][{dim} on #f2e5bc] ••• [/][/]")
+            parts.append(MessageText(f"[@click=app.msg_trim({tid},{i})][{dim} on #ebdbb2] ••• [/][/]", classes="mtoggle"))
             if i in st["trim"]:
-                lines.append(body.trimmed)
+                parts.append(MessageText(body.trimmed, classes="mtrim"))
         if body.attachments:
             link = gmail_link(m["native_id"]) if email else ""
             chips = [f"[link='{link}'][#45707a]{ICON['attachment']} {render.chip(*a)}[/][/link]" for a in body.attachments]
-            lines.append("\n" + "\n".join(chips))
-        return "\n".join(lines)
+            parts.append(MessageText("\n".join(chips), classes="mchips"))
+        return gutter_row(badge(m["who"]), Vertical(*parts, classes="msg"), "open")
 
-    parts, i = [], 0
+    out, i = [], 0
     while i < len(msgs):
         if is_open(i):
-            parts.append(expanded(i, msgs[i]))
+            out.append(card(i, msgs[i]))
             i += 1
             continue
         j = i
@@ -875,14 +909,24 @@ def messages_markup(v, st: dict | None = None, raw=None) -> str:
             j += 1
         run = list(range(i, j))
         if len(run) >= 4 and not st["lines"]:
-            lines = [collapsed(run[0], msgs[run[0]]),
-                     f"[@click=app.msg_lines({tid})][{dim} on #f2e5bc] {len(run) - 2} older messages [/][/]",
-                     collapsed(run[-1], msgs[run[-1]])]
+            more = MessageText(f"[@click=app.msg_lines({tid})][{dim} on #f2e5bc] {len(run) - 2} older messages [/][/]",
+                               classes="mline")
+            rows = [collapsed(run[0], msgs[run[0]]), gutter_row("", more, "faded"), collapsed(run[-1], msgs[run[-1]])]
         else:
-            lines = [collapsed(k, msgs[k]) for k in run]
-        parts.append("\n".join(lines))
+            rows = [collapsed(k, msgs[k]) for k in run]
+        out.append(Vertical(*rows, classes="mlines"))
         i = j
-    return "\n\n".join(parts)
+    return out
+
+
+def show_messages(container, widgets, scroller=None):
+    """Swap a message container's children, keeping the scroll position (toggling must not jump)."""
+    y = scroller.scroll_y if scroller is not None else None
+    with container.app.batch_update():
+        container.remove_children()
+        container.mount_all(widgets)
+    if y:
+        container.call_after_refresh(lambda: scroller.scroll_to(y=y, animate=False))
 
 
 def related_markup(db, v, limit: int = 6) -> list[str]:
@@ -953,7 +997,7 @@ class ThreadView(Horizontal):
         with Vertical(classes="convo"):
             with VerticalScroll(classes="timeline", can_focus=False):
                 yield Static(classes="thead")
-                yield MessageText(classes="msgs")
+                yield Vertical(classes="msgs")
             yield ReplyBox(self.thread_id)
         with VerticalScroll(classes="props", can_focus=False):
             yield Static(classes="detailtext")
@@ -972,7 +1016,8 @@ class ThreadView(Horizontal):
             bits = [escape(p["name"]) if p else "", escape(v["where"]), escape(v["case"]) if v["thread"].case_id else "no case (l)"]
             head += "\n[#928374]" + " · ".join(b for b in bits if b) + "[/]"
         self.query_one(".thead").update(head + "\n")
-        self.query_one(".msgs").update(messages_markup(v, self.app.message_state(self.thread_id), self.app.raw))
+        show_messages(self.query_one(".msgs"), message_widgets(v, self.app.message_state(self.thread_id), self.app.raw),
+                      self.query_one(".timeline"))
         self.query_one(".detailtext").update(details_markup(v, self.app.db))
         box = self.query_one(ReplyBox)
         if not box.has_class("open"):
@@ -1407,6 +1452,7 @@ class CaseCard(Vertical):
 
     def compose(self) -> ComposeResult:
         yield MessageText(classes="cardbody")
+        yield Vertical(classes="msgs")
         yield ReplyBox(self.thread_id)
 
     def show(self, v, expanded: bool, selected: bool):
@@ -1415,13 +1461,17 @@ class CaseCard(Vertical):
         plat = v["channel"]["platform"]
         self.border_title = f"{ICON[plat]} [b]{escape(t.title)}[/] [#928374]· {escape(v['where'])}[/]"
         self.border_subtitle = f"[{color}]{g} {label}[/]"
+        msgs_box = self.query_one(".msgs")
         if expanded:
-            body = messages_markup(v, self.app.message_state(t.id), self.app.raw)
+            body = ""
+            show_messages(msgs_box, message_widgets(v, self.app.message_state(t.id), self.app.raw))
         else:  # Done or Ignored: collapsed like a resolved Linear thread
+            msgs_box.remove_children()
             last = msgs[-1]["at"] if msgs else None
             body = (f"[#928374]{len(msgs)} message{'s' * (len(msgs) != 1)} · last {ago(last)} · "
                     f"[/][@click=app.case_toggle({self.index})][#928374 underline]show[/][/]")
         self.query_one(".cardbody").update(body)
+        self.query_one(".cardbody").display = bool(body)
         box = self.query_one(ReplyBox)
         box.display = expanded
         if not box.has_class("open"):
