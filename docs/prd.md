@@ -402,7 +402,7 @@ Design: `docs/design/console.md` (approved). Verify each step with Textual's tes
 
 - **6.1 `deploy/universal-inbox.service` plus a credential runbook.** **Built** 2026-10-12: unit (`systemd-analyze verify` clean), `docs/runbook.md`, package installed with `uv tool install`.
   - Authorization: point-of-risk approval to install the system unit. Installing needs `sudo`; Jeremy runs runbook §3–§4.
-- **6.2 Set up the ingress and mail services per D3.** The console needs only SSH (D2). **Built** 2026-10-12: `deploy/cloudflared/config.yml`, `deploy/email-worker/` (checked against the real hook by `tests/test_email_worker.py`), `deploy/slack-app-manifest.yml`, runbook §6.
+- **6.2 Set up the ingress and mail services per D3.** The console needs only SSH (D2). **Built** 2026-10-12: `scripts/cloudflare_setup.py` (remotely managed tunnel, DNS, Email Routing, Worker, routing rule; plan then `--apply`), `deploy/email-worker/` (checked against the real hook by `tests/test_email_worker.py`), `deploy/install.sh`, `deploy/slack-app-manifest.yml`, runbook §2–§3. The service runs email-only until Slack is connected (Slack secrets in a unit drop-in).
   - Authorization: point-of-risk approval for each external account, DNS record, and routing rule. Jeremy performs them (runbook §6); none has been made.
 - **6.3 Build demo on synthetic data.** **Built** 2026-10-12: `scripts/demo.py` runs the real hooks server and reply socket with demo credentials, signed fixture requests over HTTP, and fake Resend and Slack endpoints; 7/7 scenarios pass (`tests/test_demo.py`).
   - Walk AS-1, AS-3, AS-4, AS-6, AS-11, AS-13, and AS-17 using fixture-fed channels and fake send endpoints.

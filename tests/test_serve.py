@@ -59,3 +59,32 @@ def test_reply_over_unix_socket(tmp_path):
         assert "not reachable" in str(e)
     else:
         raise AssertionError("expected ReplyError")
+
+
+def test_service_runs_with_email_only(tmp_path, monkeypatch):
+    """Slack not connected yet: /hooks/slack answers 503 and email still works (runbook §6)."""
+    import urllib.error
+    import urllib.request
+    import threading as _threading
+    from universal_inbox import serve as _serve
+    creds = tmp_path / "creds"
+    creds.mkdir()
+    (creds / "email-hook-secret").write_text("e" * 64)
+    (creds / "resend-api-key").write_text("re_x")
+    monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(creds))
+    db_path = str(tmp_path / "inbox.db")
+    db = inbox.connect(db_path)
+    inbox.migrate(db)
+    assert set(_serve.senders_from_credentials(db)) == set()  # no email Connection yet, no Slack token
+    server = _serve.hooks_server(db_path, "127.0.0.1", 0)
+    _threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        req = urllib.request.Request(f"http://127.0.0.1:{server.server_address[1]}/hooks/slack", b"{}", method="POST")
+        try:
+            urllib.request.urlopen(req, timeout=5)
+            status = 200
+        except urllib.error.HTTPError as e:
+            status = e.code
+        assert status == 503
+    finally:
+        server.shutdown()

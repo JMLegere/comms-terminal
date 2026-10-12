@@ -16,8 +16,10 @@ from pathlib import Path
 from . import email, inbox, slack
 
 
-def credential(name: str) -> bytes:
-    return (Path(os.environ["CREDENTIALS_DIRECTORY"]) / name).read_bytes().strip()
+def credential(name: str) -> bytes | None:
+    """A systemd credential, or None when this platform is not connected yet (its unit drop-in is absent)."""
+    path = Path(os.environ["CREDENTIALS_DIRECTORY"]) / name
+    return path.read_bytes().strip() if path.exists() else None
 
 
 def connection_id(db, platform: str) -> int | None:
@@ -28,9 +30,11 @@ def connection_id(db, platform: str) -> int | None:
 def senders_from_credentials(db) -> dict:
     """Sender per platform for inbox.reply."""
     mailbox = db.execute("SELECT self_id FROM connections WHERE platform = 'email'").fetchone()
-    out = {"slack": slack.SlackSender(credential("slack-user-token").decode())}
-    if mailbox:
-        out["email"] = email.EmailSender(credential("resend-api-key").decode(), mailbox["self_id"])
+    out = {}
+    if token := credential("slack-user-token"):
+        out["slack"] = slack.SlackSender(token.decode())
+    if mailbox and (key := credential("resend-api-key")):
+        out["email"] = email.EmailSender(key.decode(), mailbox["self_id"])
     return out
 
 
@@ -45,6 +49,8 @@ def handle_reply(db, body: bytes, senders: dict) -> tuple[int, dict]:
                    " JOIN connections c ON c.id = ch.connection_id WHERE t.id = ?", (thread_id,)).fetchone()
     if r is None:
         return 404, {"error": "unknown thread"}
+    if r["platform"] not in senders:
+        return 503, {"error": f"{r['platform']} is not connected for sending"}
     try:
         t = inbox.reply(db, thread_id, text, senders[r["platform"]], req.get("to") or [], req.get("cc") or [])
     except inbox.SendFailed as e:
@@ -104,9 +110,12 @@ def reply_server(db_path: str, socket_path: str, senders: dict) -> UnixHTTPServe
 def hooks_server(db_path: str, host: str, port: int, client=None) -> ThreadingHTTPServer:
     """`client` (Slack lookups) is swappable for the 6.3 demo; the service uses the real API."""
     email_secret, slack_secret = credential("email-hook-secret"), credential("slack-signing-secret")
-    client = client or slack.SlackClient(credential("slack-user-token").decode())
+    token = credential("slack-user-token")
+    client = client or (slack.SlackClient(token.decode()) if token else None)
 
     def email_hook(headers, body):
+        if email_secret is None:
+            return 503, "text/plain", b"email not connected"
         db = inbox.connect(db_path)
         try:
             status = email.handle_hook(db, connection_id(db, "email"), headers, body, email_secret,
@@ -116,6 +125,8 @@ def hooks_server(db_path: str, host: str, port: int, client=None) -> ThreadingHT
         return status, "text/plain", b""
 
     def slack_hook(headers, body):
+        if slack_secret is None or client is None:
+            return 503, "text/plain", b"slack not connected"
         db = inbox.connect(db_path)
         try:
             status, text = slack.handle_hook(db, connection_id(db, "slack"), headers, body, slack_secret,

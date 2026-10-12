@@ -20,9 +20,9 @@ RuntimeDirectory=universal-inbox
 RuntimeDirectoryMode=0700
 
 # Secrets, decrypted by systemd into $CREDENTIALS_DIRECTORY; never in the environment or on disk in clear (NFR-5).
+# Slack's two secrets are added by the drop-in deploy/universal-inbox.service.d/slack.conf once Slack is
+# connected; until then /hooks/slack answers 503 and Slack replies are refused.
 LoadCredentialEncrypted=email-hook-secret:/etc/credstore.encrypted/universal-inbox.email-hook-secret
-LoadCredentialEncrypted=slack-signing-secret:/etc/credstore.encrypted/universal-inbox.slack-signing-secret
-LoadCredentialEncrypted=slack-user-token:/etc/credstore.encrypted/universal-inbox.slack-user-token
 LoadCredentialEncrypted=resend-api-key:/etc/credstore.encrypted/universal-inbox.resend-api-key
 
 # Hardening: read-only system and home, except the database directory.
