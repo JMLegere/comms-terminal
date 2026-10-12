@@ -1,10 +1,13 @@
-"""Fastmail adapter: a second email Connection through Fastmail's MCP server.
+"""Fastmail adapter: a second email Connection.
 
-Jeremy's Basic plan refuses JMAP and IMAP, so Universal Inbox signs in as a connected app, the way omp
-does (OAuth with PKCE; scopes mcp-read, mcp-action, mcp-send; `scripts/oauth_fastmail.py`). The service
-polls the Inbox and Sent every minute, reads new messages as text, and sends replies with `send_email`,
-which threads and quotes them the Fastmail way. MCP gives no raw source and no Auto-Submitted header, so
-Fastmail mail renders from text and only mailer-daemon bounces are filtered.
+Incoming mail is event-driven, like Gmail (#113): a Fastmail rule sends a copy to INBOUND, Cloudflare Email
+Routing hands it to the Email Worker, and /hooks/email files it under this Connection with its raw source.
+
+Everything else goes through Fastmail's MCP server, since Jeremy's Basic plan refuses JMAP and IMAP:
+Universal Inbox signs in as a connected app, the way omp does (OAuth with PKCE; scopes mcp-read,
+mcp-action, mcp-send; `scripts/oauth_fastmail.py`). Replies go out with `send_email`, which threads and
+quotes them the Fastmail way; a 10-minute poll of Sent catches replies Jeremy writes in Fastmail itself;
+the one-time import reads Inbox and Sent as text.
 """
 
 import json
@@ -23,6 +26,7 @@ MCP = "https://api.fastmail.com/mcp"
 TOKEN = "https://api.fastmail.com/oauth/refresh"
 USER_AGENT = "universal-inbox/0.1 (+https://github.com/JMLegere/universal-inbox)"
 LABEL = "Fastmail"  # connections.label that marks the Fastmail Connection
+INBOUND = "fastmail@inbox.agentmaple.com"  # the Fastmail rule's "Send a copy to" address (#113)
 BOUNCES = ("mailer-daemon@", "postmaster@")
 log = logging.getLogger("universal_inbox.fastmail")
 
@@ -153,15 +157,17 @@ def _addrs(items) -> list[str]:
     return [a["email"].lower() for a in items or [] if a.get("email")]
 
 
-def to_incoming(db, connection, e: dict, mine: set[str]) -> inbox.Incoming | None:
-    """A read_email result -> Incoming; threads by Fastmail's thread ID; None for a bounce."""
+def to_incoming(db, connection, e: dict, mine: set[str], thread_ids=()) -> inbox.Incoming | None:
+    """A read_email result -> Incoming; threads by Fastmail's thread ID and by the Message-IDs of the other
+    messages in that Fastmail thread (`thread_ids`, which the forwarded copies are stored under); None for
+    a bounce."""
     sender = (e.get("from") or [{}])[0]
     addr = (sender.get("email") or "").lower()
     if addr.startswith(BOUNCES):
         return None
     refs = [r[0] for r in db.execute(
         "SELECT native_id FROM activities WHERE kind = 'MESSAGE' AND json_extract(data, '$.fm_thread') = ?",
-        (e["threadId"],))]
+        (e["threadId"],))] + list(thread_ids)
     attachments = [[a.get("name") or "attachment", a.get("type") or "", a.get("size") or 0]
                    for a in e.get("attachments") or []]
     return inbox.Incoming(
@@ -185,10 +191,17 @@ def _known(db, nid: str) -> bool:
     return db.execute("SELECT 1 FROM activities WHERE kind = 'MESSAGE' AND native_id = ?", (nid,)).fetchone() is not None
 
 
-def sync(db, client, connection, since: datetime, mine: set[str], limit=50, pages=1) -> list[int]:
-    """Ingest Inbox and Sent messages received after `since` that are not stored yet; returns Thread IDs."""
+def thread_message_ids(client, thread_id: str, but: str) -> list[str]:
+    out = client.tool("read_thread", threadId=thread_id)
+    emails = out if isinstance(out, list) else out.get("emails") or out.get("results") or []
+    return [native_id(x["messageId"]) for x in emails if x.get("messageId") and x.get("id") != but]
+
+
+def sync(db, client, connection, since: datetime, mine: set[str], limit=50, pages=1,
+         queries=("in:inbox", "in:sent")) -> list[int]:
+    """Ingest messages received after `since` that are not stored yet; returns Thread IDs."""
     threads, found = [], []
-    for query in ("in:inbox", "in:sent"):
+    for query in queries:
         cursor = None
         for _ in range(pages):
             args = {"query": query, "limit": limit} | ({"cursor": cursor} if cursor else {})
@@ -201,7 +214,8 @@ def sync(db, client, connection, since: datetime, mine: set[str], limit=50, page
             if not page.get("hasMore") or not cursor:
                 break
     for _, fm_id in sorted(set(found)):  # oldest first, so replies find their Thread
-        inc = to_incoming(db, connection, client.tool("read_email", id=fm_id), mine)
+        e = client.tool("read_email", id=fm_id)
+        inc = to_incoming(db, connection, e, mine, thread_message_ids(client, e["threadId"], e["id"]))
         if inc is None:
             continue
         t = inbox.ingest(db, inc)
@@ -211,8 +225,9 @@ def sync(db, client, connection, since: datetime, mine: set[str], limit=50, page
     return threads
 
 
-def poll_loop(db_path: str, client, stop: threading.Event, every: float = 60) -> None:
-    """New Fastmail mail every minute; failures show as the Connection's Last Error (health)."""
+def poll_loop(db_path: str, client, stop: threading.Event, every: float = 600) -> None:
+    """Replies Jeremy wrote in Fastmail itself, every 10 minutes (incoming mail arrives by the hook);
+    failures show as the Connection's Last Error (health)."""
     mine = None
     while True:
         db, conn = inbox.connect(db_path), None
@@ -221,7 +236,7 @@ def poll_loop(db_path: str, client, stop: threading.Event, every: float = 60) ->
             if conn is not None:
                 mine = mine or identities(client)
                 since = datetime.fromisoformat(conn["connected_at"])
-                sync(db, client, conn, since, mine)
+                sync(db, client, conn, since, mine, queries=("in:sent",))
                 inbox.set_connection_error(db, conn["id"], None)
         except (FastmailError, OSError, ValueError, KeyError) as e:
             log.info("fastmail poll failed: %s", e)
@@ -260,11 +275,12 @@ class FastmailSender:
             self.mine = self.mine or identities(self.client)
         except (FastmailError, OSError, ValueError) as err:
             raise inbox.SendFailed(f"Fastmail send failed: {err}") from err
-        fm = [h for h in history if h["data"].get("fm_id")]
-        target = next((h for h in reversed(fm) if h["data"].get("from") not in self.mine), fm[-1] if fm else None)
+        inbound = [h for h in history if h["data"].get("from") and h["data"]["from"] not in self.mine]
+        target = (inbound or history or [None])[-1]
         if target is None:
             raise inbox.SendFailed("no Fastmail message to reply to in this thread")
-        args = {"mode": "reply", "emailId": target["data"]["fm_id"], "body": text, "format": "text"}
+        fm_id = target["data"].get("fm_id") or self.find(target)
+        args = {"mode": "reply", "emailId": fm_id, "body": text, "format": "text"}
         if to:
             args["to"] = [{"email": a} for a in to]
         if cc:
@@ -275,3 +291,15 @@ class FastmailSender:
         except (FastmailError, OSError, KeyError, ValueError) as err:
             raise inbox.SendFailed(f"Fastmail send failed: {err}") from err
         return native_id(e.get("messageId")) if e.get("messageId") else f"<fastmail-{sent['emailId']}@inbox>"
+
+    def find(self, h) -> str:
+        """Fastmail's ID for a message that arrived as a forwarded copy: search by sender, match Message-ID."""
+        sender = h["data"].get("from") or ""
+        try:
+            page = self.client.tool("search_email", query=f"from:{sender}" if sender else "in:inbox", limit=50)
+        except (FastmailError, OSError, ValueError) as err:
+            raise inbox.SendFailed(f"Fastmail send failed: {err}") from err
+        for r in page.get("results", []):
+            if r.get("messageId") and native_id(r["messageId"]) == h["native_id"]:
+                return r["id"]
+        raise inbox.SendFailed("could not find this message in Fastmail to reply to")

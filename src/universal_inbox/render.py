@@ -429,6 +429,66 @@ def from_raw(raw: bytes) -> Body:
     return Body(shown, trimmed, attachments, ev)
 
 
+SLACK_TOKEN = re.compile(r"<([^<>\n]+)>|```(.+?)```|`([^`\n]+)`", re.S)
+SLACK_STYLE = [(re.compile(r"(?<![\w*])\*(?=\S)([^*\n]+?)(?<=\S)\*(?![\w*])"), "b"),
+               (re.compile(r"(?<![\w_])_(?=\S)([^_\n]+?)(?<=\S)_(?![\w_])"), "i"),
+               (re.compile(r"(?<![\w~])~(?=\S)([^~\n]+?)(?<=\S)~(?![\w~])"), "strike")]
+MENTION = "#45707a"
+
+
+def _slack_inline(text: str) -> str:
+    """Escaped plain text with Slack's *bold*, _italic_, ~strike~ as markup."""
+    out = escape(text)
+    for pattern, tag in SLACK_STYLE:
+        out = pattern.sub(lambda m: f"[{tag}]{m.group(1)}[/{tag}]", out)
+    return out
+
+
+def _slack_token(tok: str) -> str:
+    """One <…> token: user, channel, and group mentions, special mentions, and links."""
+    target, _, label = tok.partition("|")
+    if target.startswith("@"):
+        return f"[b {MENTION}]@{escape(label or 'someone')}[/]"
+    if target.startswith("#"):
+        return f"[b {MENTION}]#{escape(label or 'channel')}[/]"
+    if target.startswith("!subteam"):
+        return f"[b {MENTION}]{escape(label or '@group')}[/]"
+    if target.startswith("!"):
+        return f"[b {MENTION}]@{escape(target[1:].split('^')[0])}[/]"
+    if target.startswith("mailto:"):
+        return escape(label or target[7:])
+    if target.startswith(("http://", "https://")):
+        return link(target, escape(label) if label else "")
+    return escape(tok)
+
+
+def slack_markup(text: str) -> str:
+    """Slack mrkdwn -> markup (#114): names for mentions, links as label plus domain, code, and quotes."""
+    lines_out = []
+    for ln in text.split("\n"):  # "> " quotes arrive as "&gt; "
+        quote = ln.startswith("&gt; ") or ln == "&gt;"
+        lines_out.append(("\x02" if quote else "") + (ln[5:] if ln.startswith("&gt; ") else "" if quote else ln))
+    text = "\n".join(lines_out).replace("&lt;", "\x00").replace("&gt;", "\x01").replace("&amp;", "&")
+    out, pos = [], 0
+    for m in SLACK_TOKEN.finditer(text):
+        out.append(_slack_inline(text[pos:m.start()]))
+        if m.group(1) is not None:
+            out.append(_slack_token(m.group(1)))
+        elif m.group(2) is not None:
+            out.append(f"\n[on #f2e5bc]{escape(m.group(2).strip())}[/]\n")
+        else:
+            out.append(f"[on #f2e5bc]{escape(m.group(3))}[/]")
+        pos = m.end()
+    out.append(_slack_inline(text[pos:]))
+    markup = "".join(out).replace("\x00", "<").replace("\x01", ">")
+    return "\n".join(f"[{DIM}]│[/] [{DIM}]{ln[1:]}[/]" if ln.startswith("\x02") else ln
+                     for ln in markup.split("\n")).strip()
+
+
+def from_slack(text: str | None) -> Body:
+    return Body(slack_markup(text or ""))
+
+
 def from_text(text: str | None) -> Body:
     shown, trimmed = text_body(text or "")
     return Body(shown, trimmed)

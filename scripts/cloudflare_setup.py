@@ -10,7 +10,8 @@ Creates, when missing:
   2. DNS: hooks.agentmaple.com → the tunnel (proxied CNAME).
   3. Email Routing for inbox.agentmaple.com (Cloudflare adds that subdomain's MX and SPF; the apex is untouched).
   4. The Email Worker (deploy/email-worker, via wrangler) and its EMAIL_HOOK_SECRET from --email-secret-file.
-  5. The routing rule jeremy@inbox.agentmaple.com → the Worker.
+  5. The routing rules jeremy@inbox.agentmaple.com (Gmail) and fastmail@inbox.agentmaple.com (Fastmail, #113)
+     → the Worker.
 
     uv run python scripts/cloudflare_setup.py --token-file ~/.config/universal-inbox/cloudflare-token
     uv run python scripts/cloudflare_setup.py --token-file … --email-secret-file … --apply
@@ -26,7 +27,8 @@ import urllib.request
 from pathlib import Path
 
 ZONE, HOOKS, INBOX = "agentmaple.com", "hooks.agentmaple.com", "inbox.agentmaple.com"
-ADDRESS, TUNNEL, WORKER = "jeremy@inbox.agentmaple.com", "universal-inbox", "universal-inbox-email"
+ADDRESSES = ("jeremy@inbox.agentmaple.com", "fastmail@inbox.agentmaple.com")  # Gmail's forward, Fastmail's rule
+TUNNEL, WORKER = "universal-inbox", "universal-inbox-email"
 ROOT = Path(__file__).resolve().parents[1]
 API = "https://api.cloudflare.com/client/v4"
 
@@ -69,15 +71,16 @@ def main(argv=None) -> int:
     tunnels = cf.call("GET", f"/accounts/{account_id}/cfd_tunnel?name={TUNNEL}&is_deleted=false")
     dns = cf.call("GET", f"/zones/{zone_id}/dns_records?name={HOOKS}")
     inbox_mx = cf.call("GET", f"/zones/{zone_id}/dns_records?name={INBOX}&type=MX")
-    rules = [r for r in cf.call("GET", f"/zones/{zone_id}/email/routing/rules")
-             if any(m.get("value") == ADDRESS for m in r.get("matchers", []))]
+    existing = {m.get("value") for r in cf.call("GET", f"/zones/{zone_id}/email/routing/rules")
+                for m in r.get("matchers", [])}
+    missing = [a for a in ADDRESSES if a not in existing]
 
     steps = [
         ("tunnel " + TUNNEL, bool(tunnels)),
         (f"DNS {HOOKS} → tunnel", bool(dns)),
         (f"Email Routing for {INBOX}", bool(inbox_mx)),
         (f"Worker {WORKER} + secret", None),  # wrangler deploys idempotently
-        (f"routing rule {ADDRESS} → {WORKER}", bool(rules)),
+        *((f"routing rule {a} → {WORKER}", a not in missing) for a in ADDRESSES),
     ]
     print(f"zone {ZONE} ({zone_id}), account {account_id}")
     for name, done in steps:
@@ -123,12 +126,12 @@ def main(argv=None) -> int:
                    input=secret, check=True)
 
     # 5. Routing rule
-    if not rules:
+    for address in missing:
         cf.call("POST", f"/zones/{zone_id}/email/routing/rules", {
             "name": "Universal Inbox", "enabled": True,
-            "matchers": [{"type": "literal", "field": "to", "value": ADDRESS}],
+            "matchers": [{"type": "literal", "field": "to", "value": address}],
             "actions": [{"type": "worker", "value": [WORKER]}]})
-        print(f"  routing rule {ADDRESS} → {WORKER} created")
+        print(f"  routing rule {address} → {WORKER} created")
     print("Done. Next: runbook §6.1 step 5 (install cloudflared with the run token).")
     return 0
 

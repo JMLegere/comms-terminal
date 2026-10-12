@@ -25,6 +25,12 @@ class FakeClient:
     def user_email(self, user):
         return None
 
+    def name_mentions(self, text):
+        return text
+
+    def in_thread(self, channel, thread_ts, user):
+        return False
+
 
 class Recorder:
     """Records outbound HTTP calls and answers with a fixed response."""

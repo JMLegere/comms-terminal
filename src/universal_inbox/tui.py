@@ -208,6 +208,17 @@ def glyph(detail: str) -> str:
     return f"[{color}]{g}[/]"
 
 
+def conn_name(c) -> str:
+    """How a Connection is named: its address for email, else the platform."""
+    return c["external_id"] if c["platform"] == "email" else c["platform"].capitalize()
+
+
+def conn_icon(c) -> str:
+    if c["platform"] == "email":
+        return ICON["fastmail"] if c["label"] == "Fastmail" else ICON["google"]
+    return ICON[c["platform"]]
+
+
 def native_link(view: dict) -> str | None:
     ch, msgs = view["channel"], view["messages"]
     if ch["platform"] == "email" and msgs:
@@ -260,7 +271,7 @@ class Ask(ModalScreen):
 
 
 HELP = [  # (group, [(keys, what it does)]) — the full key map; Gmail-style where Gmail has one (#93)
-    ("Move around", [("j / k", "move down / up (or click a row)"), ("space", "scroll the thread (pgup / pgdn)"),
+    ("Move around", [("j / k", "move down / up (↑/↓ also work; or click a row)"), ("space", "scroll the thread (pgup / pgdn)"),
                      ("1 – 5", "Todo, Snoozed, Done, Ignored, All"),
                      ("6 – 9", "People, Organizations, Cases, Channels"), ("u", "back (esc also works)")]),
     ("Thread", [("r", "reply to the sender   ctrl+enter sends · esc keeps the draft"), ("a", "reply all"),
@@ -268,8 +279,9 @@ HELP = [  # (group, [(keys, what it does)]) — the full key map; Gmail-style wh
                 ("w", "wait for them: it returns when they reply"), ("m", "ignore: it stays out of Todo (m again un-ignores)"),
                 ("l", "add to a case"), ("s", "change status: needs a response, investigating"),
                 ("p", "open the person"), ("o", "open in Gmail, Fastmail, or Slack"), ("z", "undo the last change"),
-                ("; / :", "expand / collapse every message (click a message or ••• to toggle one)")]),
-    ("Case", [("j / k", "select a thread card"), ("enter", "show or hide a done thread"),
+                ("; / :", "expand / collapse every message (click a message or ••• to toggle one)"),
+                ("ctrl+shift+click", "open a link in your browser (shift lets Ghostty take the click)")]),
+    ("Case", [("j / k", "select a thread card (↑/↓ also work)"), ("enter", "show or hide a done thread"),
               ("d", "edit the description   ctrl+enter saves · esc cancels"),
               ("r / a", "reply in the selected thread")]),
     ("Person", [("b", "block or unblock the identity"), ("a", "add an identity"), ("x", "remove the identity")]),
@@ -459,10 +471,11 @@ class Rail(OptionList):
         for c in inbox.connections(db):
             ok = health_ok(c)
             state = f"[#6c782e]{ICON['ok']}[/]" if ok else f"[#c14a4a]{ICON['broken']}[/]"
-            plat = c["platform"]
             mark = "[#45707a]▌[/]" if main.section == f"conn:{c['id']}" else " "
-            label = plat.capitalize() if ok else f"[#c14a4a]{plat.capitalize()}[/]"
-            opts.append(Option(f"{mark}{ICON[plat]} {label}{' ' * (17 - len(plat))}{state}", id=f"conn:{c['id']}"))
+            name = conn_name(c)
+            name = name if len(name) <= 21 else name[:20] + "…"
+            label = escape(name) if ok else f"[#c14a4a]{escape(name)}[/]"
+            opts.append(Option(f"{mark}{conn_icon(c)} {label}{' ' * max(1, 22 - len(name))}{state}", id=f"conn:{c['id']}"))
         self.clear_options()
         self.add_options(opts)
         self.highlighted = None
@@ -799,15 +812,16 @@ def gmail_link(native_id: str) -> str:
     return f"https://mail.google.com/mail/u/0/#search/rfc822msgid%3A{quote(native_id.strip('<>'))}"
 
 
-def message_body(m, raw) -> render.Body:
-    """The rendered body: from the raw message when it was kept (decision #106), else the stored text."""
+def message_body(m, raw, slack: bool = False) -> render.Body:
+    """The rendered body: from the raw message when it was kept (decision #106), Slack mrkdwn for Slack
+    (#114), else the stored text."""
     sha = m["data"].get("raw")
     if sha and raw is not None and not m["edited"]:
         body = render.load(str(raw / f"{sha}.eml"))
         if body is not None:
             return body
-    body = render.from_text(m["content"])
-    body.attachments = [tuple(a) for a in m["data"].get("attachments") or []]  # Fastmail lists them as data
+    body = render.from_slack(m["content"]) if slack else render.from_text(m["content"])
+    body.attachments = [tuple(a) for a in m["data"].get("attachments") or []]  # Fastmail and Slack list them as data
     return body
 
 
@@ -874,7 +888,7 @@ def message_widgets(v, st: dict | None = None, raw=None) -> list:
     is_open = lambda i: i in st["open"] or (i in opened and i not in st["closed"])  # noqa: E731
 
     def collapsed(i, m):
-        snippet = "message deleted" if m["deleted"] else message_body(m, raw).snippet
+        snippet = "message deleted" if m["deleted"] else message_body(m, raw, not email).snippet
         # Faded: older messages recede so the open ones read first (Jeremy, 2026-10-12).
         line = (f"[@click=app.msg_toggle({tid},{i})][#a89984][b]{escape(m['who'])}[/]  {when(m['at']):>3}  "
                 f"{escape(snippet)}[/][/]")
@@ -892,7 +906,7 @@ def message_widgets(v, st: dict | None = None, raw=None) -> list:
         if m["deleted"]:
             parts.append(MessageText(f"[i {dim}]{ICON['deleted']} message deleted[/]", classes="mbody"))
             return gutter_row(badge(m["who"]), Vertical(*parts, classes="msg"), "open")
-        body = message_body(m, raw)
+        body = message_body(m, raw, not email)
         if body.invite:
             parts.append(MessageText(f"[{dim}]{ICON['calendar']} invitation[/]\n" + render.invite_card(body.invite),
                                      classes="mbody"))
@@ -1376,7 +1390,7 @@ class ConnectionPage(Page):
         state = f"[#6c782e]{ICON['ok']} OK[/]" if ok else f"[#c14a4a]{ICON['broken']} BROKEN[/]"
         detail = c["last_error"] or ("Slack revoked access (token revoked or app uninstalled)" if not c["auth_ok"] else "None.")
         self.query_one("#conn").update(
-            f"[b]{ICON[c['platform']]} {c['platform'].capitalize()}[/]  {state}\n{RECOVERY[c['platform']][ok]}\n\n"
+            f"[b]{conn_icon(c)} {escape(conn_name(c))}[/]  {state}\n{RECOVERY[c['platform']][ok]}\n\n"
             f"[#928374]account[/]\n{escape(c['external_id'])}\n\n"
             f"[#928374]connected[/]\n{stamp(c['connected_at'])}\n\n[#928374]last error[/]\n{escape(detail)}")
 
@@ -1428,9 +1442,9 @@ class StatusLine(Static):
         parts = [f"[{b['grey1']}]{ICON['TODO']}[/] {counts['Todo']} todo",
                  f"[{b['grey1']}]{ICON['SNOOZED']}[/] {counts['Snoozed']} snoozed"]
         for c in inbox.connections(app.db):
-            plat = c["platform"]
-            parts.append(f"[{b['grey1']}]{ICON[plat]}[/] {plat} [{b['green']}]{ICON['ok']}[/]" if health_ok(c) else
-                         f"[b {b['bg0']} on {b['red']}] {ICON['broken']} {plat} broken [/]")
+            # Icon only while healthy (the rail names each account); a broken one says which, in full.
+            parts.append(f"[{b['grey1']}]{conn_icon(c)}[/] [{b['green']}]{ICON['ok']}[/]" if health_ok(c) else
+                         f"[b {b['bg0']} on {b['red']}] {ICON['broken']} {escape(conn_name(c))} broken [/]")
         right = sep.join(parts) + " "
         from rich.text import Text
         width = self.size.width or self.app.size.width
@@ -1551,6 +1565,7 @@ class CasePage(Page, ThreadActions):
     BINDINGS = [
         Binding("escape", "back", "back"),
         Binding("j", "down", "move", key_display="j/k"), Binding("k", "up", show=False),
+        Binding("down", "down", show=False), Binding("up", "up", show=False),
         Binding("enter", "toggle", show=False), *THREAD_KEYS, Binding("d", "describe", "description"),
         Binding("space", "scroll(1)", show=False), Binding("pagedown", "scroll(1)", show=False),
         Binding("pageup", "scroll(-1)", show=False),
@@ -1577,6 +1592,9 @@ class CasePage(Page, ThreadActions):
 
     def focus_first(self):
         self.focus()
+
+    def check_action(self, action, parameters):
+        return self.has_focus if action in ("down", "up") else super().check_action(action, parameters)
 
     def refresh_data(self):
         db = self.app.db

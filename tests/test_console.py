@@ -310,6 +310,69 @@ def test_case_shows_threads_as_cards_and_replies_in_one(tmp_path):
     assert sent == [ids["ana"]]
 
 
+def test_case_arrow_keys_navigate_cards_with_bounds_and_keep_j_k(tmp_path):
+    path, ids = seeded(tmp_path)
+    case_id = inbox.get_thread(inbox.connect(path), ids["ana"]).case_id
+    app = Console(path)
+
+    async def open_case(app, pilot):
+        app.action_open_case(case_id)
+
+    async def navigate(app, pilot):
+        cards = list(page(app).query("CaseCard"))
+        assert len(cards) == 2
+        assert page(app).current_thread_id() == cards[0].thread_id
+        for key, index in (("up", 0), ("down", 1), ("down", 1), ("up", 0),
+                           ("k", 0), ("j", 1), ("j", 1), ("k", 0)):
+            await pilot.press(key)
+            await pilot.pause()
+            assert page(app).current_thread_id() == cards[index].thread_id, key
+
+    run(app, [open_case, navigate])
+
+
+def test_case_arrow_keys_stay_in_focused_reply_fields(tmp_path):
+    path, ids = seeded(tmp_path)
+    case_id = inbox.get_thread(inbox.connect(path), ids["ana"]).case_id
+    app = Console(path)
+
+    async def open_case(app, pilot):
+        app.action_open_case(case_id)
+
+    async def edit(app, pilot):
+        cards = list(page(app).query("CaseCard"))
+        assert len(cards) == 2
+        for card in cards:
+            assert page(app).current_thread_id() == card.thread_id
+            await pilot.press("r")
+            await pilot.pause()
+            for selector in (".toinput", ".ccinput"):
+                field = card.query_one(selector)
+                field.focus()
+                await pilot.pause()
+                assert app.focused is field
+                for key in ("up", "down"):
+                    await pilot.press(key)
+                    await pilot.pause()
+                    assert page(app).current_thread_id() == card.thread_id, selector
+                    assert app.focused is field
+            reply = card.query_one(".reply")
+            reply.text = "first\nsecond"
+            reply.focus()
+            reply.move_cursor((1, 2))
+            await pilot.pause()
+            assert app.focused is reply
+            for key, cursor in (("up", (0, 2)), ("down", (1, 2))):
+                await pilot.press(key)
+                await pilot.pause()
+                assert reply.cursor_location == cursor
+                assert page(app).current_thread_id() == card.thread_id
+            await pilot.press("escape", "j")
+            await pilot.pause()
+
+    run(app, [open_case, edit])
+
+
 def test_thread_details_list_other_threads_with_the_person_and_organization(tmp_path):
     path, ids = seeded(tmp_path)
     db = inbox.connect(path)

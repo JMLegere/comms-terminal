@@ -828,6 +828,14 @@ All entries are dated 2026-10-10; exact times are unproven unless noted. Full de
   - Request / decision: The one-time Gmail import (30 days, all in Todo) goes through a Google Takeout export of Inbox and Sent; deferred until Jeremy has the export
   - Source: Jeremy, "also can you do the same one-time import for my gmail", ask tool answer "Google Takeout", "defer that for now" (2026-10-12)
   - Status: Deferred
+- **113**
+  - Request / decision: Fastmail incoming mail is event-driven, like Gmail: a Fastmail rule ("Universal Inbox": all messages → send a copy to `fastmail@inbox.agentmaple.com`, continue other rules, first in the list) feeds a second Email Routing rule and the same Worker, which now sends the envelope recipient as `X-Inbox-To` inside the signature; the hook files the copy under the Connection that address names, with its raw source (full rendering, real threading headers, automated-mail filtering). The service accepts both signature forms. MCP stays for sending (the Fastmail ID of a forwarded copy is found by sender and Message-ID) and for a 10-minute poll of Sent that catches replies written in Fastmail itself. Jeremy chose to copy everything, screened mail included; contact mail also still reaches Gmail through his older forward, and the first copy by Message-ID wins
+  - Source: Jeremy, "is it possible to make the fastmail connection event driven instead of polling - like gmail?", "Yes + slow Sent poll", "connect to chrome on mani and configure fastmail for me", "Everything, screened too" (2026-10-12)
+  - Status: Accepted
+- **114**
+  - Request / decision: Slack, before connecting: besides DMs, group DMs, and ruled channels, the user token also receives messages from every channel Jeremy belongs to (`message.channels`, `message.groups`; user scopes `channels:history`, `groups:history`), kept only when they mention him, reply in a thread already in the inbox, or reply in a thread he has posted in (`conversations.replies`, cached). Slack formatting renders like email: mentions as names (resolved at ingest), links as label plus domain, bold, italic, strike, code, quotes; files as Attachment chips. Links in the console open with Ctrl+Shift+click in Ghostty (Jeremy's choice over an in-app opener)
+  - Source: Jeremy, "what's the best way to use universal inbox to manage slack as well?", "Build 3+4, then connect", "Use Ghostty's modifier-click" (2026-10-12)
+  - Status: Accepted
 
 ## 8. Work log
 
@@ -956,6 +964,12 @@ All entries are dated 2026-10-10; exact times are unproven unless noted. Full de
   - Activity: Fastmail adapter (#111): `fastmail.py` (MCP client with token refresh and rotation, poller, sender, import), `scripts/oauth_fastmail.py`, service wiring, `init --fastmail`, `fastmail-import`, `deploy/universal-inbox.service.d/fastmail.conf`; readable thread view (gutter badges, message cards) shipped earlier as `f1ac0a7`
   - Result: 98 tests pass; live sign-in granted read, action, and send; import stored 11 messages in 5 Threads, all Todo; polling waits for `deploy/install.sh`
   - Evidence: `src/universal_inbox/fastmail.py`, `tests/test_fastmail.py`, `docs/runbook.md` §3a
+  - Basis: Source-observed
+- **2026-10-12T16:08:31+00:00**
+  - Actor: Agent
+  - Activity: Fastmail made event-driven (#113: Worker `X-Inbox-To`, second routing rule, Fastmail rule created in Jeremy's browser, Sent-only poll, reply lookup by Message-ID); connection names and icons in the rail; Slack mentions and threads from any channel and Slack formatting (#114)
+  - Result: 107 tests pass; Worker version 19cfa202 deployed; service restarted 15:50 UTC; Slack not yet connected
+  - Evidence: `src/universal_inbox/fastmail.py`, `src/universal_inbox/slack.py`, `src/universal_inbox/render.py`, `tests/test_slack_mentions.py`, `tests/test_email_worker.py`
   - Basis: Source-observed
 
 ## 9. Sources and coverage check

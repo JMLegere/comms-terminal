@@ -18,7 +18,7 @@ import urllib.request
 # Bot: read selected channels. User: Jeremy's DMs and group DMs, channel names, profiles, replies as him.
 BOT_SCOPES = ["channels:history", "groups:history", "channels:read", "groups:read",
               "users:read", "users:read.email"]
-USER_SCOPES = ["im:history", "mpim:history", "im:read", "mpim:read", "channels:read", "groups:read",
+USER_SCOPES = ["channels:history", "groups:history", "im:history", "mpim:history", "im:read", "mpim:read", "channels:read", "groups:read",
                "chat:write", "users:read", "users:read.email"]
 
 

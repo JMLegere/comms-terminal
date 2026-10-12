@@ -44,11 +44,13 @@ D3 (decision #102): Cloudflare Tunnel publishes `https://hooks.agentmaple.com/ho
 
 ## 3a. Connect Fastmail
 
-Fastmail is a second email Connection (decision #111). Jeremy's Basic plan refuses JMAP, IMAP, and API tokens, so Universal Inbox signs in as a connected app over Fastmail's MCP server, as omp does, and polls the Inbox and Sent every minute.
+Fastmail is a second email Connection (decisions #111, #113). Incoming mail is event-driven like Gmail: a Fastmail rule sends a copy of every message to `fastmail@inbox.agentmaple.com`, Email Routing hands it to the same Worker, and the hook files it under Fastmail by that address. Jeremy's Basic plan refuses JMAP, IMAP, and API tokens, so replies (and a 10-minute poll of Sent for replies written in Fastmail itself) go through Fastmail's MCP server, signed in as a connected app the way omp is.
 
 1. **You**, on Mani (browser): `python3 scripts/oauth_fastmail.py --resource mcp --out ~/.config/universal-inbox/fastmail-oauth.json`. On Fastmail's consent page tick read, write, **and** send (the scope must list `mcp-read mcp-action mcp-send`). Copy the file to Workbox's `~/.config/universal-inbox/` (0600) and shred the Mani copy.
 2. On Workbox: `universal-inbox init --fastmail legere@fastmail.com`. Optional one-time import: `universal-inbox fastmail-import --days 30` (Inbox and Sent, every Thread left in Todo).
 3. **You:** `sudo bash deploy/install.sh`: it stores `fastmail-oauth` and adds `universal-inbox.service.d/fastmail.conf`.
+4. Cloudflare: `scripts/cloudflare_setup.py` adds the routing rule `fastmail@inbox.agentmaple.com` → Worker (plan, then `--apply`).
+5. **You**, Fastmail → Settings → Filters & Rules → Create rule: *All messages* → *Send a copy to* `fastmail@inbox.agentmaple.com`, *Continue to apply other rules*; drag it to the top (done 2026-10-12, rule "Universal Inbox"). Spam and blocked senders are not copied.
 
 The refresh token rotates, and Fastmail revokes the sign-in when an old one is reused. Exactly one process may hold it: the service keeps the current one in `~/.local/share/universal-inbox/fastmail-oauth.json` (0600), which wins over the stored credential. Never run a second copy against the same token; if it is revoked, the Connection shows the error and step 1 is repeated.
 
@@ -63,7 +65,8 @@ The refresh token rotates, and Fastmail revokes the sign-in when an old one is r
    universal-inbox init --slack-team <T…> --slack-user <U…>
    ```
 4. **You:** `sudo bash deploy/install.sh` again: it stores both Slack secrets and adds `universal-inbox.service.d/slack.conf`.
-5. **You:** in the Slack app's Event Subscriptions, retry the request URL (it verifies now). Invite the bot to each channel to cover (`/invite @Universal Inbox`) and add a Channel rule in the console (`9`, then `a`). DMs and group DMs need no rule.
+5. **You:** in the Slack app's Event Subscriptions, retry the request URL (it verifies now). Invite the bot to each channel to cover whole (`/invite @Universal Inbox`) and add a Channel rule in the console (`9`, then `a`). DMs and group DMs need no rule. From every other channel Jeremy is in, only messages that mention him and replies in threads he has posted in (or that are already in the inbox) come in (#114).
+6. **You:** turn off Slack's email notifications (Slack → Preferences → Notifications → email), or they arrive through Gmail as duplicate email threads.
 
 ## 4. Service operations
 

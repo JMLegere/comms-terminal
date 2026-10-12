@@ -11,7 +11,8 @@ conf="$home/.config/universal-inbox"
 repo=$(cd "$(dirname "$0")/.." && pwd)
 store=/etc/credstore.encrypted
 
-# 1. Credentials
+# 1. Credentials (scripts/oauth_fastmail.py writes fastmail-oauth.json; it is stored as fastmail-oauth)
+[[ -f "$conf/fastmail-oauth.json" ]] && mv "$conf/fastmail-oauth.json" "$conf/fastmail-oauth"
 for name in email-hook-secret resend-api-key slack-signing-secret slack-user-token fastmail-oauth; do
   if [[ -f "$conf/$name" ]]; then
     systemd-creds encrypt --name="$name" "$conf/$name" "$store/universal-inbox.$name"

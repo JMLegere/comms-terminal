@@ -130,8 +130,11 @@ def hooks_server(db_path: str, host: str, port: int, client=None) -> ThreadingHT
             return 503, "text/plain", b"email not connected"
         db = inbox.connect(db_path)
         try:
-            status = email.handle_hook(db, connection_id(db, "email"), headers, body, email_secret,
-                                       datetime.now(timezone.utc))
+            # The envelope recipient picks the Connection: Fastmail's rule copies to its own address (#113).
+            fm = db.execute("SELECT id FROM connections WHERE label = ?", (fastmail.LABEL,)).fetchone()
+            to = (headers.get("X-Inbox-To") or "").lower()
+            conn_id = fm["id"] if fm and to == fastmail.INBOUND else connection_id(db, "email")
+            status = email.handle_hook(db, conn_id, headers, body, email_secret, datetime.now(timezone.utc))
         finally:
             db.close()
         return status, "text/plain", b""

@@ -28,6 +28,8 @@ ICON = {
     "im": "\U000f0ede",             # md-chat_outline (Slack DM)
     "mpim": "\U000f0b58",           # md-account_group_outline (Slack group DM)
     "mailbox": "\U000f01f0",        # md-email_outline
+    "google": "\U000f02ad",         # md-google (the Gmail Connection)
+    "fastmail": "\U000f1870",       # md-email_fast_outline (Fastmail has no glyph of its own)
     # Status (Plain's three) and Status details
     "TODO": "\U000f0766",                  # md-circle_outline
     "SNOOZED": "\U000f04b2",               # md-sleep

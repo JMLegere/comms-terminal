@@ -30,6 +30,8 @@ class FakeFastmail:
             return {"results": sorted(hits, key=lambda e: e["receivedAt"], reverse=True), "hasMore": False}
         if name == "read_email":
             return self.emails[args["id"]]
+        if name == "read_thread":
+            return [e for e in self.emails.values() if e["threadId"] == args["threadId"]]
         if name == "send_email":
             self.sent.append(args)
             eid = f"S{len(self.sent)}"
@@ -75,6 +77,30 @@ def test_poll_ignores_mail_from_before_the_connection():
                        mail("M2", "T2", "Inbox", "bo@acme.com", "New", "new", 30)])
     tids = fastmail.sync(db, fm, conn, datetime.fromisoformat(conn["connected_at"]), {ME})
     assert [inbox.get_thread(db, t).title for t in tids] == ["New"]
+
+
+def test_poll_reads_sent_only_and_joins_the_forwarded_copy_thread():
+    """Incoming mail arrives as a forwarded copy (#113); a reply written in Fastmail joins its Thread."""
+    db, conn = setup()
+    copy = inbox.Incoming(conn["id"], ME, "mailbox", "MESSAGE", "<M1@acme.com>", inbox.Identity("email", "ana@acme.com"),
+                          NOW - timedelta(minutes=30), "Can we talk pricing?", [], "Pricing", {"from": "ana@acme.com"})
+    tid = inbox.ingest(db, copy).id
+    fm = FakeFastmail([mail("M1", "T1", "Inbox", "ana@acme.com", "Pricing", "Can we talk pricing?", 30),
+                       mail("S1", "T1", "Sent", ME, "Re: Pricing", "Thursday works.", 5, "s1@fastmail.com"),
+                       mail("M9", "T9", "Inbox", "bo@acme.com", "Other", "not polled", 4)])
+    assert fastmail.sync(db, fm, conn, NOW - timedelta(days=1), {ME}, queries=("in:sent",)) == [tid]
+    assert inbox.get_thread(db, tid).status_detail == "WAITING_FOR_CUSTOMER"
+    assert db.execute("SELECT count(*) FROM threads").fetchone()[0] == 1
+
+
+def test_reply_to_a_forwarded_copy_finds_its_fastmail_id():
+    db, conn = setup()
+    copy = inbox.Incoming(conn["id"], ME, "mailbox", "MESSAGE", "<M1@acme.com>", inbox.Identity("email", "ana@acme.com"),
+                          NOW - timedelta(minutes=30), "Hi", [], "Pricing", {"from": "ana@acme.com"})
+    tid = inbox.ingest(db, copy).id
+    fm = FakeFastmail([mail("M1", "T1", "Inbox", "ana@acme.com", "Pricing", "Hi", 30)])
+    inbox.reply(db, tid, "Hello", fastmail.FastmailSender(fm), ["ana@acme.com"], [])
+    assert fm.sent[0]["emailId"] == "M1"
 
 
 def test_import_leaves_every_thread_in_todo():

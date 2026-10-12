@@ -3,6 +3,7 @@
 import hashlib
 import hmac
 import json
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -37,15 +38,21 @@ def _at(ts: str) -> datetime:
     return datetime.fromtimestamp(float(ts), timezone.utc)
 
 
-def parse(event: dict, connection, rules, client) -> inbox.Incoming | None:
-    """One Slack message event -> Incoming, or None when not selected or not a message."""
+def parse(event: dict, connection, rules, client, thread_member=lambda channel, ts: None) -> inbox.Incoming | None:
+    """One Slack message event -> Incoming, or None when not selected or not a message.
+
+    DMs, group DMs, and ruled channels are taken whole (FR-4). From any other channel Jeremy is in, the
+    user token also delivers messages (#114); only those that need him are kept: a message mentioning him,
+    and a reply in a thread that is already in the inbox or that he has posted in. `thread_member(channel,
+    thread_ts)` returns a stored message of that Slack thread, if any (the hook passes a DB lookup).
+    """
     if event.get("type") != "message":
         return None
     channel = event["channel"]
     kind = CHANNEL_KINDS.get(event.get("channel_type"), "channel")
-    if not selected(None if kind in ("im", "mpim") else client.conversation_name(channel), kind, rules):
-        return None
+    ruled = selected(None if kind in ("im", "mpim") else client.conversation_name(channel), kind, rules)
     subtype = event.get("subtype")
+    files = []
     if subtype == "message_changed":
         msg = event["message"]
         user, ts = msg.get("user"), msg["ts"]
@@ -58,18 +65,25 @@ def parse(event: dict, connection, rules, client) -> inbox.Incoming | None:
     elif subtype in MESSAGE_SUBTYPES:
         user, ts, thread_ts = event.get("user"), event["ts"], event.get("thread_ts")
         native_id, kind_, content = f"{channel}:{ts}", "MESSAGE", event.get("text")
+        files = [[f.get("name") or f.get("title") or "file", f.get("mimetype") or "", f.get("size") or 0]
+                 for f in event.get("files") or []]
     else:
         return None
-    if user == connection["self_id"]:
-        sender = None
-    else:
-        sender = inbox.Identity("slack_user", user, profile_email=client.user_email(user))
-    refs = [f"{channel}:{thread_ts}"] if thread_ts and thread_ts != ts else []
+    self_id = connection["self_id"]
+    reply = bool(thread_ts and thread_ts != ts)
+    member = thread_member(channel, thread_ts) if reply else None
+    if not ruled and kind_ == "MESSAGE":  # edits and deletions of untracked messages are dropped by ingest
+        mentioned = f"<@{self_id}>" in (content or "")
+        if not (mentioned or member or (reply and client.in_thread(channel, thread_ts, self_id))):
+            return None
+    sender = None if user == self_id else inbox.Identity("slack_user", user, profile_email=client.user_email(user))
+    refs = [f"{channel}:{thread_ts}"] + ([member] if member else []) if reply else []
     return inbox.Incoming(
         connection_id=connection["id"], channel=channel, channel_kind=kind, kind=kind_,
         native_id=native_id, sender=sender, occurred_at=_at(event.get("event_ts", ts)),
-        content=content, thread_ref=refs,
-        data={"channel": channel, "ts": ts, **({"thread_ts": thread_ts} if thread_ts else {})})
+        content=client.name_mentions(content) if content else content, thread_ref=refs,
+        data={"channel": channel, "ts": ts, **({"thread_ts": thread_ts} if thread_ts else {}),
+              **({"attachments": files} if files else {})})
 
 
 USER_AGENT = "universal-inbox/0.1 (+https://github.com/JMLegere/universal-inbox)"
@@ -94,7 +108,7 @@ class SlackClient:
     """Web API reads (form/GET methods) with Jeremy's user token; cached for the process lifetime."""
 
     def __init__(self, token: str, get=_get):
-        self.token, self.get, self._names, self._emails = token, get, {}, {}
+        self.token, self.get, self._names, self._users, self._threads = token, get, {}, {}, {}
 
     def conversation_name(self, channel: str) -> str | None:
         if channel not in self._names:
@@ -102,11 +116,33 @@ class SlackClient:
             self._names[channel] = r.get("channel", {}).get("name") if r.get("ok") else None
         return self._names[channel]
 
-    def user_email(self, user: str) -> str | None:
-        if user not in self._emails:
+    def _profile(self, user: str) -> dict:
+        if user not in self._users:
             r = self.get("https://slack.com/api/users.info", self.token, {"user": user})
-            self._emails[user] = r.get("user", {}).get("profile", {}).get("email") if r.get("ok") else None
-        return self._emails[user]
+            self._users[user] = r.get("user", {}) if r.get("ok") else {}
+        return self._users[user]
+
+    def user_email(self, user: str) -> str | None:
+        return self._profile(user).get("profile", {}).get("email")
+
+    def user_name(self, user: str) -> str | None:
+        u = self._profile(user)
+        p = u.get("profile", {})
+        return p.get("display_name") or p.get("real_name") or u.get("name")
+
+    def name_mentions(self, text: str) -> str:
+        """<@U123> -> <@U123|Ana>, so the console can show names without asking Slack (#114)."""
+        return re.sub(r"<@([UW][A-Z0-9]+)>",
+                      lambda m: f"<@{m.group(1)}|{self.user_name(m.group(1)) or m.group(1)}>", text)
+
+    def in_thread(self, channel: str, thread_ts: str, user: str) -> bool:
+        """Has `user` posted in this Slack thread? Cached once true (a thread never loses a poster)."""
+        key = (channel, thread_ts)
+        if not self._threads.get(key):
+            r = self.get("https://slack.com/api/conversations.replies", self.token,
+                         {"channel": channel, "ts": thread_ts, "limit": 200})
+            self._threads[key] = r.get("ok", False) and any(m.get("user") == user for m in r.get("messages", []))
+        return self._threads[key]
 
 
 class SlackSender:
@@ -145,7 +181,13 @@ def handle_hook(db, connection_id: int, headers, body: bytes, signing_secret: by
     connection = db.execute("SELECT * FROM connections WHERE id = ?", (connection_id,)).fetchone()
     rules = [(r["kind"], r["value"]) for r in db.execute(
         "SELECT kind, value FROM channel_rules WHERE connection_id = ?", (connection_id,))]
-    incoming = parse(event, connection, rules, client)
+    def thread_member(channel, thread_ts):
+        r = db.execute("SELECT native_id FROM activities WHERE kind = 'MESSAGE' AND (native_id = ? OR"
+                       " (json_extract(data, '$.channel') = ? AND json_extract(data, '$.thread_ts') = ?)) LIMIT 1",
+                       (f"{channel}:{thread_ts}", channel, thread_ts)).fetchone()
+        return r["native_id"] if r else None
+
+    incoming = parse(event, connection, rules, client, thread_member)
     if incoming is not None:
         inbox.ingest(db, incoming)
     return 200, ""

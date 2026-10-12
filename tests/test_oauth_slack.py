@@ -13,7 +13,7 @@ import oauth_slack  # noqa: E402
 
 def test_authorize_url_and_token_file(tmp_path, capsys):
     url = oauth_slack.authorize_url("123.456", "https://example.com/cb")
-    assert "user_scope=im%3Ahistory" in url and "chat%3Awrite" in url
+    assert "user_scope=channels%3Ahistory" in url and "im%3Ahistory" in url and "chat%3Awrite" in url
 
     reply = {"ok": True, "team": {"id": "T0"}, "access_token": "xoxb-secret",
              "authed_user": {"id": "U0JEREMY", "access_token": "xoxp-secret"}}

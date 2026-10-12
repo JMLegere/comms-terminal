@@ -25,11 +25,14 @@ AUTO_REPLY_HEADERS = (
 
 
 def verify(headers, body: bytes, secret: bytes, now: datetime) -> bool:
-    """HMAC-SHA256 over "<timestamp>.<body>", sent as X-Inbox-Signature: sha256=<hex>."""
+    """HMAC-SHA256 over "<timestamp>.<recipient>.<body>" when the Worker sends X-Inbox-To (#113), else
+    over "<timestamp>.<body>" (Workers deployed before it); sent as X-Inbox-Signature: sha256=<hex>."""
     ts, sig = headers.get("X-Inbox-Timestamp", ""), headers.get("X-Inbox-Signature", "")
     if not ts.isdigit() or abs(now.timestamp() - int(ts)) > SIGNATURE_WINDOW:
         return False
-    want = "sha256=" + hmac.new(secret, ts.encode() + b"." + body, hashlib.sha256).hexdigest()
+    to = headers.get("X-Inbox-To")
+    signed = ts.encode() + b"." + (to.encode() + b"." if to is not None else b"") + body
+    want = "sha256=" + hmac.new(secret, signed, hashlib.sha256).hexdigest()
     return hmac.compare_digest(want, sig)
 
 

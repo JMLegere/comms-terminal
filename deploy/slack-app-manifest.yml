@@ -20,6 +20,8 @@ oauth_config:
       - users:read
       - users:read.email
     user:
+      - channels:history  # mentions and threads Jeremy is in, from any channel he belongs to (#114)
+      - groups:history
       - im:history
       - mpim:history
       - im:read
@@ -38,6 +40,8 @@ settings:
       - tokens_revoked
       - app_uninstalled
     user_events:
+      - message.channels  # filtered to mentions and his threads (#114)
+      - message.groups
       - message.im
       - message.mpim
   org_deploy_enabled: false
