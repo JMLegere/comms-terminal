@@ -338,3 +338,23 @@ def test_case_description_edits_in_place_and_undoes(tmp_path):
     run(app, [open_case, "d", *"Q4 rollout", "ctrl+enter", saved, "z"])
     assert seen["saved"] == "Q4 rollout" and seen["focus"]
     assert db.execute("SELECT description FROM cases WHERE id = ?", (case_id,)).fetchone()[0] == ""
+
+
+def test_rail_follows_a_link_from_a_thread_and_back(tmp_path):
+    path, ids = seeded(tmp_path)
+    app, seen = Console(path), {}
+
+    async def open_person_from_thread(app, pilot):
+        app.main.open_thread(ids["ana"])
+        await pilot.pause()
+        page(app).action_person()
+
+    async def on_person(app, pilot):
+        seen["person"] = (type(page(app)), app.main.section, "PEOPLE" in str(app.main.query_one("#statusline").render()))
+
+    async def after_back(app, pilot):
+        seen["back"] = (type(page(app)), app.main.section)
+
+    run(app, [open_person_from_thread, on_person, "escape", after_back])
+    assert seen["person"] == (PersonPage, "people", True)
+    assert seen["back"] == (ThreadsPage, "view:0")

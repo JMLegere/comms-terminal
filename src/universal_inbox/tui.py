@@ -1544,16 +1544,25 @@ class MainScreen(Screen):
         """Open a rail section (resets the stack): a Status view, a browse list, or a Connection."""
         if target.startswith("conn:"):
             cid = int(target.split(":")[1])
-            self.section, self.stack = target, [lambda: ConnectionPage(cid)]
+            factory = lambda: ConnectionPage(cid)  # noqa: E731
         elif target.startswith("view:"):
-            self.app.view = int(target.split(":")[1])
-            self.section, self.stack = target, [ThreadsPage]
+            factory = ThreadsPage
         else:
-            self.section, self.stack = target, [SECTIONS[target]]
-        self._show()
+            factory = SECTIONS[target]
+        self.stack = [(target, factory)]
+        self._enter(target)
 
-    def open(self, factory):
-        self.stack.append(factory)
+    def open(self, factory, section: str | None = None):
+        """Open a page on top of the current one. `section` is the rail item it belongs to (a Person is
+        under People, an Organization under Organizations, a Case under Cases), so the rail follows."""
+        section = section or self.section
+        self.stack.append((section, factory))
+        self._enter(section)
+
+    def _enter(self, section: str):
+        self.section = section
+        if section.startswith("view:"):
+            self.app.view = int(section.split(":")[1])
         self._show()
 
     def open_thread(self, thread_id):
@@ -1563,12 +1572,12 @@ class MainScreen(Screen):
         self.go(f"view:{next(i for i, n in enumerate(VIEW_NAMES) if detail in inbox.VIEWS[n])}")
 
     def open_person(self, person_id):
-        self.open(lambda: PersonPage(person_id))
+        self.open(lambda: PersonPage(person_id), "people")
 
     def back(self):
         if len(self.stack) > 1:
             self.stack.pop()
-            self._show()
+            self._enter(self.stack[-1][0])
 
     def show_thread(self, thread_id):
         """Fill the thread pane (Threads views only); the same Thread is refreshed in place."""
@@ -1601,7 +1610,7 @@ class MainScreen(Screen):
     def _show(self):
         main, pane = self.query_one("#main"), self.query_one("#thread")
         main.remove_children()
-        page = self.stack[-1]()
+        page = self.stack[-1][1]()
         self.current = page
         pane.remove_children()
         self.showing, self.side_text = None, None
@@ -1659,10 +1668,10 @@ class Console(App):
         self.main.open_person(person_id)
 
     def action_open_org(self, domain):
-        self.main.open(lambda: OrganizationPage(domain))
+        self.main.open(lambda: OrganizationPage(domain), "organizations")
 
     def action_open_case(self, case_id):
-        self.main.open(lambda: CasePage(case_id))
+        self.main.open(lambda: CasePage(case_id), "cases")
 
     def action_back(self):
         self.main.back()
