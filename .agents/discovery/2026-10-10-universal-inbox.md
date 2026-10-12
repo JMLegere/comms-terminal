@@ -450,6 +450,8 @@ flowchart TB
 | 2026-10-10 | The tool may be narrow and integrate with Tana, Slack, Linear, and others for adjacent jobs | Jeremy, unprompted | Accepted as constraint for Phase 2–3 | — |
 | 2026-10-12 | PRD revision 3 (docs/prd.md decisions 51–56): reply from the console on both channels; Plain status model (Status + Status detail); Plain integration architecture (email by forwarding and provider sending, Slack bot events, DMs via user events); event-driven ingestion. Email completeness can no longer be reconciled (ADR 0002) | Jeremy | Accepted | Read-only mirror; Gmail API polling; R2 provable completeness for email |
 | 2026-10-12 | PRD decision 66: no Slack reconciliation or polling, as in Plain; completeness relies on event delivery on both channels. Agent recommended keeping reconciliation for the trust core | Jeremy ("never encountered dropped messages" on Plain) | Accepted | R2 provable completeness and 15-minute sync warning |
+| 2026-10-12 | SMS scope reopened in a child discovery: `.agents/discovery/2026-10-12-sms.md` | Jeremy, `/discovery sms` | Open | "SMS and iMessage out of scope for now" (pending child outcome) |
+| 2026-10-12 | SMS child discovery complete: a Work number via Quo becomes an SMS Connection; the Personal number (iMessage) stays out of scope | Jeremy, `.agents/discovery/2026-10-12-sms.md` | Accepted | "SMS out of scope for now" (SMS only; iMessage unchanged) |
 
 ## Sources
 
