@@ -3,11 +3,13 @@
 import hashlib
 import hmac
 import json
+import logging
 import re
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from email import message_from_bytes, policy
+from email.parser import BytesHeaderParser
 from email.utils import getaddresses, make_msgid, parseaddr, parsedate_to_datetime
 
 from . import inbox
@@ -137,17 +139,32 @@ class EmailSender:
         return message_id
 
 
+log = logging.getLogger("universal_inbox.email")
+
+
 def handle_hook(db, connection_id: int, headers, body: bytes, secret: bytes, now: datetime) -> int:
-    """POST /hooks/email -> HTTP status. 401 records a Last Error (AS-19); a valid request clears it."""
+    """POST /hooks/email -> HTTP status. 401 records a Last Error (AS-19); a valid request clears it.
+
+    Logs one line per request with its outcome and Message-ID only (no addresses or content, NFR-5),
+    so "did this email arrive?" can be answered from the journal.
+    """
     if not verify(headers, body, secret, now):
         inbox.set_connection_error(db, connection_id, "inbound request failed signature check")
+        log.info("email rejected: signature check failed")
         return 401
+    mid = (BytesHeaderParser(policy=policy.default).parsebytes(body).get("Message-ID") or "").strip() or "(none)"
     connection = db.execute("SELECT * FROM connections WHERE id = ?", (connection_id,)).fetchone()
     try:
         incoming = parse(body, connection)
     except Exception:  # noqa: BLE001 - malformed mail must not crash the hook
+        log.info("email malformed %s", mid)
         return 400
-    if incoming is not None:
-        inbox.ingest(db, incoming)
+    if incoming is None:
+        outcome = "filtered as automated (auto-reply, bounce, or bulk)"
+    elif inbox.ingest(db, incoming) is None:
+        outcome = "duplicate (already stored, or an echo of a sent reply)"
+    else:
+        outcome = "stored"
+    log.info("email %s %s", outcome, mid)
     inbox.set_connection_error(db, connection_id, None)
     return 204

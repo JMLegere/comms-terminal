@@ -115,3 +115,33 @@ def test_email_post_sends_a_user_agent_and_returns_provider_errors():
     srv.server_close()
     assert status == 403 and body["message"] == "The agentmaple.com domain is not verified"
     assert seen["ua"].startswith("universal-inbox/")
+
+
+def test_email_hook_logs_its_outcome_without_content(caplog):
+    """One journal line per inbound email: outcome and Message-ID, no addresses or body (NFR-5)."""
+    import hashlib as _h
+    import hmac as _hm
+    import logging
+    from universal_inbox import email as _email
+    db = inbox.connect()
+    inbox.migrate(db)
+    with db:
+        cid = db.execute("INSERT INTO connections (platform, external_id, self_id, label, connected_at) VALUES"
+                         " ('email', 'me@x.io', 'me@x.io', 'Email', '2026-10-12T00:00:00+00:00')").lastrowid
+    now = datetime(2026, 10, 12, 10, tzinfo=timezone.utc)
+
+    def post(raw):
+        ts = str(int(now.timestamp()))
+        sig = "sha256=" + _hm.new(b"k", ts.encode() + b"." + raw, _h.sha256).hexdigest()
+        return _email.handle_hook(db, cid, {"X-Inbox-Timestamp": ts, "X-Inbox-Signature": sig}, raw, b"k", now)
+
+    bounce = (b"From: Mail Delivery Subsystem <mailer-daemon@googlemail.com>\r\nTo: me@x.io\r\n"
+              b"Subject: Delivery Status Notification (Failure)\r\nMessage-ID: <dsn1@google.com>\r\n"
+              b"Auto-Submitted: auto-replied\r\n\r\nsecret body")
+    with caplog.at_level(logging.INFO, logger="universal_inbox.email"):
+        assert post(bounce) == 204
+        assert post(bounce.replace(b"Auto-Submitted: auto-replied\r\n", b"")) == 204
+    lines = [r.getMessage() for r in caplog.records]
+    assert lines[0] == "email filtered as automated (auto-reply, bounce, or bulk) <dsn1@google.com>"
+    assert lines[1] == "email stored <dsn1@google.com>"
+    assert not any("secret body" in x or "mailer-daemon" in x for x in lines)

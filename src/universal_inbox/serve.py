@@ -148,6 +148,8 @@ def wake_loop(db_path: str, stop: threading.Event, every: float = 60) -> None:
 
 
 def run(db_path: str, socket_path: str, host: str, port: int) -> None:
+    import logging
+    logging.basicConfig(level=logging.INFO, format="%(message)s")  # journald adds the time
     db = inbox.connect(db_path)
     inbox.migrate(db)
     senders = senders_from_credentials(db)
