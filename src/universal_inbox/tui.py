@@ -294,7 +294,8 @@ HELP = [  # (group, [(keys, what it does)]) — the full key map; Gmail-style wh
     ("Case", [("j / k", "select a thread card (↑/↓ also work)"), ("enter", "show or hide a done thread"),
               ("d", "edit the description   ctrl+enter saves · esc cancels"),
               ("r / a", "reply in the selected thread")]),
-    ("Person", [("b", "block or unblock the identity"), ("a", "add an identity"), ("x", "remove the identity")]),
+    ("Person", [("n", "rename the person"), ("b", "block or unblock the identity"), ("a", "add an identity"),
+                ("x", "remove the identity")]),
     ("Channels", [("a", "add a rule"), ("x", "delete the selected rule")]),
     ("General", [("?", "this help"), ("q", "quit")]),
 ]
@@ -1287,7 +1288,8 @@ class PersonPage(Page):
     RAIL = "people"
     BINDINGS = [Binding("escape", "back", "back"), Binding("j", "down", "move", key_display="j/k"),
                 Binding("k", "up", show=False), Binding("b", "block", "block / unblock"),
-                Binding("a", "add", "add identity"), Binding("x", "remove", "remove identity")]
+                Binding("n", "rename", "rename"), Binding("a", "add", "add identity"),
+                Binding("x", "remove", "remove identity")]
 
     def __init__(self, person_id: int):
         super().__init__()
@@ -1344,6 +1346,17 @@ class PersonPage(Page):
             self.app.offer_undo(message, lambda: inbox.block(self.app.db, i["kind"], i["value"], bool(i["blocked"])))
             self.refresh_data()
 
+    def action_rename(self):
+        old = self.person["name"]
+
+        def renamed(text):
+            if not text or text == old:
+                return
+            inbox.rename_person(self.app.db, self.person_id, text)
+            self.app.offer_undo(f"Renamed {old} to {text}.", lambda: inbox.rename_person(self.app.db, self.person_id, old))
+            self.refresh_data()
+        self.app.push_screen(Ask(f"Rename {old}", old), renamed)
+
     def action_add(self):
         def added(text):
             if not text:
@@ -1356,7 +1369,7 @@ class PersonPage(Page):
                 return
             self.app.notify(f"Added {text}: its messages now belong to {self.person['name']}.")
             self.refresh_data()
-        self.app.push_screen(Ask("Add identity", "email address or Slack user ID"), added)
+        self.app.push_screen(Ask("Add identity", "email address, phone number (+1…), or Slack user ID"), added)
 
     def action_remove(self):
         i = self.selected()

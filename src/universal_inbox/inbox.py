@@ -359,6 +359,12 @@ def _same_person(db, name: str, value: str, kind: str) -> int | None:
     return None
 
 
+def rename_person(db, person_id: int, name: str) -> None:
+    """Jeremy's own name for a Person; senders' display names only replace a name that is still an address."""
+    with db:
+        db.execute("UPDATE persons SET display_name = ? WHERE id = ?", (name.strip(), person_id))
+
+
 def merge_persons(db, keep: int, drop: int) -> None:
     """One Person from two: `drop`'s Identities (and so its Threads) move to `keep`, which keeps the
     fuller name."""

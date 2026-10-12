@@ -198,6 +198,31 @@ def test_person_page_toggles_block(tmp_path):
     assert db.execute("SELECT blocked FROM identities WHERE value = 'ana.ruiz@gmail.com'").fetchone()[0] == 0
 
 
+def test_person_page_renames_and_undo_restores(tmp_path):
+    path, _ = seeded(tmp_path)
+    db = inbox.connect(path)
+    pid = db.execute("SELECT person_id FROM identities WHERE value = 'ana@acme.com'").fetchone()[0]
+    old = db.execute("SELECT display_name FROM persons WHERE id = ?", (pid,)).fetchone()[0]
+    app = Console(path)
+    name = lambda: db.execute("SELECT display_name FROM persons WHERE id = ?", (pid,)).fetchone()[0]  # noqa: E731
+    seen = {}
+
+    async def open_person(app, pilot):
+        app.main.open_person(pid)
+
+    async def type_name(app, pilot):
+        await pilot.press(*"Ana (site super)", "enter")
+        seen["renamed"] = name()
+
+    run(app, [open_person, "n", type_name, "z"])
+    assert seen["renamed"] == "Ana (site super)" and name() == old
+    # a sender's display name does not overwrite Jeremy's name for the Person
+    inbox.rename_person(db, pid, "Ana R.")
+    inbox.ingest(db, inbox.Incoming(1, "jeremy@agentmaple.com", "mailbox", "MESSAGE", "<n@acme.com>",
+                                    inbox.Identity("email", "ana@acme.com", "Ana Ruiz"), datetime.now(timezone.utc), "hi"))
+    assert name() == "Ana R."
+
+
 def test_threads_refresh_when_the_service_writes(tmp_path):
     path, _ = seeded(tmp_path)
     app, counts = Console(path), {}
