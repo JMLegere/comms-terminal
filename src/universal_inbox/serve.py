@@ -1,7 +1,7 @@
 """The service: public hooks (/hooks/email, /hooks/slack), the local reply socket (POST /reply), and wake().
 
 Credentials come from systemd's $CREDENTIALS_DIRECTORY (LoadCredentialEncrypted=):
-email-hook-secret, slack-signing-secret, slack-user-token, resend-api-key.
+email-hook-secret, slack-signing-secret, slack-user-token, resend-api-key, fastmail-oauth.
 """
 
 import json
@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from . import email, inbox, slack
+from . import email, fastmail, inbox, slack
 
 
 def credential(name: str) -> bytes | None:
@@ -23,18 +23,29 @@ def credential(name: str) -> bytes | None:
 
 
 def connection_id(db, platform: str) -> int | None:
-    r = db.execute("SELECT id FROM connections WHERE platform = ?", (platform,)).fetchone()
+    """The hook-fed Connection for a platform (the Gmail forward for email; Fastmail is polled)."""
+    r = db.execute("SELECT id FROM connections WHERE platform = ? AND label != ?", (platform, fastmail.LABEL)).fetchone()
     return r and r["id"]
 
 
-def senders_from_credentials(db) -> dict:
-    """Sender per platform for inbox.reply."""
-    mailbox = db.execute("SELECT self_id FROM connections WHERE platform = 'email'").fetchone()
+def fastmail_client(db) -> fastmail.Client | None:
+    cred = credential("fastmail-oauth")
+    state = Path(db.execute("PRAGMA database_list").fetchone()[2] or ".").parent / "fastmail-oauth.json"
+    return fastmail.Client.load(cred, state) if cred else None
+
+
+def senders_from_credentials(db, fm: fastmail.Client | None = None) -> dict:
+    """Sender per platform for inbox.reply; the Fastmail Connection's sender is keyed by its id."""
+    mailbox = db.execute("SELECT self_id FROM connections WHERE platform = 'email' AND label != ?",
+                         (fastmail.LABEL,)).fetchone()
     out = {}
     if token := credential("slack-user-token"):
         out["slack"] = slack.SlackSender(token.decode())
     if mailbox and (key := credential("resend-api-key")):
         out["email"] = email.EmailSender(key.decode(), mailbox["self_id"])
+    fm_conn = db.execute("SELECT id FROM connections WHERE label = ?", (fastmail.LABEL,)).fetchone()
+    if fm is not None and fm_conn is not None:
+        out[fm_conn["id"]] = fastmail.FastmailSender(fm)
     return out
 
 
@@ -45,14 +56,15 @@ def handle_reply(db, body: bytes, senders: dict) -> tuple[int, dict]:
         thread_id, text = int(req["thread_id"]), str(req["text"])
     except (ValueError, KeyError, TypeError):
         return 400, {"error": "expected thread_id and text"}
-    r = db.execute("SELECT c.platform FROM threads t JOIN channels ch ON ch.id = t.channel_id"
+    r = db.execute("SELECT c.id, c.platform, c.label FROM threads t JOIN channels ch ON ch.id = t.channel_id"
                    " JOIN connections c ON c.id = ch.connection_id WHERE t.id = ?", (thread_id,)).fetchone()
     if r is None:
         return 404, {"error": "unknown thread"}
-    if r["platform"] not in senders:
-        return 503, {"error": f"{r['platform']} is not connected for sending"}
+    sender = senders.get(r["id"]) or (senders.get(r["platform"]) if r["label"] != fastmail.LABEL else None)
+    if sender is None:
+        return 503, {"error": f"{r['label'] or r['platform']} is not connected for sending"}
     try:
-        t = inbox.reply(db, thread_id, text, senders[r["platform"]], req.get("to") or [], req.get("cc") or [])
+        t = inbox.reply(db, thread_id, text, sender, req.get("to") or [], req.get("cc") or [])
     except inbox.SendFailed as e:
         return 502, {"error": str(e)}
     return 200, {"status": t.status, "status_detail": t.status_detail}
@@ -152,12 +164,15 @@ def run(db_path: str, socket_path: str, host: str, port: int) -> None:
     logging.basicConfig(level=logging.INFO, format="%(message)s")  # journald adds the time
     db = inbox.connect(db_path)
     inbox.migrate(db)
-    senders = senders_from_credentials(db)
+    fm = fastmail_client(db)
+    senders = senders_from_credentials(db, fm)
     db.close()
     stop = threading.Event()
     servers = [hooks_server(db_path, host, port), reply_server(db_path, socket_path, senders)]
     threads = [threading.Thread(target=s.serve_forever, daemon=True) for s in servers]
     threads.append(threading.Thread(target=wake_loop, args=(db_path, stop), daemon=True))
+    if fm is not None:
+        threads.append(threading.Thread(target=fastmail.poll_loop, args=(db_path, fm, stop), daemon=True))
     for t in threads:
         t.start()
     try:

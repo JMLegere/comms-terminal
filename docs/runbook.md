@@ -42,6 +42,16 @@ D3 (decision #102): Cloudflare Tunnel publishes `https://hooks.agentmaple.com/ho
 7. **You:** Gmail forwarding. Gmail → Settings → Forwarding and POP/IMAP → Add a forwarding address: `jeremy@inbox.agentmaple.com`. Google's confirmation code arrives in the console as a Todo Thread; enter it in Gmail, then choose "Forward a copy … and keep Gmail's copy in the Inbox". If Workspace blocks forwarding to an external address, an admin adds Admin console → Gmail → Routing → "Also deliver to" `jeremy@inbox.agentmaple.com` instead.
 8. Live check: send yourself an email from another account; it appears as a Todo Thread within seconds. Reply from the console; the reply arrives in the other account's thread.
 
+## 3a. Connect Fastmail
+
+Fastmail is a second email Connection (decision #111). Jeremy's Basic plan refuses JMAP, IMAP, and API tokens, so Universal Inbox signs in as a connected app over Fastmail's MCP server, as omp does, and polls the Inbox and Sent every minute.
+
+1. **You**, on Mani (browser): `python3 scripts/oauth_fastmail.py --resource mcp --out ~/.config/universal-inbox/fastmail-oauth.json`. On Fastmail's consent page tick read, write, **and** send (the scope must list `mcp-read mcp-action mcp-send`). Copy the file to Workbox's `~/.config/universal-inbox/` (0600) and shred the Mani copy.
+2. On Workbox: `universal-inbox init --fastmail legere@fastmail.com`. Optional one-time import: `universal-inbox fastmail-import --days 30` (Inbox and Sent, every Thread left in Todo).
+3. **You:** `sudo bash deploy/install.sh`: it stores `fastmail-oauth` and adds `universal-inbox.service.d/fastmail.conf`.
+
+The refresh token rotates, and Fastmail revokes the sign-in when an old one is reused. Exactly one process may hold it: the service keeps the current one in `~/.local/share/universal-inbox/fastmail-oauth.json` (0600), which wins over the stored credential. Never run a second copy against the same token; if it is revoked, the Connection shows the error and step 1 is repeated.
+
 ## 3. Connect Slack
 
 1. **You:** https://api.slack.com/apps → Create New App → From a manifest → paste `deploy/slack-app-manifest.yml`. Save the signing secret (Basic Information) as `~/.config/universal-inbox/slack-signing-secret`.

@@ -211,7 +211,7 @@ def glyph(detail: str) -> str:
 def native_link(view: dict) -> str | None:
     ch, msgs = view["channel"], view["messages"]
     if ch["platform"] == "email" and msgs:
-        return gmail_link(msgs[-1]["native_id"])
+        return message_link(msgs[-1])
     if ch["platform"] == "slack":
         return f"slack://channel?team={ch['external_id']}&id={ch['native_id']}"
     return None
@@ -267,7 +267,7 @@ HELP = [  # (group, [(keys, what it does)]) — the full key map; Gmail-style wh
                 ("e", "done: it returns if they write again"), ("b", "snooze until a time (it also returns when they write)"),
                 ("w", "wait for them: it returns when they reply"), ("m", "ignore: it stays out of Todo (m again un-ignores)"),
                 ("l", "add to a case"), ("s", "change status: needs a response, investigating"),
-                ("p", "open the person"), ("o", "open in Gmail or Slack"), ("z", "undo the last change"),
+                ("p", "open the person"), ("o", "open in Gmail, Fastmail, or Slack"), ("z", "undo the last change"),
                 ("; / :", "expand / collapse every message (click a message or ••• to toggle one)")]),
     ("Case", [("j / k", "select a thread card"), ("enter", "show or hide a done thread"),
               ("d", "edit the description   ctrl+enter saves · esc cancels"),
@@ -806,7 +806,17 @@ def message_body(m, raw) -> render.Body:
         body = render.load(str(raw / f"{sha}.eml"))
         if body is not None:
             return body
-    return render.from_text(m["content"])
+    body = render.from_text(m["content"])
+    body.attachments = [tuple(a) for a in m["data"].get("attachments") or []]  # Fastmail lists them as data
+    return body
+
+
+def fastmail_link(m) -> str:
+    return f"https://app.fastmail.com/mail/Inbox/{m['data']['fm_thread']}.{m['data']['fm_id']}"
+
+
+def message_link(m) -> str:
+    return fastmail_link(m) if m["data"].get("fm_id") else gmail_link(m["native_id"])
 
 
 def default_open(msgs) -> set[int]:
@@ -893,7 +903,7 @@ def message_widgets(v, st: dict | None = None, raw=None) -> list:
             if i in st["trim"]:
                 parts.append(MessageText(body.trimmed, classes="mtrim"))
         if body.attachments:
-            link = gmail_link(m["native_id"]) if email else ""
+            link = message_link(m) if email else ""
             chips = [f"[link='{link}'][#45707a]{ICON['attachment']} {render.chip(*a)}[/][/link]" for a in body.attachments]
             parts.append(MessageText("\n".join(chips), classes="mchips"))
         return gutter_row(badge(m["who"]), Vertical(*parts, classes="msg"), "open")
@@ -981,7 +991,8 @@ def thread_head(v) -> str:
     head = f"[b #45707a]{escape(t.title)}[/]   [{color}]{g} {label}[/]"
     link, plat = native_link(v), v["channel"]["platform"]
     if link:
-        head += f"\n[#928374]{ICON[plat]} [link='{link}']open in {plat.capitalize()}[/link] {ICON['open']} (o)[/]"
+        app = "Fastmail" if "fastmail.com" in link else "Gmail" if "mail.google.com" in link else plat.capitalize()
+        head += f"\n[#928374]{ICON[plat]} [link='{link}']open in {app}[/link] {ICON['open']} (o)[/]"
     return head
 
 

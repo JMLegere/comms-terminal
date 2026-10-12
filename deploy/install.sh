@@ -12,7 +12,7 @@ repo=$(cd "$(dirname "$0")/.." && pwd)
 store=/etc/credstore.encrypted
 
 # 1. Credentials
-for name in email-hook-secret resend-api-key slack-signing-secret slack-user-token; do
+for name in email-hook-secret resend-api-key slack-signing-secret slack-user-token fastmail-oauth; do
   if [[ -f "$conf/$name" ]]; then
     systemd-creds encrypt --name="$name" "$conf/$name" "$store/universal-inbox.$name"
     shred -u "$conf/$name"
@@ -30,6 +30,11 @@ if [[ -f "$store/universal-inbox.slack-signing-secret" && -f "$store/universal-i
   install -D -m 0644 "$repo/deploy/universal-inbox.service.d/slack.conf" \
     /etc/systemd/system/universal-inbox.service.d/slack.conf
   echo "Slack enabled"
+fi
+if [[ -f "$store/universal-inbox.fastmail-oauth" ]]; then
+  install -D -m 0644 "$repo/deploy/universal-inbox.service.d/fastmail.conf" \
+    /etc/systemd/system/universal-inbox.service.d/fastmail.conf
+  echo "Fastmail enabled"
 fi
 systemctl daemon-reload
 systemctl enable --quiet universal-inbox

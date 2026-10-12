@@ -820,6 +820,14 @@ All entries are dated 2026-10-10; exact times are unproven unless noted. Full de
   - Request / decision: The HTML-to-text converter is our own, on the standard library (`render.py`). Bake-off on six real messages exported from Gmail (Attio notification, Tana newsletter, Gmail reply chain, CDL reply, RBC Zoom invite, Outlook reply with inline images) against `lynx -dump` (`w3m` is not installed; `lynx` is the same family): lynx printed every image as its file name, numbered every link as a footnote, kept quoted history, and leaked spacer characters; ours read like Gmail. Gaps found and fixed: Outlook `From:/Sent:` quote blocks, markup inside link labels, Proofpoint `urldefense` links
   - Source: Jeremy, "aerc, neomutt and meli all render HTML through w3m or lynx as text. should we try this?", ask tool answer "Bake-off first" (2026-10-12)
   - Status: Accepted
+- **111**
+  - Request / decision: Fastmail joins as a second email Connection (`legere@fastmail.com`). The Basic plan refuses JMAP OAuth (`access_denied`, twice), JMAP API tokens, and IMAP, so Universal Inbox signs in like omp: OAuth with dynamic client registration and PKCE against Fastmail's MCP server (`scripts/oauth_fastmail.py`; scopes `mcp-read mcp-action mcp-send`). The service polls the Inbox and Sent every minute (`fastmail.poll_loop`), threads by Fastmail's thread ID, and replies with `send_email` (mode reply), which sets threading headers, quotes the original, and files the copy in Sent. MCP returns text bodies with quotes already stripped and no raw source or Auto-Submitted header, so Fastmail mail renders from text and only mailer-daemon bounces are filtered. Senders are keyed by Connection for Fastmail; the Gmail forward stays the hook-fed email Connection. One-time import of the last 30 days of Inbox and Sent, every Thread left in Todo (11 messages, 5 Threads). Refresh tokens rotate and reuse revokes the grant (seen live), so one process holds the token and persists each new one
+  - Source: Jeremy, "i want to link my fastmail to universal inbox", "connected app like omp", "Yes, through Fastmail", "last 30 days, all in todo", "Yes, try JMAP first" (2026-10-12)
+  - Status: Accepted
+- **112**
+  - Request / decision: The one-time Gmail import (30 days, all in Todo) goes through a Google Takeout export of Inbox and Sent; deferred until Jeremy has the export
+  - Source: Jeremy, "also can you do the same one-time import for my gmail", ask tool answer "Google Takeout", "defer that for now" (2026-10-12)
+  - Status: Deferred
 
 ## 8. Work log
 
@@ -942,6 +950,12 @@ All entries are dated 2026-10-10; exact times are unproven unless noted. Full de
   - Activity: Built Gmail-like Thread rendering (#105–#110): raw messages kept beside the database (`raw/<sha256>.eml`, 0600); `render.py` (HTML and plain text to markup, link domains, trimmed content, invite cards, attachment chips); console collapsing, `•••`, recipient lines, `;`/`:`; replies quote the last inbound message with Gmail markup; echo matching accepts the quoted copy
   - Result: 92 tests pass; six real samples rendered in the console and screenshots reviewed; not yet deployed
   - Evidence: `src/universal_inbox/render.py`, `tests/test_render.py`, `tests/test_schema.py`
+  - Basis: Source-observed
+- **2026-10-12T15:38:56+00:00**
+  - Actor: Agent
+  - Activity: Fastmail adapter (#111): `fastmail.py` (MCP client with token refresh and rotation, poller, sender, import), `scripts/oauth_fastmail.py`, service wiring, `init --fastmail`, `fastmail-import`, `deploy/universal-inbox.service.d/fastmail.conf`; readable thread view (gutter badges, message cards) shipped earlier as `f1ac0a7`
+  - Result: 98 tests pass; live sign-in granted read, action, and send; import stored 11 messages in 5 Threads, all Todo; polling waits for `deploy/install.sh`
+  - Evidence: `src/universal_inbox/fastmail.py`, `tests/test_fastmail.py`, `docs/runbook.md` §3a
   - Basis: Source-observed
 
 ## 9. Sources and coverage check

@@ -37,6 +37,10 @@ def main(argv=None) -> None:
     i.add_argument("--email", help="Jeremy's forwarded address, e.g. jeremy@agentmaple.com")
     i.add_argument("--slack-team", help="Slack team ID")
     i.add_argument("--slack-user", help="Jeremy's Slack user ID")
+    i.add_argument("--fastmail", help="Jeremy's Fastmail address (a second email Connection, polled over MCP)")
+    f = sub.add_parser("fastmail-import", help="one-time import of recent Fastmail Inbox and Sent, left in Todo")
+    f.add_argument("--cred", default=str(Path.home() / ".config/universal-inbox/fastmail-oauth.json"))
+    f.add_argument("--days", type=int, default=30)
     a = p.parse_args(argv)
     Path(a.db).parent.mkdir(parents=True, exist_ok=True)
 
@@ -52,10 +56,23 @@ def main(argv=None) -> None:
             if a.email:
                 db.execute("INSERT OR IGNORE INTO connections (platform, external_id, self_id, label, connected_at)"
                            " VALUES ('email', ?, ?, 'Email', ?)", (a.email.lower(), a.email.lower(), now))
+            if a.fastmail:
+                db.execute("INSERT OR IGNORE INTO connections (platform, external_id, self_id, label, connected_at)"
+                           " VALUES ('email', ?, ?, 'Fastmail', ?)", (a.fastmail.lower(), a.fastmail.lower(), now))
             if a.slack_team and a.slack_user:
                 db.execute("INSERT OR IGNORE INTO connections (platform, external_id, self_id, label, connected_at)"
                            " VALUES ('slack', ?, ?, 'Slack', ?)", (a.slack_team, a.slack_user, now))
         print(f"Connections in {a.db}: " + ", ".join(r[0] for r in db.execute("SELECT platform FROM connections")))
+    elif a.cmd == "fastmail-import":
+        from . import fastmail, inbox
+        db = inbox.connect(a.db)
+        inbox.migrate(db)
+        conn = db.execute("SELECT * FROM connections WHERE label = ?", (fastmail.LABEL,)).fetchone()
+        if conn is None:
+            raise SystemExit("no Fastmail Connection: run `universal-inbox init --fastmail <address>` first")
+        client = fastmail.Client.load(Path(a.cred).expanduser().read_bytes(), Path(a.db).parent / "fastmail-oauth.json")
+        n = fastmail.import_recent(db, client, conn, a.days)
+        print(f"Fastmail: imported into {n} Threads (last {a.days} days of Inbox and Sent), all in Todo")
     else:
         # SSH does not forward COLORTERM; without it Textual drops to a 256/16-colour palette.
         if not os.environ.get("COLORTERM") and any(t in os.environ.get("TERM", "") for t in TRUECOLOR_TERMS):
