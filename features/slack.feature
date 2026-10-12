@@ -20,7 +20,7 @@ Feature: Slack
     When Ingest receives a Slack message from "U0ANA" in "C0EXTACME" at "10:40"
     Then that Thread has Status "TODO" and Status Detail "NEW_REPLY"
 
-  @AS-15 @FR-4 @FR-4a @wip
+  @AS-15 @FR-4 @FR-4a
   Scenario: Slack Parse applies Channel Rules and always selects DMs
     Given Channel Rules:
       | Kind    | Value   |
@@ -34,7 +34,7 @@ Feature: Slack
       | G0FOUNDER |          | mpim    |
     And Slack Parse returns nothing for a message in "C0RANDOM" named "random"
 
-  @AS-17 @FR-4c @wip
+  @AS-17 @FR-4c
   Scenario: The Slack Sender posts in the reply-thread from Jeremy's profile
     Given a Thread in "C0EXTACME" that began in the Slack reply-thread "1728700000.000100"
     When Reply is called with "Fixed, deploying now." through the Slack Sender
@@ -49,7 +49,7 @@ Feature: Slack
     And that message has no content
     And the Thread has Status "TODO" and Status Detail "NEW_REPLY"
 
-  @NFR-4 @wip
+  @NFR-4
   Scenario: Slack Verify rejects an event with a bad signature
     When a request reaches /hooks/slack with a wrong X-Slack-Signature
     Then the response is 401

@@ -343,6 +343,8 @@ Every path is **Proposed** unless marked Current. D1 is approved (#67); each pha
 
 ### Phase 2 — Email adapter
 
+- **Status: done 2026-10-12.** `src/universal_inbox/email.py` (verify, parse, `EmailSender` over Resend, `handle_hook`).
+
 - **2.1 `email.verify` and `email.parse`.**
   - Requirements: FR-3, FR-3a, FR-5, AS-11, AS-19.
   - Verify: `features/email.feature` with synthetic MIME messages.
@@ -351,6 +353,8 @@ Every path is **Proposed** unless marked Current. D1 is approved (#67); each pha
   - Verify: against a fake provider endpoint: `In-Reply-To` / `References` and reply-all recipients.
 
 ### Phase 3 — Slack adapter
+
+- **Status: done 2026-10-12.** `src/universal_inbox/slack.py` (verify, parse, `SlackClient`, `SlackSender`, `handle_hook`); `scripts/oauth_slack.py`.
 
 - **3.1 `scripts/oauth_slack.py`**: bot scopes for selected channels, plus Jeremy's user scopes for DM history and events, `chat:write`, `users:read`, and `users:read.email`.
 - **3.2 `slack.verify` and `slack.parse`.**
@@ -363,6 +367,8 @@ Every path is **Proposed** unless marked Current. D1 is approved (#67); each pha
   - Requirements: FR-10.
 
 ### Phase 4 — Trust monitor
+
+- **Status: done 2026-10-12.** `src/universal_inbox/health.py`; `inbox.set_connection_error`, `inbox.set_auth`.
 
 - **4.1 `health.connection_health`.**
   - Requirements: NFR-2, AS-8.
@@ -400,7 +406,7 @@ Every path is **Proposed** unless marked Current. D1 is approved (#67); each pha
 - **D2: Console access path** (Workbox LAN, Tailscale, or other).
   - Impact: NFR-4 and Phase 6. Owner: Jeremy. Blocks: deployment only.
 - **D3: Ingress, inbound mail service, and outbound mail provider.**
-  - Candidates: Cloudflare Tunnel; Cloudflare Email Routing with an Email Worker; Amazon SES or Resend. Constraint: $10/month.
+  - Outbound provider: **Resend** (decision #70). Still open: ingress (Cloudflare Tunnel candidate) and inbound mail service (Cloudflare Email Routing with an Email Worker candidate). Constraint: $10/month.
   - Owner: Jeremy. Blocks: connecting, not building.
 - **Open: BCC console replies to Jeremy's own address** so Gmail Sent stays complete (Plain's BCC feature). The copy arrives back through forwarding and is deduplicated by `Message-ID`.
   - Owner: Jeremy. Blocks: no.
@@ -742,6 +748,10 @@ All entries are dated 2026-10-10; exact times are unproven unless noted. Full de
   - Request / decision: Commit and push the docs, design, and BDD setup to `dev`
   - Source: Jeremy, "3 approved"
   - Status: Accepted
+- **70**
+  - Request / decision: Outbound mail provider is Resend (JSON API over `urllib`, free tier 3,000/month), part of D3
+  - Source: Jeremy, ask tool answer during Phase 2
+  - Status: Accepted
 
 ## 8. Work log
 
@@ -833,6 +843,12 @@ All entries are dated 2026-10-10; exact times are unproven unless noted. Full de
   - Actor: Agent
   - Activity: Phase 1: `inbox.py` (connect, migrate, ingest, act, reply, wake, block, add_identity, remove_identity, read helpers), `schema.sql`, step definitions, schema test; removed `@wip` from 26 Phase 1 scenarios. Sender signature gains `history`
   - Result: `uv run pytest` → 27 passed, 25 deselected (`@wip`). Mutation checks: breaking the CREATED rule, the 2-hour window, or deletion clearing each fails one scenario
+  - Evidence: `uv run pytest -q`
+  - Basis: Source-observed
+- **2026-10-12T02:08:08+00:00**
+  - Actor: Agent
+  - Activity: Phases 2–4: email adapter (HMAC hook, Plain auto-reply filter, reply-all, Resend sender), Slack adapter (v0 signature, channel selection, message/edit/delete parsing, sender as Jeremy, revocation events), health, Slack OAuth helper; step definitions for all remaining scenarios
+  - Result: `uv run pytest` → 53 passed, 0 `@wip`. Mutation checks on signatures, auto-reply headers, `In-Reply-To`, DM selection, `thread_ts`, and health each fail a scenario
   - Evidence: `uv run pytest -q`
   - Basis: Source-observed
 

@@ -1,4 +1,3 @@
-@wip
 Feature: Sync
   As in Plain, there is no polling or reconciliation; completeness relies on event delivery.
   Connection Health (health.connection_health) is OK or BROKEN for a Connection (connections):

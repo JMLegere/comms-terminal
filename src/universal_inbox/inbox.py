@@ -364,7 +364,14 @@ def reply(db, thread_id: int, text: str, sender: Sender,
     history = [{"native_id": r["native_id"], "data": json.loads(r["data"])} for r in db.execute(
         "SELECT native_id, data FROM activities WHERE thread_id = ? AND kind = 'MESSAGE'"
         " ORDER BY occurred_at, id", (thread_id,))]
-    native_id = sender.send(t, text, list(to), list(cc), history)
+    connection_id = db.execute("SELECT connection_id FROM channels WHERE id = ?",
+                               (t.channel_id,)).fetchone()[0]
+    try:
+        native_id = sender.send(t, text, list(to), list(cc), history)
+    except SendFailed as e:
+        set_connection_error(db, connection_id, str(e))
+        raise
+    set_connection_error(db, connection_id, None)
     now = _now()
     with db:
         db.execute(
@@ -388,6 +395,18 @@ def wake(db, now: datetime) -> int:
                 "NEW_REPLY" if _has_replied(db, r["id"]) else "CREATED")
             _set_status(db, r["id"], "TODO", detail, now)
     return len(due)
+
+
+# --- connection health inputs (NFR-2) ----------------------------------------
+
+def set_connection_error(db, connection_id: int, error: str | None) -> None:
+    with db:
+        db.execute("UPDATE connections SET last_error = ? WHERE id = ?", (error, connection_id))
+
+
+def set_auth(db, connection_id: int, ok: bool) -> None:
+    with db:
+        db.execute("UPDATE connections SET auth_ok = ? WHERE id = ?", (int(ok), connection_id))
 
 
 # --- read side (records) ---------------------------------------------------

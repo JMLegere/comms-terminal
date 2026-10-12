@@ -62,6 +62,8 @@ People operations, used from Person pages:
 ```python
 def block(db, kind: str, value: str, blocked: bool = True) -> None
     # Blocks or unblocks one Identity (an email address or a Slack user).
+def set_connection_error(db, connection_id: int, error: str | None) -> None   # health input
+def set_auth(db, connection_id: int, ok: bool) -> None                         # health input
 def add_identity(db, person_id: int, kind: str, value: str) -> None
     # Adds an email address or Slack user to a Person.
     # Raises IdentityTaken if it already belongs to another Person (I-6).
@@ -105,12 +107,15 @@ Action = Done | Snooze(until: datetime | None) | Wait | Investigate
 # email.py
 def verify(headers, body: bytes, secret: bytes, now: datetime) -> bool
 def parse(raw: bytes, connection) -> Incoming | None   # None for an auto-reply (FR-3a)
-class EmailSender:  # Sender over the outbound provider's REST API
+def handle_hook(db, connection_id, headers, body, secret, now) -> int  # POST /hooks/email status
+class EmailSender:  # Sender over Resend's REST API (decision #70); reply-all when to is empty
     def send(self, thread, text, to, cc, history) -> str   # returns the Message-ID
 
 # slack.py
 def verify(headers, body: bytes, signing_secret: bytes, now: datetime) -> bool
 def parse(event: dict, connection, rules) -> Incoming | None   # None if not selected
+def handle_hook(db, connection_id, headers, body, signing_secret, now, client) -> tuple[int, str]
+class SlackClient:  # conversations.info / users.info reads, cached (channel names, profile emails)
 class SlackSender:  # Sender over chat.postMessage with Jeremy's user token
     def send(self, thread, text, to, cc, history) -> str   # returns "<channel>:<ts>"
 ```
