@@ -1,0 +1,1717 @@
+"""The console: a Textual terminal app run over SSH (docs/design/console.md).
+
+It reads and writes the SQLite file through `inbox`; replies go through the service's local socket.
+"""
+
+import http.client
+import json
+import socket
+from datetime import datetime, timedelta, timezone
+from urllib.parse import quote
+
+from rich.markup import escape
+from textual import work
+from textual.app import App, ComposeResult
+from textual.binding import Binding
+from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.message import Message
+from textual.screen import ModalScreen, Screen
+from textual.widgets import DataTable, Input, OptionList, Static, TextArea
+from textual.widgets.option_list import Option
+
+from . import inbox
+from .icons import ICON
+
+DETAIL_STYLE = {  # Status detail -> (color, label); the glyph comes from icons.ICON
+    "CREATED": ("#45707a", "Needs first response"),
+    "NEW_REPLY": ("#b47109", "Needs next response"),
+    "IN_PROGRESS": ("#945e80", "Investigating"),
+    "WAITING_FOR_CUSTOMER": ("#928374", "Waiting for them"),
+    "WAITING_FOR_DURATION": ("#928374", "Paused for later"),
+    "WAITING_INDEFINITELY": ("#928374", "Paused for later"),
+    "DONE_MANUALLY_SET": ("#6c782e", "Done"),
+    "IGNORED": ("#a89984", "Ignored"),
+}
+GLYPH = {d: (ICON[d], color, label) for d, (color, label) in DETAIL_STYLE.items()}
+VIEW_NAMES = list(inbox.VIEWS)  # Todo, Snoozed, Done, Ignored, All
+VIEW_ICON = {"Todo": ("TODO", "#45707a"), "Snoozed": ("SNOOZED", "#928374"), "Done": ("DONE", "#6c782e"),
+             "Ignored": ("IGNORED_VIEW", "#a89984"), "All": ("threads", "#654735")}
+LEGEND = "  ".join(f"[{GLYPH[d][1]}]{GLYPH[d][0]}[/] {GLYPH[d][2].lower()}"
+                   for d in ("CREATED", "NEW_REPLY", "IN_PROGRESS", "WAITING_FOR_CUSTOMER", "WAITING_INDEFINITELY"))
+
+
+PALETTE = {  # gruvbox-material light, hard background (sainnhe/gruvbox-material); decision #88
+    "bg0": "#f9f5d7", "bg1": "#f5edca", "bg2": "#f3eac7", "bg3": "#f2e5bc", "bg4": "#eee0b7", "bg5": "#ebdbb2",
+    "fg0": "#654735", "fg1": "#4f3829", "grey0": "#a89984", "grey1": "#928374", "grey2": "#7c6f64",
+    "red": "#c14a4a", "orange": "#c35e0a", "yellow": "#b47109", "green": "#6c782e", "aqua": "#4c7a5d",
+    "blue": "#45707a", "purple": "#945e80",
+}
+
+
+def pill(text: str, color: str = "blue") -> str:
+    """Panel title: bg0 text on a solid accent block."""
+    return f"[b {PALETTE['bg0']} on {PALETTE[color]}] {text} [/]"
+
+
+CSS = """
+* { scrollbar-color: #ebdbb2; scrollbar-color-hover: #a89984; scrollbar-color-active: #928374;
+    scrollbar-background: #f5edca; scrollbar-background-hover: #f5edca; scrollbar-background-active: #f5edca; }
+Screen { background: #f9f5d7; color: #654735; }
+ModalScreen { background: #7c6f64 25%; align: center middle; }
+#rail { width: 30; height: 1fr; background: #f5edca; border: round #a89984; border-title-align: center;
+        padding: 1 1; scrollbar-size-vertical: 0; }
+#rail > .option-list--option { color: #654735; }
+#rail > .option-list--option-highlighted { background: #f5edca; text-style: none; }
+#rail > .option-list--option-hover { background: #eee0b7; }
+#rail > .option-list--option-disabled { color: #928374; }
+#main, #thread { height: 1fr; border: round #a89984; border-title-align: center; padding: 0 1; }
+#main { width: 1fr; }
+#main.split { width: 2fr; }
+#thread { display: none; }
+#thread.open { display: block; width: 3fr; }
+.threadempty, .sidetext { padding: 1 1; }
+Page { height: 1fr; }
+#legend { color: #a89984; height: 1; }
+#table { margin-top: 1; }
+DataTable { background: #f9f5d7; color: #654735; height: 1fr; scrollbar-size-horizontal: 0; }
+#ids { height: auto; }
+DataTable > .datatable--cursor { background: #eee0b7; color: #4f3829; text-style: bold; }
+DataTable > .datatable--hover { background: #f5edca; }
+DataTable > .datatable--header { background: #f9f5d7; color: #928374; }
+#intro { color: #928374; height: auto; padding: 1 0 0 0; }
+#below { height: auto; }
+.threadview, .caseview { height: 1fr; }
+.convo { width: 1fr; }
+.timeline { height: 1fr; padding: 1 1; }
+.props { width: 34; height: 1fr; padding: 1 2; background: #f3eac7; border-left: solid #ebdbb2; }
+.activity { width: 1fr; height: 1fr; padding: 1 1; }
+.casehead, .cards, .activityhead { height: auto; }
+.sectionhead { height: auto; padding: 1 0 0 0; }
+.card { height: auto; border: round #ebdbb2; border-title-align: left; border-subtitle-align: right;
+        padding: 1 1 0 1; margin: 1 0 0 0; }
+.card.sel { border: round #a89984; }
+.card { border-title-color: #654735; border-subtitle-color: #654735; }
+.threadview.narrow .props { display: none; }
+.cardbody { height: auto; }
+.composer { height: auto; border: round #a89984; background: #f9f5d7; padding: 0 1; margin: 1 2 1 0; }
+.composer > .idle { height: auto; color: #928374; }
+.composer.open > .idle { display: none; }
+.composer > .fields, .composer > TextArea, .composer > .replyhint { display: none; }
+.composer.open > .fields, .composer.open > TextArea, .composer.open > .replyhint { display: block; }
+.fields { height: auto; }
+.field { height: 1; }
+.flabel { width: 9; color: #928374; }
+.fvalue { width: 1fr; }
+.mode { width: auto; }
+.field Input { height: 1; width: 1fr; border: none; padding: 0 0; background: #f9f5d7; color: #654735; }
+.field Input:focus { background: #f3eac7; }
+.card .composer { border: none; border-top: solid #ebdbb2; background: transparent; margin: 1 0 0 0; padding: 0 0 1 0; }
+.composer TextArea { height: 8; margin: 1 0 0 0; background: #f9f5d7; color: #654735; border: none; }
+.replyhint { color: #928374; height: 1; }
+.replyhint.error { color: #c14a4a; }
+#conn { padding: 1 1; }
+.box { width: 64; height: auto; max-height: 24; background: #f5edca; border: round #a89984;
+       border-title-align: center; padding: 1 2; }
+.box.help { width: 78; max-height: 90%; }
+.box OptionList { background: #f5edca; color: #654735; height: auto; max-height: 16; border: none; }
+.box OptionList > .option-list--option-highlighted { background: #eee0b7; color: #4f3829; text-style: bold; }
+.box .label { display: none; }
+.box Input { background: #f9f5d7; color: #654735; border: tall #ebdbb2; }
+#statusline { height: 1; background: #f3eac7; color: #654735; link-style: none; link-background: #f3eac7;
+              link-style-hover: none; link-background-hover: #eee0b7; }
+.descbox { margin: 0 2 1 0; }
+.descbox TextArea { margin: 0; }
+MainScreen > Horizontal { height: 1fr; }
+"""
+
+
+class ReplyError(Exception):
+    pass
+
+
+class _UnixConnection(http.client.HTTPConnection):
+    def __init__(self, path):
+        super().__init__("localhost", timeout=30)
+        self.unix_path = path
+
+    def connect(self):
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.sock.settimeout(self.timeout)
+        self.sock.connect(self.unix_path)
+
+
+def socket_reply(socket_path):
+    """Reply function that calls POST /reply on the service's local socket."""
+    def reply(thread_id, text, to, cc):
+        try:
+            conn = _UnixConnection(socket_path)
+            conn.request("POST", "/reply", json.dumps({"thread_id": thread_id, "text": text, "to": to, "cc": cc}),
+                         {"Content-Type": "application/json"})
+            r = conn.getresponse()
+            body = json.loads(r.read() or b"{}")
+        except OSError as e:
+            raise ReplyError(f"service not reachable: {e}") from e
+        if r.status != 200:
+            raise ReplyError(body.get("error", f"HTTP {r.status}"))
+        return body
+    return reply
+
+
+def when(iso: str | None, now: datetime | None = None) -> str:
+    """Compact age for lists: now, 5m, 3h, 2d, then a date (how long something has waited)."""
+    if not iso:
+        return ""
+    t = datetime.fromisoformat(iso).astimezone()
+    now = now or datetime.now().astimezone()
+    secs = (now - t).total_seconds()
+    if secs < 60:
+        return "now"
+    if secs < 3600:
+        return f"{int(secs // 60)}m"
+    if secs < 86400:
+        return f"{int(secs // 3600)}h"
+    if secs < 7 * 86400:
+        return f"{int(secs // 86400)}d"
+    return t.strftime("%b %-d")
+
+
+def ago(iso: str | None) -> str:
+    age = when(iso)
+    return "just now" if age == "now" else f"{age} ago"
+
+
+def stamp(iso: str | None) -> str:
+    """Exact time for the timeline: Mon Oct 12, 10:02."""
+    return datetime.fromisoformat(iso).astimezone().strftime("%a %b %-d, %H:%M") if iso else ""
+
+
+def glyph(detail: str) -> str:
+    g, color, _ = GLYPH[detail]
+    return f"[{color}]{g}[/]"
+
+
+def native_link(view: dict) -> str | None:
+    ch, msgs = view["channel"], view["messages"]
+    if ch["platform"] == "email" and msgs:
+        mid = msgs[-1]["native_id"].strip("<>")
+        return f"https://mail.google.com/mail/u/0/#search/rfc822msgid%3A{quote(mid)}"
+    if ch["platform"] == "slack":
+        return f"slack://channel?team={ch['external_id']}&id={ch['native_id']}"
+    return None
+
+
+# --- small modal screens ---------------------------------------------------
+
+class Pick(ModalScreen):
+    """A labelled menu; dismisses with the chosen option id, or None."""
+    BINDINGS = [Binding("escape", "dismiss(None)", "cancel")]
+
+    def __init__(self, label: str, options: list[tuple[str, str]]):
+        super().__init__()
+        self.label, self.options = label, options
+
+    def compose(self) -> ComposeResult:
+        box = Vertical(classes="box")
+        box.border_title = pill(self.label, "red")
+        box.border_subtitle = "[#928374]enter choose · esc cancel[/]"
+        with box:
+            yield Static(self.label, classes="label")
+            yield OptionList(*[Option(text, id=oid) for oid, text in self.options])
+
+    def on_option_list_option_selected(self, event):
+        self.dismiss(event.option.id)
+
+
+class Ask(ModalScreen):
+    """A one-line prompt; dismisses with the text, or None."""
+    BINDINGS = [Binding("escape", "dismiss(None)", "cancel")]
+
+    def __init__(self, label: str, placeholder: str = ""):
+        super().__init__()
+        self.label, self.placeholder = label, placeholder
+
+    def compose(self) -> ComposeResult:
+        box = Vertical(classes="box")
+        box.border_title = pill(self.label, "red")
+        box.border_subtitle = "[#928374]enter save · esc cancel[/]"
+        with box:
+            yield Static(self.label, classes="label")
+            yield Input(placeholder=self.placeholder)
+
+    def on_input_submitted(self, event):
+        self.dismiss(event.value.strip() or None)
+
+
+HELP = [  # (group, [(keys, what it does)]) — the full key map; Gmail-style where Gmail has one (#93)
+    ("Move around", [("j / k", "move down / up (or click a row)"), ("space", "scroll the thread (pgup / pgdn)"),
+                     ("1 – 5", "Todo, Snoozed, Done, Ignored, All"),
+                     ("6 – 9", "People, Organizations, Cases, Channels"), ("u", "back (esc also works)")]),
+    ("Thread", [("r", "reply to the sender   ctrl+enter sends · esc keeps the draft"), ("a", "reply all"),
+                ("e", "done: it returns if they write again"), ("b", "snooze until a time (it also returns when they write)"),
+                ("w", "wait for them: it returns when they reply"), ("m", "ignore: it stays out of Todo (m again un-ignores)"),
+                ("l", "add to a case"), ("s", "change status: needs a response, investigating"),
+                ("p", "open the person"), ("o", "open in Gmail or Slack"), ("z", "undo the last change")]),
+    ("Case", [("j / k", "select a thread card"), ("enter", "show or hide a done thread"),
+              ("d", "edit the description   ctrl+enter saves · esc cancels"),
+              ("r / a", "reply in the selected thread")]),
+    ("Person", [("b", "block or unblock the identity"), ("a", "add an identity"), ("x", "remove the identity")]),
+    ("Channels", [("a", "add a rule"), ("x", "delete the selected rule")]),
+    ("General", [("?", "this help"), ("q", "quit")]),
+]
+
+
+class Help(ModalScreen):
+    """Every key, grouped by task (discoverability without crowding the footer)."""
+    BINDINGS = [Binding("escape", "dismiss(None)", "close"), Binding("question_mark", "dismiss(None)", show=False)]
+
+    def compose(self) -> ComposeResult:
+        lines = []
+        for group, keys in HELP:
+            lines.append(f"[b #45707a]{group}[/]")
+            lines += [f"  [b #4f3829]{k:<8}[/] {escape(what)}" for k, what in keys]
+            lines.append("")
+        lines.append("[#928374]Status: " + "  ".join(f"[{c}]{g}[/] {label.lower()}" for g, c, label in GLYPH.values()) + "[/]")
+        box = VerticalScroll(classes="box help")
+        box.border_title = pill("? keys", "red")
+        box.border_subtitle = "[#928374]esc close[/]"
+        with box:
+            yield Static("\n".join(lines))
+
+    def on_click(self, event):
+        if event.widget is self:  # click outside the box closes
+            self.dismiss(None)
+
+
+def snooze_options(now: datetime) -> list[tuple[str, str]]:
+    tomorrow = (now + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
+    monday = (now + timedelta(days=7 - now.weekday())).replace(hour=9, minute=0, second=0, microsecond=0)
+    hour = now + timedelta(hours=1)
+    return [(hour.isoformat(), f"1 hour ({hour:%H:%M})"), (tomorrow.isoformat(), "Tomorrow 9:00"),
+            (monday.isoformat(), "Next Monday 9:00"), ("typed", "Pick a time…")]
+
+
+def parse_time(text: str, now: datetime) -> datetime | None:
+    for fmt in ("%Y-%m-%d %H:%M", "%H:%M"):
+        try:
+            t = datetime.strptime(text, fmt)
+        except ValueError:
+            continue
+        if fmt == "%H:%M":
+            t = now.replace(hour=t.hour, minute=t.minute, second=0, microsecond=0)
+            return t if t > now else t + timedelta(days=1)
+        return t.replace(tzinfo=now.tzinfo)
+    return None
+
+
+# --- actions shared by the queue and the Thread screen ----------------------
+
+class ThreadActions:
+    """Key actions on `self.current_thread_id()`; the host screen refreshes itself afterwards."""
+
+    def _act(self, action, message):
+        tid = self.current_thread_id()
+        if tid is None:
+            return
+        snap = inbox.snapshot(self.app.db, tid)
+        inbox.act(self.app.db, tid, action)
+        self.app.offer_undo(message, lambda: inbox.restore(self.app.db, snap))
+        self.after_change()
+
+    def action_done(self):
+        self._act(inbox.Done(), "Done. It returns to Todo if they write again.")
+
+    def action_wait(self):
+        self._act(inbox.Wait(), "Waiting for them. It returns to Todo when they reply.")
+
+    def action_ignore(self):
+        tid = self.current_thread_id()
+        if tid is None:
+            return
+        if inbox.get_thread(self.app.db, tid).status_detail == "IGNORED":
+            self._act(inbox.Unignore(), "Un-ignored: back in Todo.")
+        else:
+            self._act(inbox.Ignore(), "Ignored. New messages will not bring it back.")
+
+    def action_status(self):
+        tid = self.current_thread_id()
+        if tid is None:
+            return
+        current = inbox.get_thread(self.app.db, tid).status_detail
+        opts = [(d, f"[{GLYPH[d][1]}]{GLYPH[d][0]}[/] {GLYPH[d][2]}") for d in ("CREATED", "NEW_REPLY", "IN_PROGRESS")
+                if d != current]
+        if current == "IGNORED":
+            opts.append(("UNIGNORE", f"{ICON['TODO']} Un-ignore"))
+
+        def chosen(detail):
+            if detail == "UNIGNORE":
+                self._act(inbox.Unignore(), "Un-ignored: back in Todo.")
+            elif detail:
+                self._act(inbox.MarkTodo(detail), f"Marked {GLYPH[detail][2]}.")
+        self.app.push_screen(Pick("Change status", opts), chosen)
+
+    def action_pause(self):
+        if self.current_thread_id() is None:
+            return
+        now = datetime.now().astimezone()
+
+        def typed(text):
+            t = parse_time(text or "", now)
+            if t is None:
+                self.app.notify("Not paused: type a time like 14:30 or 2026-10-20 09:00.", severity="error")
+            else:
+                self._act(inbox.Snooze(t), f"Paused until {t:%a %H:%M}. It returns to Todo then, or when they write.")
+
+        def chosen(choice):
+            if choice == "typed":
+                self.app.push_screen(Ask("Pause until", "14:30 or 2026-10-20 09:00"), typed)
+            elif choice:
+                t = datetime.fromisoformat(choice)
+                self._act(inbox.Snooze(t), f"Paused until {t:%a %H:%M}. It returns to Todo then, or when they write.")
+        self.app.push_screen(Pick("Pause for later", snooze_options(now)), chosen)
+
+    def action_case(self):
+        if self.current_thread_id() is None:
+            return
+        opts = [("new", f"{ICON['add']} New case…")]
+        opts += [(str(c["id"]), f"{ICON['case']} {c['title']}  [#928374]{c['threads']} threads[/]") for c in inbox.cases(self.app.db)]
+        if inbox.get_thread(self.app.db, self.current_thread_id()).case_id:
+            opts.append(("none", f"{ICON['remove']} Remove from case"))
+
+        def named(title):
+            if title:
+                self._act(inbox.SetCase(new_title=title), f"Added to new case “{title}”.")
+
+        def chosen(choice):
+            if choice == "new":
+                self.app.push_screen(Ask("New case title", "What is this about?"), named)
+            elif choice == "none":
+                self._act(inbox.SetCase(), "Removed from its case.")
+            elif choice:
+                self._act(inbox.SetCase(case_id=int(choice)), "Added to case.")
+        self.app.push_screen(Pick("Case", opts), chosen)
+
+    def action_person(self):
+        tid = self.current_thread_id()
+        if tid is None:
+            return
+        person = inbox.thread_view(self.app.db, tid)["person"]
+        if person:
+            self.app.main.open_person(person["id"])
+        else:
+            self.app.notify("No other person in this thread yet: only your own messages.")
+
+
+# --- layout: side rail + main panel -----------------------------------------
+
+def health_ok(connection) -> bool:
+    from .health import connection_health
+    return connection_health(connection) == "OK"
+
+
+class Rail(OptionList):
+    """Side rail (herdr/Plain style): a threads section with the Status views, browse, and connections."""
+    can_focus = False  # one cohesive view: clicks work, focus stays on the main panel
+
+    def refresh_rail(self):
+        db, main = self.app.db, self.app.main
+        counts = inbox.view_counts(db)
+
+        def item(oid, icon_name, label, count="", color="#654735"):
+            on = main.section == oid
+            name = f"[b #4f3829]{label}[/]" if on else label
+            mark = "[#45707a]▌[/]" if on else " "
+            return Option(f"{mark}[{color}]{ICON[icon_name]}[/] {name}{' ' * max(1, 16 - len(label))}"
+                          f"[#928374]{count:>3}[/]", id=oid)
+
+        def header(icon_name, text):
+            return Option(f"[#928374]{ICON[icon_name]} {text}[/]", disabled=True)
+
+        gap = Option("", disabled=True)
+        opts = [header("threads", "threads")]
+        for i, name in enumerate(VIEW_NAMES):
+            icon_name, color = VIEW_ICON[name]
+            opts.append(item(f"view:{i}", icon_name, name, counts[name] if name != "All" else "", color))
+        opts += [gap, header("inbox", "browse"),
+                 item("people", "people", "People", len(inbox.people(db))),
+                 item("organizations", "organizations", "Organizations", len(inbox.organizations(db))),
+                 item("cases", "cases", "Cases", len(inbox.cases(db))),
+                 item("channels", "channels", "Channels",
+                      db.execute("SELECT count(*) FROM channels WHERE kind != 'mailbox'").fetchone()[0]),
+                 gap, header("connections", "connections")]
+        for c in inbox.connections(db):
+            ok = health_ok(c)
+            state = f"[#6c782e]{ICON['ok']}[/]" if ok else f"[#c14a4a]{ICON['broken']}[/]"
+            plat = c["platform"]
+            mark = "[#45707a]▌[/]" if main.section == f"conn:{c['id']}" else " "
+            label = plat.capitalize() if ok else f"[#c14a4a]{plat.capitalize()}[/]"
+            opts.append(Option(f"{mark}{ICON[plat]} {label}{' ' * (17 - len(plat))}{state}", id=f"conn:{c['id']}"))
+        self.clear_options()
+        self.add_options(opts)
+        self.highlighted = None
+
+    def on_option_list_option_selected(self, event):
+        self.app.main.go(event.option.id)
+
+
+class ClickTable(DataTable):
+    """Mouse: a click on a row selects it; a click on the selected row, or a double click, opens it."""
+
+    async def _on_click(self, event) -> None:
+        # Textual also calls DataTable._on_click (base handlers run too); prevent it and decide here.
+        event.prevent_default()
+        row = event.style.meta.get("row")
+        if row is None or row < 0 or self.cursor_type != "row":
+            return
+        event.stop()
+        if row != self.cursor_row:
+            self.move_cursor(row=row)
+        else:
+            self._post_selected_message()
+
+
+class Page(Vertical):
+    """One view in the main panel. TITLE becomes the panel's border title; a page with SIDE also fills the
+    right pane (the Threads list shows the selected Thread there; Channels shows the channels seen)."""
+    TITLE = ""
+    SIDE = ""
+
+    def _on_mount(self):  # runs alongside subclasses' on_mount: focus once this page's widgets exist
+        self.call_after_refresh(self.focus_first)
+
+    def check_action(self, action, parameters):
+        if action == "back":
+            return len(self.app.main.stack) > 1
+        return True
+
+    def refresh_data(self):
+        pass
+
+    def focus_first(self):
+        focusable = self.query("DataTable")
+        if focusable:
+            focusable.first().focus()
+
+
+THREAD_KEYS = [  # Thread actions, Gmail-style (decision #93); shared by the Threads list and a Case
+    Binding("r", "reply('sender')", "reply"), Binding("a", "reply('all')", "reply all"),
+    Binding("e", "done", "done"), Binding("b", "pause", "snooze"), Binding("w", "wait", "wait"),
+    Binding("m", "ignore", "ignore"), Binding("l", "case", "case"), Binding("s", "status", "status"),
+    Binding("p", "person", show=False), Binding("o", "link", show=False),
+]
+
+
+class ThreadsPage(Page, ThreadActions):
+    """The Status view's list. The selected Thread shows beside it (the thread pane); focus stays here."""
+    BINDINGS = [
+        Binding("j", "down", "move", key_display="j/k"), Binding("k", "up", show=False),
+        *THREAD_KEYS,
+        Binding("space", "scroll_thread(1)", show=False), Binding("pagedown", "scroll_thread(1)", show=False),
+        Binding("pageup", "scroll_thread(-1)", show=False),
+    ]
+    EMPTY = {
+        "Todo": "All caught up: nothing needs a reply.",
+        "Snoozed": "Nothing snoozed or waiting. Press b on a thread to snooze it.",
+        "Done": "Nothing done yet. Press e on a thread when it needs nothing more.",
+        "Ignored": "Nothing ignored. Press m on a thread to stop it coming back.",
+        "All": "No threads yet. They arrive with your next email or Slack message.",
+    }
+
+    SIDE = f"{ICON['thread']} thread"
+
+    @property
+    def TITLE(self):
+        name = VIEW_NAMES[self.app.view]
+        return f"{ICON[VIEW_ICON[name][0]]} threads · {name.lower()}"
+
+    def compose(self) -> ComposeResult:
+        yield ClickTable(id="table", cursor_type="row", show_header=False)
+        yield Static(LEGEND, id="legend")
+
+    def on_mount(self):
+        self.rows = []
+        self.refresh_data()
+
+    def on_resize(self, _):
+        self.call_after_refresh(self.refresh_data)
+
+    def after_change(self):
+        self.refresh_data()
+        self.app.main.refresh_chrome()
+        self.focus_first()
+
+    def refresh_data(self):
+        if not self.query(DataTable) or self.app.main.current is not self:  # not composed yet, or being replaced
+            return
+        db, view = self.app.db, self.app.view
+        keep = self.current_thread_id()  # selection follows the Thread, not the row number
+        self.rows = inbox.queue(db, VIEW_NAMES[view])
+        table = self.query_one(DataTable)
+        row = self.app.cursor.get(view, 0)
+        table.clear(columns=True)  # columns too: clear() keeps old widths, which pushed the age column off-screen
+        table.add_columns("s", "from", "title", "time")
+        # Fit the row to the panel so the age column stays visible: the title keeps 12 columns, then
+        # "· where" drops, then the name shortens. 15 = glyph, age, and cell padding.
+        room = self.size.width - 3 - 15
+        with_where = max((len(r["who"]) + len(r["where"]) + 3 for r in self.rows), default=0)
+        show_where = with_where <= room - 12
+        who_w = with_where if show_where else min(max((len(r["who"]) for r in self.rows), default=0), max(6, room - 12))
+        title_w = max(6, room - who_w)
+        cut = lambda text, n: text if len(text) <= n else text[:n - 1] + "…"  # noqa: E731
+        for r in self.rows:
+            who = f"[b]{escape(cut(r['who'], who_w))}[/]" + (f" [#928374]· {escape(r['where'])}[/]" if show_where else "")
+            table.add_row(glyph(r["detail"]), who, escape(cut(r["title"], title_w)), f"[#928374]{when(r['last_at'])}[/]")
+        table.show_cursor = bool(self.rows)
+        if not self.rows:
+            table.add_row("", f"[#928374]{self.EMPTY[VIEW_NAMES[view]]}[/]", "", "")
+        else:
+            table.move_cursor(row=min(row, len(self.rows) - 1))
+        main, ids = self.app.main, [r["id"] for r in self.rows]
+        if keep in ids:
+            table.move_cursor(row=ids.index(keep))
+        if main.pending_select is not None:
+            if main.pending_select in ids:
+                table.move_cursor(row=ids.index(main.pending_select))
+            main.pending_select = None
+        main.show_thread(self.current_thread_id())
+
+    def current_thread_id(self):
+        if not getattr(self, "rows", None):
+            return None
+        return self.rows[min(self.query_one(DataTable).cursor_row, len(self.rows) - 1)]["id"]
+
+    def on_data_table_row_highlighted(self, event):
+        if self.app.main.current is not self:  # a page being replaced must not repaint the thread pane
+            return
+        self.app.cursor[self.app.view] = event.cursor_row
+        self.app.main.show_thread(self.current_thread_id())
+
+    def action_down(self):
+        self.query_one(DataTable).action_cursor_down()
+
+    def action_up(self):
+        self.query_one(DataTable).action_cursor_up()
+
+    def action_reply(self, mode="all"):
+        tid = self.current_thread_id()
+        if tid is None:
+            return
+        self.app.main.show_thread(tid)  # the pane always shows the selected Thread before writing to it
+        tv = self.app.main.thread_view
+        if tv is not None and tv.thread_id == tid:
+            tv.reply(mode)
+
+    def action_link(self):
+        tv = self.app.main.thread_view
+        link = tv and native_link(tv.view)
+        self.app.notify(f"[link='{link}']{link}[/link]" if link else "No link for this thread.")
+
+    def action_scroll_thread(self, direction):
+        tv = self.app.main.thread_view
+        if tv is not None:
+            tv.scroll_page(direction)
+
+
+# --- reply composer -----------------------------------------------------------
+
+class ReplyMode(Static):
+    """Reply / Reply all switch for email (clickable)."""
+
+    def action_set(self, mode):
+        next(a for a in self.ancestors if isinstance(a, ReplyBox)).set_mode(mode)
+
+
+class ReplyBox(Vertical):
+    """Inline reply for one Thread, laid out like an email composer.
+
+    Email (Plain's composer): From, To, Cc, and Subject; To and Cc are editable, and Reply / Reply all
+    refill them. Slack: the destination (the channel or DM, in thread) is shown the same way, read-only.
+    """
+    BINDINGS = [Binding("ctrl+enter", "send", "send", key_display="ctrl+enter"),
+                Binding("ctrl+s", "send", show=False), Binding("escape", "close", "keep draft")]
+
+    def __init__(self, thread_id):
+        super().__init__(classes="replybox composer")
+        self.thread_id, self.view, self.mode = thread_id, None, "sender"
+
+    def compose(self) -> ComposeResult:
+        yield Static(classes="idle")
+        with Vertical(classes="fields"):
+            with Horizontal(classes="field from"):
+                yield Static("From", classes="flabel")
+                yield Static(classes="fvalue fromvalue")
+                yield ReplyMode(classes="mode")
+            with Horizontal(classes="field to"):
+                yield Static("To", classes="flabel")
+                yield Input(classes="toinput", placeholder="recipients, comma-separated")
+            with Horizontal(classes="field cc"):
+                yield Static("Cc", classes="flabel")
+                yield Input(classes="ccinput", placeholder="optional")
+            with Horizontal(classes="field subject"):
+                yield Static("Subject", classes="flabel")
+                yield Static(classes="fvalue subjectvalue")
+        yield TextArea(classes="reply")
+        yield Static("", classes="replyhint")
+
+    @property
+    def email(self) -> bool:
+        return self.view["channel"]["platform"] == "email"
+
+    def show_idle(self, view):
+        """Closed state: the saved draft, or where a reply would go."""
+        self.view = view
+        draft = self.app.drafts.get(self.thread_id, "").strip()
+        keys = "[#a89984]r reply · a reply all[/]"
+        if draft:
+            first = draft.splitlines()[0]
+            text = f"[#b47109]{ICON['edited']} Draft[/]  [#654735]{escape(first[:80])}{'…' if len(draft) > len(first[:80]) else ''}[/]  {keys}"
+        else:
+            text = f"{ICON['reply']} Leave a reply…  {keys}"
+        self.query_one(".idle").update(text)
+
+    def on_click(self, event):
+        if not self.has_class("open") and self.view is not None:
+            event.stop()
+            self.open(self.view, self.mode)
+
+    def open(self, view, mode="all"):
+        self.view = view
+        email_thread = self.email
+        for row in self.query(".field.to, .field.cc, .field.subject"):
+            row.display = email_thread
+        self.query_one(".mode").display = email_thread
+        if email_thread:
+            self.query_one(".fromvalue").update(escape(view["channel"]["external_id"]))
+            title = view["thread"].title
+            self.query_one(".subjectvalue").update(escape(title if title.lower().startswith("re:") else f"Re: {title}"))
+            self.set_mode(mode)
+        else:
+            self.query_one(".flabel").update("To")
+            self.query_one(".fromvalue").update(f"{escape(view['where'])} [#928374]· in thread[/]")
+        self.hint("ctrl+enter send · esc close (keeps draft)")
+        self.query_one(TextArea).text = self.app.drafts.get(self.thread_id, "")
+        self.add_class("open")
+        self.query_one(TextArea).focus()
+
+    def set_mode(self, mode):
+        from .email import reply_all, reply_sender
+        self.mode = mode
+        history = [{"native_id": m["native_id"], "data": m["data"]} for m in self.view["messages"]]
+        to, cc = (reply_all if mode == "all" else reply_sender)(history, self.view["channel"]["external_id"])
+        self.query_one(".toinput", Input).value = ", ".join(to)
+        self.query_one(".ccinput", Input).value = ", ".join(cc)
+        on, off = "[b #4f3829 on #eee0b7] {} [/]", "[#928374] {} [/]"
+        self.query_one(ReplyMode).update(
+            f"[@click=set('sender')]{(on if mode == 'sender' else off).format(ICON['reply'] + ' reply')}[/]"
+            f"[@click=set('all')]{(on if mode == 'all' else off).format(ICON['people'] + ' reply all')}[/]")
+
+    def hint(self, text, error=False):
+        h = self.query_one(".replyhint")
+        h.update(escape(text))
+        h.set_class(error, "error")
+
+    def keep_draft(self):
+        if self.has_class("open") and self.query(TextArea):
+            self.app.drafts[self.thread_id] = self.query_one(TextArea).text
+
+    def on_unmount(self):
+        self.keep_draft()
+
+    def action_close(self):
+        self.keep_draft()
+        self.remove_class("open")
+        self.show_idle(self.view)
+        self.app.main.focus_list()
+
+    def action_send(self):
+        text = self.query_one(TextArea).text.strip()
+        if not text:
+            self.hint("Nothing to send.", error=True)
+            return
+        split = lambda s: [a.strip() for a in s.split(",") if a.strip()]  # noqa: E731
+        to, cc = (split(self.query_one(".toinput", Input).value), split(self.query_one(".ccinput", Input).value)) \
+            if self.email else ([], [])
+        if self.email and not to:
+            self.hint("Not sent: add at least one recipient in To.", error=True)
+            return
+        self.hint("sending…")
+        self.send(text, to, cc)
+
+    @work(thread=True, exclusive=True)
+    def send(self, text, to, cc):
+        try:
+            self.app.send_reply(self.thread_id, text, to, cc)
+        except ReplyError as e:
+            self.app.call_from_thread(self.hint, f"Not sent: {e}", True)
+            return
+        self.app.call_from_thread(self.sent)
+
+    def sent(self):
+        self.app.drafts.pop(self.thread_id, None)
+        self.remove_class("open")
+        self.show_idle(self.view)
+        self.app.undo = None  # a sent message cannot be unsent
+        self.app.notify("Sent. Waiting for them: it returns to Todo when they reply.")
+        page = self.app.main.page
+        if page is not None:
+            page.after_change()
+
+
+# --- one Thread: conversation + properties (Linear issue layout) -------------
+
+def messages_markup(messages) -> str:
+    parts = []
+    for m in messages:
+        meta = f"[#928374]{stamp(m['at'])}{'  ' + ICON['edited'] + ' edited' if m['edited'] else ''}[/]"
+        body = f"[i #928374]{ICON['deleted']} message deleted[/]" if m["deleted"] else escape(m["content"] or "")
+        who = ICON["reply"] if m["who"] == "You" else ICON["person"]
+        parts.append(f"[#654735]{who}[/] [b]{escape(m['who'])}[/]  {meta}\n{body}")
+    return "\n\n".join(parts)
+
+
+def related_markup(db, v, limit: int = 6) -> list[str]:
+    """Other Threads with this Thread's Person, then with its Organizations (not already listed)."""
+    t, p = v["thread"], v["person"]
+    if not p:
+        return []
+    head = lambda icon, text: f"[#928374]{ICON[icon]} {text}[/]"  # noqa: E731
+    link = lambda o: f"{glyph(o.status_detail)} [@click=app.open_thread({o.id})][underline]{escape(o.title)}[/][/]"  # noqa: E731
+
+    def section(title_icon, title, threads, more_action):
+        rows = [link(o) for o in threads[:limit]]
+        if len(threads) > limit:
+            rows.append(f"[@click={more_action}][#928374 underline]{len(threads) - limit} more…[/][/]")
+        return ["", head(title_icon, title), *(rows or ["[#928374]none[/]"])]
+
+    seen = {t.id}
+    mine = [o for o in reversed(p["threads"]) if o.id not in seen]
+    seen |= {o.id for o in mine}
+    out = section("person", f"other threads with {escape(p['name'])}", mine, f"app.open_person({p['id']})")
+    for domain in p["organizations"]:
+        theirs = [o for o in reversed(inbox.organization_view(db, domain)["threads"]) if o.id not in seen]
+        seen |= {o.id for o in theirs}
+        out += section("organization", f"other threads with {escape(domain)}", theirs, f"app.open_org('{domain}')")
+    return out
+
+
+def details_markup(v, db) -> str:
+    """The Thread's properties, Linear-style: Status, Person, Organization, Case, Channel; then the
+    other Threads with the same Person and Organization."""
+    t, p = v["thread"], v["person"]
+    g, color, label = GLYPH[t.status_detail]
+    head = lambda icon, text: f"[#928374]{ICON[icon]} {text}[/]"  # noqa: E731
+    lines = [head("status", "status"), f"[{color}]{g} {label}[/]", ""]
+    if p:
+        lines += [head("person", "person"), f"[@click=app.open_person({p['id']})][b underline]{escape(p['name'])}[/][/]"]
+        lines += [(f"[#c14a4a]{ICON['blocked']}[/] " if i["blocked"] else "")
+                  + f"[#928374]{ICON['email'] if i['kind'] == 'email' else ICON['slack']} {escape(i['value'])}[/]"
+                  for i in p["identities"]]
+        orgs = [f"[@click=app.open_org('{o}')][underline]{escape(o)}[/][/]" for o in p["organizations"]]
+        lines += ["", head("organization", "organization"), ", ".join(orgs) or "[#928374]none[/]"]
+    case = f"[@click=app.open_case({t.case_id})][underline]{escape(v['case'])}[/][/]" if t.case_id else (
+        "[#928374]none · [/][@click=app.thread('case')][underline]add to a case[/][/] [#928374](l)[/]")
+    kind = v["channel"]["kind"]
+    lines += ["", head("case", "case"), case, "", f"[#928374]{ICON.get(kind, ICON['channel'])} channel[/]", escape(v["where"])]
+    return "\n".join(lines + related_markup(db, v))
+
+
+def thread_head(v) -> str:
+    t = v["thread"]
+    g, color, label = GLYPH[t.status_detail]
+    head = f"[b #45707a]{escape(t.title)}[/]   [{color}]{g} {label}[/]"
+    link, plat = native_link(v), v["channel"]["platform"]
+    if link:
+        head += f"\n[#928374]{ICON[plat]} [link='{link}']open in {plat.capitalize()}[/link] {ICON['open']} (o)[/]"
+    return head
+
+
+class ThreadView(Horizontal):
+    """One Thread in the thread pane: conversation and reply on the left, properties on the right.
+    Nothing here takes focus except the reply fields; keys act from the list."""
+
+    def __init__(self, thread_id: int):
+        super().__init__(classes="threadview")
+        self.thread_id = thread_id
+
+    def compose(self) -> ComposeResult:
+        with Vertical(classes="convo"):
+            with VerticalScroll(classes="timeline", can_focus=False):
+                yield Static(classes="thead")
+                yield Static(classes="msgs")
+            yield ReplyBox(self.thread_id)
+        with VerticalScroll(classes="props", can_focus=False):
+            yield Static(classes="detailtext")
+
+    def on_mount(self):
+        self.refresh_data()
+
+    def refresh_data(self):
+        if not self.query(".thead"):  # not composed yet; on_mount fills it
+            return
+        v = inbox.thread_view(self.app.db, self.thread_id)
+        self.view = v
+        head = thread_head(v)
+        if self.has_class("narrow"):  # properties column hidden: keep who, where, and case under the title
+            p = v["person"]
+            bits = [escape(p["name"]) if p else "", escape(v["where"]), escape(v["case"]) if v["thread"].case_id else "no case (l)"]
+            head += "\n[#928374]" + " · ".join(b for b in bits if b) + "[/]"
+        self.query_one(".thead").update(head + "\n")
+        self.query_one(".msgs").update(messages_markup(v["messages"]))
+        self.query_one(".detailtext").update(details_markup(v, self.app.db))
+        box = self.query_one(ReplyBox)
+        if not box.has_class("open"):
+            box.show_idle(v)
+
+    def on_resize(self, event):
+        narrow = event.size.width < 84
+        if narrow != self.has_class("narrow"):
+            self.set_class(narrow, "narrow")
+            self.refresh_data()
+
+    def reply(self, mode="all"):
+        self.query_one(ReplyBox).open(self.view, mode)
+
+    def scroll_page(self, direction):
+        tl = self.query_one(".timeline")
+        tl.scroll_page_down() if direction > 0 else tl.scroll_page_up()
+
+
+class TablePage(Page):
+    """A browsable list: rows from `rows()`, Enter opens `open(row)`."""
+    BINDINGS = [Binding("j", "down", "move", key_display="j/k"), Binding("k", "up", show=False),
+                Binding("escape", "back", "back")]
+    COLUMNS: tuple = ()
+    EMPTY = "Nothing here."
+    INTRO = ""
+
+    def compose(self) -> ComposeResult:
+        if self.INTRO:
+            yield Static(self.INTRO, id="intro")
+        yield ClickTable(id="table", cursor_type="row")
+        yield Static(id="below")
+
+    def on_mount(self):
+        self.query_one(DataTable).add_columns(*self.COLUMNS)
+        self.refresh_data()
+
+    def rows(self) -> list[tuple[dict, tuple]]:
+        return []
+
+    def refresh_data(self):
+        table = self.query_one(DataTable)
+        row = table.cursor_row
+        table.clear()
+        self.items = self.rows()
+        for _, cells in self.items:
+            table.add_row(*cells)
+        table.show_cursor = bool(self.items)
+        if not self.items:
+            table.add_row("", f"[#928374]{self.EMPTY}[/]", *[""] * (len(self.COLUMNS) - 2))
+        elif row is not None:
+            table.move_cursor(row=min(row, len(self.items) - 1))
+
+    def selected(self):
+        return self.items[self.query_one(DataTable).cursor_row][0] if self.items else None
+
+    def on_data_table_row_selected(self, _):
+        item = self.selected()
+        if item is not None:
+            self.open(item)
+
+    def open(self, item):
+        pass
+
+    def action_down(self):
+        self.query_one(DataTable).action_cursor_down()
+
+    def action_up(self):
+        self.query_one(DataTable).action_cursor_up()
+
+    def action_back(self):
+        self.app.main.back()
+
+
+def thread_cells(t) -> tuple:
+    return (glyph(t.status_detail), escape(t.title), f"[#928374]{GLYPH[t.status_detail][2]}[/]")
+
+
+class PeoplePage(TablePage):
+    TITLE = f"{ICON['people']} people"
+    COLUMNS = ("", "Name", "Address", "Organizations", "Todo")
+    EMPTY = "No people yet. Everyone who writes to you appears here."
+
+    def rows(self):
+        return [(p, (f"[#654735]{ICON['person']}[/]", f"[b]{escape(p['name'])}[/]", f"[#928374]{escape(p['address'])}[/]",
+                     escape(", ".join(p["organizations"]) or "—"),
+                     f"[#45707a]{ICON['TODO']} {p['todo']}[/]" if p["todo"] else ""))
+                for p in inbox.people(self.app.db)]
+
+    def open(self, p):
+        self.app.main.open(lambda: PersonPage(p["id"]))
+
+
+class OrganizationsPage(TablePage):
+    TITLE = f"{ICON['organizations']} organizations"
+    COLUMNS = ("", "Domain", "People", "Todo")
+    EMPTY = "No organizations yet. They form from company email domains."
+
+    def rows(self):
+        return [(o, (f"[#654735]{ICON['organization']}[/]", f"[b]{escape(o['domain'])}[/]",
+                     f"[#928374]{ICON['people']} {o['people']}[/]",
+                     f"[#45707a]{ICON['TODO']} {o['todo']}[/]" if o["todo"] else ""))
+                for o in inbox.organizations(self.app.db)]
+
+    def open(self, o):
+        self.app.main.open(lambda: OrganizationPage(o["domain"]))
+
+
+class CasesPage(TablePage):
+    TITLE = f"{ICON['cases']} cases"
+    COLUMNS = ("", "Title", "Threads")
+    EMPTY = "No cases yet. Press l on a thread to start one."
+
+    def rows(self):
+        return [(c, (f"[#654735]{ICON['case']}[/]", f"[b]{escape(c['title'])}[/]",
+                     f"[#928374]{ICON['threads']} {c['threads']}[/]"))
+                for c in inbox.cases(self.app.db)]
+
+    def open(self, c):
+        self.app.main.open(lambda: CasePage(c["id"], c["title"]))
+
+
+class ThreadListPage(TablePage):
+    """Threads of one Case or Organization; Enter opens a Thread."""
+    COLUMNS = ("", "Title", "Status")
+    EMPTY = "No threads here."
+
+    def threads(self):
+        return []
+
+    def rows(self):
+        return [(t, thread_cells(t)) for t in self.threads()]
+
+    def open(self, t):
+        self.app.main.open_thread(t.id)
+
+
+class OrganizationPage(ThreadListPage):
+    def __init__(self, domain):
+        super().__init__()
+        self.domain, self.TITLE = domain, f"{ICON['organization']} organization · {domain}"
+
+    def threads(self):
+        return inbox.organization_view(self.app.db, self.domain)["threads"]
+
+    def refresh_data(self):
+        super().refresh_data()
+        people = inbox.organization_view(self.app.db, self.domain)["people"]
+        self.query_one("#below").update(f"\n[#928374]{ICON['people']} people[/]\n" + "\n".join(
+            f"[@click=app.open_person({p['id']})]{ICON['person']} [underline]{escape(p['name'])}[/][/]  "
+            f"[#928374]{escape(', '.join(i['value'] for i in p['identities']))}[/]" for p in people))
+
+
+class PersonPage(Page):
+    BINDINGS = [Binding("escape", "back", "back"), Binding("j", "down", "move", key_display="j/k"),
+                Binding("k", "up", show=False), Binding("b", "block", "block / unblock"),
+                Binding("a", "add", "add identity"), Binding("x", "remove", "remove identity")]
+
+    def __init__(self, person_id: int):
+        super().__init__()
+        self.person_id, self.TITLE = person_id, f"{ICON['person']} person"
+
+    def compose(self) -> ComposeResult:
+        with VerticalScroll():
+            yield Static(id="pname")
+            yield DataTable(id="ids", cursor_type="row", show_header=False)
+            yield Static(id="prest")
+
+    def on_mount(self):
+        self.query_one(DataTable).add_columns("kind", "value", "blocked")
+        self.refresh_data()
+
+    def refresh_data(self):
+        p = inbox.person_view(self.app.db, self.person_id)
+        self.person = p
+        self.query_one("#pname").update(f"[b #45707a]{ICON['person']} {escape(p['name'])}[/]\n\n"
+                                        f"[#928374]{ICON['identity']} identities[/]")
+        table = self.query_one(DataTable)
+        table.clear()
+        for i in p["identities"]:
+            kind = ICON["email"] if i["kind"] == "email" else ICON["slack"]
+            table.add_row(f"[#654735]{kind}[/]", escape(i["value"]),
+                          f"[#c14a4a]{ICON['blocked']} blocked[/]" if i["blocked"] else "")
+        threads = "\n".join(f"[@click=app.open_thread({t.id})]{glyph(t.status_detail)} [underline]{escape(t.title)}[/][/]"
+                            for t in p["threads"]) or "—"
+        orgs = ", ".join(f"[@click=app.open_org('{o}')][underline]{escape(o)}[/][/]" for o in p["organizations"]) or "—"
+        self.query_one("#prest").update(
+            f"\n[#928374]{ICON['organizations']} organizations[/]\n{orgs}\n\n"
+            f"[#928374]{ICON['threads']} threads[/]\n{threads}\n\n"
+            f"[#928374]{ICON['cases']} cases[/]\n{escape(', '.join(p['cases']) or '—')}")
+
+    def selected(self):
+        ids = self.person["identities"]
+        return ids[self.query_one(DataTable).cursor_row] if ids else None
+
+    def action_back(self):
+        self.app.main.back()
+
+    def action_down(self):
+        self.query_one(DataTable).action_cursor_down()
+
+    def action_up(self):
+        self.query_one(DataTable).action_cursor_up()
+
+    def action_block(self):
+        i = self.selected()
+        if i:
+            inbox.block(self.app.db, i["kind"], i["value"], not i["blocked"])
+            message = (f"Unblocked {i['value']}: new messages reach Todo again." if i["blocked"] else
+                       f"Blocked {i['value']}: new messages go straight to Ignored.")
+            self.app.offer_undo(message, lambda: inbox.block(self.app.db, i["kind"], i["value"], bool(i["blocked"])))
+            self.refresh_data()
+
+    def action_add(self):
+        def added(text):
+            if not text:
+                return
+            kind = "email" if "@" in text else "slack_user"
+            try:
+                inbox.add_identity(self.app.db, self.person_id, kind, text)
+            except inbox.IdentityTaken:
+                self.app.notify(f"Not added: {text} belongs to another person. Remove it there first.", severity="error")
+                return
+            self.app.notify(f"Added {text}: its messages now belong to {self.person['name']}.")
+            self.refresh_data()
+        self.app.push_screen(Ask("Add identity", "email address or Slack user ID"), added)
+
+    def action_remove(self):
+        i = self.selected()
+        if i:
+            inbox.remove_identity(self.app.db, i["id"])
+            self.app.offer_undo(f"Removed {i['value']} from {self.person['name']}.",
+                                lambda: inbox.add_identity(self.app.db, self.person_id, i["kind"], i["value"]))
+            self.refresh_data()
+
+
+KIND_NAME = {"public": "channel", "private": "private channel", "im": "DM", "mpim": "group DM"}
+RULE_KIND = {"channel": "is exactly", "prefix": "starts with", "suffix": "ends with"}
+
+
+class ChannelsPage(TablePage):
+    TITLE = f"{ICON['channels']} channels"
+    COLUMNS = ("", "Match", "Name")
+    EMPTY = "No rules yet. Press a to add one."
+    INTRO = ("Slack DMs and group DMs always sync. A channel syncs when one of these rules matches its name.")
+    SIDE = f"{ICON['channels']} channels seen"
+    BINDINGS = TablePage.BINDINGS + [Binding("a", "add", "add rule"), Binding("x", "delete", "delete rule")]
+
+    def slack_id(self):
+        r = self.app.db.execute("SELECT id FROM connections WHERE platform = 'slack'").fetchone()
+        return r and r["id"]
+
+    def rows(self):
+        cid = self.slack_id()
+        return [(r, (f"[#654735]{ICON['rule']}[/]", f"[#928374]{RULE_KIND[r['kind']]}[/]", f"[b]{escape(r['value'])}[/]"))
+                for r in (inbox.channel_rules(self.app.db, cid) if cid else [])]
+
+    def refresh_data(self):
+        super().refresh_data()
+        from .slack import selected
+        cid = self.slack_id()
+        rules = [(r["kind"], r["value"]) for r, _ in self.items]
+        seen = self.app.db.execute("SELECT native_id, name, kind FROM channels WHERE connection_id = ?"
+                                   " ORDER BY kind, name", (cid,)).fetchall() if cid else []
+        line = lambda c: (f"{ICON.get(c['kind'], ICON['channel'])} {escape(c['name'] or c['native_id'])}"  # noqa: E731
+                          f"  [#928374]{KIND_NAME.get(c['kind'], c['kind'])}[/]")
+        on = [line(c) for c in seen if selected(c["name"], c["kind"], rules)]
+        off = [line(c) for c in seen if not selected(c["name"], c["kind"], rules)]
+        self.app.main.show_side(
+            f"[b #6c782e]{ICON['ok']} Syncing[/] [#928374]{len(on)}[/]\n" + ("\n".join(on) or "[#928374]none[/]")
+            + f"\n\n[b #928374]{ICON['ignore']} Not syncing[/] [#928374]{len(off)}[/]\n"
+            + ("\n".join(f"[#928374]{x}[/]" for x in off) or "[#928374]none[/]")
+            + "\n\n[#928374]Channels appear here once Slack sends a message from them.[/]")
+
+    def action_add(self):
+        cid = self.slack_id()
+        if cid is None:
+            self.app.notify("No Slack connection yet: run universal-inbox init with --slack-team first.", severity="error")
+            return
+
+        def value_for(kind):
+            def done(value):
+                if value:
+                    inbox.add_channel_rule(self.app.db, cid, kind, value.lstrip("#"))
+                    self.app.notify(f"Rule added: channels whose name {RULE_KIND[kind]} “{value.lstrip('#')}” now sync.")
+                    self.refresh_data()
+            return done
+
+        def chosen(kind):
+            if kind:
+                self.app.push_screen(Ask(f"Name {RULE_KIND[kind]}", {"channel": "e.g. general", "prefix": "e.g. ext-",
+                                                                     "suffix": "e.g. -alerts"}[kind]), value_for(kind))
+        self.app.push_screen(Pick("Sync channels whose name…", [("channel", "is exactly…"), ("prefix", "starts with…"),
+                                                                ("suffix", "ends with…")]), chosen)
+
+    def action_delete(self):
+        r = self.selected()
+        if r:
+            cid = self.slack_id()
+            inbox.delete_channel_rule(self.app.db, r["id"])
+            self.app.offer_undo(f"Rule deleted: “{r['value']}” channels stop syncing.",
+                                lambda: inbox.add_channel_rule(self.app.db, cid, r["kind"], r["value"]))
+            self.refresh_data()
+
+
+RECOVERY = {  # platform -> {healthy: what it means / what to do}
+    "email": {True: "Receiving forwarded mail and sending replies.",
+              False: "[#c14a4a]Mail may not be arriving or sending.[/] Check the forwarding rule and the Resend key; "
+                     "this clears on the next successful message."},
+    "slack": {True: "Receiving Slack events and sending replies.",
+              False: "[#c14a4a]Slack messages are not arriving.[/] Reconnect: run scripts/oauth_slack.py on Workbox, "
+                     "then restart universal-inbox serve."},
+}
+
+
+class ConnectionPage(Page):
+    BINDINGS = [Binding("escape", "back", "back")]
+
+    def __init__(self, connection_id):
+        super().__init__()
+        self.connection_id, self.TITLE = connection_id, f"{ICON['connection']} connection"
+
+    def compose(self) -> ComposeResult:
+        yield Static(id="conn")
+
+    def on_mount(self):
+        self.refresh_data()
+        self.can_focus = True
+        self.focus()
+
+    def refresh_data(self):
+        c = next(c for c in inbox.connections(self.app.db) if c["id"] == self.connection_id)
+        ok = health_ok(c)
+        state = f"[#6c782e]{ICON['ok']} OK[/]" if ok else f"[#c14a4a]{ICON['broken']} BROKEN[/]"
+        detail = c["last_error"] or ("Slack revoked access (token revoked or app uninstalled)" if not c["auth_ok"] else "None.")
+        self.query_one("#conn").update(
+            f"[b]{ICON[c['platform']]} {c['platform'].capitalize()}[/]  {state}\n{RECOVERY[c['platform']][ok]}\n\n"
+            f"[#928374]account[/]\n{escape(c['external_id'])}\n\n"
+            f"[#928374]connected[/]\n{stamp(c['connected_at'])}\n\n[#928374]last error[/]\n{escape(detail)}")
+
+    def action_back(self):
+        self.app.main.back()
+
+
+
+
+KEY_GROUP = {  # bottom bar order: move · reply · triage · organize · general
+    "j": 0, "escape": 0, "u": 0, "r": 1, "a": 1, "ctrl+enter": 1, "e": 2, "b": 2, "w": 2, "m": 2,
+    "l": 3, "s": 3, "z": 4, "question_mark": 4, "q": 4,
+}
+
+
+class StatusLine(Static):
+    """The one bottom bar (#97): mode on the left, then the page's keys grouped by task, then counts and
+    Connection health on the right. Keys are clickable. Flat, like the reference vim/tmux bars."""
+
+    def on_mount(self):
+        self.screen.bindings_updated_signal.subscribe(self, lambda _: self.refresh_line())
+        self.refresh_line()
+
+    def on_unmount(self):
+        self.screen.bindings_updated_signal.unsubscribe(self)
+
+    def keys_markup(self) -> list[list[str]]:
+        groups: dict[int, list[str]] = {}
+        for key, active in self.screen.active_bindings.items():
+            bnd = active.binding
+            if not bnd.show or not active.enabled:
+                continue
+            label = bnd.key_display or {"escape": "esc", "question_mark": "?"}.get(key, key)
+            item = (f"[@click=app.simulate_key('{key}')][b {PALETTE['blue']}]{escape(label)}[/] "
+                    f"[{PALETTE['grey2']}]{escape(bnd.description)}[/][/]")
+            groups.setdefault(KEY_GROUP.get(key, 3), []).append(item)
+        return [groups[g] for g in sorted(groups)]
+
+    def refresh_line(self):
+        app, main, b = self.app, self.app.main, PALETTE
+        sec = main.section
+        mode = VIEW_NAMES[app.view].upper() if sec.startswith("view:") else (
+            "CONNECTION" if sec.startswith("conn:") else sec.upper())
+        if len(main.stack) > 1 and main.page is not None:  # deeper than the rail section: say where
+            mode += f" › {main.page.TITLE.split(' ', 1)[-1].upper()}"
+        left = f"[b {b['bg0']} on {b['grey2']}] {mode} [/][{b['grey2']}]\ue0bc[/] "
+        sep = f" [{b['grey0']}]/[/] "
+        counts = inbox.view_counts(app.db)
+        parts = [f"[{b['grey1']}]{ICON['TODO']}[/] {counts['Todo']} todo",
+                 f"[{b['grey1']}]{ICON['SNOOZED']}[/] {counts['Snoozed']} snoozed"]
+        for c in inbox.connections(app.db):
+            plat = c["platform"]
+            parts.append(f"[{b['grey1']}]{ICON[plat]}[/] {plat} [{b['green']}]{ICON['ok']}[/]" if health_ok(c) else
+                         f"[b {b['bg0']} on {b['red']}] {ICON['broken']} {plat} broken [/]")
+        right = sep.join(parts) + " "
+        from rich.text import Text
+        width = self.size.width or self.app.size.width
+        room = width - Text.from_markup(left).cell_len - Text.from_markup(right).cell_len - 2
+        groups = self.keys_markup()
+        gap = f"  [{b['grey0']}]·[/]  "
+        keys = gap.join("   ".join(g) for g in groups)
+        while groups and Text.from_markup(keys).cell_len > room:  # too narrow: drop keys from the end of
+            target = max((g for g in groups[:-1] if g), key=len, default=None)  # the busiest group, keep general
+            if target is None:
+                break
+            target.pop()
+            groups = [g for g in groups if g]
+            keys = gap.join("   ".join(g) for g in groups)
+        pad = max(1, room + 2 - Text.from_markup(keys).cell_len)
+        self.update(left + keys + " " * pad + right)
+
+    def on_resize(self, _):
+        self.refresh_line()
+
+
+
+class CaseCard(Vertical):
+    """A Thread inside a Case, like a synced Slack thread on a Linear issue: its messages stay together in
+    one card, cards sit in the Case's activity by when the Thread started, and a reply goes in the card."""
+
+    def __init__(self, thread_id: int, index: int):
+        super().__init__(classes="card")
+        self.thread_id, self.index = thread_id, index
+
+    def compose(self) -> ComposeResult:
+        yield Static(classes="cardbody")
+        yield ReplyBox(self.thread_id)
+
+    def show(self, v, expanded: bool, selected: bool):
+        t, msgs = v["thread"], v["messages"]
+        g, color, label = GLYPH[t.status_detail]
+        plat = v["channel"]["platform"]
+        self.border_title = f"{ICON[plat]} [b]{escape(t.title)}[/] [#928374]· {escape(v['where'])}[/]"
+        self.border_subtitle = f"[{color}]{g} {label}[/]"
+        if expanded:
+            body = messages_markup(msgs)
+        else:  # Done or Ignored: collapsed like a resolved Linear thread
+            last = msgs[-1]["at"] if msgs else None
+            body = (f"[#928374]{len(msgs)} message{'s' * (len(msgs) != 1)} · last {ago(last)} · "
+                    f"[/][@click=app.case_toggle({self.index})][#928374 underline]show[/][/]")
+        self.query_one(".cardbody").update(body)
+        box = self.query_one(ReplyBox)
+        box.display = expanded
+        if not box.has_class("open"):
+            box.show_idle(v)
+        self.set_class(selected, "sel")
+
+    def on_click(self, _):
+        page = self.app.main.page
+        if isinstance(page, CasePage):
+            page.select(self.index)
+
+
+class DescriptionBox(Vertical):
+    """A Case's description, always shown in its box: click or d edits in place, ctrl+enter saves, esc cancels."""
+    BINDINGS = [Binding("ctrl+enter", "save", "save", key_display="ctrl+enter"),
+                Binding("ctrl+s", "save", show=False), Binding("escape", "cancel", "cancel")]
+
+    def __init__(self):
+        super().__init__(classes="descbox composer")
+        self.text = ""
+
+    def compose(self) -> ComposeResult:
+        yield Static(classes="idle")
+        yield TextArea(classes="desctext")
+        yield Static("[#928374]ctrl+enter save · esc cancel[/]", classes="replyhint")
+
+    def show(self, text):
+        self.text = text
+        if not self.has_class("open"):
+            self.query_one(".idle").update(
+                f"[#654735]{escape(text)}[/]" if text else
+                "[#928374]Add a description: what this Case is about, who is involved, what done looks like.  "
+                "[#a89984]d edit[/][/]")
+
+    def on_click(self, event):
+        if not self.has_class("open"):
+            event.stop()
+            self.open()
+
+    def open(self):
+        self.query_one(TextArea).text = self.text
+        self.add_class("open")
+        self.query_one(TextArea).focus()
+
+    def action_save(self):
+        page = self.app.main.page
+        old, new = self.text, self.query_one(TextArea).text.strip()
+        self.remove_class("open")
+        if new != old:
+            inbox.set_case_description(self.app.db, page.case_id, new)
+            self.app.offer_undo("Description saved.",
+                                lambda: inbox.set_case_description(self.app.db, page.case_id, old))
+        page.after_change()
+
+    def action_cancel(self):
+        self.remove_class("open")
+        self.show(self.text)
+        self.app.main.focus_list()
+
+
+class CasePage(Page, ThreadActions):
+    """A Case laid out like a Linear issue: title, activity (Case events and Thread cards by start time),
+    and properties on the right. j/k select a Thread card; Thread keys act on it."""
+    can_focus = True
+    BINDINGS = [
+        Binding("escape", "back", "back"),
+        Binding("j", "down", "move", key_display="j/k"), Binding("k", "up", show=False),
+        Binding("enter", "toggle", show=False), *THREAD_KEYS, Binding("d", "describe", "description"),
+        Binding("space", "scroll(1)", show=False), Binding("pagedown", "scroll(1)", show=False),
+        Binding("pageup", "scroll(-1)", show=False),
+    ]
+
+    def __init__(self, case_id: int, title: str = ""):
+        super().__init__()
+        self.case_id, self.TITLE = case_id, f"{ICON['case']} case"
+        self.sel, self.toggled, self.views = 0, set(), []
+
+    def compose(self) -> ComposeResult:
+        with Horizontal(classes="caseview"):
+            with VerticalScroll(classes="activity", can_focus=False):
+                yield Static(classes="casehead")
+                yield Static("[b]Description[/]", classes="sectionhead")
+                yield DescriptionBox()
+                yield Static(classes="activityhead")
+                yield Vertical(classes="cards")
+            with VerticalScroll(classes="props", can_focus=False):
+                yield Static(classes="caseprops")
+
+    def on_mount(self):
+        self.refresh_data()
+
+    def focus_first(self):
+        self.focus()
+
+    def refresh_data(self):
+        db = self.app.db
+        case = db.execute("SELECT title, description, created_at FROM cases WHERE id = ?", (self.case_id,)).fetchone()
+        self.description = case["description"]
+        # Cards sit in the activity by when each Thread started (its first message), like Linear's synced threads.
+        self.views = sorted((inbox.thread_view(db, t.id) for t in inbox.case_threads(db, self.case_id)),
+                            key=lambda v: v["messages"][0]["at"] if v["messages"] else "")
+        threads = [v["thread"] for v in self.views]
+        self.sel = max(0, min(self.sel, len(self.views) - 1))
+        self.query_one(".casehead").update(
+            f"[b #45707a]{escape(case['title'])}[/]\n[#928374]{len(threads)} thread{'s' * (len(threads) != 1)}[/]")
+        self.query_one(DescriptionBox).show(self.description)
+        self.query_one(".activityhead").update(
+            f"[b]Activity[/]\n[#928374]{ICON['case']} Case created · {ago(case['created_at'])}[/]")
+        self.query_one(".caseprops").update(self.props_markup())
+        cards = self.query_one(".cards")
+        if [c.thread_id for c in cards.query(CaseCard)] != [t.id for t in threads]:
+            cards.remove_children()
+            cards.mount_all([CaseCard(t.id, i) for i, t in enumerate(threads)])
+            self.call_after_refresh(self.paint)
+        else:
+            self.paint()
+
+    def expanded(self, v) -> bool:
+        open_thread = v["thread"].status != "DONE"
+        return open_thread != (v["thread"].id in self.toggled)
+
+    def paint(self):
+        for card, v in zip(self.query(CaseCard), self.views):
+            card.show(v, self.expanded(v), card.index == self.sel)
+
+    def props_markup(self) -> str:
+        head = lambda icon, text: f"[#928374]{ICON[icon]} {text}[/]"  # noqa: E731
+        counts = {}
+        for v in self.views:
+            name = next(n for n in VIEW_NAMES if v["thread"].status_detail in inbox.VIEWS[n])
+            counts[name] = counts.get(name, 0) + 1
+        status = "\n".join(f"[{VIEW_ICON[n][1]}]{ICON[VIEW_ICON[n][0]]}[/] {k} {n.lower()}" for n, k in counts.items())
+        people = {v["person"]["id"]: v["person"]["name"] for v in self.views if v["person"]}
+        orgs = sorted({o for v in self.views if v["person"] for o in v["person"]["organizations"]})
+        where = sorted({v["where"] for v in self.views})
+        return "\n".join([
+            head("status", "status"), status or "[#928374]none[/]", "",
+            head("people", "people"), *[f"[@click=app.open_person({pid})][underline]{escape(n)}[/][/]"
+                                        for pid, n in people.items()], "",
+            head("organizations", "organizations"),
+            ", ".join(f"[@click=app.open_org('{o}')][underline]{escape(o)}[/][/]" for o in orgs) or "[#928374]none[/]", "",
+            head("channels", "channels"), *[escape(w) for w in where]])
+
+    def current_thread_id(self):
+        return self.views[self.sel]["thread"].id if self.views else None
+
+    def after_change(self):
+        self.refresh_data()
+        self.app.main.refresh_chrome()
+        self.focus()
+
+    def select(self, i):
+        if not self.views:
+            return
+        self.sel = max(0, min(i, len(self.views) - 1))
+        self.paint()
+        cards = list(self.query(CaseCard))
+        if cards:
+            self.query_one(".activity").scroll_to_widget(cards[self.sel], animate=False)
+
+    def action_down(self):
+        self.select(self.sel + 1)
+
+    def action_up(self):
+        self.select(self.sel - 1)
+
+    def action_toggle(self):
+        tid = self.current_thread_id()
+        if tid is not None:
+            self.toggled ^= {tid}
+            self.paint()
+
+    def action_reply(self, mode="all"):
+        if not self.views:
+            return
+        v = self.views[self.sel]
+        if not self.expanded(v):
+            self.toggled ^= {v["thread"].id}
+            self.paint()
+        list(self.query(CaseCard))[self.sel].query_one(ReplyBox).open(v, mode)
+
+    def action_link(self):
+        link = self.views and native_link(self.views[self.sel])
+        self.app.notify(f"[link='{link}']{link}[/link]" if link else "No link for this thread.")
+
+    def action_scroll(self, direction):
+        a = self.query_one(".activity")
+        a.scroll_page_down() if direction > 0 else a.scroll_page_up()
+
+    def action_back(self):
+        self.app.main.back()
+
+    def action_describe(self):
+        self.query_one(DescriptionBox).open()
+
+
+SECTIONS = {"threads": ThreadsPage, "people": PeoplePage, "organizations": OrganizationsPage,
+            "cases": CasesPage, "channels": ChannelsPage}
+
+
+class MainScreen(Screen):
+    """Rail | main panel | thread pane (Threads views). One view: focus stays on the main panel's list."""
+    BINDINGS = [
+        Binding("z", "app.undo", "undo"), Binding("question_mark", "app.help", "help", key_display="?"),
+        Binding("q", "app.quit", "quit"), Binding("u", "back", show=False),
+        *[Binding(str(i + 1), f"go('view:{i}')", show=False) for i in range(5)],
+        Binding("6", "go('people')", show=False), Binding("7", "go('organizations')", show=False),
+        Binding("8", "go('cases')", show=False), Binding("9", "go('channels')", show=False),
+    ]
+
+    def __init__(self):
+        super().__init__()
+        self.section, self.stack, self.current, self.pending_select, self.showing = "view:0", [], None, None, None
+        self.side_text = None
+
+    def compose(self) -> ComposeResult:
+        with Horizontal():
+            rail = Rail(id="rail")
+            rail.border_title = pill(f"{ICON['inbox']} inbox", "red")
+            yield rail
+            yield Vertical(id="main")
+            yield Vertical(id="thread")
+        yield StatusLine(id="statusline")
+
+    @property
+    def rail(self) -> Rail:
+        return self.query_one(Rail)
+
+    @property
+    def page(self) -> Page | None:
+        return self.current
+
+    @property
+    def thread_view(self) -> ThreadView | None:
+        views = self.query("#thread ThreadView")
+        return views.first() if views else None
+
+    def on_mount(self):
+        self.go(f"view:{self.app.view}")
+
+    def action_go(self, target):
+        self.go(target)
+
+    def action_back(self):
+        self.back()
+
+    def go(self, target: str):
+        """Open a rail section (resets the stack): a Status view, a browse list, or a Connection."""
+        if target.startswith("conn:"):
+            cid = int(target.split(":")[1])
+            self.section, self.stack = target, [lambda: ConnectionPage(cid)]
+        elif target.startswith("view:"):
+            self.app.view = int(target.split(":")[1])
+            self.section, self.stack = target, [ThreadsPage]
+        else:
+            self.section, self.stack = target, [SECTIONS[target]]
+        self._show()
+
+    def open(self, factory):
+        self.stack.append(factory)
+        self._show()
+
+    def open_thread(self, thread_id):
+        """Show a Thread where it lives: its Status view, selected, in the thread pane."""
+        detail = inbox.get_thread(self.app.db, thread_id).status_detail
+        self.pending_select = thread_id
+        self.go(f"view:{next(i for i, n in enumerate(VIEW_NAMES) if detail in inbox.VIEWS[n])}")
+
+    def open_person(self, person_id):
+        self.open(lambda: PersonPage(person_id))
+
+    def back(self):
+        if len(self.stack) > 1:
+            self.stack.pop()
+            self._show()
+
+    def show_thread(self, thread_id):
+        """Fill the thread pane (Threads views only); the same Thread is refreshed in place."""
+        pane = self.query_one("#thread")
+        tv = self.thread_view
+        if thread_id is not None and tv is not None and tv.thread_id == thread_id:
+            tv.refresh_data()
+            return
+        pane.remove_children()
+        self.showing = thread_id
+        if thread_id is None:
+            pane.mount(Static("[#928374]No thread selected.[/]", classes="threadempty"))
+        else:
+            pane.mount(ThreadView(thread_id))
+
+    def show_side(self, markup):
+        """Text for the right pane (pages other than Threads)."""
+        if self.side_text is not None and self.side_text.is_attached:
+            self.side_text.update(markup)
+            return
+        pane = self.query_one("#thread")
+        pane.remove_children()
+        self.side_text = Static(markup, classes="sidetext")
+        pane.mount(VerticalScroll(self.side_text, can_focus=False))
+
+    def focus_list(self):
+        if self.current is not None:
+            self.current.focus_first()
+
+    def _show(self):
+        main, pane = self.query_one("#main"), self.query_one("#thread")
+        main.remove_children()
+        page = self.stack[-1]()
+        self.current = page
+        pane.remove_children()
+        self.showing, self.side_text = None, None
+        pane.set_class(bool(page.SIDE), "open")
+        main.set_class(bool(page.SIDE), "split")
+        pane.border_title = pill(page.SIDE, "green") if page.SIDE else ""
+        main.mount(page)
+        main.border_title = pill(page.TITLE, "blue")
+        self.rail.refresh_rail()
+        self.query_one(StatusLine).refresh_line()
+        self.call_after_refresh(page.focus_first)
+
+    def refresh_chrome(self):
+        """Rail counts and the statusline (after any change)."""
+        self.rail.refresh_rail()
+        self.query_one(StatusLine).refresh_line()
+
+    def refresh_all(self):
+        self.refresh_chrome()
+        if self.current is not None:
+            self.current.refresh_data()
+
+
+class Console(App):
+    CSS = CSS
+    TITLE = "Universal Inbox"
+    ENABLE_COMMAND_PALETTE = False
+
+    def __init__(self, db_path: str, reply=None):
+        super().__init__()
+        self.db_path, self.send_reply, self.drafts, self.view, self.cursor = db_path, reply, {}, 0, {}
+        self.undo = None  # (message, restore) for the last change
+
+    @property
+    def main(self) -> MainScreen:
+        return self.get_screen("main")
+
+    def on_mount(self):
+        self.theme = "textual-light"  # toasts and built-in widgets match the light palette
+        self.db = inbox.connect(self.db_path)
+        inbox.migrate(self.db)
+        self.data_version = self.db.execute("PRAGMA data_version").fetchone()[0]
+        self.install_screen(MainScreen(), "main")
+        self.push_screen("main")
+        self.set_interval(2, self.check_changes)
+
+    # Mouse: markup links ([@click=app.…]) and the rail, tables, menus, and footer keys are all clickable.
+    def action_status_tab(self, i):
+        self.main.go(f"view:{i}")
+
+    def action_open_thread(self, thread_id):
+        self.main.open_thread(thread_id)
+
+    def action_open_person(self, person_id):
+        self.main.open_person(person_id)
+
+    def action_open_org(self, domain):
+        self.main.open(lambda: OrganizationPage(domain))
+
+    def action_open_case(self, case_id):
+        self.main.open(lambda: CasePage(case_id))
+
+    def action_back(self):
+        self.main.back()
+
+    def action_thread(self, name):
+        """Run a Thread action from a link in the thread pane's properties."""
+        page = self.main.page
+        if isinstance(page, (ThreadsPage, CasePage)):
+            getattr(page, f"action_{name}")()
+
+    def action_case_reply(self, index):
+        page = self.main.page
+        if isinstance(page, CasePage):
+            page.select(index)
+            page.action_reply()
+
+    def action_case_toggle(self, index):
+        page = self.main.page
+        if isinstance(page, CasePage):
+            page.select(index)
+            page.action_toggle()
+
+    def action_help(self):
+        if not isinstance(self.screen, Help):
+            self.push_screen(Help())
+
+    def offer_undo(self, message, restore):
+        """Say what changed and what it means; `u` puts it back."""
+        self.undo = (message, restore)
+        self.notify(f"{message}  [b #45707a]z[/] undo")
+
+    def action_undo(self):
+        if self.undo is None:
+            self.notify("Nothing to undo.")
+            return
+        _, restore = self.undo
+        self.undo = None
+        restore()
+        page = self.main.page
+        if page is not None and hasattr(page, "after_change"):
+            page.after_change()
+        else:
+            self.main.refresh_all()
+        self.notify("Undone: back to how it was.")
+
+    def check_changes(self):
+        """Refresh when the service has written (new mail, Slack messages, wake)."""
+        v = self.db.execute("PRAGMA data_version").fetchone()[0]
+        if v != self.data_version:
+            self.data_version = v
+            self.undo = None  # new activity may have moved the Thread; restoring would hide it
+            self.main.refresh_all()

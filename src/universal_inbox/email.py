@@ -82,6 +82,13 @@ def reply_all(history: list[dict], self_address: str) -> tuple[list[str], list[s
     return list(dict.fromkeys(to)), cc
 
 
+def reply_sender(history: list[dict], self_address: str) -> tuple[list[str], list[str]]:
+    """Recipients for a reply to the sender only: the last inbound message's From."""
+    me = self_address.lower()
+    last = next((h["data"] for h in reversed(history) if h["data"].get("from") not in (None, me)), {})
+    return ([last["from"]] if last.get("from") else []), []
+
+
 def _post(url, headers, payload):
     req = urllib.request.Request(url, json.dumps(payload).encode(), headers, method="POST")
     with urllib.request.urlopen(req, timeout=15) as r:

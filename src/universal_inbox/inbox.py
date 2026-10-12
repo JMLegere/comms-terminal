@@ -11,7 +11,10 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Protocol
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+MIGRATIONS = {  # version -> statement that upgrades an existing database to it
+    2: "ALTER TABLE cases ADD COLUMN description TEXT NOT NULL DEFAULT ''",
+}
 
 # ponytail: fixed list; extend when a free-mail sender forms an Organization by mistake.
 FREE_MAIL = frozenset({
@@ -85,6 +88,11 @@ class Investigate: ...
 
 
 @dataclass(frozen=True)
+class MarkTodo:
+    detail: str  # CREATED, NEW_REPLY, or IN_PROGRESS (Plain markThreadAsTodo; S key)
+
+
+@dataclass(frozen=True)
 class Ignore: ...
 
 
@@ -98,7 +106,7 @@ class SetCase:
     new_title: str | None = None
 
 
-Action = Done | Snooze | Wait | Investigate | Ignore | Unignore | SetCase
+Action = Done | Snooze | Wait | Investigate | MarkTodo | Ignore | Unignore | SetCase
 
 
 class Sender(Protocol):
@@ -114,15 +122,20 @@ def connect(path: str = ":memory:") -> sqlite3.Connection:
     db = sqlite3.connect(path)
     db.row_factory = sqlite3.Row
     db.execute("PRAGMA foreign_keys = ON")
+    db.execute("PRAGMA busy_timeout = 5000")  # the service and the console share the file
     if path != ":memory:":
         db.execute("PRAGMA journal_mode = WAL")
     return db
 
 
 def migrate(db: sqlite3.Connection) -> None:
-    if db.execute("PRAGMA user_version").fetchone()[0] < SCHEMA_VERSION:
+    version = db.execute("PRAGMA user_version").fetchone()[0]
+    if version == 0:  # new database: the full schema
         db.executescript((Path(__file__).with_name("schema.sql")).read_text())
-        db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+    else:
+        for v in range(version + 1, SCHEMA_VERSION + 1):
+            db.execute(MIGRATIONS[v])
+    db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 
 def _iso(dt: datetime) -> str:
@@ -342,6 +355,8 @@ def act(db, thread_id: int, action: Action) -> Thread:
                 _set_status(db, thread_id, "SNOOZED", "WAITING_FOR_CUSTOMER", now)
             case Investigate():
                 _set_status(db, thread_id, "TODO", "IN_PROGRESS", now)
+            case MarkTodo(detail=detail):
+                _set_status(db, thread_id, "TODO", detail, now)
             case Ignore():
                 _set_status(db, thread_id, "DONE", "IGNORED", now)
             case Unignore():
@@ -425,6 +440,189 @@ def person_organizations(db, person_id: int) -> list[str]:
         " WHERE i.person_id = ? ORDER BY o.domain", (person_id,))]
 
 
+def set_case_description(db, case_id: int, description: str) -> None:
+    with db:
+        db.execute("UPDATE cases SET description = ? WHERE id = ?", (description, case_id))
+
+
 def case_threads(db, case_id: int) -> list[Thread]:
     return [get_thread(db, r[0]) for r in db.execute(
         "SELECT id FROM threads WHERE case_id = ? ORDER BY id", (case_id,))]
+
+
+# --- console read models (docs/design/console.md) ---------------------------
+
+VIEWS = {
+    "Todo": ("CREATED", "NEW_REPLY", "IN_PROGRESS"),
+    "Snoozed": ("WAITING_FOR_CUSTOMER", "WAITING_FOR_DURATION", "WAITING_INDEFINITELY"),
+    "Done": ("DONE_MANUALLY_SET",),
+    "Ignored": ("IGNORED",),
+}
+VIEWS["All"] = tuple(d for details in VIEWS.values() for d in details)
+
+
+def view_counts(db) -> dict[str, int]:
+    rows = dict(db.execute("SELECT status_detail, count(*) FROM threads GROUP BY status_detail").fetchall())
+    return {name: sum(rows.get(d, 0) for d in details) for name, details in VIEWS.items()}
+
+
+def _sender(db, identity_id):
+    """(label, identity row) for an identity: Person name, else the address."""
+    i = db.execute("SELECT i.*, p.display_name FROM identities i LEFT JOIN persons p ON p.id = i.person_id"
+                   " WHERE i.id = ?", (identity_id,)).fetchone()
+    if i is None:
+        return "You", None
+    name = i["display_name"]
+    return (name if name and name != i["value"] else i["value"]), i
+
+
+def _where(channel, identity) -> str:
+    kind = channel["kind"]
+    if kind == "im":
+        return "Slack DM"
+    if kind == "mpim":
+        return "Slack group"
+    if kind in ("channel", "private"):
+        return "#" + (channel["name"] or channel["native_id"])
+    domain = identity["value"].rsplit("@", 1)[-1] if identity and identity["kind"] == "email" else ""
+    return domain if domain and domain not in FREE_MAIL else "email"
+
+
+def queue(db, view: str) -> list[dict]:
+    """Rows for a Status view. Todo: longest-waiting first; others: most recent first."""
+    details = VIEWS[view]
+    rows = db.execute(
+        "SELECT t.id, t.title, t.status, t.status_detail, t.case_id, ch.kind, ch.name, ch.native_id,"
+        " (SELECT max(occurred_at) FROM activities a WHERE a.thread_id = t.id) AS last_at,"
+        " (SELECT max(occurred_at) FROM activities a WHERE a.thread_id = t.id AND a.identity_id IS NOT NULL) AS last_in,"
+        " (SELECT identity_id FROM activities a WHERE a.thread_id = t.id AND a.identity_id IS NOT NULL"
+        "   ORDER BY occurred_at, id LIMIT 1) AS first_identity"
+        f" FROM threads t JOIN channels ch ON ch.id = t.channel_id"
+        f" WHERE t.status_detail IN ({','.join('?' * len(details))})", details).fetchall()
+    out = []
+    for r in rows:
+        label, identity = _sender(db, r["first_identity"]) if r["first_identity"] else ("You", None)
+        out.append({"id": r["id"], "title": r["title"], "status": r["status"], "detail": r["status_detail"],
+                    "who": label, "where": _where(r, identity), "last_at": r["last_at"],
+                    "waiting_since": r["last_in"] or r["last_at"]})
+    if view == "Todo":
+        return sorted(out, key=lambda x: x["waiting_since"])
+    return sorted(out, key=lambda x: x["last_at"], reverse=True)
+
+
+def thread_view(db, thread_id: int) -> dict:
+    """Timeline (latest edit wins; deleted messages have no content) and the sender's records."""
+    t = get_thread(db, thread_id)
+    ch = db.execute("SELECT ch.*, c.platform, c.external_id FROM channels ch"
+                    " JOIN connections c ON c.id = ch.connection_id WHERE ch.id = ?", (t.channel_id,)).fetchone()
+    acts = db.execute("SELECT * FROM activities WHERE thread_id = ? ORDER BY occurred_at, id", (thread_id,)).fetchall()
+    msgs, by_id = [], {}
+    for a in acts:
+        if a["kind"] == "MESSAGE":
+            who, _ = _sender(db, a["identity_id"]) if a["identity_id"] else ("You", None)
+            m = {"who": who, "at": a["occurred_at"], "content": a["content"], "edited": False, "deleted": False,
+                 "native_id": a["native_id"], "data": json.loads(a["data"])}
+            by_id[a["id"]] = m
+            msgs.append(m)
+        elif a["target_id"] in by_id:
+            m = by_id[a["target_id"]]
+            if a["kind"] == "EDIT":
+                m["edited"], m["content"] = True, a["content"]
+            else:
+                m["deleted"], m["content"] = True, None
+    first = next((a["identity_id"] for a in acts if a["identity_id"]), None)
+    person = None
+    if first:
+        pid = db.execute("SELECT person_id FROM identities WHERE id = ?", (first,)).fetchone()[0]
+        person = person_view(db, pid) if pid else None
+    case = db.execute("SELECT title FROM cases WHERE id = ?", (t.case_id,)).fetchone() if t.case_id else None
+    return {"thread": t, "channel": dict(ch), "messages": msgs, "person": person,
+            "case": case["title"] if case else None, "where": _where(ch, None) if ch["kind"] != "mailbox" else "email"}
+
+
+def person_view(db, person_id: int) -> dict:
+    p = db.execute("SELECT * FROM persons WHERE id = ?", (person_id,)).fetchone()
+    identities = [dict(r) for r in db.execute(
+        "SELECT id, kind, value, blocked FROM identities WHERE person_id = ? ORDER BY kind, value", (person_id,))]
+    threads = person_threads(db, person_id)
+    cases = sorted({r[0] for r in db.execute(
+        "SELECT c.title FROM cases c JOIN threads t ON t.case_id = c.id WHERE t.id IN"
+        f" ({','.join(str(t.id) for t in threads) or 'NULL'})")})
+    return {"id": person_id, "name": p["display_name"], "identities": identities,
+            "organizations": person_organizations(db, person_id), "threads": threads, "cases": cases}
+
+
+def cases(db) -> list[dict]:
+    return [dict(r) for r in db.execute(
+        "SELECT c.id, c.title, count(t.id) AS threads FROM cases c LEFT JOIN threads t ON t.case_id = c.id"
+        " GROUP BY c.id ORDER BY c.title")]
+
+
+def connections(db) -> list[dict]:
+    return [dict(r) for r in db.execute("SELECT * FROM connections ORDER BY id")]
+
+
+def channel_rules(db, connection_id: int) -> list[dict]:
+    return [dict(r) for r in db.execute(
+        "SELECT id, kind, value FROM channel_rules WHERE connection_id = ? ORDER BY kind, value", (connection_id,))]
+
+
+def add_channel_rule(db, connection_id: int, kind: str, value: str) -> None:
+    with db:
+        db.execute("INSERT OR IGNORE INTO channel_rules (connection_id, kind, value) VALUES (?, ?, ?)",
+                   (connection_id, kind, value))
+
+
+def delete_channel_rule(db, rule_id: int) -> None:
+    with db:
+        db.execute("DELETE FROM channel_rules WHERE id = ?", (rule_id,))
+
+
+def people(db) -> list[dict]:
+    """Persons with at least one Identity: name, first address, Organizations, open (Todo) Thread count."""
+    out = []
+    for p in db.execute("SELECT p.id, p.display_name FROM persons p WHERE EXISTS"
+                        " (SELECT 1 FROM identities i WHERE i.person_id = p.id) ORDER BY lower(p.display_name)"):
+        ids = db.execute("SELECT value FROM identities WHERE person_id = ? ORDER BY kind, value", (p["id"],)).fetchall()
+        threads = person_threads(db, p["id"])
+        out.append({"id": p["id"], "name": p["display_name"], "address": ids[0]["value"],
+                    "organizations": person_organizations(db, p["id"]),
+                    "todo": sum(t.status == "TODO" for t in threads), "threads": len(threads)})
+    return out
+
+
+def organizations(db) -> list[dict]:
+    out = []
+    for o in db.execute("SELECT id, domain, name FROM organizations ORDER BY domain"):
+        view = organization_view(db, o["domain"])
+        out.append({"id": o["id"], "domain": o["domain"], "people": len(view["people"]),
+                    "todo": sum(t.status == "TODO" for t in view["threads"]), "threads": len(view["threads"])})
+    return out
+
+
+def organization_view(db, domain: str) -> dict:
+    """An Organization's Persons (by email domain) and their Threads."""
+    pids = [r[0] for r in db.execute(
+        "SELECT DISTINCT person_id FROM identities WHERE kind = 'email' AND person_id IS NOT NULL"
+        " AND substr(value, instr(value, '@') + 1) = ?", (domain,))]
+    persons = [person_view(db, pid) for pid in pids]
+    threads = {t.id: t for p in persons for t in p["threads"]}
+    return {"domain": domain, "people": persons, "threads": sorted(threads.values(), key=lambda t: t.id)}
+
+
+# --- undo (console: u) -------------------------------------------------------
+
+def snapshot(db, thread_id: int) -> dict:
+    """The Thread's Status, Status detail, snooze, and Case, so an action can be undone."""
+    r = db.execute("SELECT id, status, status_detail, status_changed_at, snoozed_until, detail_before_snooze, case_id"
+                   " FROM threads WHERE id = ?", (thread_id,)).fetchone()
+    return dict(r)
+
+
+def restore(db, snap: dict) -> Thread:
+    with db:
+        db.execute("UPDATE threads SET status = ?, status_detail = ?, status_changed_at = ?, snoozed_until = ?,"
+                   " detail_before_snooze = ?, case_id = ? WHERE id = ?",
+                   (snap["status"], snap["status_detail"], snap["status_changed_at"], snap["snoozed_until"],
+                    snap["detail_before_snooze"], snap["case_id"], snap["id"]))
+    return get_thread(db, snap["id"])

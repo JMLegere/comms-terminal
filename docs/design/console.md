@@ -30,54 +30,68 @@ Workbox
 
 ## 2. Look
 
-**Decision #74**: dark only, matcha-like, with Plain's status details as glyphs.
+**Decision #88**: colours follow gruvbox-material light with the hard background (sainnhe/gruvbox-material), from Jeremy's reference screenshot and palette. This replaces the dark-only rule (#74) and the NvChad onedark palette (#82). The NvChad structure stays: pill panel titles, statusline blocks, key blocks in the footer.
 
-- **Colors**:
-  - background `#1e222a`
-  - raised surface `#262b35`
-  - rule `#3a404c`
-  - text `#d6dae2`
-  - muted `#7c8594`
-  - accent `#2bd48f` (selection, titles, health OK)
-  - error `#f7768e` (health BROKEN, send failure)
-- **Type**: the terminal's monospace font. Bold for names and titles; muted for metadata.
-- **Status glyphs** (Status detail → glyph, color):
-  - `CREATED` → `✸` blue `#7aa2f7` (Needs first response)
-  - `NEW_REPLY` → `↩` amber `#e0af68` (Needs next response)
-  - `IN_PROGRESS` → `◔` violet `#bb9af7` (Investigating)
-  - `WAITING_FOR_CUSTOMER` → `◷` muted (Waiting for them)
-  - `WAITING_FOR_DURATION`, `WAITING_INDEFINITELY` → `⏸` muted (Paused for later)
-  - `DONE_MANUALLY_SET` → `✓` accent (Done)
-  - `IGNORED` → `⊘` dim (Ignored)
-- Every glyph appears with its label in the Thread header and the legend line, so meaning never rests on color alone.
+- **Palette**: bg0 `#f9f5d7` (background), bg1 `#f5edca` (rail, properties, reply fields), bg2 `#f3eac7` (statusline, footer), bg4 `#eee0b7` (selected row, key blocks), bg5 `#ebdbb2` (card borders); fg0 `#654735` (text), fg1 `#4f3829` (selected text); grey0 `#a89984` (panel borders, dim), grey1 `#928374` (muted), grey2 `#7c6f64` (statusline mode block); red `#c14a4a`, orange `#c35e0a`, yellow `#b47109`, green `#6c782e`, aqua `#4c7a5d`, blue `#45707a`, purple `#945e80`.
+- **Panel titles**: bg0 text on an accent block: inbox red, main blue, thread green.
+- **No focus highlight**: panel borders never change colour; the selected row (bg4, bold) and the rail's `▌` marker show where you are.
+- **Bottom bar** (#94, #97): one line, flat like the reference vim/tmux bars: a grey2 mode block (with `› PAGE` when deeper than the rail section), then the page's keys grouped move · reply · triage · organize · general (key bold blue, description grey2, clickable), then Todo, Snoozed, and each Connection as thin text segments separated by `/`; a red block only when a Connection is broken. Keys drop from the busiest group when the terminal is narrow.
+- **Status detail colours**: Needs first response blue, Needs next response yellow, Investigating purple, waiting and paused grey, Done green, Ignored dim. Icons come from the icon mapper; colour never carries meaning alone.
 
 ## 3. Screens
 
-### Queue (home)
+**Revision 2026-10-12 (decisions #89–#92)** supersedes the preview, full-thread page, and details container below (#79):
+
+- **One cohesive view (#90)**: focus stays on the main panel's list. The rail and the thread pane never take focus; clicks in them still work. Only the reply fields take focus while you type; `esc` returns to the list. `1`–`5` switch Status views and `6`–`9` open People, Organizations, Cases, Channels from anywhere.
+- **Thread pane is the thread view (#89)**: in a Status view the selected Thread always shows beside the list, laid out like a Linear issue: conversation and reply box on the left, properties (status, person, organization, case, channel) on the right in the same panel. There is no separate full-page Thread. `space` / `pgdn` / `pgup` scroll it. Below 84 columns the properties fold into one line under the title. Links elsewhere (a Person's Threads, an Organization's Threads) select the Thread in its Status view.
+- **Related Threads (#95)**: below the properties, "other threads with <Person>" and "other threads with <Organization>" (six each, then "N more…" to the Person or Organization page); clicking one selects it in its Status view.
+- **Channels (#94)**: rules on the left; the channels seen, grouped Syncing / Not syncing, in the right pane, the same structure as the Threads page.
+- **Cases like Linear issues (#91)**: title, then Activity: "Case created", then one card per Thread ordered by when it started, mirroring how Linear shows a synced Slack thread. A Thread's messages stay inside its card; nothing is woven into the Case feed. Done and Ignored Threads collapse to one line like resolved Linear threads (`enter` shows them). Each card ends with "Leave a reply… (r)". Properties on the right: Status counts, People, Organizations, Channels. `j`/`k` select a card (a darker border); Thread keys act on it.
+- **Composer always visible (#99)**: under the conversation, the reply box is its own bordered region (Gestalt: common region), set apart from the properties column (bg2 with a divider). Closed, it shows the saved draft or "Leave a reply…"; click it, or press `r` / `a`, to write. In a Case card it is a footer row under a divider, like Linear's reply row, instead of a box inside a box.
+- **Case description (#98)**: a "Description" heading like "Activity", with its box always shown: the text, or placeholder guidance when empty. Click or `d` edits in place; `ctrl+enter` saves (undoable with `z`), `esc` cancels.
+- **Reply composer (#92)**, following Plain's email reply: From (the mailbox), To, Cc (editable), Subject (`Re: …`), then the message. `r` replies to all (FR-3b), `R` replies to the sender only, and the Reply / Reply all switch in the composer refills To and Cc. Slack shows the destination read-only ("To  Slack DM · in thread"); Plain's Slack replies have no options either. Bcc waits for a change to the reply contract (socket, `inbox.reply`, both senders).
+
+**Revision 2026-10-12 (decisions #76–#80)**: herdr-style bordered panels, Plain-style rail sections, preview pane, mouse, and Nerd Font icons.
+
+### Layout
 
 ```
-┌────────────────────┬──────────────────────────────────────────────────────────┐
-│ ▸ 1 Todo       4   │ Todo · 4                                                 │
-│   2 Snoozed    1   │  ✸  Ana Ruiz · acme.com     Pricing for 40 seats?  10:02 │
-│   3 Done           │  ↩  Logan Carr · Slack DM   deploy now?            09:40 │
-│   4 Ignored        │  ✸  bob@gmail.com · email   Invoice #2041           Mon  │
-│                    │  ◔  Mia Chen · #ext-acme    spec review             Sun  │
-│   Cases            │                                                          │
-│   Channels         │                                                          │
-│                    │                                                          │
-│ ● Email   OK       │                                                          │
-│ ● Slack   OK       │                                                          │
-└────────────────────┴──────────────────────────────────────────────────────────┘
- ✸ first response  ↩ next response  ◔ investigating  ◷ waiting  ⏸ paused
- j/k move  enter open  1-4 views  e done  z pause  w wait  s status  i ignore  c case  q quit
+╭─ 󰚇 inbox ──────────────╮╭─ 󰝦 threads · todo ──────────────╮╭─ 󰠢 preview ─────────────╮
+│ 󰠢 threads              ││ 󰙴 Ana Ruiz · acme.com  Pricing… ││ contract attached        │
+│ ▌󰝦 Todo           6    ││ 󱜾 Logan · Slack DM     deploy…  ││ 󰀓 Raj Patel  Sun         │
+│  󰒲 Snoozed        2    ││ …                               ││ …                        │
+│  󰗡 Done           1    │╰─────────────────────────────────╯╰──────────────────────────╯
+│  󰛑 Ignored        1    │
+│  󰠢 All                 │   full Thread:  rail │ thread (timeline + reply) │ details
+│ 󰚇 browse               │
+│  󰀏 People        10    │
+│  󰇗 Organizations  4    │
+│  󰠔 Cases          1    │
+│  󰐣 Channels       5    │
+│ 󱘖 connections          │
+│  󰇰 Email         󰗠     │
+│  󰒱 Slack         󰗠     │
+╰────────────────────────╯
 ```
 
-- Sidebar: the four Status views with counts for Todo and Snoozed, then Cases, Channels, and one health line per Connection (`●` OK in accent, BROKEN in error color with the error text).
-- Rows: glyph, sender (Person name, else address or Slack user) · where (Organization domain, `Slack DM`, `#channel`, or `email`), Thread title, last activity time (time today, weekday this week, else date).
-- Order: Todo by oldest last inbound activity first (longest waiting at the top); other views by most recent activity.
-- Queue keys act on the selected row without opening it.
+- Every region is its own rounded, bordered panel with its title on the border (herdr); the focused panel's border turns accent green.
+- **Rail** sections: `threads` (Todo, Snoozed, Done, Ignored, All, with counts), `browse` (People, Organizations, Cases, Channels), `connections` (one line per Connection with its health icon). The current item has an accent bar. Status views live in the rail; there are no tabs above the list.
+- **Main panel**: the selected rail item's list, or a full Thread, Person, Organization, Case, or Connection page.
+- **Preview panel**: a single click on a Thread (or `space`) opens it read-only beside the list; `j`/`k` keep the preview in step; a second click, a double click, or `enter` opens it full; `esc` closes the preview.
+- **Details panel**: with a full Thread open, the Person, Organization, Case, and Channel sit in their own bordered panel on the right.
+
+### Mouse
+
+Everything clickable: rail items, list rows (preview, then open), menu options, footer keys, and links in the details panel (Person, Organization, Case), the Person page (Threads, Organizations), and the Thread header (back, open in Gmail/Slack).
+
+### Icons
+
+`src/universal_inbox/icons.py` maps every entity, Status detail, action, and term to a Nerd Font Material Design glyph (Nerd Fonts 3.5.1). Ghostty ships the symbols. Footer actions, rail items, panel titles, list rows, and details use the mapper; the Status detail glyphs replace the earlier Unicode glyphs.
 
 ### Thread
+
+The side rail stays visible on every screen (Thread, Person, Cases, Channels); on the Threads list, `1`–`5` switch Status views.
+
 
 ```
 ┌──────────────────────────────────────────────────────┬──────────────────────────┐
@@ -106,13 +120,13 @@ Workbox
 
 - `r` opens the box under the timeline; the conversation stays visible.
 - Email: `To` and `Cc` are prefilled reply-all (FR-3b) and editable with `tab` into a one-line field. Slack: no recipient line; the box shows the channel or DM.
-- `ctrl+s` sends (most terminals cannot tell `ctrl+enter` from `enter`); `esc` closes the box and keeps the draft in memory for that Thread until the app exits.
+- `ctrl+enter` sends (#100; `ctrl+s` still works where a terminal cannot report `ctrl+enter`); `esc` closes the box and keeps the draft in memory for that Thread until the app exits.
 - While sending: the box shows `sending…`. On success the app returns to the queue with a toast `Sent → Waiting for them`. On failure the box stays open with the text and shows the error in red.
 
 ### Status, Case, and Person pickers
 
 - `s`: a small menu of Todo details (Needs first response, Needs next response, Investigating) and `Unignore` when the Thread is Ignored.
-- `z`: a menu of `1 hour`, `tomorrow 9:00`, `next Monday 9:00`, `indefinitely`, or a typed time.
+- `b` (snooze): a menu of `1 hour`, `tomorrow 9:00`, `next Monday 9:00`, or a typed time. No indefinite option (#96); a snoozed Thread also returns when they write.
 - `c`: a filterable list of Cases, `new case…`, and `remove from case`.
 - `p`: the Person record: Identities (with `b` block/unblock, `a` add Identity, `x` remove Identity), Organizations, Threads with their glyphs, Cases.
 
@@ -120,13 +134,16 @@ Workbox
 
 - **Cases**: list of Cases; opening one lists its Threads with glyphs (FR-12, FR-13).
 - **Channels**: Slack Channel rules (`a` add `channel` / `prefix` / `suffix` rule, `x` delete) and the Channels seen so far with whether each is selected.
-- **Health**: one line per Connection in the sidebar; Enter on it shows the last error.
+- **Health**: one line per Connection in the sidebar; `h` shows each Connection's last error.
 
 ## 4. Keys
 
-- Plain: `j`/`k` move, `e` Done, `z` Pause for later, `w` Wait for them, `s` change status.
-- Deviations: `i` Ignore/Unignore, `c` Case, `r` reply, `ctrl+s` send, `o` link to the native app, `p` Person, `1`–`4` views, `esc` back, `q` quit.
-- FR-14 change: Enter now opens the Thread in the console; `o` replaces "Enter opens the native app".
+**Decision #93**: Gmail-style where Gmail has an equivalent.
+
+- Move: `j`/`k`, `space`/`pgdn`/`pgup` scroll the thread, `u` or `esc` back, `1`–`5` Status views, `6`–`9` People, Organizations, Cases, Channels.
+- Thread: `r` reply to the sender, `a` reply all (FR-3b's reply-all stays one key away), `e` Done (Gmail archive), `b` snooze (Gmail snooze), `m` Ignore (Gmail mute), `l` Case (Gmail label), `z` undo (Gmail undo), `w` wait for them, `s` change status, `p` Person, `o` open in Gmail or Slack, `ctrl+enter` send (#100).
+- General: `?` all keys, `q` quit.
+- The footer lists every action for the page as plain text: key in blue, description in grey, no icons or blocks (#94).
 
 ## 5. States to check (visual QA)
 
@@ -139,3 +156,36 @@ Rendered with Textual's test driver (`run_test`, SVG screenshots) and once in a 
 5. Send failure: box stays open with the error.
 6. Health BROKEN in the sidebar.
 7. Person record with a blocked Identity.
+
+## 6. Development
+
+Hot reload: the console restarts on every source change.
+
+```
+uv run python scripts/seed_demo.py --db /tmp/demo.db
+.venv/bin/watchfiles --filter python '.venv/bin/universal-inbox --db /tmp/demo.db' src/universal_inbox
+```
+
+Run the console binary directly, not through `uv run`: `uv run` does not pass the watcher's stop signal on, which leaves two consoles drawing over each other.
+
+## 7. UX review (2026-10-12, decisions #83–#87)
+
+A pass over every page and component against the UX Fundamentals guide: utility, usability, clarity, consistency, feedback, control, and accessibility; the gulfs of execution and evaluation; Hick's, Fitts's, and Jakob's laws; Von Restorff; and Gestalt grouping.
+
+| Finding | Principle | Change |
+|---|---|---|
+| Actions could not be reversed; a mistaken `i` or `e` hid the Thread | Control, recovery | `u` undoes the last change: a Thread action, block or unblock, identity removal, or rule deletion. One level. It is cleared when the service writes, so a restore never hides new activity |
+| Toasts named the new state (`→ Ignored`) without saying what it means | Feedback, gulf of evaluation | Each toast states the consequence and the way back: "Ignored. New messages will not bring it back. u undo" |
+| The footer listed 10 keys on the queue | Hick's law, Von Restorff | `?` opens a grouped key overlay with the Status legend. The footer trim was reverted at Jeremy's request (#88–#92): it lists every action again |
+| `esc back` showed on pages with nothing to go back to | Consistency, clarity | "back" appears only where it works; in the preview pane, `esc` closes the preview |
+| List times mixed clock times and weekdays | Clarity of the user's goal (what has waited longest) | Lists show waiting age (`now`, `5m`, `3h`, `2d`, then a date); the timeline shows exact times |
+| After an action the preview closed | Flow, usability | The thread pane shows the Thread that takes the row (always, since #89) |
+| An empty view said "Nothing here." | Clarity, discoverability | Each view says what empty means and how Threads arrive there ("All caught up: nothing needs a reply.") |
+| Browse tables had no column names | Clarity, Gestalt | Headers on People, Organizations, Cases, Channels, and Thread lists |
+| Channel rules used internal words (`prefix`, `kind`) | Mental model over implementation model | The page explains what syncs; rules read "starts with …"; each seen channel says "syncs" or "not synced" |
+| A broken Connection showed only an error string | Recovery | The page says what is affected and the step to fix it |
+| A Thread with no Case showed "—" | Discoverability, Fitts's law | "none · add to a case (c)", clickable |
+| Menus and prompts had no way-out hint | Control | Every menu and prompt shows "enter … · esc cancel" |
+| Narrow panes pushed the age column off-screen | Usability | Rows fit the panel: "· where" drops first, then the name shortens |
+
+Colour still never carries meaning alone: Status details have an icon and a label, the channel list says "syncs" or "not synced" in words, and broken Connections say "broken".

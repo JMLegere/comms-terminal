@@ -26,3 +26,14 @@ def test_activities_are_append_only_except_content_clearing_after_delete():
 
     with pytest.raises(sqlite3.IntegrityError):  # I-2: detail must match status
         db.execute("UPDATE threads SET status = 'DONE', status_detail = 'CREATED' WHERE id = ?", (thread.id,))
+
+
+def test_migrates_a_version_1_database_to_case_descriptions(tmp_path):
+    import sqlite3
+    db = sqlite3.connect(tmp_path / "v1.db")
+    db.execute("CREATE TABLE cases (id INTEGER PRIMARY KEY, title TEXT NOT NULL, created_at TEXT NOT NULL) STRICT")
+    db.execute("INSERT INTO cases (title, created_at) VALUES ('Acme', '2026-10-01T00:00:00+00:00')")
+    db.execute("PRAGMA user_version = 1")
+    inbox.migrate(db)
+    assert db.execute("SELECT description FROM cases").fetchone()[0] == ""
+    assert db.execute("PRAGMA user_version").fetchone()[0] == inbox.SCHEMA_VERSION

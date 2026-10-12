@@ -224,9 +224,10 @@ CREATE TABLE channel_rules (
 ) STRICT;
 
 CREATE TABLE cases (
-  id         INTEGER PRIMARY KEY,
-  title      TEXT NOT NULL,
-  created_at TEXT NOT NULL
+  id          INTEGER PRIMARY KEY,
+  title       TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',  -- shown above the Case's activity (decision #98; schema version 2)
+  created_at  TEXT NOT NULL
 ) STRICT;
 
 CREATE TABLE threads (

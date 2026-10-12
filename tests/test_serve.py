@@ -1,0 +1,61 @@
+"""The service's local reply socket (POST /reply) end to end, with fake senders."""
+
+import json
+import threading
+from datetime import datetime, timezone
+
+from universal_inbox import inbox, serve
+from universal_inbox.tui import ReplyError, socket_reply
+
+
+class Sender:
+    def __init__(self, fail=False):
+        self.fail = fail
+
+    def send(self, thread, text, to, cc, history):
+        if self.fail:
+            raise inbox.SendFailed("slack send failed: invalid_auth")
+        return "D0ANA:1728700999.000100"
+
+
+def setup(tmp_path):
+    path = str(tmp_path / "inbox.db")
+    db = inbox.connect(path)
+    inbox.migrate(db)
+    with db:
+        db.execute("INSERT INTO connections (id, platform, external_id, self_id, label, connected_at)"
+                   " VALUES (2, 'slack', 'T0', 'U0JEREMY', 'Slack', '2026-10-12T00:00:00+00:00')")
+    t = inbox.ingest(db, inbox.Incoming(2, "D0ANA", "im", "MESSAGE", "D0ANA:1", inbox.Identity("slack_user", "U0ANA"),
+                                        datetime.now(timezone.utc), "hi", data={"channel": "D0ANA"}))
+    return path, t.id
+
+
+def test_handle_reply_statuses(tmp_path):
+    path, tid = setup(tmp_path)
+    db = inbox.connect(path)
+    assert serve.handle_reply(db, b"{}", {})[0] == 400
+    assert serve.handle_reply(db, json.dumps({"thread_id": 999, "text": "x"}).encode(), {})[0] == 404
+    status, body = serve.handle_reply(db, json.dumps({"thread_id": tid, "text": "x"}).encode(), {"slack": Sender(True)})
+    assert status == 502 and "invalid_auth" in body["error"]
+
+
+def test_reply_over_unix_socket(tmp_path):
+    path, tid = setup(tmp_path)
+    sock = str(tmp_path / "s.sock")
+    server = serve.reply_server(path, sock, {"slack": Sender()})
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        import os
+        import stat
+        assert stat.S_IMODE(os.stat(sock).st_mode) == 0o600
+        out = socket_reply(sock)(tid, "on it", [], [])
+        assert out == {"status": "SNOOZED", "status_detail": "WAITING_FOR_CUSTOMER"}
+    finally:
+        server.shutdown()
+        server.server_close()
+    try:
+        socket_reply(sock + ".missing")(tid, "x", [], [])
+    except ReplyError as e:
+        assert "not reachable" in str(e)
+    else:
+        raise AssertionError("expected ReplyError")

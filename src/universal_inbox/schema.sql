@@ -28,9 +28,10 @@ CREATE TABLE channel_rules (
 ) STRICT;
 
 CREATE TABLE cases (
-  id         INTEGER PRIMARY KEY,
-  title      TEXT NOT NULL,
-  created_at TEXT NOT NULL
+  id          INTEGER PRIMARY KEY,
+  title       TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',  -- free text shown above the Case's activity (decision #98)
+  created_at  TEXT NOT NULL
 ) STRICT;
 
 CREATE TABLE threads (

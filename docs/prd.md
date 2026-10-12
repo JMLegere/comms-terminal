@@ -315,8 +315,10 @@ flowchart LR
 - **`src/universal_inbox/email.py`**: `verify`, `parse` (stdlib `email`; returns nothing for an auto-reply, FR-3a), `EmailSender`.
 - **`src/universal_inbox/slack.py`**: `verify`, `parse` (applies Channel selection), `SlackSender`, `user_email`.
 - **`src/universal_inbox/health.py`**: `connection_health(connection, now)`.
-- **`src/universal_inbox/tui.py`**: the Textual console (`docs/design/console.md`).
-- **`src/universal_inbox/serve.py`**: the service's HTTP handlers: `/hooks/email` and `/hooks/slack` on the public listener, `POST /reply` on the local Unix socket.
+- **`src/universal_inbox/tui.py`** (**Current**): the Textual console (`docs/design/console.md`).
+- **`src/universal_inbox/main.py`** (**Current**): the `universal-inbox` command: console (default), `serve`, `init`.
+- **`scripts/seed_demo.py`** (**Current**): synthetic data for visual QA and the 6.3 demo.
+- **`src/universal_inbox/serve.py`** (**Current**): the service's HTTP handlers: `/hooks/email` and `/hooks/slack` on the public listener, `POST /reply` on the local Unix socket.
 - **`src/universal_inbox/main.py`**: both listeners and `wake` every minute; reads credentials from `$CREDENTIALS_DIRECTORY`.
 - **`scripts/oauth_slack.py`**: consent helper for Jeremy's post-build connect.
 - **`deploy/universal-inbox.service`**: systemd system unit. Ingress and mail-service configuration per D3.
@@ -380,6 +382,8 @@ Every path is **Proposed** unless marked Current. D1 is approved (#67); each pha
   - Verify: `features/sync.feature`: a `tokens_revoked` or `app_uninstalled` event, a failed Slack post, a failed email send, and a rejected inbound request each make health BROKEN.
 
 ### Phase 5 — Console (terminal)
+
+- **Status: done 2026-10-12.** `serve.py`, `tui.py`, `main.py` (`universal-inbox`, `serve`, `init`), `scripts/seed_demo.py`; `tests/test_console.py`, `tests/test_serve.py`. 60 tests pass; 12 visual-QA screenshots reviewed; real-terminal run in herdr; service smoke-tested over HTTP and the Unix socket.
 
 Design: `docs/design/console.md` (approved). Verify each step with Textual's test driver (`run_test`) and the visual-QA states in console.md §5.
 
@@ -764,6 +768,38 @@ All entries are dated 2026-10-10; exact times are unproven unless noted. Full de
   - Source: Jeremy, "we need to agree on console design first", the matcha/pimalaya suggestion, ask tool answers, and "i like the inline mode better" after trying a mock of both reply styles
   - Status: Approved (2026-10-12, "approved.")
   - Supersedes: web console (`web.py`, `keys.js`, console routes); D2 open; D1's stdlib-only rule (Textual added)
+- **76–80**
+  - Request / decision: Console revision from Jeremy's review on Mani: herdr-style bordered panels with titles (#76); Plain-style rail sections, with Todo/Snoozed/Done/Ignored/All nested under "threads" instead of tabs, and browsing People, Organizations, Cases, Channels (#77); mouse support everywhere (#78); single click previews a Thread in a pane on the right, a second click or double click opens it in its own pane, with details in their own container (#79); a Nerd Font icon mapper for all entities, actions, and terms (#80)
+  - Source: Jeremy, review messages with herdr and Plain screenshots
+  - Status: Accepted
+- **81**
+  - Request / decision: Set COLORTERM=truecolor for known truecolor terminals when it is missing, because SSH does not forward it and Textual otherwise drops to a reduced palette (Mani showed broken colors)
+  - Source: Jeremy, "colors are completely broken on mani"; agent diagnosis from the session's TERM/COLORTERM
+  - Status: Accepted
+- **82**
+  - Request / decision: Console styling follows NvChad (base46 onedark palette, Telescope-style pill titles, statusline blocks, subtle cursorline), styling only
+  - Source: Jeremy, "can we take some inspiration from https://nvchad.com/? … only for styling"
+  - Status: Accepted
+- **83–87**
+  - Request / decision: UX pass over every page and component against the UX Fundamentals guide Jeremy supplied. One-level undo (`u`) for Thread actions, block, identity removal, and rule deletion (#83). Every action toast states its consequence (#84). A `?` key overlay; the footer shows only frequent keys (#85). Lists show waiting age and the timeline shows exact times (#86). Goal-oriented empty states, table headers, and explanations on the Channels and Connection pages, including recovery steps when a Connection is broken (#87). Detail: `docs/design/console.md` §7
+  - Source: Jeremy, "can you do a pass on every page and component to revise the ux in terms of the following?"
+  - Status: Accepted
+- **88–92**
+  - Request / decision: Colours from gruvbox-material light, hard background (#88; supersedes #74 dark only and #82's onedark palette). The thread pane is the thread view: list beside the selected Thread, with properties in the same panel; no full-page Thread (#89; supersedes #79). One cohesive view: focus stays on the list, no focus-highlighted borders (#90). Cases laid out like Linear issues, with each Thread as a card that keeps its messages together, ordered by start time, as Linear does for synced Slack threads (#91). Reply composer like Plain's email reply: editable To and Cc, Reply / Reply all, Slack destination shown read-only; Bcc deferred (#92). The footer goes back to listing every action. Detail: `docs/design/console.md` §2–§3
+  - Source: Jeremy, Linear issue screenshot ("cases should be laid out like linear issues … the preview should be the main view for threads … i also don't like that the selected pane gets highlighted"), "are activities weaved or are they all kept within their threads?", "i should be able to reply to 'x' or reply to 'all'", "i liked the styling of the bottom bar better", gruvbox-material screenshot and palette
+  - Status: Accepted
+- **93–96**
+  - Request / decision: Gmail-style keys: `r` reply, `a` reply all, `e` Done, `b` snooze, `m` Ignore, `l` Case, `z` undo, `u` back (#93). Flat statusline and footer, plain text with no blocks or icons except a red block for a broken Connection (#94). Channels page: rules on the left, channels seen in the right pane (#94). Thread properties list other Threads with the same Person and Organization (#95). Snooze has no indefinite option (#96). Detail: `docs/design/console.md` §2–§4
+  - Source: Jeremy, "switch to gmail-esque keybinds", "the bottom bar is still a mess", channels screenshot, "thread detail pane should have a new section below…", "remove 'pause for indefinitely' option"
+  - Status: Accepted
+- **97–100**
+  - Request / decision: One bottom bar: mode, grouped clickable keys, counts and health on a single line (#97). Cases have an editable description (schema version 2: `cases.description`, migrated with `ALTER TABLE`), under a "Description" heading with its box always shown (#98). The reply composer is always visible, shows the saved draft, opens on click, and is a separate region from the properties column; in Case cards it is a footer row (#99). Send and save with `ctrl+enter` (#100); Ghostty's default `ctrl+enter=toggle_fullscreen` is unbound on Mani (`keybind = ctrl+enter=unbind`, backup `config.bak-ctrl-enter`), and `ctrl+s` remains a hidden fallback
+  - Source: Jeremy, "this should all be on one line and reorganized", "cases should have an editable description above the activity", "the reply box should always be visible…", "the case description should have 'Description' header…", "i want send to be ctrl+enter. but we need to remove it as the fullscreen bind first"
+  - Status: Accepted
+- **101**
+  - Request / decision: Bcc on email replies is deferred. It needs the reply contract changed end to end (socket `POST /reply`, `inbox.reply`, the `Sender` protocol, `EmailSender`, `SlackSender`)
+  - Source: Jeremy, "defer bcc, approved" (2026-10-12), which also approved decisions #88–#100
+  - Status: Deferred
 
 ## 8. Work log
 
@@ -862,6 +898,12 @@ All entries are dated 2026-10-10; exact times are unproven unless noted. Full de
   - Activity: Phases 2–4: email adapter (HMAC hook, Plain auto-reply filter, reply-all, Resend sender), Slack adapter (v0 signature, channel selection, message/edit/delete parsing, sender as Jeremy, revocation events), health, Slack OAuth helper; step definitions for all remaining scenarios
   - Result: `uv run pytest` → 53 passed, 0 `@wip`. Mutation checks on signatures, auto-reply headers, `In-Reply-To`, DM selection, `thread_ts`, and health each fail a scenario
   - Evidence: `uv run pytest -q`
+  - Basis: Source-observed
+- **2026-10-12T02:31:16+00:00**
+  - Actor: Agent
+  - Activity: Phase 5: service (`serve.py`: hooks, reply socket 0600, wake loop), Textual console (`tui.py`: queue, Thread, inline reply, pickers, Person, Cases, Channels, health), CLI (`main.py`), demo seeder; `inbox.MarkTodo` and console read models; Textual added as the first runtime dependency (#72). Visual QA: 12 states rendered and reviewed; fixes for an emoji-rendering pause glyph (now `‖`), horizontal scrolling, missing To/Cc labels, and default blue focus colors
+  - Result: `uv run pytest` → 60 passed. Mutation checks on queue refresh and reply-all prefill each fail a test. Real terminal: queue and Thread render; `j`/`k` and cursor restore work. Service smoke test: Slack `url_verification` 200, signed email 204, bad signature 401, socket mode 0600
+  - Evidence: `uv run pytest -q`; screenshots in the session scratchpad
   - Basis: Source-observed
 
 ## 9. Sources and coverage check
