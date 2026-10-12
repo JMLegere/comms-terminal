@@ -214,6 +214,24 @@ def person_name(name: str) -> str:
     return f"{m.group(2)} {m.group(1)}" if m and "@" not in name else name
 
 
+GENERIC = re.compile(AUTOMATED.pattern.replace(r"|[a-z]-[0-9a-f]{20,}", ""), re.I)  # shared role addresses
+
+
+def sender_name(name: str | None, address: str) -> str:
+    """The Person's name for a sender (#117). A shared service address (service@, noreply@, …) is named after
+    the service, not the human it writes for: "Jeremy Legere (via Google Workspace eSignatures)" is "Google
+    Workspace eSignatures", and a TidyCal booking "from" Tony Sheehan is "Tidycal". Everyone else keeps their
+    own name, in First Last order."""
+    name = person_name(name or "") or address
+    if "@" not in address or not GENERIC.match(address):
+        return name
+    via = re.search(r"\(via ([^)]+)\)", name)
+    if via:
+        return via.group(1).strip()
+    org = _org(address.rsplit("@", 1)[1]).split(".")[0]
+    return name if org in _name_key(name).replace(" ", "") else org.capitalize()
+
+
 def _name_key(name: str) -> str:
     """Comparable form of a full name: First Last order, no accents, no "(via …)", lower case."""
     import unicodedata
@@ -222,23 +240,34 @@ def _name_key(name: str) -> str:
     return " ".join(name.lower().split())
 
 
-def _company_domains(db, person_id) -> set[str]:
-    return {r[0].rsplit("@", 1)[1] for r in db.execute(
+def _org(domain: str) -> str:
+    """The organization a domain belongs to: accounts.google.com -> google.com."""
+    # ponytail: last two labels; misreads two-part suffixes (example.co.uk), add a suffix list if that matters
+    return ".".join(domain.lower().split(".")[-2:])
+
+
+def _company_domains(db, person_id, automated: bool = False) -> set[str]:
+    """The organizations a Person writes from: humans' company domains, or (automated=True) the domains of
+    automated senders, which only ever match other automated senders."""
+    return {_org(r[0].rsplit("@", 1)[1]) for r in db.execute(
         "SELECT value FROM identities WHERE person_id = ? AND kind = 'email'", (person_id,))
-        if not AUTOMATED.match(r[0]) and r[0].rsplit("@", 1)[1] not in FREE_MAIL}
+        if bool(AUTOMATED.match(r[0])) == automated and r[0].rsplit("@", 1)[1] not in FREE_MAIL}
 
 
 def _same_person(db, name: str, value: str, kind: str) -> int | None:
-    """The existing Person this sender is: same full name (two words or more) and the same company domain.
-    Never for free-mail domains or automated senders, where a shared name proves nothing (#117)."""
+    """The existing Person this sender is (#117): the same name and the same organization. For people, a full
+    name (two words or more) and a company domain; for automated senders (noreply, notifications, …) the same
+    sender name from the same organization, so Google's no-reply addresses are one "Google Takeout". Never on
+    free-mail domains, and never between a person and an automated relay (a TidyCal booking "from" Tony)."""
     key = _name_key(name or "")
-    if kind != "email" or len(key.split()) < 2 or AUTOMATED.match(value):
+    if kind != "email" or not key:
         return None
+    automated = bool(AUTOMATED.match(value))
     domain = value.rsplit("@", 1)[1]
-    if domain in FREE_MAIL:
+    if domain in FREE_MAIL or (not automated and len(key.split()) < 2):
         return None
     for p in db.execute("SELECT id, display_name FROM persons").fetchall():
-        if _name_key(p["display_name"]) == key and domain in _company_domains(db, p["id"]):
+        if _name_key(p["display_name"]) == key and _org(domain) in _company_domains(db, p["id"], automated):
             return p["id"]
     return None
 
@@ -262,15 +291,21 @@ def merge_duplicates(db) -> list[tuple[str, str]]:
     merged = []
     with db:
         for p in db.execute("SELECT id, display_name FROM persons").fetchall():
-            if person_name(p["display_name"]) != p["display_name"]:
-                db.execute("UPDATE persons SET display_name = ? WHERE id = ?", (person_name(p["display_name"]), p["id"]))
+            addrs = [r[0] for r in db.execute("SELECT value FROM identities WHERE person_id = ?", (p["id"],))]
+            # a Person whose only address is a shared service address is named after the service
+            name = sender_name(p["display_name"], addrs[0]) if len(addrs) == 1 else person_name(p["display_name"])
+            if name != p["display_name"]:
+                db.execute("UPDATE persons SET display_name = ? WHERE id = ?", (name, p["id"]))
     people = db.execute("SELECT id, display_name FROM persons ORDER BY id").fetchall()
     gone = set()
     for i, a in enumerate(people):
         for b in people[i + 1:]:
             if a["id"] in gone or b["id"] in gone or _name_key(a["display_name"]) != _name_key(b["display_name"]):
                 continue
-            if len(_name_key(a["display_name"]).split()) >= 2 and _company_domains(db, a["id"]) & _company_domains(db, b["id"]):
+            people_match = (len(_name_key(a["display_name"]).split()) >= 2
+                            and _company_domains(db, a["id"]) & _company_domains(db, b["id"]))
+            senders_match = _company_domains(db, a["id"], True) & _company_domains(db, b["id"], True)
+            if people_match or senders_match:
                 merge_persons(db, a["id"], b["id"])
                 gone.add(b["id"])
                 merged.append((a["display_name"], b["display_name"]))
@@ -290,7 +325,7 @@ def _identity_for(db, sender: Identity) -> sqlite3.Row:
     if row is not None and row["person_id"] is not None:
         if sender.display_name:  # a Person still named by its address or user ID gets the real name
             db.execute("UPDATE persons SET display_name = ? WHERE id = ? AND display_name = ?",
-                       (person_name(sender.display_name), row["person_id"], value))
+                       (sender_name(sender.display_name, value), row["person_id"], value))
         return row
     person_id = None
     if sender.kind == "slack_user" and sender.profile_email:
@@ -301,7 +336,7 @@ def _identity_for(db, sender: Identity) -> sqlite3.Row:
     if person_id is None and sender.display_name:
         person_id = _same_person(db, sender.display_name, value, sender.kind)
     if person_id is None:
-        person_id = _new_person(db, person_name(sender.display_name or value))
+        person_id = _new_person(db, sender_name(sender.display_name, value))
     if row is None:
         db.execute("INSERT INTO identities (person_id, kind, value) VALUES (?, ?, ?)",
                    (person_id, sender.kind, value))

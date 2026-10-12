@@ -36,9 +36,12 @@ def test_same_name_and_company_domain_is_one_person():
     mail(db, 4, "tony@northbound.com", "Tony Sheehan")
     mail(db, 5, "sam@gmail.com", "Sam Lee")  # free mail: a shared name proves nothing
     mail(db, 6, "sam.lee@gmail.com", "Sam Lee")
+    mail(db, 7, "no-reply@accounts.google.com", "Google Takeout")  # one sender, two of Google's addresses
+    mail(db, 8, "noreply@google.com", "Google Takeout")
     assert people(db)["Hope Scheller"] == ["cdl-atlantic@cdl.com", "hope@cdl.com"]
     count = lambda name: db.execute("SELECT count(*) FROM persons WHERE display_name = ?", (name,)).fetchone()[0]  # noqa: E731
-    assert (count("Hope Scheller"), count("Tony Sheehan"), count("Sam Lee")) == (1, 2, 2)
+    assert (count("Hope Scheller"), count("Tony Sheehan"), count("Tidycal"), count("Sam Lee"), count("Google Takeout")) \
+        == (1, 1, 1, 2, 1)
 
 
 def test_names_are_first_last_and_jeremys_addresses_are_you():
@@ -68,3 +71,14 @@ def test_merge_persons_keeps_the_fuller_name():
     ids = {r["display_name"]: r["id"] for r in db.execute("SELECT id, display_name FROM persons")}
     inbox.merge_persons(db, ids["Marc"], ids["Marc Savoie"])
     assert people(db) == {"Marc Savoie": ["marc@eastvalley.com", "msavoie@climb.ca"]}
+
+
+def test_service_addresses_are_named_after_the_service():
+    assert inbox.sender_name("Tony Sheehan", "service@tidycal.com") == "Tidycal"
+    assert inbox.sender_name("Jeremy Legere (via Google Workspace eSignatures)", "esignature-noreply@google.com") \
+        == "Google Workspace eSignatures"
+    assert inbox.sender_name("Google Takeout", "noreply@google.com") == "Google Takeout"
+    assert inbox.sender_name("Ivy from Linear", "support@linear.app") == "Ivy from Linear"
+    assert inbox.sender_name("VEVOR Official Store CA", "s-baaa5a5b219148699b7505e7913d59c8@relay.walmart.ca") \
+        == "VEVOR Official Store CA"  # a per-seller relay address identifies the seller
+    assert inbox.sender_name("Tony Sheehan", "tony@northboundadvisory.com") == "Tony Sheehan"
