@@ -4,11 +4,12 @@ External services are faked at the HTTP-call seam (`post` / `get`)."""
 import hashlib
 import hmac
 import json
+from dataclasses import replace
 from datetime import datetime, timezone
 
 from pytest_bdd import given, parsers, then, when
 
-from steps.inbox_steps import EMAIL, MAILBOX, SLACK, keep
+from steps.inbox_steps import EMAIL, MAILBOX, SLACK, keep, tick
 from universal_inbox import email, health, inbox, slack
 
 EMAIL_SECRET, SLACK_SECRET = b"inbox-test-secret", b"slack-test-secret"
@@ -76,6 +77,39 @@ def totals(ctx):
 
 
 # --- Email -----------------------------------------------------------------
+
+def ingest_email_refs(ctx, mid, refs, subject="Booking"):
+    incoming = email.parse(raw_mail(message_id=mid, subject=subject, extra=[f"References: {refs}"]),
+                           connection(ctx, EMAIL))
+    thread = keep(ctx, inbox.ingest(ctx.db, replace(incoming, occurred_at=tick(ctx))))
+    ctx.email_threads[mid] = thread.id
+    return thread
+
+
+@given("Ingest has received emails:")
+def emails_with_refs(ctx, datatable):
+    ctx.email_threads = {}
+    for mid, refs, subject in datatable[1:]:
+        ingest_email_refs(ctx, mid, refs, subject)
+    ctx.email_first_id = min(ctx.email_threads.values())
+
+
+@when(parsers.parse('Ingest receives an email with Message-ID "{mid}" and Thread Ref "{refs}"'))
+@when(parsers.parse('Ingest receives an email with Message-ID "{mid}" and no Thread Ref'))
+def email_with_refs(ctx, mid, refs=""):
+    ingest_email_refs(ctx, mid, refs)
+
+
+@then(parsers.parse('the Thread for Message-ID "{mid}" has Activities with Message-IDs:'))
+def email_ref_history(ctx, mid, datatable):
+    view = inbox.thread_view(ctx.db, ctx.email_threads[mid])
+    assert [m["native_id"] for m in view["messages"]] == [row[0] for row in datatable[1:]]
+
+
+@then(parsers.parse('the Thread for Message-ID "{mid}" keeps the first Thread\'s Id'))
+def email_ref_keeps_first_id(ctx, mid):
+    assert inbox.get_thread(ctx.db, ctx.email_threads[mid]).id == ctx.email_first_id
+
 
 @given(parsers.parse('a Thread whose last message "{mid}" came from "{frm}" with CC "{cc}"'))
 def email_thread_with_cc(ctx, mid, frm, cc):

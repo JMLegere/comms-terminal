@@ -56,3 +56,44 @@ Feature: Email
     Then the response is 401
     And no Activity or Thread is created
     And the email Connection has a Last Error
+
+  @AS-4 @FR-3
+  Scenario: Ingest keeps exact Thread Ref matches separate from the subject
+    Given Ingest has received emails:
+      | Message-ID       | Thread Ref       | Subject |
+      | <one@newco.io>   | <absent@newco.io> | Booking |
+      | <same@newco.io>  |                  | Booking |
+    When Ingest receives an email with Message-ID "<two@newco.io>" and Thread Ref "<absent@newco.io>"
+    Then the Thread for Message-ID "<one@newco.io>" has Activities with Message-IDs:
+      | Message-ID     |
+      | <one@newco.io> |
+      | <two@newco.io> |
+    And the Thread for Message-ID "<same@newco.io>" has Activities with Message-IDs:
+      | Message-ID      |
+      | <same@newco.io> |
+
+  @AS-4 @FR-3
+  Scenario: Ingest joins a late parent to the Thread that already references it
+    Given Ingest has received emails:
+      | Message-ID        | Thread Ref         | Subject |
+      | <child@newco.io>   | <parent@newco.io>   | Booking |
+    When Ingest receives an email with Message-ID "<parent@newco.io>" and no Thread Ref
+    Then the Thread for Message-ID "<child@newco.io>" has Activities with Message-IDs:
+      | Message-ID         |
+      | <child@newco.io>   |
+      | <parent@newco.io>  |
+    And the Thread for Message-ID "<parent@newco.io>" keeps the first Thread's Id
+
+  @AS-4 @FR-3
+  Scenario: Ingest joins split Threads when an email references both
+    Given Ingest has received emails:
+      | Message-ID       | Thread Ref | Subject |
+      | <one@newco.io>   |            | Booking |
+      | <two@newco.io>   |            | Booking |
+    When Ingest receives an email with Message-ID "<bridge@newco.io>" and Thread Ref "<two@newco.io> <one@newco.io>"
+    Then the Thread for Message-ID "<two@newco.io>" has Activities with Message-IDs:
+      | Message-ID         |
+      | <one@newco.io>     |
+      | <two@newco.io>     |
+      | <bridge@newco.io>  |
+    And the Thread for Message-ID "<two@newco.io>" keeps the first Thread's Id

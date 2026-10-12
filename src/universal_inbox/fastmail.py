@@ -222,7 +222,7 @@ def sync(db, client, connection, since: datetime, mine: set[str], limit=50, page
         log.info("fastmail %s %s", "stored" if t else "duplicate", inc.native_id)
         if t:
             threads.append(t.id)
-    return threads
+    return [inbox.get_thread(db, tid).id for tid in threads]
 
 
 def poll_loop(db_path: str, client, stop: threading.Event, every: float = 600) -> None:
@@ -251,14 +251,15 @@ def poll_loop(db_path: str, client, stop: threading.Event, every: float = 600) -
 def import_recent(db, client, connection, days: int) -> int:
     """One-time import (Jeremy, 2026-10-12): the last `days` of Inbox and Sent, every Thread left in Todo."""
     since = datetime.now(timezone.utc) - timedelta(days=days)
-    tids = sync(db, client, connection, since, identities(client), limit=50, pages=40)
-    for tid in set(tids):
+    tids = {inbox.get_thread(db, tid).id for tid in
+            sync(db, client, connection, since, identities(client), limit=50, pages=40)}
+    for tid in tids:
         t = inbox.get_thread(db, tid)
         if t.status != "TODO":
-            replied = db.execute("SELECT 1 FROM activities WHERE thread_id = ? AND identity_id IS NULL"
+            replied = db.execute("SELECT 1 FROM thread_activities WHERE thread_id = ? AND identity_id IS NULL"
                                  " AND kind = 'MESSAGE'", (tid,)).fetchone()
             inbox.act(db, tid, inbox.MarkTodo("NEW_REPLY" if replied else "CREATED"))
-    return len(set(tids))
+    return len(tids)
 
 
 # --- outbound ------------------------------------------------------------------------------------

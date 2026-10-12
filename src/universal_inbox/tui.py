@@ -589,6 +589,16 @@ class ThreadsPage(Page, ThreadActions):
             return
         db, view = self.app.db, self.app.view
         keep = self.current_thread_id()  # selection follows the Thread, not the row number
+        old_id = self.rows[min(self.query_one(DataTable).cursor_row, len(self.rows) - 1)]["id"] if self.rows else None
+        tv = self.app.main.thread_view
+        members = inbox.snapshot(db, keep)["_members"] if keep is not None else None
+        membership_changed = tv is not None and keep is not None and inbox.get_thread(db, tv.thread_id).id == keep and tv.members != members
+        if keep is not None and (old_id != keep or membership_changed):
+            detail = inbox.get_thread(db, keep).status_detail
+            if detail not in inbox.VIEWS[VIEW_NAMES[view]]:
+                view = self.app.view = next(i for i, name in enumerate(VIEW_NAMES) if detail in inbox.VIEWS[name])
+                self.app.main.query_one("#main").border_title = pill(self.TITLE, "blue")
+                self.app.main.refresh_chrome()
         self.rows = inbox.queue(db, VIEW_NAMES[view])
         table = self.query_one(DataTable)
         row = self.app.cursor.get(view, 0)
@@ -617,12 +627,17 @@ class ThreadsPage(Page, ThreadActions):
             if main.pending_select in ids:
                 table.move_cursor(row=ids.index(main.pending_select))
             main.pending_select = None
-        main.show_thread(self.current_thread_id())
+        selected = self.current_thread_id()
+        main.show_thread(selected)
+        tv = main.thread_view
+        if tv is not None and getattr(tv, "view", None) is not None and tv.view["thread"].id == selected:
+            tv.members = tv.view["_members"]
 
     def current_thread_id(self):
         if not getattr(self, "rows", None):
             return None
-        return self.rows[min(self.query_one(DataTable).cursor_row, len(self.rows) - 1)]["id"]
+        tid = self.rows[min(self.query_one(DataTable).cursor_row, len(self.rows) - 1)]["id"]
+        return inbox.get_thread(self.app.db, tid).id
 
     def on_data_table_row_highlighted(self, event):
         if self.app.main.current is not self:  # a page being replaced must not repaint the thread pane
@@ -677,6 +692,7 @@ class ReplyBox(Vertical):
     def __init__(self, thread_id):
         super().__init__(classes="replybox composer")
         self.thread_id, self.view, self.mode = thread_id, None, "sender"
+        self.draft_key = thread_id  # keep the original saved-text key when this Thread becomes an alias
 
     def compose(self) -> ComposeResult:
         yield Static(classes="idle")
@@ -703,10 +719,13 @@ class ReplyBox(Vertical):
 
     def show_idle(self, view):
         """Closed state: the saved draft, or where a reply would go."""
-        self.view = view
-        draft = self.app.drafts.get(self.thread_id, "").strip()
+        self.view, self.thread_id = view, view["thread"].id
+        drafts = self.app.thread_drafts(self.thread_id)
+        draft = drafts[0][1].strip() if drafts else ""
         keys = "[#a89984]r reply · a reply all[/]"
-        if draft:
+        if len(drafts) > 1:
+            text = f"[#b47109]{ICON['edited']} {len(drafts)} saved drafts[/]  {keys}"
+        elif draft:
             first = draft.splitlines()[0]
             text = f"[#b47109]{ICON['edited']} Draft[/]  [#654735]{escape(first[:80])}{'…' if len(draft) > len(first[:80]) else ''}[/]  {keys}"
         else:
@@ -719,7 +738,25 @@ class ReplyBox(Vertical):
             self.open(self.view, self.mode)
 
     def open(self, view, mode="all"):
-        self.view = view
+        self.view, self.thread_id = view, view["thread"].id
+        if self.has_class("open"):
+            self.query_one(TextArea).focus()
+            return
+        drafts = self.app.thread_drafts(self.thread_id)
+        if len({text for _, text in drafts}) > 1:
+            options = [(str(key), f"[#928374]Thread {key}[/] · {escape(text.strip().splitlines()[0][:80])}")
+                       for key, text in drafts]
+
+            def chosen(key):
+                if key is not None and self.is_attached:
+                    self._open_draft(inbox.thread_view(self.app.db, self.thread_id), mode, int(key))
+
+            self.app.push_screen(Pick("Choose draft", options), chosen)
+            return
+        self._open_draft(view, mode, drafts[0][0] if drafts else self.draft_key)
+
+    def _open_draft(self, view, mode, draft_key):
+        self.view, self.thread_id, self.draft_key = view, view["thread"].id, draft_key
         email_thread = self.email
         for row in self.query(".field.to, .field.cc, .field.subject"):
             row.display = email_thread
@@ -733,7 +770,9 @@ class ReplyBox(Vertical):
             self.query_one(".flabel").update("To")
             self.query_one(".fromvalue").update(f"{escape(view['where'])} [#928374]· in thread[/]")
         self.hint("ctrl+enter send · esc close (keeps draft)")
-        self.query_one(TextArea).text = self.app.drafts.get(self.thread_id, "")
+        area = self.query_one(TextArea)
+        area.text = self.app.drafts.get(self.draft_key, "")
+        area.move_cursor(area.document.end)
         self.add_class("open")
         self.query_one(TextArea).focus()
 
@@ -756,7 +795,7 @@ class ReplyBox(Vertical):
 
     def keep_draft(self):
         if self.has_class("open") and self.query(TextArea):
-            self.app.drafts[self.thread_id] = self.query_one(TextArea).text
+            self.app.drafts[self.draft_key] = self.query_one(TextArea).text
 
     def on_unmount(self):
         self.keep_draft()
@@ -778,6 +817,7 @@ class ReplyBox(Vertical):
         if self.email and not to:
             self.hint("Not sent: add at least one recipient in To.", error=True)
             return
+        self.thread_id = inbox.get_thread(self.app.db, self.thread_id).id
         self.hint("sending…")
         self.send(text, to, cc)
 
@@ -791,7 +831,7 @@ class ReplyBox(Vertical):
         self.app.call_from_thread(self.sent)
 
     def sent(self):
-        self.app.drafts.pop(self.thread_id, None)
+        self.app.drafts.pop(self.draft_key, None)
         self.remove_class("open")
         self.show_idle(self.view)
         self.app.undo = None  # a sent message cannot be unsent
@@ -884,6 +924,11 @@ def gutter_row(gutter: str, content, cls: str = ""):
     return Horizontal(MessageText(gutter, classes="gutter"), content, classes=f"mrow {cls}".strip())
 
 
+def message_action_id(native_id: str) -> str:
+    """A Python string literal inside Rich markup: brackets must reach the action parser unchanged."""
+    return repr(native_id).replace("[", r"\u005b").replace("]", r"\u005d")
+
+
 def message_widgets(v, st: dict | None = None, raw=None) -> list:
     """A Thread's messages, Gmail-style (#105-#109): each open message is a card (header, body, •••,
     Trimmed content under a rule, Attachment chips); older ones collapse to faded one-line rows."""
@@ -893,23 +938,23 @@ def message_widgets(v, st: dict | None = None, raw=None) -> list:
     email = v["channel"].get("platform") == "email"
     dim = "#928374"
     opened = default_open(msgs)
-    is_open = lambda i: i in st["open"] or (i in opened and i not in st["closed"])  # noqa: E731
+    is_open = lambda i: msgs[i]["native_id"] in st["open"] or (i in opened and msgs[i]["native_id"] not in st["closed"])  # noqa: E731
 
     def collapsed(i, m):
         snippet = "message deleted" if m["deleted"] else message_body(m, raw, not email).snippet
         # Faded: older messages recede so the open ones read first (Jeremy, 2026-10-12).
         # The gutter badge says who; the row is just when and what (Jeremy, 2026-10-12).
-        line = f"[@click=app.msg_toggle({tid},{i})][#a89984]{when(m['at']):<5} {escape(snippet)}[/][/]"
+        line = f"[@click=app.msg_toggle({tid},{message_action_id(m['native_id'])})][#a89984]{when(m['at']):<5} {escape(snippet)}[/][/]"
         return gutter_row(badge(m["who"], faded=True), MessageText(line, classes="mline"), "faded")
 
     def card(i, m):
         age = datetime.now().astimezone() - datetime.fromisoformat(m["at"]).astimezone()
         meta = stamp(m["at"]) + (f" · {ago(m['at'])}" if age.days < 7 else "")
         meta += f"  {ICON['edited']} edited" if m["edited"] else ""
-        head = f"[@click=app.msg_toggle({tid},{i})][b #654735]{escape(m['who'])}[/][/]  [{dim}]{meta}[/]"
-        rcpt = recipients(m, me, i in st["to"], m["at"]) if email else ""
+        head = f"[@click=app.msg_toggle({tid},{message_action_id(m['native_id'])})][b #654735]{escape(m['who'])}[/][/]  [{dim}]{meta}[/]"
+        rcpt = recipients(m, me, m["native_id"] in st["to"], m["at"]) if email else ""
         if rcpt:
-            head += f"\n[@click=app.msg_to({tid},{i})][{dim}]{rcpt}[/][/]"
+            head += f"\n[@click=app.msg_to({tid},{message_action_id(m['native_id'])})][{dim}]{rcpt}[/][/]"
         parts = [MessageText(head, classes="mhead")]
         if m["deleted"]:
             parts.append(MessageText(f"[i {dim}]{ICON['deleted']} message deleted[/]", classes="mbody"))
@@ -921,8 +966,8 @@ def message_widgets(v, st: dict | None = None, raw=None) -> list:
         if body.text:
             parts.append(MessageText(body.text, classes="mbody"))
         if body.trimmed:
-            parts.append(MessageText(f"[@click=app.msg_trim({tid},{i})][{dim} on #ebdbb2] ••• [/][/]", classes="mtoggle"))
-            if i in st["trim"]:
+            parts.append(MessageText(f"[@click=app.msg_trim({tid},{message_action_id(m['native_id'])})][{dim} on #ebdbb2] ••• [/][/]", classes="mtoggle"))
+            if m["native_id"] in st["trim"]:
                 parts.append(MessageText(body.trimmed, classes="mtrim"))
         if body.attachments:
             link = message_link(m) if email else ""
@@ -1035,6 +1080,7 @@ class ThreadView(Horizontal):
     def __init__(self, thread_id: int):
         super().__init__(classes="threadview")
         self.thread_id = thread_id
+        self.members = None  # membership acknowledged by the queue, not by a message-only repaint
 
     def compose(self) -> ComposeResult:
         with Vertical(classes="convo"):
@@ -1052,6 +1098,9 @@ class ThreadView(Horizontal):
         if not self.query(".thead"):  # not composed yet; on_mount fills it
             return
         v = inbox.thread_view(self.app.db, self.thread_id)
+        self.thread_id = v["thread"].id
+        if self.members is None:
+            self.members = v["_members"]
         self.view = v
         head = thread_head(v)
         if self.has_class("narrow"):  # properties column hidden: keep who, where, and case under the title
@@ -1063,6 +1112,7 @@ class ThreadView(Horizontal):
                       self.query_one(".timeline"))
         self.query_one(".detailtext").update(details_markup(v, self.app.db))
         box = self.query_one(ReplyBox)
+        box.view, box.thread_id = v, self.thread_id
         if not box.has_class("open"):
             box.show_idle(v)
 
@@ -1506,6 +1556,7 @@ class CaseCard(Vertical):
 
     def show(self, v, expanded: bool, selected: bool):
         t, msgs = v["thread"], v["messages"]
+        expanded |= self.query_one(ReplyBox).has_class("open")
         g, color, label = GLYPH[t.status_detail]
         plat = v["channel"]["platform"]
         self.border_title = f"{ICON[plat]} [b]{escape(t.title)}[/] [#928374]· {escape(v['where'])}[/]"
@@ -1522,6 +1573,7 @@ class CaseCard(Vertical):
         self.query_one(".cardbody").update(body)
         self.query_one(".cardbody").display = bool(body)
         box = self.query_one(ReplyBox)
+        box.view, box.thread_id = v, t.id
         box.display = expanded
         if not box.has_class("open"):
             box.show_idle(v)
@@ -1622,13 +1674,17 @@ class CasePage(Page, ThreadActions):
 
     def refresh_data(self):
         db = self.app.db
+        keep = self.current_thread_id()
+        keep = inbox.get_thread(db, keep).id if keep is not None else None
+        self.toggled = {inbox.get_thread(db, tid).id for tid in self.toggled}
         case = db.execute("SELECT title, description, created_at FROM cases WHERE id = ?", (self.case_id,)).fetchone()
         self.description = case["description"]
         # Cards sit in the activity by when each Thread started (its first message), like Linear's synced threads.
         self.views = sorted((inbox.thread_view(db, t.id) for t in inbox.case_threads(db, self.case_id)),
                             key=lambda v: v["messages"][0]["at"] if v["messages"] else "")
         threads = [v["thread"] for v in self.views]
-        self.sel = max(0, min(self.sel, len(self.views) - 1))
+        ids = [t.id for t in threads]
+        self.sel = ids.index(keep) if keep in ids else max(0, min(self.sel, len(self.views) - 1))
         self.query_one(".casehead").update(
             f"[b #45707a]{escape(case['title'])}[/]\n[#928374]{len(threads)} thread{'s' * (len(threads) != 1)}[/]")
         self.query_one(DescriptionBox).show(self.description)
@@ -1637,8 +1693,21 @@ class CasePage(Page, ThreadActions):
         self.query_one(".caseprops").update(self.props_markup())
         cards = self.query_one(".cards")
         if [c.thread_id for c in cards.query(CaseCard)] != [t.id for t in threads]:
-            cards.remove_children()
-            cards.mount_all([CaseCard(t.id, i) for i, t in enumerate(threads)])
+            old, retained = list(cards.query(CaseCard)), []
+            for i, t in enumerate(threads):
+                matches = [c for c in old if inbox.get_thread(db, c.thread_id).id == t.id]
+                if matches:
+                    card = max(matches, key=lambda c: (c.query_one(ReplyBox).has_focus_within,
+                                                       c.query_one(ReplyBox).has_class("open")))
+                    card.thread_id, card.index = t.id, i
+                    retained.append(card)
+                else:
+                    cards.mount(CaseCard(t.id, i))
+            for card in old:
+                if card not in retained:
+                    card.query_one(ReplyBox).keep_draft()
+                    card.remove()
+            cards.sort_children(key=lambda c: c.index)
             self.call_after_refresh(self.paint)
         else:
             self.paint()
@@ -1822,9 +1891,17 @@ class MainScreen(Screen):
 
     def open_thread(self, thread_id):
         """Show a Thread where it lives: its Status view, selected, in the thread pane."""
-        detail = inbox.get_thread(self.app.db, thread_id).status_detail
-        self.pending_select = thread_id
-        self.go(f"view:{next(i for i, n in enumerate(VIEW_NAMES) if detail in inbox.VIEWS[n])}")
+        thread = inbox.get_thread(self.app.db, thread_id)
+        self.pending_select = thread.id
+        view = next(i for i, name in enumerate(VIEW_NAMES) if thread.status_detail in inbox.VIEWS[name])
+        tv = self.thread_view
+        if isinstance(self.current, ThreadsPage) and tv is not None and inbox.get_thread(self.app.db, tv.thread_id).id == thread.id:
+            self.app.view = view
+            self.query_one("#main").border_title = pill(self.current.TITLE, "blue")
+            self.current.refresh_data()
+            self.refresh_chrome()
+        else:
+            self.go(f"view:{view}")
 
     def open_person(self, person_id):
         self.open(lambda: PersonPage(person_id))
@@ -1838,7 +1915,10 @@ class MainScreen(Screen):
         """Fill the thread pane (Threads views only); the same Thread is refreshed in place."""
         pane = self.query_one("#thread")
         tv = self.thread_view
-        if thread_id is not None and tv is not None and tv.thread_id == thread_id:
+        if thread_id is not None:
+            thread_id = inbox.get_thread(self.app.db, thread_id).id
+        if thread_id is not None and tv is not None and inbox.get_thread(self.app.db, tv.thread_id).id == thread_id:
+            self.showing = thread_id
             tv.refresh_data()
             return
         pane.remove_children()
@@ -1914,9 +1994,23 @@ class Console(App):
         self.push_screen("main")
         self.set_interval(2, self.check_changes)
 
+    def thread_drafts(self, thread_id: int) -> list[tuple[int, str]]:
+        """Saved texts stay under their original keys; aliases only change which Thread offers them."""
+        members = set(inbox.snapshot(self.db, thread_id)["_members"])
+        return [(key, text) for key, text in self.drafts.items()
+                if text.strip() and key in members]
+
     # Mouse: markup links ([@click=app.…]) and the rail, tables, menus, and footer keys are all clickable.
     def message_state(self, thread_id: int) -> dict:
-        return self.msg_states.setdefault(thread_id, new_message_state())
+        tid = inbox.get_thread(self.db, thread_id).id
+        st = self.msg_states.setdefault(tid, new_message_state())
+        for old_id in list(self.msg_states):
+            if old_id != tid and inbox.get_thread(self.db, old_id).id == tid:
+                old = self.msg_states.pop(old_id)
+                for key in ("open", "closed", "trim", "to"):
+                    st[key].update(old[key])
+                st["lines"] |= old["lines"]
+        return st
 
     def repaint_messages(self):
         tv = self.main.thread_view
@@ -1926,15 +2020,19 @@ class Console(App):
             self.main.page.paint()
 
     def _flip(self, thread_id, key, i):
+        if isinstance(i, int):
+            i = inbox.thread_view(self.db, thread_id)["messages"][i]["native_id"]
         self.message_state(thread_id)[key] ^= {i}
         self.repaint_messages()
 
     def action_msg_toggle(self, thread_id, i):
         st = self.message_state(thread_id)
         v = inbox.thread_view(self.db, thread_id)
-        now_open = i in st["open"] or (i in default_open(v["messages"]) and i not in st["closed"])
-        st["open"].discard(i), st["closed"].discard(i)
-        (st["closed"] if now_open else st["open"]).add(i)
+        native_id = v["messages"][i]["native_id"] if isinstance(i, int) else i
+        opened = {v["messages"][j]["native_id"] for j in default_open(v["messages"])}
+        now_open = native_id in st["open"] or (native_id in opened and native_id not in st["closed"])
+        st["open"].discard(native_id), st["closed"].discard(native_id)
+        (st["closed"] if now_open else st["open"]).add(native_id)
         self.repaint_messages()
 
     def action_msg_trim(self, thread_id, i):
@@ -1956,9 +2054,9 @@ class Console(App):
             tid = page.views[page.sel]["thread"].id
         else:
             return
-        n = len(inbox.thread_view(self.db, tid)["messages"])
+        ids = {m["native_id"] for m in inbox.thread_view(self.db, tid)["messages"]}
         st = self.message_state(tid)
-        st["open"], st["closed"] = (set(range(n)), set()) if expand else (set(), set(range(n)))
+        st["open"], st["closed"] = (ids, set()) if expand else (set(), ids)
         st["lines"] = expand
         self.repaint_messages()
 
@@ -2013,7 +2111,12 @@ class Console(App):
             return
         _, restore = self.undo
         self.undo = None
-        restore()
+        try:
+            restore()
+        except inbox.StaleThreadSnapshot:
+            self.main.refresh_all()
+            self.notify("Cannot undo: this thread was reconciled. Current state kept.")
+            return
         page = self.main.page
         if page is not None and hasattr(page, "after_change"):
             page.after_change()

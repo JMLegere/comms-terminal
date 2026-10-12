@@ -92,6 +92,8 @@ Status key in brackets:
   - **FR-2a** [PL]: When a Slack message is deleted, the Delete Activity references the deleted message's native ID and carries no content; it is the audit record. The content of the deleted message's earlier Activities (the message and any edits) is cleared, as in Plain's Slack data retention.
 - **FR-3** [PL]: **Email receiving.** Mail is forwarded in, as in Plain: a Google Workspace routing rule copies every message for `jeremy@agentmaple.com` to the inbound address and still delivers it to Gmail. The system never reads the Gmail mailbox.
   - Every new inbound email creates a Thread; a reply that references an earlier message (`In-Reply-To` / `References`) joins its Thread.
+  - [D] Reconcile stored email Threads within one mailbox using exact Message-ID references, including late parents and shared referenced ancestors outside stored history (decision #118). Subject, body, sender, time-window, fuzzy, and AI matching are excluded.
+  - Activity records and raw messages remain immutable. Old Thread IDs resolve to the retained Thread; the latest complete triage state and one Case association are preserved. Conflicting Case associations keep their Threads separate for review.
   - Mail Jeremy sends from Gmail directly is never seen (Plain assumes replies happen in Plain). Accepted in decision #55.
 - **FR-3a** [PL]: **Auto-reply filter.** An inbound email is an auto-reply when it carries one of Plain's header signals: `Auto-Submitted` (other than `no`), `Precedence: auto_reply` or `bulk`, `X-AutoReply`, `X-Autorespond`, `X-Amazon-Auto-Reply`, `X-amzn-vacation`, `X-SFDC-AutoResponse`, `X-ServiceNow-Generated`, `X-Front-Autoreply`, `X-CodeTwo-AutoResponse` / `X-C2AutoRespond`, `X-MDAutoResponse`, `X-QQ-Auto-Reply`, `X-MS-Exchange-Generated-Message-Source`. A matching subject prefix ("Automatic reply:", "Out of office:", and others) counts only together with a header signal.
   - A filtered auto-reply is not stored, creates no Thread, and never moves one.
@@ -156,7 +158,7 @@ Status key in brackets:
 
 ### Non-functional
 
-- **NFR-1** [PL]: **Completeness** relies on event delivery, as in Plain: no polling or reconciliation on either channel (decisions #55, #66). See R7 and R12.
+- **NFR-1** [PL]: **Completeness** relies on event delivery, as in Plain (decisions #55, #66). Reference-based reconciliation repairs stored Thread membership; it does not establish source completeness. See R7 and R12.
 - **NFR-2** [C / P]: **Sync health.**
   - Slack: Broken when Slack reports the token revoked or the app uninstalled (`tokens_revoked`, `app_uninstalled` events), or a reply fails to post.
   - Email: Broken on an inbound request that fails verification or a send failure.
@@ -187,7 +189,7 @@ Executable form: `features/<domain>.feature` (Gherkin via pytest-bdd), each scen
 - **AS-1**: Jeremy reads an email in Gmail and forgets it. → The Thread stays Todo / Needs first response.
 - **AS-2**: Logan emails, then pings in a DM. → Two Todo Threads on Logan's Person record (via his Slack profile email). C groups them into a Case.
 - **AS-3**: Jeremy replies to an email Thread from the console. → The reply is sent with `In-Reply-To`; the Thread is Snoozed / Waiting for them.
-- **AS-4**: The other side then replies. → Todo / Needs next response.
+- **AS-4**: The other side then replies. → Todo / Needs next response in the same Thread. Exact references reconcile eligible split email Threads even when a parent arrives later or a reply bridges stored branches; Activities remain unchanged.
 - **AS-5**: A Done Slack Thread's message is edited by its author. → Todo / Needs next response.
 - **AS-6**: Jeremy blocks `alerts@signoz.io`, and a new alert arrives. → A new Thread is created as Done / Ignored and is visible under the Ignored filter.
 - **AS-7**: A new prospect emails for the first time. → Todo / Needs first response; a Person is auto-created.
@@ -827,7 +829,7 @@ All entries are dated 2026-10-10; exact times are unproven unless noted. Full de
 - **112**
   - Request / decision: The one-time Gmail import (30 days, all in Todo) goes through a Google Takeout export of Inbox and Sent; deferred until Jeremy has the export
   - Source: Jeremy, "also can you do the same one-time import for my gmail", ask tool answer "Google Takeout", "defer that for now" (2026-10-12)
-  - Status: Deferred
+  - Status: Completed (2026-10-12). Imported 95 messages into 32 Todo Threads from Inbox and Sent for the 30-day window ending `2026-10-12T16:11:29Z`; skipped 36 duplicates and one auto-reply, and held one invalid date. Existing Thread states preserved. Persisted dates, sender attribution, Todo queue visibility, and all 95 raw-message hashes verified; 118 tests passed.
 - **113**
   - Request / decision: Fastmail incoming mail is event-driven, like Gmail: a Fastmail rule ("Universal Inbox": all messages → send a copy to `fastmail@inbox.agentmaple.com`, continue other rules, first in the list) feeds a second Email Routing rule and the same Worker, which now sends the envelope recipient as `X-Inbox-To` inside the signature; the hook files the copy under the Connection that address names, with its raw source (full rendering, real threading headers, automated-mail filtering). The service accepts both signature forms. MCP stays for sending (the Fastmail ID of a forwarded copy is found by sender and Message-ID) and for a 10-minute poll of Sent that catches replies written in Fastmail itself. Jeremy chose to copy everything, screened mail included; contact mail also still reaches Gmail through his older forward, and the first copy by Message-ID wins
   - Source: Jeremy, "is it possible to make the fastmail connection event driven instead of polling - like gmail?", "Yes + slow Sent poll", "connect to chrome on mani and configure fastmail for me", "Everything, screened too" (2026-10-12)
@@ -848,6 +850,11 @@ All entries are dated 2026-10-10; exact times are unproven unless noted. Full de
   - Request / decision: People merge smartly. A new sender joins an existing Person when the full name (two words or more, compared without accents, "(via …)", or Outlook's "Last, First" order) matches and they share a company domain; never on free-mail domains or automated and relay senders (noreply, service@, notifications, relay addresses), where a shared name proves nothing. `inbox.merge_persons` joins two Persons (Identities move, the fuller name stays); `inbox.merge_duplicates` applies the rule to what is stored. Person names read First Last. Jeremy's own address on any email Connection is "You", whichever Connection the mail came through. Applied live: Hope Scheller's two addresses merged; Marc and Marc Savoie merged on Jeremy's word; "Last, First" names turned around; Jeremy's two addresses detached from the Person "Jeremy Legere" (stored Activities cannot be relabelled). Left apart on purpose: Tony Sheehan's TidyCal relay, the two Google Takeout senders. Backup before the change: `inbox.before-people-merge.db`
   - Source: Jeremy, "can you smartly merge the people in the app", ask tool answers "Same person, merge" and "Yes, go" (2026-10-12)
   - Status: Accepted
+
+- **118**
+  - Request / decision: Email Thread reconciliation uses exact Message-ID references only; fuzzy and AI matching are excluded. Reconcile same-mailbox reference-linked branches, late parents, and shared referenced ancestors. Preserve immutable Activities and raw mail through logical Thread aliases; old IDs remain usable. Retain the latest complete triage state, carry a single Case association, and hold conflicting Cases for review. Preserve saved drafts through alias-aware selection.
+  - Source: Jeremy, "no fuzzy or ai matching, but yes to ref-based reconciliation" (2026-10-12).
+  - Status: Implemented and locally verified (2026-10-12): schema 4, immutable Activity projection, coherent alias reads, merge-aware drafts and undo. All 191 tests passed; rendered draft chooser and composer inspected. Read-only existing-inbox snapshot: 121 messages, 102 verified raw headers, 19 missing raw sources held, zero eligible groups or Case conflicts. Release and live indexing pending.
 
 ## 8. Work log
 

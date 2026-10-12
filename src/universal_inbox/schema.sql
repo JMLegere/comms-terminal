@@ -48,6 +48,7 @@ CREATE TABLE threads (
   case_id           INTEGER REFERENCES cases (id),
   created_at        TEXT NOT NULL,
   follow_up_at      TEXT,            -- Waiting for them: back to Todo at this time with no reply (#116)
+  merged_into       INTEGER REFERENCES threads (id) CHECK (merged_into < id), -- stable alias, NULL = active
   UNIQUE (channel_id, native_thread_id),
   CHECK (
     (status = 'TODO'
@@ -63,6 +64,27 @@ CREATE TABLE threads (
 ) STRICT;
 CREATE INDEX threads_queue ON threads (status, status_changed_at);
 CREATE INDEX threads_case ON threads (case_id);
+
+CREATE TRIGGER threads_alias_insert BEFORE INSERT ON threads
+WHEN NEW.merged_into IS NOT NULL AND NOT EXISTS (
+  SELECT 1 FROM threads t JOIN channels ch ON ch.id = t.channel_id
+  WHERE t.id = NEW.merged_into AND t.merged_into IS NULL
+    AND t.channel_id = NEW.channel_id AND ch.kind = 'mailbox'
+)
+BEGIN
+  SELECT RAISE(ABORT, 'thread aliases require an active older thread in the same mailbox');
+END;
+
+CREATE TRIGGER threads_alias_update BEFORE UPDATE OF merged_into, channel_id ON threads
+WHEN (NEW.merged_into IS NOT NULL AND NOT EXISTS (
+  SELECT 1 FROM threads t JOIN channels ch ON ch.id = t.channel_id
+  WHERE t.id = NEW.merged_into AND t.merged_into IS NULL
+    AND t.channel_id = NEW.channel_id AND ch.kind = 'mailbox'
+)) OR (EXISTS (SELECT 1 FROM threads t WHERE t.merged_into = OLD.id)
+       AND (NEW.merged_into IS NOT NULL OR NEW.channel_id IS NOT OLD.channel_id))
+BEGIN
+  SELECT RAISE(ABORT, 'thread aliases require an active older thread in the same mailbox');
+END;
 
 CREATE TABLE persons (
   id           INTEGER PRIMARY KEY,
@@ -102,6 +124,18 @@ CREATE TABLE activities (
 ) STRICT;
 CREATE INDEX activities_thread ON activities (thread_id, occurred_at);
 CREATE INDEX activities_identity ON activities (identity_id);
+
+CREATE TABLE email_refs (
+  activity_id INTEGER NOT NULL REFERENCES activities (id),
+  native_id   TEXT NOT NULL,
+  PRIMARY KEY (activity_id, native_id)
+) STRICT;
+CREATE INDEX email_refs_native ON email_refs (native_id);
+
+CREATE VIEW thread_activities AS
+SELECT a.id, COALESCE(t.merged_into, a.thread_id) AS thread_id,
+       a.kind, a.occurred_at, a.identity_id, a.native_id, a.target_id, a.content, a.data
+FROM activities a JOIN threads t ON t.id = a.thread_id;
 
 CREATE TRIGGER activities_no_delete BEFORE DELETE ON activities
 BEGIN

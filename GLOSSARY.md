@@ -8,6 +8,10 @@ A single-user console that tracks who owes whom what across Jeremy's professiona
 The unit of work, as in Plain: an email thread; a Slack thread in a channel (a top-level message and its replies); or, in a Slack DM or group DM, a time-based group of messages (same sender within 2 hours, different senders within 1 hour).
 _Avoid_: Conversation, Ticket, Loop
 
+**Thread alias**:
+A retired Thread ID that resolves to the surviving Thread after exact-reference email reconciliation. Old links still reach the same work and its combined history.
+_Avoid_: Deleted thread, Duplicate activity
+
 **Activity**:
 A timestamped, never-rewritten record of a message received or sent in a Thread, or of an edit or deletion of one.
 _Avoid_: Event, Interaction, Message (when meaning the record)
