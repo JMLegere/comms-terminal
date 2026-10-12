@@ -474,6 +474,7 @@ class Page(Vertical):
     right pane (the Threads list shows the selected Thread there; Channels shows the channels seen)."""
     TITLE = ""
     SIDE = ""
+    RAIL = ""  # the rail item this page belongs to; the rail and statusline read it from the current page
 
     def _on_mount(self):  # runs alongside subclasses' on_mount: focus once this page's widgets exist
         self.call_after_refresh(self.focus_first)
@@ -502,6 +503,11 @@ THREAD_KEYS = [  # Thread actions, Gmail-style (decision #93); shared by the Thr
 
 class ThreadsPage(Page, ThreadActions):
     """The Status view's list. The selected Thread shows beside it (the thread pane); focus stays here."""
+
+    @property
+    def RAIL(self):
+        return f"view:{self.app.view}"
+
     BINDINGS = [
         Binding("j", "down", "move", key_display="j/k"), Binding("k", "up", show=False),
         *THREAD_KEYS,
@@ -935,6 +941,7 @@ def thread_cells(t) -> tuple:
 
 
 class PeoplePage(TablePage):
+    RAIL = "people"
     TITLE = f"{ICON['people']} people"
     COLUMNS = ("", "Name", "Address", "Organizations", "Todo")
     EMPTY = "No people yet. Everyone who writes to you appears here."
@@ -950,6 +957,7 @@ class PeoplePage(TablePage):
 
 
 class OrganizationsPage(TablePage):
+    RAIL = "organizations"
     TITLE = f"{ICON['organizations']} organizations"
     COLUMNS = ("", "Domain", "People", "Todo")
     EMPTY = "No organizations yet. They form from company email domains."
@@ -965,6 +973,7 @@ class OrganizationsPage(TablePage):
 
 
 class CasesPage(TablePage):
+    RAIL = "cases"
     TITLE = f"{ICON['cases']} cases"
     COLUMNS = ("", "Title", "Threads")
     EMPTY = "No cases yet. Press l on a thread to start one."
@@ -994,6 +1003,8 @@ class ThreadListPage(TablePage):
 
 
 class OrganizationPage(ThreadListPage):
+    RAIL = "organizations"
+
     def __init__(self, domain):
         super().__init__()
         self.domain, self.TITLE = domain, f"{ICON['organization']} organization · {domain}"
@@ -1010,6 +1021,7 @@ class OrganizationPage(ThreadListPage):
 
 
 class PersonPage(Page):
+    RAIL = "people"
     BINDINGS = [Binding("escape", "back", "back"), Binding("j", "down", "move", key_display="j/k"),
                 Binding("k", "up", show=False), Binding("b", "block", "block / unblock"),
                 Binding("a", "add", "add identity"), Binding("x", "remove", "remove identity")]
@@ -1097,6 +1109,7 @@ RULE_KIND = {"channel": "is exactly", "prefix": "starts with", "suffix": "ends w
 
 
 class ChannelsPage(TablePage):
+    RAIL = "channels"
     TITLE = f"{ICON['channels']} channels"
     COLUMNS = ("", "Match", "Name")
     EMPTY = "No rules yet. Press a to add one."
@@ -1172,6 +1185,10 @@ RECOVERY = {  # platform -> {healthy: what it means / what to do}
 
 
 class ConnectionPage(Page):
+    @property
+    def RAIL(self):
+        return f"conn:{self.connection_id}"
+
     BINDINGS = [Binding("escape", "back", "back")]
 
     def __init__(self, connection_id):
@@ -1357,6 +1374,7 @@ class DescriptionBox(Vertical):
 class CasePage(Page, ThreadActions):
     """A Case laid out like a Linear issue: title, activity (Case events and Thread cards by start time),
     and properties on the right. j/k select a Thread card; Thread keys act on it."""
+    RAIL = "cases"
     can_focus = True
     BINDINGS = [
         Binding("escape", "back", "back"),
@@ -1506,7 +1524,7 @@ class MainScreen(Screen):
 
     def __init__(self):
         super().__init__()
-        self.section, self.stack, self.current, self.pending_select, self.showing = "view:0", [], None, None, None
+        self.stack, self.current, self.pending_select, self.showing = [], None, None, None
         self.side_text = None
 
     def compose(self) -> ComposeResult:
@@ -1540,29 +1558,25 @@ class MainScreen(Screen):
     def action_back(self):
         self.back()
 
+    @property
+    def section(self) -> str:
+        """The rail item for what is on screen: always derived from the current page, never stored."""
+        return self.current.RAIL if self.current is not None else f"view:{self.app.view}"
+
     def go(self, target: str):
         """Open a rail section (resets the stack): a Status view, a browse list, or a Connection."""
         if target.startswith("conn:"):
             cid = int(target.split(":")[1])
-            factory = lambda: ConnectionPage(cid)  # noqa: E731
+            self.stack = [lambda: ConnectionPage(cid)]
         elif target.startswith("view:"):
-            factory = ThreadsPage
+            self.app.view = int(target.split(":")[1])
+            self.stack = [ThreadsPage]
         else:
-            factory = SECTIONS[target]
-        self.stack = [(target, factory)]
-        self._enter(target)
+            self.stack = [SECTIONS[target]]
+        self._show()
 
-    def open(self, factory, section: str | None = None):
-        """Open a page on top of the current one. `section` is the rail item it belongs to (a Person is
-        under People, an Organization under Organizations, a Case under Cases), so the rail follows."""
-        section = section or self.section
-        self.stack.append((section, factory))
-        self._enter(section)
-
-    def _enter(self, section: str):
-        self.section = section
-        if section.startswith("view:"):
-            self.app.view = int(section.split(":")[1])
+    def open(self, factory):
+        self.stack.append(factory)
         self._show()
 
     def open_thread(self, thread_id):
@@ -1572,12 +1586,12 @@ class MainScreen(Screen):
         self.go(f"view:{next(i for i, n in enumerate(VIEW_NAMES) if detail in inbox.VIEWS[n])}")
 
     def open_person(self, person_id):
-        self.open(lambda: PersonPage(person_id), "people")
+        self.open(lambda: PersonPage(person_id))
 
     def back(self):
         if len(self.stack) > 1:
             self.stack.pop()
-            self._enter(self.stack[-1][0])
+            self._show()
 
     def show_thread(self, thread_id):
         """Fill the thread pane (Threads views only); the same Thread is refreshed in place."""
@@ -1610,7 +1624,7 @@ class MainScreen(Screen):
     def _show(self):
         main, pane = self.query_one("#main"), self.query_one("#thread")
         main.remove_children()
-        page = self.stack[-1][1]()
+        page = self.stack[-1]()
         self.current = page
         pane.remove_children()
         self.showing, self.side_text = None, None
@@ -1668,10 +1682,10 @@ class Console(App):
         self.main.open_person(person_id)
 
     def action_open_org(self, domain):
-        self.main.open(lambda: OrganizationPage(domain), "organizations")
+        self.main.open(lambda: OrganizationPage(domain))
 
     def action_open_case(self, case_id):
-        self.main.open(lambda: CasePage(case_id), "cases")
+        self.main.open(lambda: CasePage(case_id))
 
     def action_back(self):
         self.main.back()
