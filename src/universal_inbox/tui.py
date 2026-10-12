@@ -995,13 +995,20 @@ def details_markup(v, db) -> str:
     end = t.follow_up_at or t.snoozed_until
     until = f" [#928374]until {stamp(end)}[/]" if t.status == "SNOOZED" and end else ""
     lines = [head("status", "status"), f"[{color}]{g} {label}[/]{until}", ""]
-    if p:
-        lines += [head("person", "person"), f"[@click=app.open_person({p['id']})][b underline]{escape(p['name'])}[/][/]"]
-        lines += [(f"[#c14a4a]{ICON['blocked']}[/] " if i["blocked"] else "")
-                  + f"[#928374]{ICON['email'] if i['kind'] == 'email' else ICON['slack']} {escape(i['value'])}[/]"
-                  for i in p["identities"]]
-        orgs = [f"[@click=app.open_org('{o}')][underline]{escape(o)}[/][/]" for o in p["organizations"]]
-        lines += ["", head("organization", "organization"), ", ".join(orgs) or "[#928374]none[/]"]
+    people, others = v.get("people") or ([p] if p else []), v.get("others") or []
+    if people or others:  # everyone involved, not just who wrote first (Jeremy, 2026-10-12)
+        lines.append(head("person", "people" if len(people) + len(others) > 1 else "person"))
+        for q in people:
+            ident = next((i for i in q["identities"] if i["kind"] == "email"), q["identities"][0] if q["identities"] else None)
+            addr = f" [#928374]{escape(ident['value'])}[/]" if ident and ident["value"] != q["name"] else ""
+            block = f"[#c14a4a]{ICON['blocked']}[/] " if any(i["blocked"] for i in q["identities"]) else ""
+            lines.append(f"{block}[@click=app.open_person({q['id']})][b underline]{escape(q['name'])}[/][/]{addr}")
+        lines += [f"[#928374]{ICON['email']} {escape(a)}[/]" for a in others]
+        known = {o for q in people for o in q["organizations"]}
+        orgs = [f"[@click=app.open_org('{o}')][underline]{escape(o)}[/][/]" if o in known else f"[#928374]{escape(o)}[/]"
+                for o in v.get("organizations") or sorted(known)]
+        lines += ["", head("organization", "organizations" if len(orgs) > 1 else "organization"),
+                  "\n".join(orgs) or "[#928374]none[/]"]
     case = f"[@click=app.open_case({t.case_id})][underline]{escape(v['case'])}[/][/]" if t.case_id else (
         "[#928374]none · [/][@click=app.thread('case')][underline]add to a case[/][/] [#928374](l)[/]")
     kind = v["channel"]["kind"]

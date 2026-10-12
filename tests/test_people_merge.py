@@ -82,3 +82,15 @@ def test_service_addresses_are_named_after_the_service():
     assert inbox.sender_name("VEVOR Official Store CA", "s-baaa5a5b219148699b7505e7913d59c8@relay.walmart.ca") \
         == "VEVOR Official Store CA"  # a per-seller relay address identifies the seller
     assert inbox.sender_name("Tony Sheehan", "tony@northboundadvisory.com") == "Tony Sheehan"
+
+
+def test_thread_lists_everyone_involved():
+    db = setup()
+    t = mail(db, 1, "janet@ws.ca", "Janet Forbes")
+    inbox.ingest(db, inbox.Incoming(1, "jeremy@agentmaple.com", "mailbox", "MESSAGE", "<m2@x>",
+                                    inbox.Identity("email", "john@ws.ca", "John Debly"), AT, "thanks", ["<m1@x>"], "Re",
+                                    {"to": ["jeremy@agentmaple.com", "janet@ws.ca"], "cc": ["bob@acme.com", "logan@agentmaple.com"]}))
+    v = inbox.thread_view(db, t.id)
+    assert [p["name"] for p in v["people"]] == ["Janet Forbes", "John Debly"]
+    assert v["others"] == ["bob@acme.com", "logan@agentmaple.com"]
+    assert v["organizations"] == ["acme.com", "ws.ca"]  # Agent Maple's own domain is not a counterparty

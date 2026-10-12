@@ -725,9 +725,41 @@ def thread_view(db, thread_id: int) -> dict:
     if first:
         pid = db.execute("SELECT person_id FROM identities WHERE id = ?", (first,)).fetchone()[0]
         person = person_view(db, pid) if pid else None
+    people, others, orgs = _participants(db, acts)
     case = db.execute("SELECT title FROM cases WHERE id = ?", (t.case_id,)).fetchone() if t.case_id else None
-    return {"thread": t, "channel": dict(ch), "messages": msgs, "person": person,
+    return {"thread": t, "channel": dict(ch), "messages": msgs, "person": person, "people": people,
+            "others": others, "organizations": orgs,
             "case": case["title"] if case else None, "where": _where(ch, None) if ch["kind"] != "mailbox" else "email"}
+
+
+def _participants(db, acts) -> tuple[list[dict], list[str], list[str]]:
+    """Everyone involved in a Thread, in order of appearance (Jeremy, 2026-10-12): Persons who wrote or were
+    addressed (To/Cc), addresses that belong to no Person yet, and all their Organizations. Jeremy's own
+    addresses, and his own company's domain, are left out."""
+    mine = {r[0].lower() for r in db.execute("SELECT self_id FROM connections")}
+    pids, others = [], []
+    for a in acts:
+        if a["kind"] != "MESSAGE":
+            continue
+        found = []
+        if a["identity_id"]:
+            found.append(db.execute("SELECT person_id FROM identities WHERE id = ?", (a["identity_id"],)).fetchone()[0])
+        data = json.loads(a["data"])
+        for addr in [*(data.get("to") or []), *(data.get("cc") or [])]:
+            addr = addr.lower()
+            if addr in mine:
+                continue
+            r = db.execute("SELECT person_id FROM identities WHERE kind = 'email' AND value = ?", (addr,)).fetchone()
+            if r and r[0]:
+                found.append(r[0])
+            elif addr not in others:
+                others.append(addr)
+        pids += [p for p in found if p and p not in pids]
+    people = [person_view(db, p) for p in pids]
+    known = {d for p in people for d in p["organizations"]}
+    extra = {a.rsplit("@", 1)[1] for a in others if "@" in a} - FREE_MAIL
+    own = {m.rsplit("@", 1)[1] for m in mine if "@" in m}  # Agent Maple is not a counterparty
+    return people, others, sorted((known | extra) - own)
 
 
 def person_view(db, person_id: int) -> dict:
