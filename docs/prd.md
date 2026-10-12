@@ -3,7 +3,7 @@
 ## 1. Document control
 
 - **Title**: Universal Inbox MVP (Gmail + Slack)
-- **Status**: **Draft (revision 3).** This revision adopts Plain's status model and integration architecture and adds replying from the console (decisions #51–#56). Behavior follows Plain unless a deviation is stated with its reason. The technical design in §4–§5 is **Approved** (D1, decision #67). Each phase needs its own implementation authorization; connecting is blocked on D3, and deployment on D2 (§6).
+- **Status**: **Draft (revision 3).** This revision adopts Plain's status model and integration architecture and adds replying from the console (decisions #51–#56). Behavior follows Plain unless a deviation is stated with its reason. The technical design in §4–§5 is **Approved** (D1, decision #67). Each phase needs its own implementation authorization; connecting is blocked on D3 (§6). D2 is resolved (SSH, #71).
 - **Owner / authority**: Jeremy Legere (single user and product owner)
 - **Created**: 2026-10-10T20:04+00:00
 - **Updated**: 2026-10-12T00:38+00:00
@@ -149,9 +149,9 @@ Status key in brackets:
 
 - **FR-14** [PL + D]: **Keyboard**:
   - [PL] Plain's keys: J / K next and previous; E Done; Z Pause for later; W Wait for them; S change status (for example, Investigating).
-  - [P] R opens the reply box on the Thread; Cmd+Enter sends.
+  - [P] R opens the inline reply box on the Thread; Ctrl+S sends (decision #75; terminals cannot tell Ctrl+Enter from Enter).
   - [D] I Ignore; C add to Case. Reason: Plain ignores through status changes and workflows, and has no Case.
-  - [D] Enter opens the Thread in Gmail or Slack. Reason: reading full context or attachments in the native app.
+  - [D] Enter opens the Thread in the console; O shows a Ctrl-clickable link to it in Gmail or Slack. Reason: reading full context or attachments in the native app. Other console keys: `docs/design/console.md` §4.
 - **FR-15** [C]: The console sends only replies Jeremy writes. It never edits, deletes, archives, or marks read anything in Gmail or Slack.
 
 ### Non-functional
@@ -162,7 +162,7 @@ Status key in brackets:
   - Email: Broken on an inbound request that fails verification or a send failure.
   - Silence on either channel cannot be told apart from a quiet inbox (R7, R12).
 - **NFR-3** [C]: **Pull only.** No notifications.
-- **NFR-4** [C intent / D2 path]: **Single user.** The console is reachable only by Jeremy. The public ingress exposes only the inbound mail and Slack event endpoints, and each request is verified (Slack signing secret; inbound mail shared secret).
+- **NFR-4** [C]: **Single user.** The console is a terminal app reachable only by SSH to Workbox (D2, decision #71); the reply socket is owned by `jerry` with mode 0600. The public ingress exposes only the inbound mail and Slack event endpoints, and each request is verified (Slack signing secret; inbound mail shared secret).
 - **NFR-5** [P]: **Secrets.** Tokens and keys are never logged or printed, and are never stored as plaintext user-service credentials (Ledgere precedent).
 - **NFR-8** [P]: **Simplicity.** A single process, the standard library first, and no added service without evidence that it is needed. The inbound mail service, outbound provider, and ingress are needed by Plain's architecture (decision #55).
 
@@ -223,7 +223,7 @@ Executable form: `features/<domain>.feature` (Gherkin via pytest-bdd), each scen
 - Strategy C (ADR 0001), with Plain's integration architecture (ADR 0002).
 - One process with an embedded database. Two private surfaces and one public one:
   - **Public ingress** (two verified endpoints only): inbound mail, and Slack events.
-  - **Private console** (D2).
+  - **Terminal console** over SSH (decision #71), reading the same database; replies go through the service's local socket (#73).
   - **Outbound calls**: the mail provider's send API, and Slack's Web API.
 
 ### Alternatives considered
@@ -258,24 +258,26 @@ flowchart LR
 ```mermaid
 flowchart TB
   subgraph Workbox[Workbox host]
-    subgraph P[universal-inbox process]
+    subgraph SVC[universal-inbox serve: systemd service]
       HOOKS[Hooks server: inbound mail, Slack events]
-      WEB[Console server]
+      SOCK[Local reply socket]
+      WAKE[wake timer]
     end
+    TUI[universal-inbox: terminal console]
     DB[(SQLite file)]
     CRED[[systemd encrypted credentials]]
   end
   ING[Public ingress] --> HOOKS
   IM[(Inbound mail service)] --> ING
   SL[(Slack)] --> ING
-  CRED --> HOOKS & WEB
+  CRED --> SVC
   HOOKS --> DB
-  REC --> DB
-  REC --> SL
-  WEB --> DB
-  WEB -->|send reply| OM[(Outbound mail provider)]
-  WEB -->|post reply| SL
-  Browser([Jeremy's browser]) --> WEB
+  WAKE --> DB
+  TUI --> DB
+  TUI -->|reply| SOCK
+  SOCK -->|send reply| OM[(Outbound mail provider)]
+  SOCK -->|post reply| SL
+  J([Jeremy over SSH]) --> TUI
 ```
 
 ### L3 Components (Proposed)
@@ -294,9 +296,11 @@ flowchart LR
     I3[reply]
     I4[wake]
   end
-  WEB[web: console + hooks] -->|raw mail, Slack event| EM & SK
+  SRV[serve: hooks + reply socket] -->|raw mail, Slack event| EM & SK
   EM & SK -->|Incoming| I1
-  WEB --> I2 & I3
+  TUI[tui: terminal console] --> I2
+  TUI -->|reply via socket| SRV
+  SRV --> I3
   I3 -->|Sender| EM & SK
   MAIN[main: timer] --> I4
   HL[health]
@@ -311,7 +315,8 @@ flowchart LR
 - **`src/universal_inbox/email.py`**: `verify`, `parse` (stdlib `email`; returns nothing for an auto-reply, FR-3a), `EmailSender`.
 - **`src/universal_inbox/slack.py`**: `verify`, `parse` (applies Channel selection), `SlackSender`, `user_email`.
 - **`src/universal_inbox/health.py`**: `connection_health(connection, now)`.
-- **`src/universal_inbox/web.py`** and **`static/keys.js`**: console pages and actions; `/hooks/email` and `/hooks/slack` on a separate listener.
+- **`src/universal_inbox/tui.py`**: the Textual console (`docs/design/console.md`).
+- **`src/universal_inbox/serve.py`**: the service's HTTP handlers: `/hooks/email` and `/hooks/slack` on the public listener, `POST /reply` on the local Unix socket.
 - **`src/universal_inbox/main.py`**: both listeners and `wake` every minute; reads credentials from `$CREDENTIALS_DIRECTORY`.
 - **`scripts/oauth_slack.py`**: consent helper for Jeremy's post-build connect.
 - **`deploy/universal-inbox.service`**: systemd system unit. Ingress and mail-service configuration per D3.
@@ -374,23 +379,26 @@ Every path is **Proposed** unless marked Current. D1 is approved (#67); each pha
   - Requirements: NFR-2, AS-8.
   - Verify: `features/sync.feature`: a `tokens_revoked` or `app_uninstalled` event, a failed Slack post, a failed email send, and a rejected inbound request each make health BROKEN.
 
-### Phase 5 — Console
+### Phase 5 — Console (terminal)
 
-- **5.1 Queue pages, Status filters (including Ignored), and Thread detail.**
-- **5.2 Key actions** (J / K / E / Z / W / S / I / C / R / Enter).
-  - Requirement: FR-14.
-- **5.3 Reply box**: reply-all recipients for email, Cmd+Enter to send, send errors shown on the Thread.
-  - Requirements: FR-3b, FR-4c.
-- **5.4 Person, Organization, Case, and Channels pages; Block on Person and address.**
-  - Requirements: FR-4, FR-7a, FR-12, FR-13.
-- **5.5 `/health`.**
-  - Requirement: NFR-2.
+Design: `docs/design/console.md` (approved). Verify each step with Textual's test driver (`run_test`) and the visual-QA states in console.md §5.
+
+- **5.1 `serve.py`**: hooks on the public listener (wrapping `email.handle_hook`, `slack.handle_hook`), `POST /reply` on the local socket, `wake` every minute.
+  - Requirements: NFR-4, NFR-5, FR-3b, FR-4c.
+- **5.2 `tui.py` queue**: sidebar views and counts, health lines, rows with glyphs, ordering, refresh on `PRAGMA data_version`.
+  - Requirements: FR-6, FR-7, NFR-2, NFR-3.
+- **5.3 Thread screen and keys** (j/k, enter, esc, e, z, w, s, i, c, o, p).
+  - Requirements: FR-12, FR-13, FR-14.
+- **5.4 Inline reply box**: reply-all To/Cc for email, Ctrl+S send through the socket, errors kept in the box.
+  - Requirements: FR-3b, FR-4c, FR-6b.
+- **5.5 Person, Cases, Channels screens**: Identities with block/add/remove, Case list, Slack Channel rules.
+  - Requirements: FR-4, FR-7a, FR-10, FR-12, FR-13.
 
 ### Phase 6 — Package and demo
 
 - **6.1 `deploy/universal-inbox.service` plus a credential runbook.**
   - Authorization: point-of-risk approval to install the system unit.
-- **6.2 Bind the console per D2; set up the ingress and mail services per D3.**
+- **6.2 Set up the ingress and mail services per D3.** The console needs only SSH (D2).
   - Authorization: point-of-risk approval for each external account, DNS record, and routing rule.
 - **6.3 Build demo on synthetic data.**
   - Walk AS-1, AS-3, AS-4, AS-6, AS-11, AS-13, and AS-17 using fixture-fed channels and fake send endpoints.
@@ -403,8 +411,7 @@ Every path is **Proposed** unless marked Current. D1 is approved (#67); each pha
 - **D1: Technical shape in §4.**
   - Approved 2026-10-11 (#47); reopened by #53 and #55; re-approved 2026-10-12 (#67).
   - Owner: Jeremy. Blocks: no.
-- **D2: Console access path** (Workbox LAN, Tailscale, or other).
-  - Impact: NFR-4 and Phase 6. Owner: Jeremy. Blocks: deployment only.
+- **D2: Console access path.** **Resolved** 2026-10-12: SSH to Workbox (decision #71).
 - **D3: Ingress, inbound mail service, and outbound mail provider.**
   - Outbound provider: **Resend** (decision #70). Still open: ingress (Cloudflare Tunnel candidate) and inbound mail service (Cloudflare Email Routing with an Email Worker candidate). Constraint: $10/month.
   - Owner: Jeremy. Blocks: connecting, not building.
@@ -752,6 +759,11 @@ All entries are dated 2026-10-10; exact times are unproven unless noted. Full de
   - Request / decision: Outbound mail provider is Resend (JSON API over `urllib`, free tier 3,000/month), part of D3
   - Source: Jeremy, ask tool answer during Phase 2
   - Status: Accepted
+- **71–75**
+  - Request / decision: Console as a terminal app over SSH (#71), built with Textual (#72), replies through a jerry-only local socket on the service so the app holds no token (#73), dark matcha-like look with Plain status glyphs (#74), inline reply box with `ctrl+s` to send (#75). Detail: `docs/design/console.md`
+  - Source: Jeremy, "we need to agree on console design first", the matcha/pimalaya suggestion, ask tool answers, and "i like the inline mode better" after trying a mock of both reply styles
+  - Status: Approved (2026-10-12, "approved.")
+  - Supersedes: web console (`web.py`, `keys.js`, console routes); D2 open; D1's stdlib-only rule (Textual added)
 
 ## 8. Work log
 
@@ -886,7 +898,7 @@ All entries are dated 2026-10-10; exact times are unproven unless noted. Full de
 
 **Coverage gaps**
 - The success measures can only be checked after Jeremy connects.
-- NFR-4 depends on D2; connecting depends on D3.
+- Connecting depends on D3.
 - R7: email completeness has no verification method in the MVP.
 - AS-1 and AS-18 have no executable scenario: each describes something the system never receives (a Gmail read, a reply sent from Gmail). They are checked in the 6.3 demo.
 - R5 inferences are verified only in the 6.3 demo.

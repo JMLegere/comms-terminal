@@ -352,20 +352,14 @@ Only these two routes exist on it (NFR-4).
   - `url_verification` echoes `challenge`. `event_callback` handles `message`, `message_changed`, `message_deleted`, and `tokens_revoked` / `app_uninstalled` (set `auth_ok = 0`).
   - `200` within Slack's 3-second limit; `401` bad signature. Retries are harmless because `ingest` is idempotent.
 
-### Private console listener
+### Local reply socket (console)
 
-Bound per D2. Server-rendered HTML. Actions are `POST` from forms or `keys.js`; each checks that `Origin` is the console's own, then redirects (`303`).
+The console is a terminal app (`docs/design/console.md`, decisions #71–#75). It calls `inbox` directly for everything except sending.
 
-**Pages (`GET`)**
-- `/` Todo; `/snoozed`; `/done`; `/done?detail=IGNORED` (the Ignored filter).
-- `/t/{id}` Thread timeline and reply box; `/p/{id}` Person; `/o/{id}` Organization; `/c/{id}` Case.
-- `/channels` Channel rules; `/health` Connection health.
-
-**Actions (`POST`)**
-- `/t/{id}/act` with `action` = `done`, `snooze` (+ `until`, empty for indefinitely), `wait`, `investigate`, `ignore`, `unignore`, or `case` (+ `case_id`, `new_case_title`, or neither to remove).
-- `/t/{id}/reply` with `text`, and for email `to` and `cc` (prefilled reply-all). On `SendFailed`, re-renders the Thread with the error and the typed text kept.
-- `/identities/{id}/block`, `/identities/{id}/unblock`, and `/identities/{id}/remove`; `/p/{id}/identities` with `kind` and `value`.
-- `/channels/rules` with `kind`, `value`; `/channels/rules/{id}/delete`.
+- **`POST /reply`** on the service's Unix socket `$XDG_RUNTIME_DIR/universal-inbox.sock` (mode 0600, owned by `jerry`).
+  - Body: JSON `{"thread_id", "text", "to", "cc"}`.
+  - `200 {"status", "status_detail"}` after `inbox.reply` succeeds; `502 {"error"}` on `SendFailed`; `404` for an unknown Thread.
+  - Only the service holds the Resend key and Slack token (NFR-5).
 
 ## 7. Decisions and open points
 

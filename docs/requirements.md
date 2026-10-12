@@ -40,11 +40,12 @@ Status: MVP confirmed 2026-10-10; revised 2026-10-12 to follow Plain's status mo
 - **Records**: Person and Organization records list Threads (with Status) and Cases.
 - **Replying**: plain-text replies from the console on both channels. The console never edits, deletes, archives, or marks read anything in Gmail or Slack.
 - **Sync health** (Plain): a Connection shows broken when Slack revokes the token or uninstalls the app, a reply fails to send, or an inbound email request is rejected. No polling or reconciliation; completeness relies on event delivery.
+- **Console**: a dark terminal app (Textual) run over SSH on Workbox; replies are sent by the service, which holds the credentials.
 - **Notifications**: none; pull only.
 - **Keyboard**:
   - Plain keys: J / K, E Done, Z Pause for later, W Wait for them, S change status.
-  - R opens the reply box; Cmd+Enter sends.
-  - Deviations: I Ignore and C add to Case; Enter opens the Thread in its native app.
+  - R opens the inline reply box; Ctrl+S sends.
+  - Deviations: I Ignore and C add to Case; O links to the Thread in its native app.
 
 ## Deferred (after MVP)
 
