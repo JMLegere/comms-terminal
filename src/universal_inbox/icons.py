@@ -56,6 +56,8 @@ ICON = {
     "add": "\U000f0415",            # md-plus
     "remove": "\U000f0374",         # md-minus
     "link": "\U000f0339",           # md-link_variant
+    "attachment": "\U000f03e2",     # md-paperclip
+    "calendar": "\U000f0b67",       # md-calendar_outline
     "move": "\U000f04e2",           # md-swap_vertical
     "quit": "\U000f0156",           # md-close
     # terms and states

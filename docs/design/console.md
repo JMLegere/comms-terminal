@@ -114,6 +114,20 @@ The side rail stays visible on every screen (Thread, Person, Cases, Channels); o
 - Right panel: the sender's Person (all Identities, blocked ones marked `⊘`), Organization, Case, Channel.
 - `o` shows a Ctrl-clickable link (OSC 8) to the message in its app: a Gmail search for the `Message-ID`, or the Slack permalink.
 
+### Message body (decisions #105–#110)
+
+Text-first, like a terminal mail client with Gmail's habits. No images in the console; `o` opens visual mail in Gmail.
+
+- Source: the raw message kept on Workbox (`raw/<sha256>.eml` beside the database); the HTML part converted to terminal text by `render.py` (standard library, chosen over `lynx -dump` in a bake-off, #110), plain as fallback. Messages from before raw storage render their stored text, with bare URLs shortened to `↗ domain` links.
+- Links: `View all tasks ↗ app.attio.com`, label clickable (OSC 8), domain from the real destination (known tracking redirects unwrapped); the click opens the original link.
+- Images: `[image: alt]`. Attachments: a chip under the message (name, type, size) that opens the message in Gmail.
+- Collapse: messages after Jeremy's last reply, and the newest, are expanded; older ones are one line (sender, snippet, date), and a long run shows as `N older messages`. Click toggles; `;` expands all, `:` collapses all.
+- Trimmed content (quoted text, signatures, boilerplate footers) folds behind `•••`; click to show.
+- Header: name, `Mon Oct 12, 10:15 · 2h ago` (relative only within 7 days), and `to …, cc …`; full addresses on expand.
+- Calendar invites: an event card (title, time in Jeremy's zone, organizer, attendee count). Forwarded mail: a nested message card, untrimmed.
+- No clipping; newsletters follow the same rules.
+- Replies quote the earlier message Gmail-style and target the latest inbound message.
+
 ### Reply (inline)
 
 **Decision #75**: inline reply box, chosen after trying both inline and `$EDITOR` in the mock.

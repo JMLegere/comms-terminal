@@ -4,7 +4,10 @@ Interface: ingest, act, reply, wake; people operations block, add_identity, remo
 Design: docs/design/api-and-database.md.
 """
 
+import hashlib
 import json
+import os
+import re
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -296,9 +299,38 @@ def _echo_of_sent(db, thread_id: int, inc: Incoming) -> bool:
     if not text:
         return False
     since = _iso(inc.occurred_at - ECHO_WINDOW)
-    return any((r["content"] or "").strip() == text for r in db.execute(
+    # The copy is Jeremy's text, possibly followed by the quote his reply included (decision #109).
+    norm = lambda x: (x or "").replace("\r\n", "\n").strip()  # noqa: E731
+    text = norm(text)
+
+    def same(sent):
+        sent = norm(sent)
+        return bool(sent) and (text == sent or text.startswith(sent)
+                               and re.match(r"\s*On .{0,300}?wrote:", text[len(sent):], re.S) is not None)
+    return any(same(r["content"]) for r in db.execute(
         "SELECT content FROM activities WHERE thread_id = ? AND kind = 'MESSAGE' AND identity_id IS NULL"
         " AND occurred_at >= ?", (thread_id, since)))
+
+
+def raw_dir(db) -> Path | None:
+    """Where raw messages are kept: `raw/` beside the database file (decision #106); None in memory."""
+    f = db.execute("PRAGMA database_list").fetchone()[2]
+    return Path(f).parent / "raw" if f else None
+
+
+def store_raw(db, raw: bytes) -> str | None:
+    """Keep a message's raw bytes, content-addressed and 0600; returns the sha256 name."""
+    d = raw_dir(db)
+    if d is None:
+        return None
+    sha = hashlib.sha256(raw).hexdigest()
+    d.mkdir(mode=0o700, exist_ok=True)
+    path = d / f"{sha}.eml"
+    if not path.exists():
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "wb") as f:
+            f.write(raw)
+    return sha
 
 
 def ingest(db, inc: Incoming) -> Thread | None:
@@ -396,8 +428,9 @@ def reply(db, thread_id: int, text: str, sender: Sender,
     """Send first; store the outbound Activity only on success (decision #59).
     SendFailed propagates and nothing is stored."""
     t = get_thread(db, thread_id)
-    history = [{"native_id": r["native_id"], "data": json.loads(r["data"])} for r in db.execute(
-        "SELECT native_id, data FROM activities WHERE thread_id = ? AND kind = 'MESSAGE'"
+    history = [{"native_id": r["native_id"], "data": json.loads(r["data"]), "content": r["content"],
+                "at": r["occurred_at"]} for r in db.execute(
+        "SELECT native_id, data, content, occurred_at FROM activities WHERE thread_id = ? AND kind = 'MESSAGE'"
         " ORDER BY occurred_at, id", (thread_id,))]
     connection_id = db.execute("SELECT connection_id FROM channels WHERE id = ?",
                                (t.channel_id,)).fetchone()[0]

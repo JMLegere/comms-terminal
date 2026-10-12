@@ -2,9 +2,9 @@
 
 import hashlib
 import hmac
+import html
 import json
 import logging
-import re
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -12,7 +12,7 @@ from email import message_from_bytes, policy
 from email.parser import BytesHeaderParser
 from email.utils import getaddresses, make_msgid, parseaddr, parsedate_to_datetime
 
-from . import inbox
+from . import inbox, render
 
 SIGNATURE_WINDOW = 300  # seconds
 
@@ -47,8 +47,10 @@ def _text(msg) -> str:
     if part is None:
         return ""
     text = part.get_content()
-    # ponytail: crude tag strip for HTML-only mail; use html.parser if previews look wrong.
-    return re.sub(r"<[^>]+>", " ", text) if part.get_content_subtype() == "html" else text
+    if part.get_content_subtype() == "html":  # HTML-only mail: the console's converter, as plain text
+        shown, _ = render.html_body(text)
+        return render.plain(shown)
+    return text
 
 
 def parse(raw: bytes, connection) -> inbox.Incoming | None:
@@ -70,7 +72,7 @@ def parse(raw: bytes, connection) -> inbox.Incoming | None:
         native_id=message_id,
         sender=None if sender == mailbox else inbox.Identity("email", sender, parseaddr(msg.get("From", ""))[0] or None),
         occurred_at=occurred, content=_text(msg), thread_ref=refs, title=subject or None,
-        data={"from": sender, "subject": subject,
+        data={"from": sender, "from_name": parseaddr(msg.get("From", ""))[0], "subject": subject,
               "to": [a.lower() for _, a in getaddresses(msg.get_all("To", [])) if a],
               "cc": [a.lower() for _, a in getaddresses(msg.get_all("Cc", [])) if a]})
 
@@ -110,6 +112,29 @@ def _post(url, headers, payload):
             return e.code, {"message": raw.decode(errors="replace").strip()[:200]}
 
 
+def quoted(text: str, history: list[dict], self_address: str) -> dict:
+    """Text and HTML for a reply that quotes the last inbound message, as Gmail does (decision #109):
+    `On <date>, <name> <address> wrote:` then the message; the HTML uses Gmail's markup so mail clients
+    fold the quote."""
+    me = self_address.lower()
+    last = next((h for h in reversed(history) if h["data"].get("from") not in (None, me)), None)
+    body_html = html.escape(text).replace("\n", "<br>\n")
+    if last is None or not (last.get("content") or "").strip():
+        return {"text": text, "html": f"<div dir=\"ltr\">{body_html}</div>"}
+    d = last["data"]
+    who = f"{d['from_name']} <{d['from']}>" if d.get("from_name") else f"<{d['from']}>"
+    at = datetime.fromisoformat(last["at"]).astimezone() if last.get("at") else None
+    when = at.strftime("%a, %b %-d, %Y at %-I:%M %p") if at else ""
+    head = f"On {when}, {who} wrote:" if when else f"{who} wrote:"
+    old = last["content"].replace("\r\n", "\n").strip()
+    plain = text.rstrip() + "\n\n" + head + "\n" + "\n".join(f"> {ln}" if ln else ">" for ln in old.split("\n"))
+    rich = (f"<div dir=\"ltr\">{body_html}</div><br>\n<div class=\"gmail_quote\"><div dir=\"ltr\" class=\"gmail_attr\">"
+            f"{html.escape(head)}<br></div><blockquote class=\"gmail_quote\" style=\"margin:0px 0px 0px 0.8ex;"
+            f"border-left:1px solid rgb(204,204,204);padding-left:1ex\">{html.escape(old).replace(chr(10), '<br>' + chr(10))}"
+            f"</blockquote></div>")
+    return {"text": plain, "html": rich}
+
+
 class EmailSender:
     """Sends replies through Resend (decision #70). `post` is swappable for tests."""
 
@@ -125,8 +150,8 @@ class EmailSender:
         headers = {"Message-ID": message_id}
         if ids:
             headers |= {"In-Reply-To": ids[-1], "References": " ".join(ids)}
-        payload = {"from": self.from_address, "to": to, "cc": cc, "subject": subject, "text": text,
-                   "headers": headers}
+        payload = {"from": self.from_address, "to": to, "cc": cc, "subject": subject,
+                   **quoted(text, history, self.from_address), "headers": headers}
         try:
             status, body = self.post("https://api.resend.com/emails",
                                      {"Authorization": f"Bearer {self.api_key}",
@@ -161,10 +186,10 @@ def handle_hook(db, connection_id: int, headers, body: bytes, secret: bytes, now
         return 400
     if incoming is None:
         outcome = "filtered as automated (auto-reply, bounce, or bulk)"
-    elif inbox.ingest(db, incoming) is None:
-        outcome = "duplicate (already stored, or an echo of a sent reply)"
     else:
-        outcome = "stored"
+        incoming.data["raw"] = inbox.store_raw(db, body)  # rendered by the console (decision #106)
+        stored = inbox.ingest(db, incoming) is not None
+        outcome = "stored" if stored else "duplicate (already stored, or an echo of a sent reply)"
     log.info("email %s %s", outcome, mid)
     inbox.set_connection_error(db, connection_id, None)
     return 204

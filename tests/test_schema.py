@@ -56,4 +56,14 @@ def test_an_echo_of_a_sent_reply_is_not_stored_twice():
     echo = inbox.Incoming(cid, "me@x.io", "mailbox", "MESSAGE", "<ses-rewritten@amazonses.com>", None,
                           at + timedelta(minutes=5, seconds=1), "test reply\r\n", ["<a1@acme.com>"], "Re: Hi")
     assert inbox.ingest(db, echo) is None
-    assert db.execute("SELECT count(*) FROM activities WHERE thread_id = ?", (t.id,)).fetchone()[0] == 2
+    # Replies quote the earlier message (decision #109); the copy with the quote is still the echo,
+    quoted = inbox.Incoming(cid, "me@x.io", "mailbox", "MESSAGE", "<ses-2@amazonses.com>", None,
+                            at + timedelta(minutes=5, seconds=2),
+                            "test reply\r\n\r\nOn Mon, Oct 12, 2026 at 4:36 AM Ana <ana@acme.com> wrote:\r\n> hi",
+                            ["<a1@acme.com>"], "Re: Hi")
+    assert inbox.ingest(db, quoted) is None
+    # but a new message that merely starts with the same words is not.
+    longer = inbox.Incoming(cid, "me@x.io", "mailbox", "MESSAGE", "<other@x.io>", None,
+                            at + timedelta(minutes=6), "test reply, and one more thing", ["<a1@acme.com>"], "Re: Hi")
+    assert inbox.ingest(db, longer) is not None
+    assert db.execute("SELECT count(*) FROM activities WHERE thread_id = ?", (t.id,)).fetchone()[0] == 3

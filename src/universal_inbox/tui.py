@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 
 from rich.markup import escape
+from rich.style import Style
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -19,7 +20,7 @@ from textual.screen import ModalScreen, Screen
 from textual.widgets import DataTable, Input, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 
-from . import inbox
+from . import inbox, render
 from .icons import ICON
 
 DETAIL_STYLE = {  # Status detail -> (color, label); the glyph comes from icons.ICON
@@ -194,8 +195,7 @@ def glyph(detail: str) -> str:
 def native_link(view: dict) -> str | None:
     ch, msgs = view["channel"], view["messages"]
     if ch["platform"] == "email" and msgs:
-        mid = msgs[-1]["native_id"].strip("<>")
-        return f"https://mail.google.com/mail/u/0/#search/rfc822msgid%3A{quote(mid)}"
+        return gmail_link(msgs[-1]["native_id"])
     if ch["platform"] == "slack":
         return f"slack://channel?team={ch['external_id']}&id={ch['native_id']}"
     return None
@@ -251,7 +251,8 @@ HELP = [  # (group, [(keys, what it does)]) — the full key map; Gmail-style wh
                 ("e", "done: it returns if they write again"), ("b", "snooze until a time (it also returns when they write)"),
                 ("w", "wait for them: it returns when they reply"), ("m", "ignore: it stays out of Todo (m again un-ignores)"),
                 ("l", "add to a case"), ("s", "change status: needs a response, investigating"),
-                ("p", "open the person"), ("o", "open in Gmail or Slack"), ("z", "undo the last change")]),
+                ("p", "open the person"), ("o", "open in Gmail or Slack"), ("z", "undo the last change"),
+                ("; / :", "expand / collapse every message (click a message or ••• to toggle one)")]),
     ("Case", [("j / k", "select a thread card"), ("enter", "show or hide a done thread"),
               ("d", "edit the description   ctrl+enter saves · esc cancels"),
               ("r / a", "reply in the selected thread")]),
@@ -765,13 +766,122 @@ class ReplyBox(Vertical):
 
 # --- one Thread: conversation + properties (Linear issue layout) -------------
 
-def messages_markup(messages) -> str:
-    parts = []
-    for m in messages:
-        meta = f"[#928374]{stamp(m['at'])}{'  ' + ICON['edited'] + ' edited' if m['edited'] else ''}[/]"
-        body = f"[i #928374]{ICON['deleted']} message deleted[/]" if m["deleted"] else escape(m["content"] or "")
+class MessageText(Static):
+    """Message markup whose clickable spans keep their own colours (Textual paints [@click] spans in
+    link-color); hovering underlines them."""
+
+    @property
+    def link_style(self) -> Style:
+        return Style()
+
+    @property
+    def link_style_hover(self) -> Style:
+        return Style(underline=True)
+
+
+def gmail_link(native_id: str) -> str:
+    return f"https://mail.google.com/mail/u/0/#search/rfc822msgid%3A{quote(native_id.strip('<>'))}"
+
+
+def message_body(m, raw) -> render.Body:
+    """The rendered body: from the raw message when it was kept (decision #106), else the stored text."""
+    sha = m["data"].get("raw")
+    if sha and raw is not None and not m["edited"]:
+        body = render.load(str(raw / f"{sha}.eml"))
+        if body is not None:
+            return body
+    return render.from_text(m["content"])
+
+
+def default_open(msgs) -> set[int]:
+    """Gmail's unread, approximated: everything after Jeremy's last message, and the newest (#107)."""
+    last_you = max((i for i, m in enumerate(msgs) if m["who"] == "You"), default=-1)
+    return set(range(last_you + 1, len(msgs))) | ({len(msgs) - 1} if msgs else set())
+
+
+def new_message_state() -> dict:
+    return {"open": set(), "closed": set(), "trim": set(), "to": set(), "lines": False}
+
+
+def recipients(m, me: str, full: bool, at: str) -> str:
+    d = m["data"]
+    to, cc = d.get("to") or [], d.get("cc") or []
+    if not to and not cc:
+        return ""
+    if full:
+        rows = [("from", d.get("from") or me)] if m["who"] != "You" or d.get("from") else [("from", me)]
+        rows += [("to", ", ".join(to))] if to else []
+        rows += [("cc", ", ".join(cc))] if cc else []
+        rows += [("date", datetime.fromisoformat(at).astimezone().strftime("%a %b %-d %Y, %H:%M"))]
+        return "\n".join(f"{k:>4}  {escape(v)}" for k, v in rows)
+    name = lambda a: "me" if a == me else a  # noqa: E731
+    def short(addrs):
+        return ", ".join(name(a) for a in addrs[:2]) + (f" +{len(addrs) - 2}" if len(addrs) > 2 else "")
+    return escape("to " + short(to) + (", cc " + short(cc) if cc else ""))
+
+
+def messages_markup(v, st: dict | None = None, raw=None) -> str:
+    """A Thread's messages, Gmail-style (#105-#109): older ones collapse to a line, Trimmed content
+    folds behind •••, Attachments are chips that open the message in Gmail, invites show a card."""
+    msgs, tid = v["messages"], v["thread"].id
+    st = st or new_message_state()
+    me = (v["channel"].get("external_id") or "").lower()
+    email = v["channel"].get("platform") == "email"
+    dim = "#928374"
+    opened = default_open(msgs)
+    is_open = lambda i: i in st["open"] or (i in opened and i not in st["closed"])  # noqa: E731
+
+    def collapsed(i, m):
+        snippet = "message deleted" if m["deleted"] else message_body(m, raw).snippet
+        snippet = snippet[:70] + "…" if len(snippet) > 70 else snippet
         who = ICON["reply"] if m["who"] == "You" else ICON["person"]
-        parts.append(f"[#654735]{who}[/] [b]{escape(m['who'])}[/]  {meta}\n{body}")
+        # Faded: older messages recede so the open ones read first (Jeremy, 2026-10-12).
+        return (f"[@click=app.msg_toggle({tid},{i})][#a89984]{who} {escape(m['who'])}  "
+                f"{escape(snippet)}  {when(m['at'])}[/][/]")
+
+    def expanded(i, m):
+        age = datetime.now().astimezone() - datetime.fromisoformat(m["at"]).astimezone()
+        meta = stamp(m["at"]) + (f" · {ago(m['at'])}" if age.days < 7 else "")
+        meta += f"  {ICON['edited']} edited" if m["edited"] else ""
+        who = ICON["reply"] if m["who"] == "You" else ICON["person"]
+        lines = [f"[@click=app.msg_toggle({tid},{i})][#654735]{who}[/] [b]{escape(m['who'])}[/][/]  [{dim}]{meta}[/]"]
+        rcpt = recipients(m, me, i in st["to"], m["at"]) if email else ""
+        if rcpt:
+            lines.append(f"[@click=app.msg_to({tid},{i})][{dim}]{rcpt}[/][/]")
+        if m["deleted"]:
+            return "\n".join(lines + [f"[i {dim}]{ICON['deleted']} message deleted[/]"])
+        body = message_body(m, raw)
+        if body.invite:
+            lines.append(f"[{dim}]{ICON['calendar']} invitation[/]\n" + render.invite_card(body.invite) + "\n")
+        lines.append(body.text)
+        if body.trimmed:
+            lines.append(f"[@click=app.msg_trim({tid},{i})][{dim} on #f2e5bc] ••• [/][/]")
+            if i in st["trim"]:
+                lines.append(body.trimmed)
+        if body.attachments:
+            link = gmail_link(m["native_id"]) if email else ""
+            chips = [f"[link='{link}'][#45707a]{ICON['attachment']} {render.chip(*a)}[/][/link]" for a in body.attachments]
+            lines.append("\n" + "\n".join(chips))
+        return "\n".join(lines)
+
+    parts, i = [], 0
+    while i < len(msgs):
+        if is_open(i):
+            parts.append(expanded(i, msgs[i]))
+            i += 1
+            continue
+        j = i
+        while j < len(msgs) and not is_open(j):
+            j += 1
+        run = list(range(i, j))
+        if len(run) >= 4 and not st["lines"]:
+            lines = [collapsed(run[0], msgs[run[0]]),
+                     f"[@click=app.msg_lines({tid})][{dim} on #f2e5bc] {len(run) - 2} older messages [/][/]",
+                     collapsed(run[-1], msgs[run[-1]])]
+        else:
+            lines = [collapsed(k, msgs[k]) for k in run]
+        parts.append("\n".join(lines))
+        i = j
     return "\n\n".join(parts)
 
 
@@ -843,7 +953,7 @@ class ThreadView(Horizontal):
         with Vertical(classes="convo"):
             with VerticalScroll(classes="timeline", can_focus=False):
                 yield Static(classes="thead")
-                yield Static(classes="msgs")
+                yield MessageText(classes="msgs")
             yield ReplyBox(self.thread_id)
         with VerticalScroll(classes="props", can_focus=False):
             yield Static(classes="detailtext")
@@ -862,7 +972,7 @@ class ThreadView(Horizontal):
             bits = [escape(p["name"]) if p else "", escape(v["where"]), escape(v["case"]) if v["thread"].case_id else "no case (l)"]
             head += "\n[#928374]" + " · ".join(b for b in bits if b) + "[/]"
         self.query_one(".thead").update(head + "\n")
-        self.query_one(".msgs").update(messages_markup(v["messages"]))
+        self.query_one(".msgs").update(messages_markup(v, self.app.message_state(self.thread_id), self.app.raw))
         self.query_one(".detailtext").update(details_markup(v, self.app.db))
         box = self.query_one(ReplyBox)
         if not box.has_class("open"):
@@ -1296,7 +1406,7 @@ class CaseCard(Vertical):
         self.thread_id, self.index = thread_id, index
 
     def compose(self) -> ComposeResult:
-        yield Static(classes="cardbody")
+        yield MessageText(classes="cardbody")
         yield ReplyBox(self.thread_id)
 
     def show(self, v, expanded: bool, selected: bool):
@@ -1306,7 +1416,7 @@ class CaseCard(Vertical):
         self.border_title = f"{ICON[plat]} [b]{escape(t.title)}[/] [#928374]· {escape(v['where'])}[/]"
         self.border_subtitle = f"[{color}]{g} {label}[/]"
         if expanded:
-            body = messages_markup(msgs)
+            body = messages_markup(v, self.app.message_state(t.id), self.app.raw)
         else:  # Done or Ignored: collapsed like a resolved Linear thread
             last = msgs[-1]["at"] if msgs else None
             body = (f"[#928374]{len(msgs)} message{'s' * (len(msgs) != 1)} · last {ago(last)} · "
@@ -1521,6 +1631,7 @@ class MainScreen(Screen):
         *[Binding(str(i + 1), f"go('view:{i}')", show=False) for i in range(5)],
         Binding("6", "go('people')", show=False), Binding("7", "go('organizations')", show=False),
         Binding("8", "go('cases')", show=False), Binding("9", "go('channels')", show=False),
+        Binding("semicolon", "app.expand_all(True)", show=False), Binding("colon", "app.expand_all(False)", show=False),
     ]
 
     def __init__(self):
@@ -1658,6 +1769,7 @@ class Console(App):
         super().__init__()
         self.db_path, self.send_reply, self.drafts, self.view, self.cursor = db_path, reply, {}, 0, {}
         self.undo = None  # (message, restore) for the last change
+        self.msg_states = {}  # thread id -> which messages, quotes, and recipient lines are open (#107)
 
     @property
     def main(self) -> MainScreen:
@@ -1667,12 +1779,60 @@ class Console(App):
         self.theme = "textual-light"  # toasts and built-in widgets match the light palette
         self.db = inbox.connect(self.db_path)
         inbox.migrate(self.db)
+        self.raw = inbox.raw_dir(self.db)
         self.data_version = self.db.execute("PRAGMA data_version").fetchone()[0]
         self.install_screen(MainScreen(), "main")
         self.push_screen("main")
         self.set_interval(2, self.check_changes)
 
     # Mouse: markup links ([@click=app.…]) and the rail, tables, menus, and footer keys are all clickable.
+    def message_state(self, thread_id: int) -> dict:
+        return self.msg_states.setdefault(thread_id, new_message_state())
+
+    def repaint_messages(self):
+        tv = self.main.thread_view
+        if tv is not None:
+            tv.refresh_data()
+        if isinstance(self.main.page, CasePage):
+            self.main.page.paint()
+
+    def _flip(self, thread_id, key, i):
+        self.message_state(thread_id)[key] ^= {i}
+        self.repaint_messages()
+
+    def action_msg_toggle(self, thread_id, i):
+        st = self.message_state(thread_id)
+        v = inbox.thread_view(self.db, thread_id)
+        now_open = i in st["open"] or (i in default_open(v["messages"]) and i not in st["closed"])
+        st["open"].discard(i), st["closed"].discard(i)
+        (st["closed"] if now_open else st["open"]).add(i)
+        self.repaint_messages()
+
+    def action_msg_trim(self, thread_id, i):
+        self._flip(thread_id, "trim", i)
+
+    def action_msg_to(self, thread_id, i):
+        self._flip(thread_id, "to", i)
+
+    def action_msg_lines(self, thread_id):
+        self.message_state(thread_id)["lines"] = True
+        self.repaint_messages()
+
+    def action_expand_all(self, expand: bool):
+        """`;` opens every message in the shown Thread, `:` collapses them (Gmail's keys)."""
+        tv, page = self.main.thread_view, self.main.page
+        if tv is not None:
+            tid = tv.thread_id
+        elif isinstance(page, CasePage) and page.views:
+            tid = page.views[page.sel]["thread"].id
+        else:
+            return
+        n = len(inbox.thread_view(self.db, tid)["messages"])
+        st = self.message_state(tid)
+        st["open"], st["closed"] = (set(range(n)), set()) if expand else (set(), set(range(n)))
+        st["lines"] = expand
+        self.repaint_messages()
+
     def action_status_tab(self, i):
         self.main.go(f"view:{i}")
 

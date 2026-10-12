@@ -812,6 +812,14 @@ All entries are dated 2026-10-10; exact times are unproven unless noted. Full de
   - Request / decision: Phase 6.3 demo accepted; Phase 6 complete for email. Slack connection stays open (runbook §3)
   - Source: Jeremy, "accepted" (2026-10-12)
   - Status: Approved
+- **105–109**
+  - Request / decision: Gmail-like Thread rendering, text-first (reopens FR-16 body rendering, removed in #635, and rich text and attachments, deferred in #678). No images in the console: omp turns terminal images off under Herdr, Herdr has open Kitty-graphics bugs (#3697, #4858), and terminal mail clients (aerc, neomutt, meli) render HTML as text with a key to open visual mail elsewhere; visual mail opens in Gmail (`o`) (#105). Each inbound email's raw RFC 822 bytes are kept, content-addressed on Workbox, forever; older messages stay text-only. The HTML part is rendered, converted to terminal text; plain is the fallback. Links show their label and real domain (known tracking redirects unwrapped for the domain shown) and open the original link; images show as `[image: alt]`; Attachments show as chips (name, type, size) that open the message in Gmail, since Gmail's per-attachment link needs Gmail's internal message ID, which a forwarded copy lacks (#106). Messages after Jeremy's last reply and the newest are expanded, the rest collapse to one line; Trimmed content (quoted text, signatures, boilerplate footers) folds behind `•••`; each message header shows name, absolute and relative time (relative within 7 days), and to/cc, with full addresses on expand; no clipping of long messages; newsletters follow the same rules (#107). Calendar invites render as an event card (RSVP stays in Gmail); forwarded mail renders as a nested message card, untrimmed (#108). Replies quote the earlier message Gmail-style (`On … wrote:`, HTML with `gmail_quote` plus plain text) and still target the latest inbound message; Slack rendering follows when Slack connects (#109). The HTML-to-text converter is chosen by a bake-off on real mail between a stdlib converter and `w3m -dump`
+  - Source: Jeremy, "i want the thread rendering to be like gmail, images, rendering things smartly, etc", "do discovery on this - not sure the best way to do this in a tui, or if this is even a good idea", the Attio notification screenshot ("it should be smart about things like this"), "aerc, neomutt and meli all render HTML through w3m or lynx as text. should we try this?", ask tool answers 2026-10-12
+  - Status: Accepted
+- **110**
+  - Request / decision: The HTML-to-text converter is our own, on the standard library (`render.py`). Bake-off on six real messages exported from Gmail (Attio notification, Tana newsletter, Gmail reply chain, CDL reply, RBC Zoom invite, Outlook reply with inline images) against `lynx -dump` (`w3m` is not installed; `lynx` is the same family): lynx printed every image as its file name, numbered every link as a footnote, kept quoted history, and leaked spacer characters; ours read like Gmail. Gaps found and fixed: Outlook `From:/Sent:` quote blocks, markup inside link labels, Proofpoint `urldefense` links
+  - Source: Jeremy, "aerc, neomutt and meli all render HTML through w3m or lynx as text. should we try this?", ask tool answer "Bake-off first" (2026-10-12)
+  - Status: Accepted
 
 ## 8. Work log
 
@@ -922,6 +930,18 @@ All entries are dated 2026-10-10; exact times are unproven unless noted. Full de
   - Activity: Phase 6 build: systemd unit and runbook (6.1), D3 artifacts (tunnel config, Email Worker, Slack manifest; 6.2), synthetic-data demo (6.3)
   - Result: 76 tests pass, including the demo (7/7 scenarios) and the Email Worker under Node against the real hook; no external account, DNS record, or system unit changed
   - Evidence: `deploy/`, `docs/runbook.md`, `scripts/demo.py`, `tests/test_demo.py`, `tests/test_email_worker.py`
+  - Basis: Source-observed
+- **2026-10-12T12:52:56+00:00**
+  - Actor: Agent
+  - Activity: Grilled Gmail-like Thread rendering; discovery on terminal images (omp source, Herdr issues, aerc/neomutt/meli docs)
+  - Result: Decisions #105–#109; `GLOSSARY.md` gains Attachment and Trimmed content; console design §3 "Message body" added
+  - Evidence: this ledger; `docs/design/console.md`
+  - Basis: Source-observed
+- **2026-10-12T13:37:30+00:00**
+  - Actor: Agent
+  - Activity: Built Gmail-like Thread rendering (#105–#110): raw messages kept beside the database (`raw/<sha256>.eml`, 0600); `render.py` (HTML and plain text to markup, link domains, trimmed content, invite cards, attachment chips); console collapsing, `•••`, recipient lines, `;`/`:`; replies quote the last inbound message with Gmail markup; echo matching accepts the quoted copy
+  - Result: 92 tests pass; six real samples rendered in the console and screenshots reviewed; not yet deployed
+  - Evidence: `src/universal_inbox/render.py`, `tests/test_render.py`, `tests/test_schema.py`
   - Basis: Source-observed
 
 ## 9. Sources and coverage check

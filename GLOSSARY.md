@@ -12,6 +12,14 @@ _Avoid_: Conversation, Ticket, Loop
 A timestamped, never-rewritten record of a message received or sent in a Thread, or of an edit or deletion of one.
 _Avoid_: Event, Interaction, Message (when meaning the record)
 
+**Attachment**:
+A file sent with a message. It is seen in the console and fetched from the Platform.
+_Avoid_: File (alone), Part
+
+**Trimmed content**:
+The parts of a message body that repeat or decorate rather than say something new: quoted earlier messages, signatures, and boilerplate footers. They are folded behind `•••`, as in Gmail.
+_Avoid_: Quote (when meaning all of it), Fluff
+
 **Case**:
 An optional grouping of Threads that serve one need across Platforms; it has no Status of its own.
 _Avoid_: Commitment, Issue, Project
