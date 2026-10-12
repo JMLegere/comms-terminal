@@ -89,10 +89,23 @@ def reply_sender(history: list[dict], self_address: str) -> tuple[list[str], lis
     return ([last["from"]] if last.get("from") else []), []
 
 
+# Resend's API sits behind Cloudflare, which rejects Python's default User-Agent (403, "error code: 1010").
+USER_AGENT = "universal-inbox/0.1 (+https://github.com/JMLegere/universal-inbox)"
+
+
 def _post(url, headers, payload):
-    req = urllib.request.Request(url, json.dumps(payload).encode(), headers, method="POST")
-    with urllib.request.urlopen(req, timeout=15) as r:
-        return r.status, json.loads(r.read() or b"{}")
+    """POST JSON -> (status, body). HTTP errors return their status and the provider's message."""
+    req = urllib.request.Request(url, json.dumps(payload).encode(), {**headers, "User-Agent": USER_AGENT},
+                                 method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return r.status, json.loads(r.read() or b"{}")
+    except urllib.error.HTTPError as e:
+        raw = e.read()
+        try:
+            return e.code, json.loads(raw or b"{}")
+        except ValueError:
+            return e.code, {"message": raw.decode(errors="replace").strip()[:200]}
 
 
 class EmailSender:

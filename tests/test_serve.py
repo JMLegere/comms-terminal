@@ -88,3 +88,30 @@ def test_service_runs_with_email_only(tmp_path, monkeypatch):
         assert status == 503
     finally:
         server.shutdown()
+
+
+def test_email_post_sends_a_user_agent_and_returns_provider_errors():
+    """Resend sits behind Cloudflare, which 403s Python's default User-Agent; errors keep the provider's message."""
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    from universal_inbox import email as _email
+    seen = {}
+
+    class H(BaseHTTPRequestHandler):
+        def do_POST(self):
+            seen["ua"] = self.headers.get("User-Agent")
+            self.rfile.read(int(self.headers["Content-Length"]))
+            body = b'{"message":"The agentmaple.com domain is not verified"}'
+            self.send_response(403)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+
+    srv = HTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.handle_request, daemon=True).start()
+    status, body = _email._post(f"http://127.0.0.1:{srv.server_address[1]}/emails", {}, {"x": 1})
+    srv.server_close()
+    assert status == 403 and body["message"] == "The agentmaple.com domain is not verified"
+    assert seen["ua"].startswith("universal-inbox/")

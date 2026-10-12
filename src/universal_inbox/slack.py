@@ -72,9 +72,12 @@ def parse(event: dict, connection, rules, client) -> inbox.Incoming | None:
         data={"channel": channel, "ts": ts, **({"thread_ts": thread_ts} if thread_ts else {})})
 
 
+USER_AGENT = "universal-inbox/0.1 (+https://github.com/JMLegere/universal-inbox)"
+
+
 def _post(url, token, payload):
     req = urllib.request.Request(url, json.dumps(payload).encode(),
-                                 {"Authorization": f"Bearer {token}",
+                                 {"Authorization": f"Bearer {token}", "User-Agent": USER_AGENT,
                                   "Content-Type": "application/json; charset=utf-8"}, method="POST")
     with urllib.request.urlopen(req, timeout=15) as r:
         return json.loads(r.read())
@@ -82,7 +85,7 @@ def _post(url, token, payload):
 
 def _get(url, token, params):
     req = urllib.request.Request(f"{url}?{urllib.parse.urlencode(params)}",
-                                 headers={"Authorization": f"Bearer {token}"})
+                                 headers={"Authorization": f"Bearer {token}", "User-Agent": USER_AGENT})
     with urllib.request.urlopen(req, timeout=15) as r:
         return json.loads(r.read())
 
