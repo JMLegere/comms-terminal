@@ -618,7 +618,7 @@ class ThreadsPage(Page, ThreadActions):
         # Fit the row to the panel so the age column stays visible: the title keeps 12 columns, then
         # "· where" drops, then the name shortens. 15 = glyph, age, and cell padding.
         indent = "  " if len(threads) < len(self.rows) else ""  # Threads sit under their Case header
-        room = self.size.width - 3 - 15 - len(indent)
+        room = self.size.width - 3 - 15 - 2 * len(indent)
         with_where = max((len(r["who"]) + len(r["where"]) + 3 for r in threads), default=0)
         show_where = with_where <= room - 12
         who_w = with_where if show_where else min(max((len(r["who"]) for r in threads), default=0), max(6, room - 12))
@@ -627,11 +627,11 @@ class ThreadsPage(Page, ThreadActions):
         for r in self.rows:
             if r.get("header"):
                 icon = f"[#654735]{ICON['case']}[/]" if r["case_id"] else ""
-                name = f"[b #45707a]{escape(cut(r['title'], who_w))}[/]" if r["case_id"] else "[b #928374]No case[/]"
+                name = f"[b #45707a]{escape(cut(r['title'], who_w + len(indent)))}[/]" if r["case_id"] else "[b #928374]No case[/]"
                 table.add_row(icon, name, f"[#928374]{escape(cut(r['summary'], title_w))}[/]", "")
                 continue
             who = f"{indent}[b]{escape(cut(r['who'], who_w))}[/]" + (f" [#928374]· {escape(r['where'])}[/]" if show_where else "")
-            table.add_row(glyph(r["detail"]), who, escape(cut(r["title"], title_w)), f"[#928374]{when(r['last_at'])}[/]")
+            table.add_row(indent + glyph(r["detail"]), who, escape(cut(r["title"], title_w)), f"[#928374]{when(r['last_at'])}[/]")
         table.show_cursor = bool(self.rows)
         if not self.rows:
             table.add_row("", f"[#928374]{self.EMPTY[VIEW_NAMES[view]]}[/]", "", "")
