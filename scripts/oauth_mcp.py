@@ -61,7 +61,7 @@ def catch_code(port: int, state: str) -> str:
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
             q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
-            if q.get("state", [""])[0] != state:
+            if q.get("state", [state])[0] != state:  # Tana omits state on the redirect; PKCE still binds the code
                 self.send_response(400), self.end_headers()
                 self.wfile.write(b"State mismatch; close this tab and try again.")
                 return
