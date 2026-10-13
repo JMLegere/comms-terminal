@@ -1,6 +1,7 @@
 """Console behaviour through Textual's test driver (docs/design/console.md)."""
 
 import asyncio
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -528,3 +529,29 @@ def test_snoozed_countdown_ticks_in_the_list(tmp_path):
 
     run(app, ["2", read, wait, read])
     assert seen[0] != seen[1] and seen[1].endswith("s[/]")
+
+
+def test_snoozed_status_counts_down_on_case_cards_and_thread_header(tmp_path):
+    path, _ = seeded(tmp_path)
+    db = inbox.connect(path)
+    snoozed = next(r for r in inbox.queue(db, "Snoozed") if r["until"])
+    inbox.act(db, snoozed["id"], inbox.SetCase(new_title="Birthday"))
+    case_id = inbox.get_thread(db, snoozed["id"]).case_id
+    app, seen = Console(path), {"card": [], "head": []}
+
+    async def head(app, pilot):
+        seen["head"].append(str(app.main.thread_view.query_one(".thead").render()))
+
+    async def open_case(app, pilot):
+        from universal_inbox.tui import CasePage
+        app.main.open(lambda: CasePage(case_id))
+
+    async def card(app, pilot):
+        seen["card"].append(page(app).query_one("CaseCard").border_subtitle)
+
+    async def wait(app, pilot):
+        await pilot.pause(1.2)
+
+    run(app, ["2", head, wait, head, open_case, card, wait, card])
+    for a, b in (seen["head"], seen["card"]):
+        assert a != b and re.search(r"· (\d+[dhm])*\d+s", b)

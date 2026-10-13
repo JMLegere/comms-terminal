@@ -215,6 +215,14 @@ def left(iso: str | None, now: datetime | None = None) -> str:
     return "".join(f"{n}{u}" for n, u in parts)
 
 
+def status_markup(t) -> str:
+    """A Thread's status label; a Snoozed one also counts down to when it returns (5m24s)."""
+    g, color, label = GLYPH[t.status_detail]
+    end = t.follow_up_at or t.snoozed_until
+    countdown = f" [#928374]· {left(end)}[/]" if t.status == "SNOOZED" and end else ""
+    return f"[{color}]{g} {label}[/]{countdown}"
+
+
 def thread_time(r: dict) -> str:
     """A list row's time: a snooze's time left, else the age of its last message."""
     return left(r["until"]) if r["status"] == "SNOOZED" else when(r["last_at"])
@@ -1139,11 +1147,10 @@ def details_markup(v, db) -> str:
     """The Thread's properties, Linear-style: Status, Person, Organization, Case, Channel; then the
     other Threads with the same Person and Organization."""
     t, p = v["thread"], v["person"]
-    g, color, label = GLYPH[t.status_detail]
     head = lambda icon, text: f"[#928374]{ICON[icon]} {text}[/]"  # noqa: E731
     end = t.follow_up_at or t.snoozed_until
-    until = f" [#928374]until {stamp(end)}[/]" if t.status == "SNOOZED" and end else ""
-    lines = [head("status", "status"), f"[{color}]{g} {label}[/]{until}", ""]
+    until = f"\n[#928374]until {stamp(end)}[/]" if t.status == "SNOOZED" and end else ""
+    lines = [head("status", "status"), f"{status_markup(t)}{until}", ""]
     people, others = v.get("people") or ([p] if p else []), v.get("others") or []
     if people or others:  # everyone involved, not just who wrote first (Jeremy, 2026-10-12)
         lines.append(head("person", "people" if len(people) + len(others) > 1 else "person"))
@@ -1167,8 +1174,7 @@ def details_markup(v, db) -> str:
 
 def thread_head(v) -> str:
     t = v["thread"]
-    g, color, label = GLYPH[t.status_detail]
-    head = f"[b #45707a]{escape(t.title)}[/]   [{color}]{g} {label}[/]"
+    head = f"[b #45707a]{escape(t.title)}[/]   {status_markup(t)}"
     link, plat = native_link(v), v["channel"]["platform"]
     if link:
         p = PLATFORMS[plat]
@@ -1206,19 +1212,24 @@ class ThreadView(Horizontal):
         if self.members is None:
             self.members = v["members"]
         self.view = v
+        self.paint_status()
+        show_messages(self.query_one(".msgs"), message_widgets(v, self.app.message_state(self.thread_id), self.app.raw),
+                      self.query_one(".timeline"))
+        box = self.query_one(ReplyBox)
+        box.view, box.thread_id = v, self.thread_id
+        if not box.has_class("open"):
+            box.show_idle(v)
+
+    def paint_status(self):
+        """Header and properties: they carry the status, and a Snoozed Thread's countdown."""
+        v = self.view
         head = thread_head(v)
         if self.has_class("narrow"):  # properties column hidden: keep who, where, and case under the title
             p = v["person"]
             bits = [escape(p["name"]) if p else "", escape(v["where"]), escape(v["case"]) if v["thread"].case_id else "no case (l)"]
             head += "\n[#928374]" + " · ".join(b for b in bits if b) + "[/]"
         self.query_one(".thead").update(head + "\n")
-        show_messages(self.query_one(".msgs"), message_widgets(v, self.app.message_state(self.thread_id), self.app.raw),
-                      self.query_one(".timeline"))
         self.query_one(".detailtext").update(details_markup(v, self.app.db))
-        box = self.query_one(ReplyBox)
-        box.view, box.thread_id = v, self.thread_id
-        if not box.has_class("open"):
-            box.show_idle(v)
 
     def on_resize(self, event):
         narrow = event.size.width < 84
@@ -1291,7 +1302,7 @@ class TablePage(Page):
 
 
 def thread_cells(t) -> tuple:
-    return (glyph(t.status_detail), escape(t.title), f"[#928374]{GLYPH[t.status_detail][2]}[/]")
+    return (glyph(t.status_detail), escape(t.title), status_markup(t))
 
 
 class PeoplePage(TablePage):
@@ -1732,10 +1743,10 @@ class CaseCard(Vertical):
     def show(self, v, expanded: bool, selected: bool):
         t, msgs = v["thread"], v["messages"]
         expanded |= self.query_one(ReplyBox).has_class("open")
-        g, color, label = GLYPH[t.status_detail]
+        self.thread = t
         plat = v["channel"]["platform"]
         self.border_title = f"{ICON[PLATFORMS[plat].icon]} [b]{escape(t.title)}[/] [#928374]· {escape(v['where'])}[/]"
-        self.border_subtitle = f"[{color}]{g} {label}[/]"
+        self.border_subtitle = status_markup(t)
         msgs_box = self.query_one(".msgs")
         if expanded:
             body = ""
@@ -2185,6 +2196,18 @@ class Console(App):
         self.push_screen("main")
         self.set_interval(2, self.check_changes)
         self.set_interval(60, lambda: self.main.refresh_chrome())  # health goes stale with no write to notice
+        self.set_interval(1, self.tick_countdowns)
+
+    def tick_countdowns(self):
+        """Snoozed Threads count down beside their status every second (the lists tick on their own)."""
+        # ponytail: a Snoozed ThreadView repaints its properties each second; cache them if that gets slow
+        for tv in self.screen.query(ThreadView):
+            if getattr(tv, "view", None) is not None and tv.view["thread"].status == "SNOOZED":
+                tv.paint_status()
+        for card in self.screen.query(CaseCard):
+            t = getattr(card, "thread", None)
+            if t is not None and card.thread_id is not None and t.status == "SNOOZED":
+                card.border_subtitle = status_markup(t)
 
     def thread_drafts(self, thread_id: int) -> list[tuple[int, str]]:
         """Saved texts stay under their original keys; aliases only change which Thread offers them."""
