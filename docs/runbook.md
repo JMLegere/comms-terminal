@@ -25,7 +25,7 @@ D3 (decision #102): Cloudflare Tunnel publishes `https://hooks.agentmaple.com/ho
 3. Generate the inbound mail secret and create the email Connection:
    ```
    bash -c 'umask 077; openssl rand -hex 32 > ~/.config/universal-inbox/email-hook-secret'
-   universal-inbox init --email jeremy@agentmaple.com
+   universal-inbox init --gmail jeremy@agentmaple.com
    ```
 4. Cloudflare: plan, then apply (the tunnel, `hooks.agentmaple.com`, Email Routing for `inbox.agentmaple.com`, the Worker and its secret, the routing rule):
    ```
@@ -53,6 +53,18 @@ Fastmail is a second email Connection (decisions #111, #113). Incoming mail is e
 5. **You**, Fastmail → Settings → Filters & Rules → Create rule: *All messages* → *Send a copy to* `fastmail@inbox.agentmaple.com`, *Continue to apply other rules*; drag it to the top (done 2026-10-12, rule "Universal Inbox"). Spam and blocked senders are not copied.
 
 The refresh token rotates, and Fastmail revokes the sign-in when an old one is reused. Exactly one process may hold it: the service keeps the current one in `~/.local/share/universal-inbox/fastmail-oauth.json` (0600), which wins over the stored credential. Never run a second copy against the same token; if it is revoked, the Connection shows the error and step 1 is repeated.
+
+## 3b. Connect Quo (SMS)
+
+Quo is the SMS Platform (`.agents/discovery/2026-10-12-sms.md`): Jeremy's Work number (506) 832-4154 (Quo phone-number ID `PN2ppcGyMM`). Texts arrive through a signed Quo webhook (Standard Webhooks, `Quo-Api-Version: 2026-03-30`) at `/hooks/quo`; replies from the console go out through Quo's send API; texts Jeremy sends in the Quo app arrive as `message.delivered` and answer the Thread. Group texts are dropped (Quo fires no event for a group text sent from the app). Done 2026-10-12.
+
+1. **You:** save the Quo API key without echoing it: `install -m 600 /dev/null ~/.config/universal-inbox/quo-api-key; and read -s -P 'Quo API key: ' k; and printf %s $k > ~/.config/universal-inbox/quo-api-key; and set -e k`.
+2. Create the webhook through the API (`POST https://api.quo.com/webhooks`, header `Quo-Api-Version: 2026-03-30`): URL `https://hooks.agentmaple.com/hooks/quo`, events `message.received`, `message.delivered`, `message.failed`, `message.undelivered`, `resourceIds: ["PN2ppcGyMM"]`. Write the returned `data.key` (`whsec_…`) straight to `~/.config/universal-inbox/quo-webhook-secret` (0600); it is shown once (rotate with `POST /webhooks/{id}/rotate`). The live webhook is ID `43687`, "Universal Inbox".
+3. Cloudflare: the tunnel's public path is `^/hooks/(email|slack|quo)$` (`scripts/cloudflare_setup.py`).
+4. **You:** `sudo bash deploy/install.sh`: it stores `quo-webhook-secret` and `quo-api-key` and adds `universal-inbox.service.d/quo.conf`.
+5. On Workbox: `universal-inbox init --quo +15068324154`. The service makes the Quo sender on first reply; no restart is needed.
+
+Quo restricts the number from texting US numbers until US texting registration (10DLC) is done; Canadian numbers work.
 
 ## 3. Connect Slack
 
@@ -100,4 +112,4 @@ sudo rm -r /etc/systemd/system/universal-inbox.service /etc/systemd/system/unive
 sudo systemctl daemon-reload
 ```
 
-Then turn off Gmail forwarding, delete the Email Routing rule for `jeremy@inbox.agentmaple.com`, and turn off the Slack app's event subscriptions. Gmail and Slack keep every message; the database stays at `~/.local/share/universal-inbox/inbox.db`. Remove the secrets with `sudo rm /etc/credstore.encrypted/universal-inbox.*` and the package with `uv tool uninstall universal-inbox`.
+Then turn off Gmail forwarding, delete the Email Routing rule for `jeremy@inbox.agentmaple.com`, and turn off the Slack app's event subscriptions. For Quo, delete webhook `43687` in Quo (or `DELETE /webhooks/43687`). Gmail and Slack keep every message; the database stays at `~/.local/share/universal-inbox/inbox.db`. Remove the secrets with `sudo rm /etc/credstore.encrypted/universal-inbox.*` and the package with `uv tool uninstall universal-inbox`.
