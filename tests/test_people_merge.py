@@ -129,3 +129,13 @@ def test_merge_preview_matches_the_merge():
     assert preview["name"] == after["name"] == "Ana Ruiz"
     assert [i["value"] for i in preview["identities"]] == sorted(i["value"] for i in after["identities"])
     assert preview["organizations"] == ["acme.com"] and preview["threads"] == 2
+
+
+def test_people_count_blocked_identities_of_total():
+    db = setup()
+    mail(db, 1, "no-reply@accounts.acme.com", "Acme")
+    pid = db.execute("SELECT person_id FROM identities WHERE value = 'no-reply@accounts.acme.com'").fetchone()[0]
+    inbox.add_identity(db, pid, "email", "noreply@acme.com")
+    inbox.block(db, "email", "noreply@acme.com")
+    p = next(p for p in inbox.people(db) if p["id"] == pid)
+    assert (p["blocked"], p["identities"]) == (1, 2)

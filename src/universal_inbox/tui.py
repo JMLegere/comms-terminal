@@ -1265,7 +1265,7 @@ class PeoplePage(TablePage):
     """People; drag one Person onto another (or g) to merge them after a preview (#121)."""
     RAIL = "people"
     TITLE = f"{ICON['people']} people"
-    COLUMNS = ("", "Name", "Address", "Organizations", "Todo")
+    COLUMNS = ("", "Name", "Address", "Organizations", "Blocked", "Todo")
     EMPTY = "No people yet. Everyone who writes to you appears here."
     TABLE = DragTable
     BINDINGS = [Binding("g", "merge", "merge into…")]
@@ -1303,6 +1303,8 @@ class PeoplePage(TablePage):
     def rows(self):
         return [(p, (f"[#654735]{ICON['person']}[/]", f"[b]{escape(p['name'])}[/]", f"[#928374]{escape(p['address'])}[/]",
                      escape(", ".join(p["organizations"]) or "—"),
+                     f"[#c14a4a]{ICON['blocked']} {p['blocked']}/{p['identities']}[/]" if p["blocked"]
+                     else f"[#928374]0/{p['identities']}[/]",
                      f"[#45707a]{ICON['TODO']} {p['todo']}[/]" if p["todo"] else ""))
                 for p in inbox.people(self.app.db)]
 

@@ -1257,16 +1257,19 @@ def delete_channel_rule(db, rule_id: int) -> None:
 
 
 def people(db) -> list[dict]:
-    """Persons with at least one Identity: name, first address, Organizations, open (Todo) Thread count."""
+    """Persons with at least one Identity: name, first address, Organizations, open (Todo) Thread count, and
+    how many of their Identities are blocked."""
     with _read_snapshot(db):
         out = []
         for p in db.execute("SELECT p.id, p.display_name FROM persons p WHERE EXISTS"
                             " (SELECT 1 FROM identities i WHERE i.person_id = p.id) ORDER BY lower(p.display_name)"):
-            ids = db.execute("SELECT value FROM identities WHERE person_id = ? ORDER BY kind, value", (p["id"],)).fetchall()
+            ids = db.execute("SELECT value, blocked FROM identities WHERE person_id = ? ORDER BY kind, value",
+                             (p["id"],)).fetchall()
             threads = person_threads(db, p["id"])
             out.append({"id": p["id"], "name": p["display_name"], "address": ids[0]["value"],
                         "organizations": person_organizations(db, p["id"]),
-                        "todo": sum(t.status == "TODO" for t in threads), "threads": len(threads)})
+                        "todo": sum(t.status == "TODO" for t in threads), "threads": len(threads),
+                        "identities": len(ids), "blocked": sum(r["blocked"] for r in ids)})
         return out
 
 
