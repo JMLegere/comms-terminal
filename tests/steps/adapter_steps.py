@@ -5,7 +5,7 @@ import hashlib
 import hmac
 import json
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from pytest_bdd import given, parsers, then, when
 
@@ -280,3 +280,27 @@ def slack_send_fails(ctx, error):
         inbox.reply(ctx.db, t.id, "Thanks", sender)
     except inbox.SendFailed as e:
         ctx.error = e
+
+
+def creds(name):
+    return b"test-credential"
+
+
+@when(parsers.parse('a Health Check runs and Slack returns "{error}"'))
+def slack_probe_fails(ctx, error):
+    get = lambda url, token, params: {"ok": False, "error": error}  # noqa: E731
+    inbox.set_probe(ctx.db, ctx.conn, slack.probe(connection(ctx, ctx.conn), creds, {}, get=get))
+
+
+@when("a Health Check runs and Resend accepts the key")
+def email_probe_passes(ctx):
+    get = lambda url, headers: (200, {"data": []})  # noqa: E731
+    inbox.set_probe(ctx.db, ctx.conn, email.probe(connection(ctx, ctx.conn), creds, {}, get=get))
+
+
+@given(parsers.parse("its last Health Check passed {minutes:d} minutes ago"))
+def probed_ago(ctx, minutes):
+    at = datetime.now(timezone.utc) - timedelta(minutes=minutes)
+    with ctx.db:
+        ctx.db.execute("UPDATE connections SET probe_error = NULL, probed_at = ? WHERE id = ?",
+                       (at.isoformat(), ctx.conn))

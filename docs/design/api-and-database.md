@@ -104,6 +104,7 @@ def block(db, kind: str, value: str, blocked: bool = True) -> None
     # Blocks or unblocks one Identity (an email address or a Slack user).
 def set_connection_error(db, connection_id: int, error: str | None) -> None   # health input
 def set_auth(db, connection_id: int, ok: bool) -> None                         # health input
+def set_probe(db, connection_id: int, error: str | None) -> None              # health input: a Health Check
 def add_identity(db, person_id: int, kind: str, value: str) -> None
     # Adds an email address or Slack user to a Person.
     # Raises IdentityTaken if it already belongs to another Person (I-6).
@@ -162,9 +163,10 @@ class SlackSender:  # Sender over chat.postMessage with Jeremy's user token
 
 ```python
 # health.py
-def connection_health(connection) -> Literal["OK", "BROKEN"]
-    # BROKEN: auth_ok = 0 (Slack tokens_revoked / app_uninstalled) or last_error set
-    # (failed send, rejected inbound request). Otherwise OK.
+def connection_health(connection, now=None) -> Literal["OK", "BROKEN"]
+    # BROKEN: auth_ok = 0 (Slack tokens_revoked / app_uninstalled), probe_error set (failed Health Check),
+    # last_error set (failed send, rejected inbound request), or probed_at over 65 minutes old. Otherwise OK.
+def problem(connection, now=None) -> str | None   # the reason shown on the Connection page
 ```
 
 ## 4. Status
@@ -454,6 +456,7 @@ The console is a terminal app (`docs/design/console.md`, decisions #71–#75). I
   - Accepted gap: if the process crashes after an email is sent but before it is stored, the reply is not recorded. Slack replies come back as events and are recorded anyway.
 - **#60, one deep `inbox` module** with `ingest`, `act`, `reply`, and `wake`; email and Slack as adapters behind two seams.
 - **#66, event-driven completeness** (Plain): delivery and health remain event-driven. Jeremy's 2026-10-12 exact-reference reconciliation approval adds logical email repair over stored evidence, independently of provider delivery or history polling.
+- **#119, Health Checks** (Jeremy, 2026-10-13): event-driven health stayed green while a source went quiet. Every 30 minutes `serve.probe_all` calls each adapter's `probe` (Resend `/domains`, Slack `auth.test`, Quo `/webhooks`); Fastmail's Sent poll is its check. Results live in `probe_error`/`probed_at`, apart from `last_error`, so a passing message cannot hide a failed check. Forwarded Gmail and Slack event delivery still cannot be checked.
 - **#62, Block applies to one Identity only**: no Person-level block.
 - **#64, `remove_identity`**: refusing a taken Identity stays; Jeremy moves one by removing it from the other Person first.
 - **#63, `add_identity`** replaces `add_address`: it adds an email address or a Slack user, matching the `identities` table.

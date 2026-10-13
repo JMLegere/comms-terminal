@@ -1,4 +1,5 @@
-"""The service: public hooks (/hooks/email, /hooks/slack, /hooks/quo), the local reply socket (POST /reply), and wake().
+"""The service: public hooks (/hooks/email, /hooks/slack, /hooks/quo), the local reply socket (POST /reply), wake(),
+and a health check of every Connection each 30 minutes.
 
 Credentials come from systemd's $CREDENTIALS_DIRECTORY (LoadCredentialEncrypted=):
 email-hook-secret, slack-signing-secret, slack-user-token, resend-api-key, fastmail-oauth, quo-webhook-secret,
@@ -178,6 +179,34 @@ def wake_loop(db_path: str, stop: threading.Event, every: float = 60) -> None:
             db.close()
 
 
+def probe_all(db, shared: dict, cred=credential) -> None:
+    """One health check per Connection through its adapter's `probe` (decision #119). Fastmail has none:
+    its 10-minute Sent poll records the same result."""
+    import logging
+    for c in inbox.connections(db):
+        adapter = importlib.import_module(f".{platforms.PLATFORMS[c['platform']].adapter}", __package__)
+        if (probe := getattr(adapter, "probe", None)) is None:
+            continue
+        try:
+            error = probe(c, cred, shared)
+        except Exception as e:  # noqa: BLE001 - one bad check must not stop the others or the loop
+            error = f"health check crashed: {e}"
+        inbox.set_probe(db, c["id"], error)
+        logging.getLogger("universal_inbox.health").info("health check %s: %s", c["platform"], error or "ok")
+
+
+def probe_loop(db_path: str, shared: dict, stop: threading.Event, every: float = 1800) -> None:
+    # ponytail: one failed check shows BROKEN for 30 minutes; retry once inside probe_all if blips annoy
+    while True:
+        db = inbox.connect(db_path)
+        try:
+            probe_all(db, shared)
+        finally:
+            db.close()
+        if stop.wait(every):
+            return
+
+
 def run(db_path: str, socket_path: str, host: str, port: int) -> None:
     import logging
     logging.basicConfig(level=logging.INFO, format="%(message)s")  # journald adds the time
@@ -190,6 +219,7 @@ def run(db_path: str, socket_path: str, host: str, port: int) -> None:
     servers = [hooks_server(db_path, host, port), reply_server(db_path, socket_path, senders)]
     threads = [threading.Thread(target=s.serve_forever, daemon=True) for s in servers]
     threads.append(threading.Thread(target=wake_loop, args=(db_path, stop), daemon=True))
+    threads.append(threading.Thread(target=probe_loop, args=(db_path, senders.shared, stop), daemon=True))
     if fm is not None:
         threads.append(threading.Thread(target=fastmail.poll_loop, args=(db_path, fm, stop), daemon=True))
     if token := credential("slack-user-token"):

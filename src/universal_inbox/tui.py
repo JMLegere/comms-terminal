@@ -22,6 +22,7 @@ from textual.widgets import DataTable, Input, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 
 from . import inbox, render
+from .health import problem
 from .icons import ICON
 from .platforms import PLATFORMS
 
@@ -439,8 +440,7 @@ class ThreadActions:
 # --- layout: side rail + main panel -----------------------------------------
 
 def health_ok(connection) -> bool:
-    from .health import connection_health
-    return connection_health(connection) == "OK"
+    return problem(connection) is None
 
 
 class Rail(OptionList):
@@ -1458,11 +1458,12 @@ class ConnectionPage(Page):
         c = next(c for c in inbox.connections(self.app.db) if c["id"] == self.connection_id)
         ok = health_ok(c)
         state = f"[#6c782e]{ICON['ok']} OK[/]" if ok else f"[#c14a4a]{ICON['broken']} BROKEN[/]"
-        detail = c["last_error"] or ("Slack revoked access (token revoked or app uninstalled)" if not c["auth_ok"] else "None.")
+        detail = problem(c) or "None."
         self.query_one("#conn").update(
             f"[b]{conn_icon(c)} {escape(conn_name(c))}[/]  {state}\n{PLATFORMS[c['platform']].healthy if ok else PLATFORMS[c['platform']].broken}\n\n"
             f"[#928374]account[/]\n{escape(c['external_id'])}\n\n"
-            f"[#928374]connected[/]\n{stamp(c['connected_at'])}\n\n[#928374]last error[/]\n{escape(detail)}")
+            f"[#928374]connected[/]\n{stamp(c['connected_at'])}\n\n"
+            f"[#928374]last health check[/]\n{stamp(c['probed_at']) or 'Never.'}\n\n[#928374]problem[/]\n{escape(detail)}")
 
     def action_back(self):
         self.app.main.back()
@@ -1994,6 +1995,7 @@ class Console(App):
         self.install_screen(MainScreen(), "main")
         self.push_screen("main")
         self.set_interval(2, self.check_changes)
+        self.set_interval(60, lambda: self.main.refresh_chrome())  # health goes stale with no write to notice
 
     def thread_drafts(self, thread_id: int) -> list[tuple[int, str]]:
         """Saved texts stay under their original keys; aliases only change which Thread offers them."""

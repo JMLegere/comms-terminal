@@ -277,6 +277,18 @@ def make_sender(connection, credential, shared):
     return SlackSender(token.decode()) if token else None
 
 
+def probe(connection, credential, shared, get=_get) -> str | None:
+    """Health check (decision #119): auth.test accepts Jeremy's user token. Event delivery cannot be checked."""
+    token = credential("slack-user-token")
+    if token is None:
+        return "Slack user token is not installed"
+    try:
+        r = get("https://slack.com/api/auth.test", token.decode(), {})
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        return f"Slack unreachable: {e}"
+    return None if r.get("ok") else f"Slack refused the token: {r.get('error', 'unknown error')}"
+
+
 class SlackSender:
     """Posts replies with Jeremy's user token, so they appear under his name (FR-4c)."""
 

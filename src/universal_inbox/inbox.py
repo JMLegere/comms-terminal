@@ -19,7 +19,7 @@ from typing import Protocol
 
 from . import platforms
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 WAIT = timedelta(days=5)  # Waiting for them ends after this with no reply: back to Todo to follow up (#116)
 MIGRATIONS = {  # version -> statement that upgrades an existing database to it
     2: "ALTER TABLE cases ADD COLUMN description TEXT NOT NULL DEFAULT ''",
@@ -103,6 +103,8 @@ SELECT org_key(domain), CASE WHEN max(name != domain) THEN max(CASE WHEN name !=
                              ELSE org_key(domain) END, min(created_at)
 FROM organizations WHERE org_key(domain) != domain GROUP BY org_key(domain);
 DELETE FROM organizations WHERE org_key(domain) != domain;""",
+    # Health checks every 30 minutes (decision #119): their result apart from send and inbound errors.
+    8: "ALTER TABLE connections ADD COLUMN probe_error TEXT; ALTER TABLE connections ADD COLUMN probed_at TEXT;",
 }
 
 # ponytail: fixed list; extend when a free-mail sender forms an Organization by mistake.
@@ -981,6 +983,13 @@ def set_connection_error(db, connection_id: int, error: str | None) -> None:
 def set_auth(db, connection_id: int, ok: bool) -> None:
     with db:
         db.execute("UPDATE connections SET auth_ok = ? WHERE id = ?", (int(ok), connection_id))
+
+
+def set_probe(db, connection_id: int, error: str | None) -> None:
+    """Records a health check: its failure (None when it passed) and when it ran."""
+    with db:
+        db.execute("UPDATE connections SET probe_error = ?, probed_at = ? WHERE id = ?",
+                   (error, _iso(_now()), connection_id))
 
 
 # --- read side (records) ---------------------------------------------------

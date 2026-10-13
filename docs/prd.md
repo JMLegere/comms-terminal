@@ -162,7 +162,8 @@ Status key in brackets:
 - **NFR-2** [C / P]: **Sync health.**
   - Slack: Broken when Slack reports the token revoked or the app uninstalled (`tokens_revoked`, `app_uninstalled` events), or a reply fails to post.
   - Email: Broken on an inbound request that fails verification or a send failure.
-  - Silence on either channel cannot be told apart from a quiet inbox (R7, R12).
+  - Every Connection: Broken when its Health Check fails or none has run for over an hour (decision #119). Every 30 minutes the service checks that Resend, Slack, and Quo accept their keys and that Quo's webhook is enabled; Fastmail's 10-minute Sent poll is its check.
+  - Silence on any channel cannot be told apart from a quiet inbox (R7, R12).
 - **NFR-3** [C]: **Pull only.** No notifications.
 - **NFR-4** [C]: **Single user.** The console is a terminal app reachable only by SSH to Workbox (D2, decision #71); the reply socket is owned by `jerry` with mode 0600. The public ingress exposes only the inbound mail and Slack event endpoints, and each request is verified (Slack signing secret; inbound mail shared secret).
 - **NFR-5** [P]: **Secrets.** Tokens and keys are never logged or printed, and are never stored as plaintext user-service credentials (Ledgere precedent).

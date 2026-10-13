@@ -144,6 +144,34 @@ def make_sender(connection, credential, shared):
     return EmailSender(key.decode(), connection["self_id"]) if key else None
 
 
+def _get(url, headers):
+    """GET JSON -> (status, body), like _post."""
+    req = urllib.request.Request(url, headers={**headers, "User-Agent": USER_AGENT})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return r.status, json.loads(r.read() or b"{}")
+    except urllib.error.HTTPError as e:
+        try:
+            return e.code, json.loads(e.read() or b"{}")
+        except ValueError:
+            return e.code, {}
+
+
+def probe(connection, credential, shared, get=_get) -> str | None:
+    """Health check (decision #119): Resend accepts the key. A send-only key is refused on /domains as
+    restricted_api_key, which still proves it valid. Forwarded inbound mail cannot be checked from here."""
+    key = credential("resend-api-key")
+    if key is None:
+        return "Resend key is not installed"
+    try:
+        status, body = get("https://api.resend.com/domains", {"Authorization": f"Bearer {key.decode()}"})
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        return f"Resend unreachable: {e}"
+    if status < 300 or body.get("name") == "restricted_api_key":
+        return None
+    return f"Resend refused the key: HTTP {status} {body.get('message', '')}".strip()
+
+
 class EmailSender:
     """Sends replies through Resend (decision #70). `post` is swappable for tests."""
 

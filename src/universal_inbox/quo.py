@@ -84,6 +84,29 @@ def make_sender(connection, credential, shared):
     return QuoSender(key.decode(), connection["external_id"]) if key else None
 
 
+def _get(url, key):
+    req = urllib.request.Request(url, headers={"Authorization": key, "Quo-Api-Version": "2026-03-30",
+                                               "User-Agent": "universal-inbox"})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        return json.load(r)
+
+
+def probe(connection, credential, shared, get=_get) -> str | None:
+    """Health check (decision #119): Quo accepts the key and still has an enabled webhook to /hooks/quo."""
+    key = credential("quo-api-key")
+    if key is None:
+        return "Quo API key is not installed"
+    try:
+        hooks = get("https://api.quo.com/webhooks", key.decode())["data"]
+    except urllib.error.HTTPError as e:
+        return f"Quo refused the key: HTTP {e.code}"
+    except (urllib.error.URLError, OSError, ValueError, KeyError) as e:
+        return f"Quo unreachable: {e}"
+    if not any(h.get("url", "").endswith("/hooks/quo") and h.get("status") == "enabled" for h in hooks):
+        return "Quo has no enabled webhook to /hooks/quo"
+    return None
+
+
 class QuoSender:
     """Sends replies from the Work number through Quo's API; Quo files them in the conversation."""
 

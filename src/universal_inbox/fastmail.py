@@ -226,7 +226,7 @@ def sync(db, client, connection, since: datetime, mine: set[str], limit=50, page
 
 def poll_loop(db_path: str, client, stop: threading.Event, every: float = 600) -> None:
     """Replies Jeremy wrote in Fastmail itself, every 10 minutes (incoming mail arrives by the hook);
-    failures show as the Connection's Last Error (health)."""
+    this poll is also the Connection's health check (decision #119)."""
     mine = None
     while True:
         db, conn = inbox.connect(db_path), None
@@ -236,11 +236,11 @@ def poll_loop(db_path: str, client, stop: threading.Event, every: float = 600) -
                 mine = mine or identities(client)
                 since = datetime.fromisoformat(conn["connected_at"])
                 sync(db, client, conn, since, mine, queries=("in:sent",))
-                inbox.set_connection_error(db, conn["id"], None)
+                inbox.set_probe(db, conn["id"], None)
         except (FastmailError, OSError, ValueError, KeyError) as e:
             log.info("fastmail poll failed: %s", e)
             if conn is not None:
-                inbox.set_connection_error(db, conn["id"], str(e)[:200])
+                inbox.set_probe(db, conn["id"], str(e)[:200])
         finally:
             db.close()
         if stop.wait(every):

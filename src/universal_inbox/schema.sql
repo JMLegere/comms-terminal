@@ -6,7 +6,9 @@ CREATE TABLE connections (
   label             TEXT NOT NULL,
   connected_at      TEXT NOT NULL,
   auth_ok           INTEGER NOT NULL DEFAULT 1 CHECK (auth_ok IN (0, 1)),
-  last_error        TEXT
+  last_error        TEXT,
+  probe_error       TEXT,                  -- the last health check's failure (decision #119)
+  probed_at         TEXT                   -- when the last health check ran
 ) STRICT;
 
 CREATE TABLE channels (
