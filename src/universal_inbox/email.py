@@ -81,19 +81,24 @@ def parse(raw: bytes, connection) -> inbox.Incoming | None:
 
 
 def reply_all(history: list[dict], self_address: str) -> tuple[list[str], list[str]]:
-    """Default recipients (FR-3b): the last inbound message's From and To, and its Cc, minus Jeremy."""
+    """Default recipients (FR-3b): last inbound From/To/Cc, or last outbound To/Cc, minus Jeremy."""
     me = self_address.lower()
     last = next((h["data"] for h in reversed(history) if h["data"].get("from") not in (None, me)), {})
+    if not last:
+        last = next((h["data"] for h in reversed(history) if h["data"].get("to")), {})
     to = [a for a in [last.get("from"), *last.get("to", [])] if a and a != me]
     cc = [a for a in last.get("cc", []) if a != me and a not in to]
-    return list(dict.fromkeys(to)), cc
+    return list(dict.fromkeys(to)), list(dict.fromkeys(cc))
 
 
 def reply_sender(history: list[dict], self_address: str) -> tuple[list[str], list[str]]:
-    """Recipients for a reply to the sender only: the last inbound message's From."""
+    """Recipients for a reply to the sender only: last inbound From, or last outbound To."""
     me = self_address.lower()
     last = next((h["data"] for h in reversed(history) if h["data"].get("from") not in (None, me)), {})
-    return ([last["from"]] if last.get("from") else []), []
+    if not last:
+        last = next((h["data"] for h in reversed(history) if h["data"].get("to")), {})
+    to = [last["from"]] if last.get("from") not in (None, me) else last.get("to", [])
+    return list(dict.fromkeys(a for a in to if a and a != me)), []
 
 
 # Resend's API sits behind Cloudflare, which rejects Python's default User-Agent (403, "error code: 1010").
