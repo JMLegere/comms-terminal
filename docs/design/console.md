@@ -150,7 +150,7 @@ Text-first, like a terminal mail client with Gmail's habits. No images in the co
 - **Merge people** (#121): on People, drag one Person onto another (or `g` and pick the other). A preview shows the merged Person (name by the fuller-name rule, every Identity, Organizations, Thread counts) with Accept and Cancel; nothing changes until Accept. The Person dropped onto is kept.
 
 - **Cases** (#120): the rail's `cases` views list Cases by rolled-up Status (Todo oldest first, others most recently changed first), each with its Thread counts per Status; `n` creates a Case with no Threads yet; `enter` opens it. Key `8` opens Cases › Todo.
-- **Time column**: a Thread's age since its last message; a Snoozed Thread instead shows the time left on its snooze or follow-up (`in 3h`, `in 2d`), `—` when paused with no end.
+- **Time column**: a Thread's age since its last message; a Snoozed Thread instead shows the time left on its snooze or follow-up to the second, ticking (`5m24s`, `3h32m12s`), `—` when paused with no end.
 - **Grouped Thread views** (#120): in a Thread Status view, when any listed Thread is in a Case, rows group under header rows: "No case" first, then each Case by its oldest listed Thread. A header shows the Case title and its Thread counts per Status; `enter` on it opens the Case.
 - **Channels**: Slack Channel rules (`a` add `channel` / `prefix` / `suffix` rule, `x` delete) and the Channels seen so far with whether each is selected.
 - **Health**: one line per Connection in the sidebar; `h` shows each Connection's last error.

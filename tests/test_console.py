@@ -507,6 +507,24 @@ def test_snoozed_rows_show_time_left():
     from datetime import timedelta
     from universal_inbox.tui import left
     now = datetime(2026, 10, 13, 12, tzinfo=timezone.utc)
-    assert [left((now + d).isoformat(), now) for d in (timedelta(minutes=5), timedelta(hours=3), timedelta(days=2), timedelta(days=30))] \
-        == ["in 5m", "in 3h", "in 2d", "in 30d"]
+    assert [left((now + d).isoformat(), now) for d in (timedelta(minutes=5, seconds=24),
+                                                        timedelta(hours=3, minutes=32, seconds=12),
+                                                        timedelta(days=2, seconds=9), timedelta(seconds=7))] \
+        == ["5m24s", "3h32m12s", "2d0h0m9s", "7s"]
     assert left((now - timedelta(minutes=1)).isoformat(), now) == "now" and left(None, now) == "—"
+
+
+def test_snoozed_countdown_ticks_in_the_list(tmp_path):
+    path, _ = seeded(tmp_path)
+    app, seen = Console(path), []
+
+    async def read(app, pilot):
+        table, rows = page(app).query_one("DataTable"), page(app).rows
+        i = next(i for i, r in enumerate(rows) if r.get("status") == "SNOOZED" and r["until"])
+        seen.append(str(table.get_cell_at((i, 3))))
+
+    async def wait(app, pilot):
+        await pilot.pause(1.2)
+
+    run(app, ["2", read, wait, read])
+    assert seen[0] != seen[1] and seen[1].endswith("s[/]")

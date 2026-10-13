@@ -17,6 +17,7 @@ from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.coordinate import Coordinate
 from textual.message import Message
 from textual.screen import ModalScreen, Screen
 from textual.widgets import DataTable, Input, OptionList, Static, TextArea
@@ -199,18 +200,24 @@ def when(iso: str | None, now: datetime | None = None) -> str:
 
 
 def left(iso: str | None, now: datetime | None = None) -> str:
-    """Compact time left until a snooze ends: in 5m, in 3h, in 2d (days however far); now when due; — with no end."""
+    """Time left until a snooze ends, to the second: 5m24s, 3h32m12s, 2d4h0m9s; now when due; — with no end."""
     if not iso:
         return "—"
-    t = datetime.fromisoformat(iso).astimezone()
-    secs = (t - (now or datetime.now().astimezone())).total_seconds()
-    if secs < 60:
+    secs = int((datetime.fromisoformat(iso).astimezone() - (now or datetime.now().astimezone())).total_seconds())
+    if secs <= 0:
         return "now"
-    if secs < 3600:
-        return f"in {int(secs // 60)}m"
-    if secs < 86400:
-        return f"in {int(secs // 3600)}h"
-    return f"in {int(secs // 86400)}d"
+    days, secs = divmod(secs, 86400)
+    hours, secs = divmod(secs, 3600)
+    minutes, secs = divmod(secs, 60)
+    parts = [(days, "d"), (hours, "h"), (minutes, "m"), (secs, "s")]
+    while parts[0][0] == 0:  # leading zero units drop; inner ones stay (3h0m5s)
+        parts.pop(0)
+    return "".join(f"{n}{u}" for n, u in parts)
+
+
+def thread_time(r: dict) -> str:
+    """A list row's time: a snooze's time left, else the age of its last message."""
+    return left(r["until"]) if r["status"] == "SNOOZED" else when(r["last_at"])
 
 
 def ago(iso: str | None) -> str:
@@ -642,6 +649,16 @@ class ThreadsPage(Page, ThreadActions):
     def on_mount(self):
         self.rows = []
         self.refresh_data()
+        self.set_interval(1, self.tick)
+
+    def tick(self):
+        """Snoozed rows count down every second; only their time cells change."""
+        if self.app.main.current is not self or not self.query(DataTable):
+            return
+        table = self.query_one(DataTable)
+        for i, r in enumerate(self.rows):
+            if r.get("status") == "SNOOZED" and i < table.row_count:
+                table.update_cell_at(Coordinate(i, 3), f"[#928374]{thread_time(r)}[/]", update_width=True)
 
     def on_resize(self, _):
         self.call_after_refresh(self.refresh_data)
@@ -672,10 +689,11 @@ class ThreadsPage(Page, ThreadActions):
         row = self.app.cursor.get(view, 1 if len(threads) < len(self.rows) else 0)  # past the first header
         table.clear(columns=True)  # columns too: clear() keeps old widths, which pushed the age column off-screen
         table.add_columns("s", "from", "title", "time")
-        # Fit the row to the panel so the age column stays visible: the title keeps 12 columns, then
-        # "· where" drops, then the name shortens. 15 = glyph, age, and cell padding.
+        # Fit the row to the panel so the time column stays visible: the title keeps 12 columns, then
+        # "· where" drops, then the name shortens. 10 = glyph and cell padding; then the widest time.
         indent = "  " if len(threads) < len(self.rows) else ""  # Threads sit under their Case header
-        room = self.size.width - 3 - 15 - 2 * len(indent)
+        times = {r["id"]: thread_time(r) for r in threads}
+        room = self.size.width - 3 - 10 - max(5, *map(len, times.values()), 0) - 2 * len(indent)
         with_where = max((len(r["who"]) + len(r["where"]) + 3 for r in threads), default=0)
         show_where = with_where <= room - 12
         who_w = with_where if show_where else min(max((len(r["who"]) for r in threads), default=0), max(6, room - 12))
@@ -688,8 +706,7 @@ class ThreadsPage(Page, ThreadActions):
                 table.add_row(icon, name, f"[#928374]{escape(cut(r['summary'], title_w))}[/]", "")
                 continue
             who = f"{indent}[b]{escape(cut(r['who'], who_w))}[/]" + (f" [#928374]· {escape(r['where'])}[/]" if show_where else "")
-            time = left(r["until"]) if r["status"] == "SNOOZED" else when(r["last_at"])  # a snooze shows time left
-            table.add_row(indent + glyph(r["detail"]), who, escape(cut(r["title"], title_w)), f"[#928374]{time}[/]")
+            table.add_row(indent + glyph(r["detail"]), who, escape(cut(r["title"], title_w)), f"[#928374]{times[r['id']]}[/]")
         table.show_cursor = bool(self.rows)
         if not self.rows:
             table.add_row("", f"[#928374]{self.EMPTY[VIEW_NAMES[view]]}[/]", "", "")
