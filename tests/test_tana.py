@@ -97,3 +97,15 @@ def test_section_markup():
     empty = {k: [] for k in ("people", "organizations", "deals", "threats", "opportunities", "tasks", "meetings")}
     assert "nothing in Tana" in tana_markup(empty)
     assert "Tana unavailable: boom" in tana_markup(None, "boom")
+
+
+def test_console_treats_a_service_without_tana_as_not_connected(tmp_path):
+    import threading
+    from universal_inbox.tui import socket_tana
+    sock = str(tmp_path / "s.sock")
+    old = serve.UnixHTTPServer(sock, serve._handler({}))  # a service from before /tana: HTML 404
+    threading.Thread(target=old.serve_forever, daemon=True).start()
+    try:
+        assert socket_tana(sock)(["a@b.ca"], []) is None
+    finally:
+        old.shutdown()

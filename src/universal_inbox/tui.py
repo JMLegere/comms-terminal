@@ -172,9 +172,13 @@ def _post(socket_path, path, payload, timeout=30) -> tuple[int, dict]:
         conn.timeout = timeout
         conn.request("POST", path, json.dumps(payload), {"Content-Type": "application/json"})
         r = conn.getresponse()
-        return r.status, json.loads(r.read() or b"{}")
+        raw = r.read()
     except OSError as e:
         raise ReplyError(f"service not reachable: {e}") from e
+    try:
+        return r.status, json.loads(raw or b"{}")
+    except ValueError:  # an error page, not JSON (an older service has no such route)
+        return r.status, {"error": f"HTTP {r.status}"}
 
 
 def socket_reply(socket_path):
@@ -191,7 +195,7 @@ def socket_tana(socket_path):
     """Tana context (FR-13a) from POST /tana on the service's local socket; None when Tana is not connected."""
     def fetch(emails, domains):
         status, body = _post(socket_path, "/tana", {"emails": emails, "domains": domains}, timeout=120)
-        if status == 503:
+        if status in (404, 503):  # not connected, or a service from before Tana (404)
             return None
         if status != 200:
             raise ReplyError(body.get("error", f"HTTP {status}"))
