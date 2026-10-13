@@ -104,3 +104,28 @@ def test_organizations_use_the_registrable_domain():
     google = db.execute("SELECT person_id FROM identities WHERE value = 'no-reply@accounts.google.com'").fetchone()[0]
     assert inbox.person_organizations(db, google) == ["google.com"]
     assert [p["name"] for p in inbox.organization_view(db, "google.com")["people"]] == ["Google Takeout"]
+
+
+def test_two_addresses_in_one_organization_list_it_once():
+    db = setup()
+    mail(db, 1, "no-reply@accounts.acme.com", "Acme")
+    mail(db, 2, "noreply@acme.com", "Acme")
+    a, b = (db.execute("SELECT person_id FROM identities WHERE value = ?", (v,)).fetchone()[0]
+            for v in ("no-reply@accounts.acme.com", "noreply@acme.com"))
+    inbox.merge_persons(db, a, b)  # a no-op if the same-person rule already joined them
+    assert inbox.person_organizations(db, a) == ["acme.com"]
+
+
+def test_merge_preview_matches_the_merge():
+    db = setup()
+    mail(db, 1, "ana@acme.com", "Ana Ruiz")
+    mail(db, 2, "ana.r@gmail.com", "Ana")
+    keep, drop = (db.execute("SELECT person_id FROM identities WHERE value = ?", (a,)).fetchone()[0]
+                  for a in ("ana@acme.com", "ana.r@gmail.com"))
+    preview = inbox.merge_preview(db, keep, drop)
+    assert people(db) == {"Ana Ruiz": ["ana@acme.com"], "Ana": ["ana.r@gmail.com"]}  # preview changed nothing
+    inbox.merge_persons(db, keep, drop)
+    after = inbox.person_view(db, keep)
+    assert preview["name"] == after["name"] == "Ana Ruiz"
+    assert [i["value"] for i in preview["identities"]] == sorted(i["value"] for i in after["identities"])
+    assert preview["organizations"] == ["acme.com"] and preview["threads"] == 2

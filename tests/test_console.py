@@ -477,3 +477,27 @@ def test_cases_views_group_threads_and_start_an_empty_case(tmp_path):
     assert seen["cases"] == (True, 0, ["Acme rollout"])
     new = [c for c in inbox.case_queue(inbox.connect(path), "Todo") if c["title"] == "Get Ana to respond"]
     assert new and new[0]["counts"] == {"Todo": 0, "Snoozed": 0, "Done": 0, "Ignored": 0}
+
+
+def test_drag_one_person_onto_another_previews_then_merges(tmp_path):
+    """#121: drop a Person on another; the preview shows the result; Cancel keeps both, Accept merges."""
+    path, _ = seeded(tmp_path)
+    app, seen = Console(path), {}
+
+    async def drag(app, pilot):
+        items = [p for p, _ in page(app).items]
+        seen["drop"], seen["keep"] = items[0], items[1]
+        await pilot.mouse_down("#table", offset=(4, 1))  # row 0 (the header is line 0)
+        await pilot.mouse_up("#table", offset=(4, 2))  # row 1
+        await pilot.pause()
+        seen["preview"] = str(app.screen.query_one(".body").render())
+
+    async def kept_both(app, pilot):
+        seen["after_cancel"] = len(page(app).items)
+
+    run(app, ["6", drag, "escape", kept_both, "6", drag, "enter"])
+    assert seen["drop"]["name"] in seen["preview"] and seen["keep"]["name"] in seen["preview"]
+    db = inbox.connect(path)
+    assert seen["after_cancel"] == len(inbox.people(db)) + 1  # Cancel changed nothing; Accept removed one
+    ids = {r[0] for r in db.execute("SELECT person_id FROM identities WHERE value = ?", (seen["drop"]["address"],))}
+    assert ids == {seen["keep"]["id"]}

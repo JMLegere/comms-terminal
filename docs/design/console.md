@@ -147,6 +147,8 @@ Text-first, like a terminal mail client with Gmail's habits. No images in the co
 
 ### Cases, Channels, Health
 
+- **Merge people** (#121): on People, drag one Person onto another (or `g` and pick the other). A preview shows the merged Person (name by the fuller-name rule, every Identity, Organizations, Thread counts) with Accept and Cancel; nothing changes until Accept. The Person dropped onto is kept.
+
 - **Cases** (#120): the rail's `cases` views list Cases by rolled-up Status (Todo oldest first, others most recently changed first), each with its Thread counts per Status; `n` creates a Case with no Threads yet; `enter` opens it. Key `8` opens Cases › Todo.
 - **Grouped Thread views** (#120): in a Thread Status view, when any listed Thread is in a Case, rows group under header rows: "No case" first, then each Case by its oldest listed Thread. A header shows the Case title and its Thread counts per Status; `enter` on it opens the Case.
 - **Channels**: Slack Channel rules (`a` add `channel` / `prefix` / `suffix` rule, `x` delete) and the Channels seen so far with whether each is selected.

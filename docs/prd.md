@@ -869,6 +869,11 @@ All entries are dated 2026-10-10; exact times are unproven unless noted. Full de
   - Source: Jeremy's grilling answers (2026-10-13); `.agents/discovery/2026-10-13-case-work.md`. Supersedes FR-12's "a Case has no Status".
   - Status: Built (2026-10-13). 216 tests passed, including the roll-up scenarios and a console test; Todo, Cases, Case, and All views checked in rendered screenshots. Not yet installed.
 
+- **121**
+  - Request / decision: Merge People by dragging one onto another in the People list (`g` from the keyboard). A preview shows the result (`inbox.merge_preview`, same name rule as `merge_persons`); Accept merges, Cancel changes nothing. The Person dropped onto is kept. No undo: the preview is the safeguard. Also fixed: a Person with two addresses in one Organization listed it twice.
+  - Source: Jeremy, "merge people by dragging one onto the other, it should show me the result and i click accept or cancel"; "bug: same org listed twice" (2026-10-13).
+  - Status: Built (2026-10-13).
+
 ## 8. Work log
 
 - **2026-10-10T18:20:22+00:00**

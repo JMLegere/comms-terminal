@@ -435,12 +435,28 @@ def merge_persons(db, keep: int, drop: int) -> None:
     if keep == drop:
         return
     with db:
-        names = [r[0] for r in db.execute("SELECT display_name FROM persons WHERE id IN (?, ?) ORDER BY id = ?",
-                                          (keep, drop, drop))]
-        best = max(names, key=lambda n: ("@" not in n, len(_name_key(n).split()), len(n)))
+        name = _merged_name(db, keep, drop)
         db.execute("UPDATE identities SET person_id = ? WHERE person_id = ?", (keep, drop))
         db.execute("DELETE FROM persons WHERE id = ?", (drop,))
-        db.execute("UPDATE persons SET display_name = ? WHERE id = ?", (person_name(best), keep))
+        db.execute("UPDATE persons SET display_name = ? WHERE id = ?", (name, keep))
+
+
+def _merged_name(db, keep: int, drop: int) -> str:
+    names = [r[0] for r in db.execute("SELECT display_name FROM persons WHERE id IN (?, ?) ORDER BY id = ?",
+                                      (keep, drop, drop))]
+    return person_name(max(names, key=lambda n: ("@" not in n, len(_name_key(n).split()), len(n))))
+
+
+def merge_preview(db, keep: int, drop: int) -> dict:
+    """What merge_persons(keep, drop) would make, without changing anything: name, Identities,
+    Organizations, and Thread counts."""
+    with _read_snapshot(db):
+        identities = [dict(r) for r in db.execute(
+            "SELECT kind, value FROM identities WHERE person_id IN (?, ?) ORDER BY kind, value", (keep, drop))]
+        threads = {t.id: t for pid in (keep, drop) for t in person_threads(db, pid)}
+        orgs = sorted({o for pid in (keep, drop) for o in person_organizations(db, pid)})
+        return {"name": _merged_name(db, keep, drop), "identities": identities, "organizations": orgs,
+                "threads": len(threads), "todo": sum(t.status == "TODO" for t in threads.values())}
 
 
 def merge_duplicates(db) -> list[tuple[str, str]]:
@@ -1004,7 +1020,7 @@ def person_threads(db, person_id: int) -> list[Thread]:
 
 def person_organizations(db, person_id: int) -> list[str]:
     return [r[0] for r in db.execute(
-        "SELECT o.domain FROM organizations o JOIN identities i"
+        "SELECT DISTINCT o.domain FROM organizations o JOIN identities i"
         " ON i.kind = 'email' AND org_key(substr(i.value, instr(i.value, '@') + 1)) = o.domain"
         " WHERE i.person_id = ? ORDER BY o.domain", (person_id,))]
 

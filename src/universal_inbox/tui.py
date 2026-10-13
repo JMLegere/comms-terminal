@@ -138,6 +138,7 @@ DataTable > .datatable--header { background: #f9f5d7; color: #928374; }
 .box OptionList { background: #f5edca; color: #654735; height: auto; max-height: 16; border: none; }
 .box OptionList > .option-list--option-highlighted { background: #eee0b7; color: #4f3829; text-style: bold; }
 .box .label { display: none; }
+.box .body { height: auto; margin: 0 1 1 1; color: #654735; }
 .box Input { background: #f9f5d7; color: #654735; border: tall #ebdbb2; }
 #statusline { height: 1; background: #f3eac7; color: #654735; link-style: none; link-background: #f3eac7;
               link-style-hover: none; link-background-hover: #eee0b7; }
@@ -237,12 +238,12 @@ def native_link(view: dict) -> str | None:
 # --- small modal screens ---------------------------------------------------
 
 class Pick(ModalScreen):
-    """A labelled menu; dismisses with the chosen option id, or None."""
+    """A labelled menu, optionally under a body of text; dismisses with the chosen option id, or None."""
     BINDINGS = [Binding("escape", "dismiss(None)", "cancel")]
 
-    def __init__(self, label: str, options: list[tuple[str, str]]):
+    def __init__(self, label: str, options: list[tuple[str, str]], body: str = ""):
         super().__init__()
-        self.label, self.options = label, options
+        self.label, self.options, self.body = label, options, body
 
     def compose(self) -> ComposeResult:
         box = Vertical(classes="box")
@@ -250,6 +251,8 @@ class Pick(ModalScreen):
         box.border_subtitle = "[#928374]enter choose · esc cancel[/]"
         with box:
             yield Static(self.label, classes="label")
+            if self.body:
+                yield Static(self.body, classes="body")
             yield OptionList(*[Option(text, id=oid) for oid, text in self.options])
 
     def on_option_list_option_selected(self, event):
@@ -295,6 +298,8 @@ HELP = [  # (group, [(keys, what it does)]) — the full key map; Gmail-style wh
               ("j / k", "select a thread card (↑/↓ also work)"), ("enter", "show or hide a done thread"),
               ("d", "edit the description   ctrl+enter saves · esc cancels"),
               ("r / a", "reply in the selected thread")]),
+    ("People", [("drag", "drop one person on another to merge them: preview, then Accept or Cancel"),
+                ("g", "merge the selected person into another (same preview)")]),
     ("Person", [("n", "rename the person"), ("b", "block or unblock the identity"), ("a", "add an identity"),
                 ("x", "remove the identity")]),
     ("Channels", [("a", "add a rule"), ("x", "delete the selected rule")]),
@@ -514,6 +519,43 @@ class ClickTable(DataTable):
             self.move_cursor(row=row)
         else:
             self._post_selected_message()
+
+
+class DragTable(ClickTable):
+    """A ClickTable that also reports a drag from one row onto another; the row under the pointer is
+    selected while dragging, so the drop target shows."""
+
+    class Dropped(Message):
+        def __init__(self, source: int, target: int):
+            super().__init__()
+            self.source, self.target = source, target
+
+    drag_from, dragging = None, False
+
+    def _row_at(self, event):
+        row = self.screen.get_style_at(event.screen_x, event.screen_y).meta.get("row")
+        return row if row is not None and row >= 0 else None
+
+    def on_mouse_down(self, event):
+        self.drag_from, self.dragging = self._row_at(event), False
+
+    def on_mouse_move(self, event):
+        row = self._row_at(event) if self.drag_from is not None and event.button else None
+        if row is not None and row != self.drag_from:
+            self.dragging = True
+            self.move_cursor(row=row)
+
+    def on_mouse_up(self, event):
+        start, self.drag_from = self.drag_from, None
+        end = self._row_at(event)
+        if start is not None and end is not None and end != start:  # pressed on one row, released on another
+            self.dragging = True
+            self.post_message(self.Dropped(start, end))
+
+    async def _on_click(self, event) -> None:
+        if self.dragging:  # the drop already happened; this click must not open the row
+            event.prevent_default()
+            event.stop()
 
 
 class Page(Vertical):
@@ -1166,11 +1208,12 @@ class TablePage(Page):
     COLUMNS: tuple = ()
     EMPTY = "Nothing here."
     INTRO = ""
+    TABLE = None  # ClickTable unless a page needs more (People drags one Person onto another)
 
     def compose(self) -> ComposeResult:
         if self.INTRO:
             yield Static(self.INTRO, id="intro")
-        yield ClickTable(id="table", cursor_type="row")
+        yield (self.TABLE or ClickTable)(id="table", cursor_type="row")
         yield Static(id="below")
 
     def on_mount(self):
@@ -1219,10 +1262,43 @@ def thread_cells(t) -> tuple:
 
 
 class PeoplePage(TablePage):
+    """People; drag one Person onto another (or g) to merge them after a preview (#121)."""
     RAIL = "people"
     TITLE = f"{ICON['people']} people"
     COLUMNS = ("", "Name", "Address", "Organizations", "Todo")
     EMPTY = "No people yet. Everyone who writes to you appears here."
+    TABLE = DragTable
+    BINDINGS = [Binding("g", "merge", "merge into…")]
+
+    def on_drag_table_dropped(self, event):
+        self.offer_merge(self.items[event.source][0], self.items[event.target][0])
+
+    def action_merge(self):
+        drop = self.selected()
+        if drop is None:
+            return
+        others = {str(p["id"]): p for p, _ in self.items if p["id"] != drop["id"]}
+        opts = [(pid, f"{ICON['person']} {escape(p['name'])}  [#928374]{escape(p['address'])}[/]")
+                for pid, p in others.items()]
+        self.app.push_screen(Pick(f"Merge {drop['name']} into", opts),
+                             lambda choice: choice and self.offer_merge(drop, others[choice]))
+
+    def offer_merge(self, drop, keep):
+        """Show the merged Person; merge only on Accept. `keep` is the one dropped onto."""
+        r = inbox.merge_preview(self.app.db, keep["id"], drop["id"])
+        ids = "\n".join(f"  {ICON[IDENTITY_ICON.get(i['kind'], 'email')]} {escape(i['value'])}" for i in r["identities"])
+        body = (f"[#928374]{escape(drop['name'])} joins {escape(keep['name'])}:[/]\n\n"
+                f"[b]{escape(r['name'])}[/]\n{ids}\n"
+                f"[#928374]{escape(', '.join(r['organizations']) or 'no organization')} · "
+                f"{r['threads']} thread{'s' * (r['threads'] != 1)}, {r['todo']} todo[/]")
+
+        def chosen(choice):
+            if choice == "accept":
+                inbox.merge_persons(self.app.db, keep["id"], drop["id"])
+                self.refresh_data()
+                self.app.main.refresh_chrome()
+                self.app.notify(f"Merged into {r['name']}.")
+        self.app.push_screen(Pick("Merge people", [("accept", f"{ICON['ok']} Accept"), ("cancel", "Cancel")], body), chosen)
 
     def rows(self):
         return [(p, (f"[#654735]{ICON['person']}[/]", f"[b]{escape(p['name'])}[/]", f"[#928374]{escape(p['address'])}[/]",
