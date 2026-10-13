@@ -11,9 +11,12 @@ conf="$home/.config/universal-inbox"
 repo=$(cd "$(dirname "$0")/.." && pwd)
 store=/etc/credstore.encrypted
 
-# 1. Credentials (scripts/oauth_fastmail.py writes fastmail-oauth.json; it is stored as fastmail-oauth)
-[[ -f "$conf/fastmail-oauth.json" ]] && mv "$conf/fastmail-oauth.json" "$conf/fastmail-oauth"
-for name in email-hook-secret resend-api-key slack-signing-secret slack-user-token fastmail-oauth quo-webhook-secret quo-api-key; do
+# 1. Credentials (scripts/oauth_mcp.py writes fastmail-oauth.json; it is stored as fastmail-oauth)
+# (and tana-oauth.json the same way for Tana)
+for name in fastmail-oauth tana-oauth; do
+  [[ -f "$conf/$name.json" ]] && mv "$conf/$name.json" "$conf/$name"
+done
+for name in email-hook-secret resend-api-key slack-signing-secret slack-user-token fastmail-oauth quo-webhook-secret quo-api-key tana-oauth; do
   if [[ -f "$conf/$name" ]]; then
     systemd-creds encrypt --name="$name" "$conf/$name" "$store/universal-inbox.$name"
     shred -u "$conf/$name"
@@ -41,6 +44,11 @@ if [[ -f "$store/universal-inbox.quo-webhook-secret" && -f "$store/universal-inb
   install -D -m 0644 "$repo/deploy/universal-inbox.service.d/quo.conf" \
     /etc/systemd/system/universal-inbox.service.d/quo.conf
   echo "Quo enabled"
+fi
+if [[ -f "$store/universal-inbox.tana-oauth" ]]; then
+  install -D -m 0644 "$repo/deploy/universal-inbox.service.d/tana.conf" \
+    /etc/systemd/system/universal-inbox.service.d/tana.conf
+  echo "Tana enabled"
 fi
 systemctl daemon-reload
 systemctl enable --quiet universal-inbox

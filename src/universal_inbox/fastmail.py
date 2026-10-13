@@ -5,143 +5,27 @@ Routing hands it to the Email Worker, and /hooks/email files it under this Conne
 
 Everything else goes through Fastmail's MCP server, since Jeremy's Basic plan refuses JMAP and IMAP:
 Universal Inbox signs in as a connected app, the way omp does (OAuth with PKCE; scopes mcp-read,
-mcp-action, mcp-send; `scripts/oauth_fastmail.py`). Replies go out with `send_email`, which threads and
+mcp-action, mcp-send; `scripts/oauth_mcp.py`). Replies go out with `send_email`, which threads and
 quotes them the Fastmail way; a 10-minute poll of Sent catches replies Jeremy writes in Fastmail itself;
 the one-time import reads Inbox and Sent as text.
 """
 
-import json
 import logging
-import os
 import threading
-import urllib.error
-import urllib.parse
-import urllib.request
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 from . import inbox
+from .mcp import McpClient, McpError
 
 MCP = "https://api.fastmail.com/mcp"
 TOKEN = "https://api.fastmail.com/oauth/refresh"
-USER_AGENT = "universal-inbox/0.1 (+https://github.com/JMLegere/universal-inbox)"
 INBOUND = "fastmail@inbox.agentmaple.com"  # the Fastmail rule's "Send a copy to" address (#113)
 BOUNCES = ("mailer-daemon@", "postmaster@")
 log = logging.getLogger("universal_inbox.fastmail")
 
 
-class FastmailError(Exception):
-    pass
-
-
-class Retry(FastmailError):
-    """Refused before running (token or session expired): safe to repeat, even for send_email."""
-
-
-def _http(url, body: bytes, headers: dict, timeout=30):
-    req = urllib.request.Request(url, body, {"User-Agent": USER_AGENT, **headers}, method="POST")
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            return r.status, {k.lower(): v for k, v in r.headers.items()}, r.read()
-    except urllib.error.HTTPError as e:
-        return e.code, {k.lower(): v for k, v in e.headers.items()}, e.read()
-
-
-class Client:
-    """MCP over streamable HTTP with a refreshable OAuth token. `http` is swappable for tests.
-
-    The refresh token comes from the systemd credential (or a 0600 file); if Fastmail ever rotates it,
-    the new one is written to `state` (beside the database) and preferred from then on.
-    """
-
-    def __init__(self, cred: dict, state: Path | None = None, http=_http):
-        self.cred, self.state, self.http = dict(cred), state, http
-        self.access, self.expires, self.session = None, datetime.min.replace(tzinfo=timezone.utc), None
-        self.ids, self.lock = 0, threading.Lock()
-
-    @classmethod
-    def load(cls, cred_bytes: bytes, state: Path | None):
-        cred = json.loads(cred_bytes)
-        if state is not None and state.exists():
-            cred |= json.loads(state.read_text())
-        return cls(cred, state)
-
-    def _refresh(self):
-        st, _, body = self.http(TOKEN, urllib.parse.urlencode({
-            "grant_type": "refresh_token", "refresh_token": self.cred["refresh_token"],
-            "client_id": self.cred["client_id"], "resource": self.cred.get("resource", MCP)}).encode(),
-            {"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"})
-        tok = json.loads(body or b"{}")
-        if st != 200 or "access_token" not in tok:
-            raise FastmailError(f"Fastmail sign-in expired or revoked (HTTP {st} {tok.get('error', '')})".strip())
-        self.access = tok["access_token"]
-        self.expires = datetime.now(timezone.utc) + timedelta(seconds=int(tok.get("expires_in", 3600)) - 120)
-        new = tok.get("refresh_token")
-        if new and new != self.cred["refresh_token"]:
-            self.cred["refresh_token"] = new
-            if self.state is not None:
-                fd = os.open(self.state.with_suffix(".tmp"), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-                with os.fdopen(fd, "w") as f:
-                    json.dump({"refresh_token": new}, f)
-                os.replace(self.state.with_suffix(".tmp"), self.state)
-        self.session = None
-
-    def _rpc(self, method, params=None, notify=False):
-        if self.access is None or datetime.now(timezone.utc) >= self.expires:
-            self._refresh()
-        if self.session is None and method != "initialize":
-            self._initialize()
-        msg = {"jsonrpc": "2.0", "method": method}
-        if params is not None:
-            msg["params"] = params
-        if not notify:
-            self.ids += 1
-            msg["id"] = self.ids
-        headers = {"Authorization": f"Bearer {self.access}", "Content-Type": "application/json",
-                   "Accept": "application/json, text/event-stream", "MCP-Protocol-Version": "2025-06-18"}
-        if self.session:
-            headers["Mcp-Session-Id"] = self.session
-        st, h, body = self.http(MCP, json.dumps(msg).encode(), headers)
-        if st == 401:
-            self.access = None
-            raise Retry("Fastmail refused the access token")
-        if st == 404 and self.session:  # the server forgot the session: start a new one next call
-            self.session = None
-            raise Retry("Fastmail MCP session expired")
-        if st >= 300:
-            raise FastmailError(f"Fastmail MCP HTTP {st}")
-        if method == "initialize":
-            self.session = h.get("mcp-session-id") or ""
-        if notify:
-            return None
-        text = body.decode()
-        if "data:" in text and not text.lstrip().startswith("{"):
-            text = "\n".join(ln[5:].strip() for ln in text.splitlines() if ln.startswith("data:"))
-        out = json.loads(text)
-        if "error" in out:
-            raise FastmailError(f"Fastmail MCP error: {out['error'].get('message', out['error'])}")
-        return out["result"]
-
-    def _initialize(self):
-        self._rpc("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
-                                 "clientInfo": {"name": "universal-inbox", "version": "0.1"}})
-        self._rpc("notifications/initialized", notify=True)
-
-    def tool(self, name: str, **args):
-        with self.lock:
-            for attempt in (1, 2):
-                try:
-                    res = self._rpc("tools/call", {"name": name, "arguments": args})
-                    break
-                except Retry:  # never repeat after other failures: send_email may already have sent
-                    if attempt == 2:
-                        raise
-        if res.get("isError"):
-            msg = " ".join(c.get("text", "") for c in res.get("content", []))
-            raise FastmailError(f"Fastmail {name} failed: {msg[:200]}")
-        if "structuredContent" in res:
-            return res["structuredContent"]
-        return json.loads(res["content"][0]["text"])
+class Client(McpClient):
+    mcp, token_url, name = MCP, TOKEN, "Fastmail"
 
 
 # --- inbound -------------------------------------------------------------------------------------
@@ -237,7 +121,7 @@ def poll_loop(db_path: str, client, stop: threading.Event, every: float = 600) -
                 since = datetime.fromisoformat(conn["connected_at"])
                 sync(db, client, conn, since, mine, queries=("in:sent",))
                 inbox.set_probe(db, conn["id"], None)
-        except (FastmailError, OSError, ValueError, KeyError) as e:
+        except (McpError, OSError, ValueError, KeyError) as e:
             log.info("fastmail poll failed: %s", e)
             if conn is not None:
                 inbox.set_probe(db, conn["id"], str(e)[:200])
@@ -275,7 +159,7 @@ class FastmailSender:
     def send(self, thread, text, to, cc, history) -> str:
         try:
             self.mine = self.mine or identities(self.client)
-        except (FastmailError, OSError, ValueError) as err:
+        except (McpError, OSError, ValueError) as err:
             raise inbox.SendFailed(f"Fastmail send failed: {err}") from err
         inbound = [h for h in history if h["data"].get("from") and h["data"]["from"] not in self.mine]
         target = (inbound or history or [None])[-1]
@@ -290,7 +174,7 @@ class FastmailSender:
         try:
             sent = self.client.tool("send_email", **args)
             e = self.client.tool("read_email", id=sent["emailId"])
-        except (FastmailError, OSError, KeyError, ValueError) as err:
+        except (McpError, OSError, KeyError, ValueError) as err:
             raise inbox.SendFailed(f"Fastmail send failed: {err}") from err
         return native_id(e.get("messageId")) if e.get("messageId") else f"<fastmail-{sent['emailId']}@inbox>"
 
@@ -299,7 +183,7 @@ class FastmailSender:
         sender = h["data"].get("from") or ""
         try:
             page = self.client.tool("search_email", query=f"from:{sender}" if sender else "in:inbox", limit=50)
-        except (FastmailError, OSError, ValueError) as err:
+        except (McpError, OSError, ValueError) as err:
             raise inbox.SendFailed(f"Fastmail send failed: {err}") from err
         for r in page.get("results", []):
             if r.get("messageId") and native_id(r["messageId"]) == h["native_id"]:

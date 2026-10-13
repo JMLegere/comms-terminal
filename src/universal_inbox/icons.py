@@ -22,6 +22,14 @@ ICON = {
     "channel": "\U000f0423",        # md-pound
     "channels": "\U000f0423",       # md-pound
     "rule": "\U000f0233",           # md-filter_outline
+    # Tana, a Context source (FR-13a)
+    "tana": "\U000f0ebf",           # md-notebook_outline
+    "meeting": "\U000f0ed8",        # md-calendar_account_outline
+    "deal": "\U000f15a1",           # md-handshake_outline
+    "threat": "\U000f002a",         # md-alert_outline
+    "opportunity": "\U000f0336",    # md-lightbulb_outline
+    "task": "\U000f0131",           # md-checkbox_blank_outline
+    "summary": "\U000f09ed",        # md-text_box_outline
     # platforms and conversation kinds
     "email": "\U000f01f0",          # md-email_outline
     "slack": "\U000f04b1",          # md-slack

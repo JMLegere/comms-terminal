@@ -82,3 +82,11 @@ _Avoid_: Space, Room, Inbox
 **Connection**:
 One connected account on a Platform, such as one forwarded Gmail address, one Slack workspace, or one Quo number.
 _Avoid_: Source, Account, Integration
+
+**Context source**:
+An outside tool that Universal Inbox reads to show context beside Threads, Persons, Organizations, and Cases, such as Tana. It holds no Threads and is not a Platform.
+_Avoid_: Integration, Connection, Platform (for Tana)
+
+**Meeting**:
+A calendar event read from a Context source, with its summary and linked documents. It is context for the Persons and Organizations among its attendees. It is never a Thread or an Activity.
+_Avoid_: Call, Event (alone), Thread (for a meeting)

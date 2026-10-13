@@ -3,7 +3,7 @@ and a health check of every Connection each 30 minutes.
 
 Credentials come from systemd's $CREDENTIALS_DIRECTORY (LoadCredentialEncrypted=):
 email-hook-secret, slack-signing-secret, slack-user-token, resend-api-key, fastmail-oauth, quo-webhook-secret,
-quo-api-key.
+quo-api-key, tana-oauth.
 """
 
 import importlib
@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from . import email, fastmail, inbox, platforms, quo, slack
+from . import email, fastmail, inbox, mcp, platforms, quo, slack, tana
 
 
 def credential(name: str) -> bytes | None:
@@ -36,6 +36,27 @@ def fastmail_client(db) -> fastmail.Client | None:
     cred = credential("fastmail-oauth")
     state = Path(db.execute("PRAGMA database_list").fetchone()[2] or ".").parent / "fastmail-oauth.json"
     return fastmail.Client.load(cred, state) if cred else None
+
+
+def tana_context(db) -> tana.Context | None:
+    cred = credential("tana-oauth")
+    state = Path(db.execute("PRAGMA database_list").fetchone()[2] or ".").parent / "tana-oauth.json"
+    return tana.Context(tana.Client.load(cred, state)) if cred else None
+
+
+def handle_tana(body: bytes, context: tana.Context | None) -> tuple[int, dict]:
+    """POST /tana: {"emails", "domains"} -> (status, Tana context or {"error"}) (FR-13a)."""
+    if context is None:
+        return 503, {"error": "Tana is not connected"}
+    try:
+        req = json.loads(body)
+        emails, domains = [str(e) for e in req.get("emails") or []], [str(d) for d in req.get("domains") or []]
+    except (ValueError, TypeError, AttributeError):
+        return 400, {"error": "expected emails and domains"}
+    try:
+        return 200, context.get(emails, domains)
+    except (mcp.McpError, OSError, ValueError, KeyError, IndexError) as e:
+        return 502, {"error": str(e) or type(e).__name__}
 
 
 class Senders:
@@ -107,7 +128,7 @@ class UnixHTTPServer(socketserver.ThreadingUnixStreamServer):
     daemon_threads = True
 
 
-def reply_server(db_path: str, socket_path: str, senders: Senders) -> UnixHTTPServer:
+def reply_server(db_path: str, socket_path: str, senders: Senders, context: tana.Context | None = None) -> UnixHTTPServer:
     def reply(headers, body):
         db = inbox.connect(db_path)
         try:
@@ -116,11 +137,15 @@ def reply_server(db_path: str, socket_path: str, senders: Senders) -> UnixHTTPSe
             db.close()
         return status, "application/json", json.dumps(out).encode()
 
+    def tana_route(headers, body):
+        status, out = handle_tana(body, context)
+        return status, "application/json", json.dumps(out).encode()
+
     if os.path.exists(socket_path):
         os.unlink(socket_path)
     old = os.umask(0o177)  # socket created 0600 (NFR-4)
     try:
-        return UnixHTTPServer(socket_path, _handler({"/reply": reply}))
+        return UnixHTTPServer(socket_path, _handler({"/reply": reply, "/tana": tana_route}))
     finally:
         os.umask(old)
 
@@ -214,9 +239,10 @@ def run(db_path: str, socket_path: str, host: str, port: int) -> None:
     inbox.migrate(db)
     fm = fastmail_client(db)
     senders = Senders({"fastmail": fm} if fm is not None else {})
+    context = tana_context(db)
     db.close()
     stop = threading.Event()
-    servers = [hooks_server(db_path, host, port), reply_server(db_path, socket_path, senders)]
+    servers = [hooks_server(db_path, host, port), reply_server(db_path, socket_path, senders, context)]
     threads = [threading.Thread(target=s.serve_forever, daemon=True) for s in servers]
     threads.append(threading.Thread(target=wake_loop, args=(db_path, stop), daemon=True))
     threads.append(threading.Thread(target=probe_loop, args=(db_path, senders.shared, stop), daemon=True))

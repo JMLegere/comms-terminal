@@ -46,7 +46,7 @@ D3 (decision #102): Cloudflare Tunnel publishes `https://hooks.agentmaple.com/ho
 
 Fastmail is a second email Connection (decisions #111, #113). Incoming mail is event-driven like Gmail: a Fastmail rule sends a copy of every message to `fastmail@inbox.agentmaple.com`, Email Routing hands it to the same Worker, and the hook files it under Fastmail by that address. Jeremy's Basic plan refuses JMAP, IMAP, and API tokens, so replies (and a 10-minute poll of Sent for replies written in Fastmail itself) go through Fastmail's MCP server, signed in as a connected app the way omp is.
 
-1. **You**, on Mani (browser): `python3 scripts/oauth_fastmail.py --resource mcp --out ~/.config/universal-inbox/fastmail-oauth.json`. On Fastmail's consent page tick read, write, **and** send (the scope must list `mcp-read mcp-action mcp-send`). Copy the file to Workbox's `~/.config/universal-inbox/` (0600) and shred the Mani copy.
+1. **You**, on Mani (browser): `python3 scripts/oauth_mcp.py --resource mcp --out ~/.config/universal-inbox/fastmail-oauth.json`. On Fastmail's consent page tick read, write, **and** send (the scope must list `mcp-read mcp-action mcp-send`). Copy the file to Workbox's `~/.config/universal-inbox/` (0600) and shred the Mani copy.
 2. On Workbox: `universal-inbox init --fastmail legere@fastmail.com`. Optional one-time import: `universal-inbox fastmail-import --days 30` (Inbox and Sent, every Thread left in Todo).
 3. **You:** `sudo bash deploy/install.sh`: it stores `fastmail-oauth` and adds `universal-inbox.service.d/fastmail.conf`.
 4. Cloudflare: `scripts/cloudflare_setup.py` adds the routing rule `fastmail@inbox.agentmaple.com` → Worker (plan, then `--apply`).
@@ -65,6 +65,16 @@ Quo is the SMS Platform (`.agents/discovery/2026-10-12-sms.md`): Jeremy's Work n
 5. On Workbox: `universal-inbox init --quo +15068324154`. The service makes the Quo sender on first reply; no restart is needed.
 
 Quo restricts the number from texting US numbers until US texting registration (10DLC) is done; Canadian numbers work.
+
+## 3c. Connect Tana (context)
+
+Tana is a read-only Context source (FR-13a, decision #122): Thread, Person, Organization, and Case pages show what Tana knows about their people and Organizations. The service signs in to Tana's MCP server (`https://home.tana.inc/mcp`) and the console asks it over the reply socket (`POST /tana`).
+
+1. **You**, on Mani (browser): `python3 scripts/oauth_mcp.py --resource tana --out ~/.config/universal-inbox/tana-oauth.json`. Approve "Universal Inbox" on Tana's consent page. Copy the file to Workbox's `~/.config/universal-inbox/` (0600) and shred the Mani copy.
+2. **You:** `sudo bash deploy/install.sh`: it stores `tana-oauth`, adds `universal-inbox.service.d/tana.conf`, and restarts the service.
+3. Check: open a Thread with someone in Tana; its details column ends with a Tana section, and the bottom bar shows the Tana icon with a check. A failed fetch shows "Tana unavailable: …" and "Tana broken".
+
+As with Fastmail, the service keeps a rotated refresh token in `~/.local/share/universal-inbox/tana-oauth.json` (0600); only the service may hold it.
 
 ## 3. Connect Slack
 

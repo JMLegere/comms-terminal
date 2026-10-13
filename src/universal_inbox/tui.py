@@ -146,6 +146,8 @@ DataTable > .datatable--header { background: #f9f5d7; color: #928374; }
 .descbox { margin: 0 2 1 0; }
 .descbox TextArea { margin: 0; }
 MainScreen > Horizontal { height: 1fr; }
+TanaSection { height: auto; }
+.sidescroll TanaSection { padding: 0 1 1 1; }
 """
 
 
@@ -164,21 +166,37 @@ class _UnixConnection(http.client.HTTPConnection):
         self.sock.connect(self.unix_path)
 
 
+def _post(socket_path, path, payload, timeout=30) -> tuple[int, dict]:
+    try:
+        conn = _UnixConnection(socket_path)
+        conn.timeout = timeout
+        conn.request("POST", path, json.dumps(payload), {"Content-Type": "application/json"})
+        r = conn.getresponse()
+        return r.status, json.loads(r.read() or b"{}")
+    except OSError as e:
+        raise ReplyError(f"service not reachable: {e}") from e
+
+
 def socket_reply(socket_path):
     """Reply function that calls POST /reply on the service's local socket."""
     def reply(thread_id, text, to, cc):
-        try:
-            conn = _UnixConnection(socket_path)
-            conn.request("POST", "/reply", json.dumps({"thread_id": thread_id, "text": text, "to": to, "cc": cc}),
-                         {"Content-Type": "application/json"})
-            r = conn.getresponse()
-            body = json.loads(r.read() or b"{}")
-        except OSError as e:
-            raise ReplyError(f"service not reachable: {e}") from e
-        if r.status != 200:
-            raise ReplyError(body.get("error", f"HTTP {r.status}"))
+        status, body = _post(socket_path, "/reply", {"thread_id": thread_id, "text": text, "to": to, "cc": cc})
+        if status != 200:
+            raise ReplyError(body.get("error", f"HTTP {status}"))
         return body
     return reply
+
+
+def socket_tana(socket_path):
+    """Tana context (FR-13a) from POST /tana on the service's local socket; None when Tana is not connected."""
+    def fetch(emails, domains):
+        status, body = _post(socket_path, "/tana", {"emails": emails, "domains": domains}, timeout=120)
+        if status == 503:
+            return None
+        if status != 200:
+            raise ReplyError(body.get("error", f"HTTP {status}"))
+        return body
+    return fetch
 
 
 def when(iso: str | None, now: datetime | None = None) -> str:
@@ -1182,6 +1200,95 @@ def thread_head(v) -> str:
     return head
 
 
+TANA_RECORDS = (("people", "person", "people"), ("organizations", "organization", "organizations"),
+                ("deals", "deal", "deals"), ("threats", "threat", "threats"),
+                ("opportunities", "opportunity", "opportunities"), ("tasks", "task", "tasks"))
+
+
+def tana_markup(ctx: dict | None, error: str | None = None) -> str:
+    """The Tana section (FR-13a): records, then Meetings with their summary and linked documents by type."""
+    head = lambda icon, text: f"[#928374]{ICON[icon]} {text}[/]"  # noqa: E731
+    link = lambda r, text=None: (f"[link='{r['url']}'][underline]{escape(text or r['title'] or 'untitled')}[/]"  # noqa: E731
+                                 "[/link]")
+    lines = [head("tana", "tana")]
+    if error:
+        return "\n".join(lines + [f"[#c14a4a]{ICON['broken']} Tana unavailable: {escape(error)}[/]"])
+    if ctx is None:
+        return "\n".join(lines + ["[#928374]loading…[/]"])
+    for key, icon, label in TANA_RECORDS:
+        if ctx[key]:
+            lines += ["", head(icon, label), *(link(r) for r in ctx[key])]
+    if ctx["meetings"]:
+        lines += ["", head("meeting", "meetings")]
+    for m in ctx["meetings"]:
+        when_ = "[#45707a]next[/] " if m["upcoming"] else ""
+        lines.append(f"{when_}[#928374]{escape(stamp(m['start']))}[/] {link(m)}")
+        if m["summary"]:
+            text = escape(m["summary"])
+            lines.append(f"[#928374]{ICON['summary']} [link='{m['summary_url']}']{text}[/link][/]" if m["summary_url"]
+                         else f"[#928374]{ICON['summary']} {text}[/]")
+        groups: dict[str, list] = {}
+        for d in m["linked"]:
+            groups.setdefault(d["type"], []).append(d)
+        for kind, docs in groups.items():
+            lines.append(f"  [#928374]{escape(kind)} ({len(docs)})[/]")
+            lines += [f"    {link(d)}" for d in docs[:3]]
+        lines.append("")
+    if len(lines) == 1:
+        lines.append("[#928374]nothing in Tana[/]")
+    return "\n".join(lines).rstrip()
+
+
+class TanaSection(Static):
+    """Tana context for a page (FR-13a), fetched through the service when the page's addresses change.
+    Hidden when the console has no service or Tana is not connected."""
+
+    def __init__(self, **kwargs):
+        super().__init__("", **kwargs)
+        self.key = None
+        self.display = False
+
+    def load(self, emails, domains):
+        key = (tuple(sorted({e.lower() for e in emails})), tuple(sorted({d.lower() for d in domains})))
+        if key == self.key:
+            return
+        self.key = key
+        if getattr(self.app, "fetch_tana", None) is None or not (key[0] or key[1]):
+            self.display = False
+            return
+        self.display = True
+        self.update("\n" + tana_markup(None))
+        self.fetch(key)
+
+    @work(thread=True, exclusive=True)
+    def fetch(self, key):
+        try:
+            ctx, error = self.app.fetch_tana(list(key[0]), list(key[1])), None
+        except ReplyError as e:
+            ctx, error = None, str(e)
+        self.app.call_from_thread(self.show, key, ctx, error)
+
+    def show(self, key, ctx, error):
+        if key != self.key:  # the page moved on while Tana answered
+            return
+        connected = ctx is not None or error is not None
+        self.app.tana_state = error or ("ok" if connected else None)
+        self.app.main.refresh_chrome()
+        self.display = connected
+        if connected:
+            self.update("\n" + tana_markup(ctx, error))
+
+
+def thread_addresses(views) -> tuple[list[str], list[str]]:
+    """Email addresses and Organization domains of the people on these Threads (for Tana)."""
+    emails = {i["value"] for v in views for p in v.get("people") or ([v["person"]] if v["person"] else [])
+              for i in p["identities"] if i["kind"] == "email"}
+    emails |= {a for v in views for a in v.get("others") or [] if "@" in a}
+    domains = {o for v in views for o in v.get("organizations") or []}
+    domains |= {o for v in views for p in v.get("people") or ([v["person"]] if v["person"] else []) for o in p["organizations"]}
+    return sorted(emails), sorted(domains)
+
+
 class ThreadView(Horizontal):
     """One Thread in the thread pane: focusable conversation and reply on the left, properties on the right."""
     BINDINGS = [Binding(b.key, f"app.thread({b.action!r})", b.description, show=b.show)
@@ -1200,6 +1307,7 @@ class ThreadView(Horizontal):
             yield ReplyBox(self.thread_id)
         with VerticalScroll(classes="props", can_focus=False):
             yield Static(classes="detailtext")
+            yield TanaSection()
 
     def on_mount(self):
         self.refresh_data()
@@ -1213,6 +1321,7 @@ class ThreadView(Horizontal):
             self.members = v["members"]
         self.view = v
         self.paint_status()
+        self.query_one(TanaSection).load(*thread_addresses([v]))
         show_messages(self.query_one(".msgs"), message_widgets(v, self.app.message_state(self.thread_id), self.app.raw),
                       self.query_one(".timeline"))
         box = self.query_one(ReplyBox)
@@ -1448,11 +1557,12 @@ class OrganizationPage(ThreadListPage):
         if self.app.main.current is not self:
             return
         people = inbox.organization_view(self.app.db, self.domain)["people"]
+        emails = [i["value"] for p in people for i in p["identities"] if i["kind"] == "email"]
         self.app.main.show_side("\n\n".join(
             f"[@click=app.open_person({p['id']})][b underline]{escape(p['name'])}[/][/]\n"
             + "\n".join(f"[#928374]{ICON[IDENTITY_ICON[i['kind']]]} {escape(i['value'])}[/]"
                         for i in p["identities"])
-            for p in people) or "[#928374]No people yet.[/]")
+            for p in people) or "[#928374]No people yet.[/]", tana=(emails, [self.domain]))
 
 
 class PersonPage(Page):
@@ -1471,6 +1581,7 @@ class PersonPage(Page):
             yield Static(id="pname")
             yield DataTable(id="ids", cursor_type="row", show_header=False)
             yield Static(id="prest")
+            yield TanaSection()
 
     def on_mount(self):
         self.query_one(DataTable).add_columns("kind", "value", "blocked")
@@ -1494,6 +1605,8 @@ class PersonPage(Page):
             f"\n[#928374]{ICON['organizations']} organizations[/]\n{orgs}\n\n"
             f"[#928374]{ICON['threads']} threads[/]\n{threads}\n\n"
             f"[#928374]{ICON['cases']} cases[/]\n{escape(', '.join(p['cases']) or '—')}")
+        self.query_one(TanaSection).load([i["value"] for i in p["identities"] if i["kind"] == "email"],
+                                         p["organizations"])
 
     def selected(self):
         ids = self.person["identities"]
@@ -1705,6 +1818,10 @@ class StatusLine(Static):
             # Icon only while healthy (the rail names each account); a broken one says which, in full.
             parts.append(f"[{b['grey1']}]{conn_icon(c)}[/] [{b['green']}]{ICON['ok']}[/]" if health_ok(c) else
                          f"[b {b['bg0']} on {b['red']}] {ICON['broken']} {escape(conn_name(c))} broken [/]")
+        if app.tana_state == "ok":  # Tana is a Context source, shown apart from Connections (FR-13a)
+            parts.append(f"[{b['grey1']}]{ICON['tana']}[/] [{b['green']}]{ICON['ok']}[/]")
+        elif app.tana_state:
+            parts.append(f"[b {b['bg0']} on {b['red']}] {ICON['broken']} Tana broken [/]")
         right = sep.join(parts) + " "
         from rich.text import Text
         width = self.size.width or self.app.size.width
@@ -1852,6 +1969,7 @@ class CasePage(Page, ThreadActions):
                 yield Vertical(classes="cards")
             with VerticalScroll(classes="props", can_focus=False):
                 yield Static(classes="caseprops")
+                yield TanaSection()
 
     def on_mount(self):
         self.refresh_data()
@@ -1884,6 +2002,7 @@ class CasePage(Page, ThreadActions):
         self.query_one(".activityhead").update(
             f"[b]Activity[/]\n[#928374]{ICON['case']} Case created · {ago(case['created_at'])}[/]")
         self.query_one(".caseprops").update(self.props_markup())
+        self.query_one(TanaSection).load(*thread_addresses(self.views))
         cards = self.query_one(".cards")
         if [c.thread_id for c in self.live_cards()] != [t.id for t in threads]:
             old, retained = self.live_cards(), []
@@ -2129,15 +2248,16 @@ class MainScreen(Screen):
         else:
             pane.mount(ThreadView(thread_id))
 
-    def show_side(self, markup):
-        """Text for the right pane (pages other than Threads)."""
-        if self.side_text is not None and self.side_text.is_attached:
-            self.side_text.update(markup)
-            return
-        pane = self.query_one("#thread")
-        pane.remove_children()
-        self.side_text = Static(markup, classes="sidetext")
-        pane.mount(VerticalScroll(self.side_text, can_focus=False))
+    def show_side(self, markup, tana=None):
+        """Text for the right pane (pages other than Threads), and the Tana section for (emails, domains)."""
+        if self.side_text is None or not self.side_text.is_attached:
+            pane = self.query_one("#thread")
+            pane.remove_children()
+            self.side_text = Static(markup, classes="sidetext")
+            pane.mount(VerticalScroll(self.side_text, TanaSection(), classes="sidescroll", can_focus=False))
+        self.side_text.update(markup)
+        if tana is not None:
+            self.call_after_refresh(lambda: self.query_one("#thread").query_one(TanaSection).load(*tana))
 
     def focus_list(self):
         if self.current is not None:
@@ -2175,9 +2295,10 @@ class Console(App):
     TITLE = "Universal Inbox"
     ENABLE_COMMAND_PALETTE = False
 
-    def __init__(self, db_path: str, reply=None):
+    def __init__(self, db_path: str, reply=None, tana=None):
         super().__init__()
         self.db_path, self.send_reply, self.drafts, self.view, self.cursor = db_path, reply, {}, 0, {}
+        self.fetch_tana, self.tana_state = tana, None  # Tana context (FR-13a); state: None, "ok", or the error
         self.case_view = 0  # the Cases section's Status view (#120)
         self.undo = None  # (message, restore) for the last change
         self.msg_states = {}  # thread id -> which messages, quotes, and recipient lines are open (#107)

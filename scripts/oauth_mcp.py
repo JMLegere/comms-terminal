@@ -1,13 +1,16 @@
-"""Fastmail sign-in for Universal Inbox: OAuth with dynamic client registration and PKCE.
+"""MCP sign-in for Universal Inbox (Fastmail, Tana): OAuth with dynamic client registration and PKCE.
 
 Run on the machine with the browser (Mani). It registers a public client named "Universal Inbox" once
-(or reuses --client-id), opens Fastmail's consent page, catches the redirect on 127.0.0.1, exchanges
+(or reuses --client-id), opens the server's consent page, catches the redirect on 127.0.0.1, exchanges
 the code, and writes {client_id, refresh_token, resource, scope} to --out (mode 0600). It then checks
 the access token against the resource and prints only the HTTP status, scope, and capability names.
 Never prints a token.
 
-    python3 scripts/oauth_fastmail.py --resource jmap --out ~/.config/universal-inbox/fastmail-oauth.json
-    python3 scripts/oauth_fastmail.py --resource mcp --out …   # fallback when the plan refuses JMAP
+    python3 scripts/oauth_mcp.py --resource jmap --out ~/.config/universal-inbox/fastmail-oauth.json
+    python3 scripts/oauth_mcp.py --resource mcp --out …   # fallback when the plan refuses JMAP
+    python3 scripts/oauth_mcp.py --resource tana --out ~/.config/universal-inbox/tana-oauth.json
+
+Tana's MCP server (decision #122) signs in the same way, against Tana's own endpoints.
 """
 
 import argparse
@@ -22,10 +25,14 @@ import urllib.parse
 import urllib.request
 import webbrowser
 
-ISSUER = "https://api.fastmail.com"
-RESOURCES = {
-    "jmap": ("https://api.fastmail.com/jmap/session", "urn:ietf:params:oauth:scope:mail offline_access"),
-    "mcp": ("https://api.fastmail.com/mcp", "https://www.fastmail.com/dev/mcp offline_access"),
+FASTMAIL = ("https://api.fastmail.com/oauth/register", "https://api.fastmail.com/oauth/authorize",
+            "https://api.fastmail.com/oauth/refresh")
+TANA = ("https://login.tana.inc/oauth2/register", "https://login.tana.inc/oauth2/authorize",
+        "https://login.tana.inc/oauth2/token")
+RESOURCES = {  # name -> (register, authorize, token endpoints), resource, scope
+    "jmap": (FASTMAIL, "https://api.fastmail.com/jmap/session", "urn:ietf:params:oauth:scope:mail offline_access"),
+    "mcp": (FASTMAIL, "https://api.fastmail.com/mcp", "https://www.fastmail.com/dev/mcp offline_access"),
+    "tana": (TANA, "https://home.tana.inc/mcp", "openid profile offline_access"),
 }
 USER_AGENT = "universal-inbox/0.1 (+https://github.com/JMLegere/universal-inbox)"
 
@@ -63,9 +70,9 @@ def catch_code(port: int, state: str) -> str:
             self.send_response(200), self.end_headers()
             if got["error"] or not got["code"]:
                 desc = q.get("error_description", [""])[0]
-                self.wfile.write(f"Fastmail did not grant access: {got['error'] or 'no code'} {desc}".encode())
+                self.wfile.write(f"Access not granted: {got['error'] or 'no code'} {desc}".encode())
             else:
-                self.wfile.write(b"Fastmail approved Universal Inbox; finishing in the terminal. You can close this tab.")
+                self.wfile.write(b"Approved Universal Inbox; finishing in the terminal. You can close this tab.")
 
         def log_message(self, *_):
             pass
@@ -74,7 +81,7 @@ def catch_code(port: int, state: str) -> str:
         while "code" not in got:
             srv.handle_request()
     if got["error"] or not got["code"]:
-        raise SystemExit(f"Fastmail refused the sign-in: {got['error'] or 'no code'} {got.get('desc', '')}".rstrip())
+        raise SystemExit(f"Sign-in refused: {got['error'] or 'no code'} {got.get('desc', '')}".rstrip())
     return got["code"]
 
 
@@ -85,12 +92,12 @@ def main(argv=None) -> int:
     ap.add_argument("--client-id", help="reuse a registered client instead of registering a new one")
     ap.add_argument("--port", type=int, default=8733)
     a = ap.parse_args(argv)
-    resource, scope = RESOURCES[a.resource]
+    (register, authorize, token), resource, scope = RESOURCES[a.resource]
     redirect = f"http://127.0.0.1:{a.port}/callback"
 
     client_id = a.client_id
     if not client_id:
-        status, reg = call(f"{ISSUER}/oauth/register", {
+        status, reg = call(register, {
             "client_name": "Universal Inbox", "redirect_uris": [redirect], "token_endpoint_auth_method": "none",
             "grant_types": ["authorization_code", "refresh_token"], "response_types": ["code"], "scope": scope})
         if status >= 300 or "client_id" not in reg:
@@ -102,15 +109,15 @@ def main(argv=None) -> int:
     verifier = base64.urlsafe_b64encode(secrets.token_bytes(48)).rstrip(b"=").decode()
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
     state = secrets.token_urlsafe(16)
-    url = f"{ISSUER}/oauth/authorize?" + urllib.parse.urlencode({
+    url = f"{authorize}?" + urllib.parse.urlencode({
         "response_type": "code", "client_id": client_id, "redirect_uri": redirect, "scope": scope,
         "resource": resource, "state": state, "code_challenge": challenge, "code_challenge_method": "S256"})
-    print("Opening Fastmail's consent page. Approve it (tick sending) in the browser.")
+    print("Opening the consent page. Approve it in the browser (for Fastmail, tick sending).")
     print(url)
     webbrowser.open(url)
     code = catch_code(a.port, state)
 
-    status, tok = call(f"{ISSUER}/oauth/refresh", {
+    status, tok = call(token, {
         "grant_type": "authorization_code", "code": code, "redirect_uri": redirect, "client_id": client_id,
         "code_verifier": verifier, "resource": resource}, form=True)
     if status >= 300 or "access_token" not in tok:

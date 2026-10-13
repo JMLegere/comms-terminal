@@ -49,7 +49,7 @@ PLATFORMS = {p.name: p for p in (
     Platform("fastmail", "Fastmail", "fastmail", "email", "fastmail", True,
              "Receiving Fastmail's copies and sending replies through Fastmail.",
              "[#c14a4a]Fastmail may not be arriving or sending.[/] Check the Fastmail rule and re-run "
-             "scripts/oauth_fastmail.py if the sign-in expired; this clears on the next successful poll.", _fastmail),
+             "scripts/oauth_mcp.py if the sign-in expired; this clears on the next successful poll.", _fastmail),
     Platform("slack", "Slack", "slack", "slack", "slack", False,
              "Receiving Slack events and sending replies.",
              "[#c14a4a]Slack messages are not arriving.[/] Reconnect: run scripts/oauth_slack.py on Workbox, "
