@@ -501,3 +501,12 @@ def test_drag_one_person_onto_another_previews_then_merges(tmp_path):
     assert seen["after_cancel"] == len(inbox.people(db)) + 1  # Cancel changed nothing; Accept removed one
     ids = {r[0] for r in db.execute("SELECT person_id FROM identities WHERE value = ?", (seen["drop"]["address"],))}
     assert ids == {seen["keep"]["id"]}
+
+
+def test_snoozed_rows_show_time_left():
+    from datetime import timedelta
+    from universal_inbox.tui import left
+    now = datetime(2026, 10, 13, 12, tzinfo=timezone.utc)
+    assert [left((now + d).isoformat(), now) for d in (timedelta(minutes=5), timedelta(hours=3), timedelta(days=2), timedelta(days=30))] \
+        == ["in 5m", "in 3h", "in 2d", "in 30d"]
+    assert left((now - timedelta(minutes=1)).isoformat(), now) == "now" and left(None, now) == "—"

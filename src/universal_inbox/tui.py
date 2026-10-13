@@ -198,6 +198,21 @@ def when(iso: str | None, now: datetime | None = None) -> str:
     return t.strftime("%b %-d")
 
 
+def left(iso: str | None, now: datetime | None = None) -> str:
+    """Compact time left until a snooze ends: in 5m, in 3h, in 2d (days however far); now when due; — with no end."""
+    if not iso:
+        return "—"
+    t = datetime.fromisoformat(iso).astimezone()
+    secs = (t - (now or datetime.now().astimezone())).total_seconds()
+    if secs < 60:
+        return "now"
+    if secs < 3600:
+        return f"in {int(secs // 60)}m"
+    if secs < 86400:
+        return f"in {int(secs // 3600)}h"
+    return f"in {int(secs // 86400)}d"
+
+
 def ago(iso: str | None) -> str:
     age = when(iso)
     return "just now" if age == "now" else f"{age} ago"
@@ -673,7 +688,8 @@ class ThreadsPage(Page, ThreadActions):
                 table.add_row(icon, name, f"[#928374]{escape(cut(r['summary'], title_w))}[/]", "")
                 continue
             who = f"{indent}[b]{escape(cut(r['who'], who_w))}[/]" + (f" [#928374]· {escape(r['where'])}[/]" if show_where else "")
-            table.add_row(indent + glyph(r["detail"]), who, escape(cut(r["title"], title_w)), f"[#928374]{when(r['last_at'])}[/]")
+            time = left(r["until"]) if r["status"] == "SNOOZED" else when(r["last_at"])  # a snooze shows time left
+            table.add_row(indent + glyph(r["detail"]), who, escape(cut(r["title"], title_w)), f"[#928374]{time}[/]")
         table.show_cursor = bool(self.rows)
         if not self.rows:
             table.add_row("", f"[#928374]{self.EMPTY[VIEW_NAMES[view]]}[/]", "", "")

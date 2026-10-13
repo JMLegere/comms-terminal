@@ -1119,7 +1119,8 @@ def queue(db, view: str) -> list[dict]:
     """Rows for a Status view. Todo: longest-waiting first; others: most recent first."""
     details = VIEWS[view]
     rows = db.execute(
-        "SELECT t.id, t.title, t.status, t.status_detail, t.case_id, ch.kind, ch.name, ch.native_id, c.platform,"
+        "SELECT t.id, t.title, t.status, t.status_detail, t.case_id, t.follow_up_at, t.snoozed_until,"
+        " ch.kind, ch.name, ch.native_id, c.platform,"
         " (SELECT max(occurred_at) FROM thread_activities a WHERE a.thread_id = t.id) AS last_at,"
         " (SELECT max(occurred_at) FROM thread_activities a WHERE a.thread_id = t.id AND a.identity_id IS NOT NULL) AS last_in,"
         " (SELECT identity_id FROM thread_activities a WHERE a.thread_id = t.id AND a.identity_id IS NOT NULL"
@@ -1130,7 +1131,7 @@ def queue(db, view: str) -> list[dict]:
     for r in rows:
         label, identity = _sender(db, r["first_identity"]) if r["first_identity"] else ("You", None)
         out.append({"id": r["id"], "title": r["title"], "status": r["status"], "detail": r["status_detail"],
-                    "case_id": r["case_id"], "who": label, "where": _where(r, identity), "last_at": r["last_at"],
+                    "case_id": r["case_id"], "until": r["follow_up_at"] or r["snoozed_until"], "who": label, "where": _where(r, identity), "last_at": r["last_at"],
                     "waiting_since": r["last_in"] or r["last_at"]})
     if view == "Todo":
         return sorted(out, key=lambda x: x["waiting_since"])
