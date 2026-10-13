@@ -8,6 +8,7 @@ import http.client
 import json
 import re
 import socket
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 
 from rich.markup import escape
@@ -281,7 +282,7 @@ HELP = [  # (group, [(keys, what it does)]) — the full key map; Gmail-style wh
                      ("← / →", "focus previous / next pane (no item opens)"),
                      ("enter", "open the highlighted sidebar item"),
                      ("1 – 5", "Todo, Snoozed, Done, Ignored, All"),
-                     ("6 – 9", "People, Organizations, Cases, Channels"), ("u", "back (esc also works)")]),
+                     ("6 – 9", "People, Organizations, Cases (Todo), Channels"), ("u", "back (esc also works)")]),
     ("Thread", [("r", "reply to the sender   ctrl+enter sends · esc keeps the draft"), ("a", "reply all"),
                 ("e", "done: it returns if they write again"), ("b", "snooze until a time (it also returns when they write)"),
 ("m", "ignore: it stays out of Todo (m again un-ignores)"),
@@ -289,7 +290,9 @@ HELP = [  # (group, [(keys, what it does)]) — the full key map; Gmail-style wh
                 ("p", "open the person"), ("o", "open in Gmail, Fastmail, or Slack"), ("z", "undo the last change"),
                 ("; / :", "expand / collapse every message (click a message or ••• to toggle one)"),
                 ("ctrl+shift+click", "open a link in your browser (shift lets Ghostty take the click)")]),
-    ("Case", [("j / k", "select a thread card (↑/↓ also work)"), ("enter", "show or hide a done thread"),
+    ("Case", [("n", "Cases views: start a case (a goal) with no threads yet"),
+              ("enter", "Cases views or a case header row: open the case"),
+              ("j / k", "select a thread card (↑/↓ also work)"), ("enter", "show or hide a done thread"),
               ("d", "edit the description   ctrl+enter saves · esc cancels"),
               ("r / a", "reply in the selected thread")]),
     ("Person", [("n", "rename the person"), ("b", "block or unblock the identity"), ("a", "add an identity"),
@@ -444,7 +447,7 @@ def health_ok(connection) -> bool:
 
 
 class Rail(OptionList):
-    """Side rail (herdr/Plain style): a threads section with the Status views, browse, and connections."""
+    """Side rail (herdr/Plain style): threads and cases sections with their Status views, browse, and connections."""
     can_focus = True
 
     def refresh_rail(self):
@@ -466,10 +469,14 @@ class Rail(OptionList):
         for i, name in enumerate(VIEW_NAMES):
             icon_name, color = VIEW_ICON[name]
             opts.append(item(f"view:{i}", icon_name, name, counts[name] if name != "All" else "", color))
+        opts += [gap, header("cases", "cases")]
+        case_counts = Counter(c["status"] for c in inbox.case_queue(db))
+        for i, name in enumerate(inbox.CASE_VIEWS):
+            icon_name, color = VIEW_ICON[name]
+            opts.append(item(f"cases:{i}", icon_name, name, case_counts[name], color))
         opts += [gap, header("inbox", "browse"),
                  item("people", "people", "People", len(inbox.people(db))),
                  item("organizations", "organizations", "Organizations", len(inbox.organizations(db))),
-                 item("cases", "cases", "Cases", len(inbox.cases(db))),
                  item("channels", "channels", "Channels",
                       db.execute("SELECT count(*) FROM channels WHERE kind != 'mailbox'").fetchone()[0]),
                  gap, header("connections", "connections")]
@@ -602,21 +609,28 @@ class ThreadsPage(Page, ThreadActions):
                 view = self.app.view = next(i for i, name in enumerate(VIEW_NAMES) if detail in inbox.VIEWS[name])
                 self.app.main.query_one("#main").border_title = pill(self.TITLE, "blue")
                 self.app.main.refresh_chrome()
-        self.rows = inbox.queue(db, VIEW_NAMES[view])
+        self.rows = self.grouped(inbox.queue(db, VIEW_NAMES[view]))
+        threads = [r for r in self.rows if not r.get("header")]
         table = self.query_one(DataTable)
-        row = self.app.cursor.get(view, 0)
+        row = self.app.cursor.get(view, 1 if len(threads) < len(self.rows) else 0)  # past the first header
         table.clear(columns=True)  # columns too: clear() keeps old widths, which pushed the age column off-screen
         table.add_columns("s", "from", "title", "time")
         # Fit the row to the panel so the age column stays visible: the title keeps 12 columns, then
         # "· where" drops, then the name shortens. 15 = glyph, age, and cell padding.
-        room = self.size.width - 3 - 15
-        with_where = max((len(r["who"]) + len(r["where"]) + 3 for r in self.rows), default=0)
+        indent = "  " if len(threads) < len(self.rows) else ""  # Threads sit under their Case header
+        room = self.size.width - 3 - 15 - len(indent)
+        with_where = max((len(r["who"]) + len(r["where"]) + 3 for r in threads), default=0)
         show_where = with_where <= room - 12
-        who_w = with_where if show_where else min(max((len(r["who"]) for r in self.rows), default=0), max(6, room - 12))
+        who_w = with_where if show_where else min(max((len(r["who"]) for r in threads), default=0), max(6, room - 12))
         title_w = max(6, room - who_w)
         cut = lambda text, n: text if len(text) <= n else text[:n - 1] + "…"  # noqa: E731
         for r in self.rows:
-            who = f"[b]{escape(cut(r['who'], who_w))}[/]" + (f" [#928374]· {escape(r['where'])}[/]" if show_where else "")
+            if r.get("header"):
+                icon = f"[#654735]{ICON['case']}[/]" if r["case_id"] else ""
+                name = f"[b #45707a]{escape(cut(r['title'], who_w))}[/]" if r["case_id"] else "[b #928374]No case[/]"
+                table.add_row(icon, name, f"[#928374]{escape(cut(r['summary'], title_w))}[/]", "")
+                continue
+            who = f"{indent}[b]{escape(cut(r['who'], who_w))}[/]" + (f" [#928374]· {escape(r['where'])}[/]" if show_where else "")
             table.add_row(glyph(r["detail"]), who, escape(cut(r["title"], title_w)), f"[#928374]{when(r['last_at'])}[/]")
         table.show_cursor = bool(self.rows)
         if not self.rows:
@@ -624,7 +638,7 @@ class ThreadsPage(Page, ThreadActions):
         else:
             table.move_cursor(row=min(row, len(self.rows) - 1))
         main, ids = self.app.main, [r["id"] for r in self.rows]
-        if keep in ids:
+        if keep is not None and keep in ids:
             table.move_cursor(row=ids.index(keep))
         if main.pending_select is not None:
             if main.pending_select in ids:
@@ -636,11 +650,34 @@ class ThreadsPage(Page, ThreadActions):
         if tv is not None and getattr(tv, "view", None) is not None and tv.view["thread"].id == selected:
             tv.members = tv.view["members"]
 
+    def grouped(self, rows) -> list[dict]:
+        """Case header rows (#120): "No case" first, then each Case by its oldest listed Thread; the view's own
+        order inside each group. A flat list when no listed Thread is in a Case."""
+        if not any(r["case_id"] for r in rows):
+            return rows
+        cases = {c["id"]: c for c in inbox.case_queue(self.app.db)}
+        groups = {}
+        for r in rows:
+            groups.setdefault(r["case_id"], []).append(r)
+        out = []
+        for cid in sorted(groups, key=lambda c: (c is not None, min(r["waiting_since"] for r in groups[c]))):
+            n = len(groups[cid])
+            summary = case_counts(cases[cid]["counts"]) if cid else f"{n} thread{'s' * (n != 1)}"
+            out += [{"header": True, "id": None, "case_id": cid, "title": cases[cid]["title"] if cid else "",
+                     "summary": summary}, *groups[cid]]
+        return out
+
     def current_thread_id(self):
         if not getattr(self, "rows", None):
             return None
         tid = self.rows[min(self.query_one(DataTable).cursor_row, len(self.rows) - 1)]["id"]
-        return inbox.get_thread(self.app.db, tid).id
+        return inbox.get_thread(self.app.db, tid).id if tid is not None else None
+
+    def on_data_table_row_selected(self, event):
+        """Enter (or a second click) on a Case header row opens the Case."""
+        r = self.rows[event.cursor_row] if self.rows and event.cursor_row < len(self.rows) else None
+        if r is not None and r.get("header") and r["case_id"]:
+            self.app.main.open(lambda: CasePage(r["case_id"], r["title"]))
 
     def on_data_table_row_highlighted(self, event):
         if self.app.main.current is not self:  # a page being replaced must not repaint the thread pane
@@ -1213,19 +1250,48 @@ class OrganizationsPage(TablePage):
         self.app.main.open(lambda: OrganizationPage(o["domain"]))
 
 
+def case_counts(counts: dict) -> str:
+    """A Case's Threads per Status: '2 todo · 1 snoozed · 4 done' (#120)."""
+    return " · ".join(f"{n} {view.lower()}" for view, n in counts.items() if n) or "no threads yet"
+
+
 class CasesPage(TablePage):
-    RAIL = "cases"
-    TITLE = f"{ICON['cases']} cases"
+    """One Status view of Cases: a Case's Status is the earliest of its Threads' (#120)."""
     COLUMNS = ("", "Title", "Threads")
-    EMPTY = "No cases yet. Press l on a thread to start one."
+    BINDINGS = [Binding("n", "new_case", "new case")]
+    EMPTIES = {
+        "Todo": "No case needs you. Press n to start one, or l on a thread.",
+        "Snoozed": "No case is waiting on anyone.",
+        "Done": "No case is done yet.",
+        "Ignored": "No ignored cases.",
+    }
+
+    @property
+    def RAIL(self):
+        return f"cases:{self.app.case_view}"
+
+    @property
+    def TITLE(self):
+        return f"{ICON['cases']} cases · {inbox.CASE_VIEWS[self.app.case_view].lower()}"
+
+    def refresh_data(self):
+        self.EMPTY = self.EMPTIES[inbox.CASE_VIEWS[self.app.case_view]]
+        super().refresh_data()
 
     def rows(self):
-        return [(c, (f"[#654735]{ICON['case']}[/]", f"[b]{escape(c['title'])}[/]",
-                     f"[#928374]{ICON['threads']} {c['threads']}[/]"))
-                for c in inbox.cases(self.app.db)]
+        return [(c, (f"[#654735]{ICON['case']}[/]", f"[b]{escape(c['title'])}[/]", f"[#928374]{case_counts(c['counts'])}[/]"))
+                for c in inbox.case_queue(self.app.db, inbox.CASE_VIEWS[self.app.case_view])]
 
     def open(self, c):
         self.app.main.open(lambda: CasePage(c["id"], c["title"]))
+
+    def action_new_case(self):
+        def named(title):
+            if title:
+                inbox.create_case(self.app.db, title)
+                self.app.main.go("cases:0")  # a Case with no Threads is Todo
+                self.app.notify(f"Case “{title}” started. Press l on a thread to add it.")
+        self.app.push_screen(Ask("New case title", "What is the goal?"), named)
 
 
 class ThreadListPage(TablePage):
@@ -1504,6 +1570,7 @@ class StatusLine(Static):
         app, main, b = self.app, self.app.main, PALETTE
         sec = main.section
         mode = VIEW_NAMES[app.view].upper() if sec.startswith("view:") else (
+            f"CASES · {inbox.CASE_VIEWS[app.case_view].upper()}" if sec.startswith("cases:") else
             "CONNECTION" if sec.startswith("conn:") else sec.upper())
         if len(main.stack) > 1 and main.page is not None:  # deeper than the rail section: say where
             mode += f" › {main.page.TITLE.split(' ', 1)[-1].upper()}"
@@ -1633,7 +1700,11 @@ class DescriptionBox(Vertical):
 class CasePage(Page, ThreadActions):
     """A Case laid out like a Linear issue: title, activity (Case events and Thread cards by start time),
     and properties on the right. j/k select a Thread card; Thread keys act on it."""
-    RAIL = "cases"
+
+    @property
+    def RAIL(self):
+        return f"cases:{self.app.case_view}"
+
     can_focus = True
     BINDINGS = [
         Binding("escape", "back", "back"),
@@ -1682,8 +1753,11 @@ class CasePage(Page, ThreadActions):
         threads = [v["thread"] for v in self.views]
         ids = [t.id for t in threads]
         self.sel = ids.index(keep) if keep in ids else max(0, min(self.sel, len(self.views) - 1))
+        status = inbox.case_status([t.status_detail for t in threads])  # rolled up from its Threads (#120)
+        icon_name, color = VIEW_ICON[status]
         self.query_one(".casehead").update(
-            f"[b #45707a]{escape(case['title'])}[/]\n[#928374]{len(threads)} thread{'s' * (len(threads) != 1)}[/]")
+            f"[b #45707a]{escape(case['title'])}[/]\n[{color}]{ICON[icon_name]} {status}[/]"
+            f"[#928374] · {len(threads)} thread{'s' * (len(threads) != 1)}[/]")
         self.query_one(DescriptionBox).show(self.description)
         self.query_one(".activityhead").update(
             f"[b]Activity[/]\n[#928374]{ICON['case']} Case created · {ago(case['created_at'])}[/]")
@@ -1806,7 +1880,7 @@ class MainScreen(Screen):
         Binding("right", "focus_pane(1)", show=False, priority=True),
         *[Binding(str(i + 1), f"go('view:{i}')", show=False) for i in range(5)],
         Binding("6", "go('people')", show=False), Binding("7", "go('organizations')", show=False),
-        Binding("8", "go('cases')", show=False), Binding("9", "go('channels')", show=False),
+        Binding("8", "go('cases:0')", show=False), Binding("9", "go('channels')", show=False),
         Binding("semicolon", "app.expand_all(True)", show=False), Binding("colon", "app.expand_all(False)", show=False),
     ]
 
@@ -1883,6 +1957,9 @@ class MainScreen(Screen):
         elif target.startswith("view:"):
             self.app.view = int(target.split(":")[1])
             self.stack = [ThreadsPage]
+        elif target.startswith("cases:"):
+            self.app.case_view = int(target.split(":")[1])
+            self.stack = [CasesPage]
         else:
             self.stack = [SECTIONS[target]]
         self._show()
@@ -1979,6 +2056,7 @@ class Console(App):
     def __init__(self, db_path: str, reply=None):
         super().__init__()
         self.db_path, self.send_reply, self.drafts, self.view, self.cursor = db_path, reply, {}, 0, {}
+        self.case_view = 0  # the Cases section's Status view (#120)
         self.undo = None  # (message, restore) for the last change
         self.msg_states = {}  # thread id -> which messages, quotes, and recipient lines are open (#107)
 

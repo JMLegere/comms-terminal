@@ -9,8 +9,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import seed_demo  # noqa: E402
 
 from universal_inbox import inbox  # noqa: E402
-from universal_inbox.tui import (HELP, Console, OrganizationPage, PeoplePage, PersonPage, ReplyError,  # noqa: E402
-                                 ThreadsPage)
+from universal_inbox.tui import (HELP, CasePage, CasesPage, Console, OrganizationPage, PeoplePage, PersonPage,  # noqa: E402
+                                 ReplyError, ThreadsPage)
 
 
 def seeded(tmp_path):
@@ -446,3 +446,34 @@ def test_rail_follows_a_link_from_a_thread_and_back(tmp_path):
     run(app, [open_person_from_thread, on_person, "escape", after_back])
     assert seen["person"] == (PersonPage, "people", True)
     assert seen["back"] == (ThreadsPage, "view:0")
+
+
+def test_cases_views_group_threads_and_start_an_empty_case(tmp_path):
+    """#120: Cases rail views by rolled-up Status, Thread views grouped by Case, n starts a Case."""
+    path, ids = seeded(tmp_path)
+    acme = inbox.get_thread(inbox.connect(path), ids["ana"]).case_id
+    app, seen = Console(path), {}
+
+    async def grouped(app, pilot):
+        rows = page(app).rows
+        seen["heads"] = [(r["case_id"], r["title"]) for r in rows if r.get("header")]
+        seen["acme"] = [r["id"] for r in rows if not r.get("header") and r["case_id"] == acme]
+        table = page(app).query_one("DataTable")
+        table.move_cursor(row=next(i for i, r in enumerate(rows) if r.get("header") and r["case_id"] == acme))
+
+    async def opened(app, pilot):
+        seen["case_page"] = isinstance(page(app), CasePage) and page(app).case_id == acme
+
+    async def cases_todo(app, pilot):
+        seen["cases"] = (isinstance(page(app), CasesPage), app.case_view, [c["title"] for c, _ in page(app).items])
+
+    async def typed(app, pilot):
+        for ch in "Get Ana to respond":
+            await pilot.press("space" if ch == " " else ch)
+
+    run(app, ["1", grouped, "enter", opened, "8", cases_todo, "n", typed, "enter"])
+    assert seen["heads"][0] == (None, "") and seen["heads"][1] == (acme, "Acme rollout")
+    assert len(seen["acme"]) == 2 and seen["case_page"]
+    assert seen["cases"] == (True, 0, ["Acme rollout"])
+    new = [c for c in inbox.case_queue(inbox.connect(path), "Todo") if c["title"] == "Get Ana to respond"]
+    assert new and new[0]["counts"] == {"Todo": 0, "Snoozed": 0, "Done": 0, "Ignored": 0}

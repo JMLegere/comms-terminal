@@ -144,7 +144,9 @@ Status key in brackets:
   - [P] A Slack user joins the Person holding the email address in their Slack profile. Jeremy can add an Identity (an email address or a Slack user) to a Person by hand, and remove one; an Identity that belongs to another Person is refused until he removes it there.
 - **FR-11** [C/PL]: **Organizations** are created automatically from email domains (Plain tenants match by domain).
   - [D] Free-mail domains (gmail.com, outlook.com, and similar) never form an Organization. Reason: Jeremy approved this in AS-12; Plain does not state a rule.
-- **FR-12** [C]: A Case is an optional grouping of Threads. A Thread is in at most one Case. A Case has no Status of its own and shows its Threads' Statuses.
+- **FR-12** [C]: A Case is one goal with an end that Jeremy drives through Threads (a support issue, a deal or onboarding, getting someone to respond). A Thread is in at most one Case. A Case's Status is the earliest of its Threads' Statuses in the order Todo, Snoozed, Done, Ignored; with no Threads it is Todo; Jeremy never sets it (decision #120).
+  - [D] The rail has a Cases section with Todo, Snoozed, Done, and Ignored views; `n` there creates a Case with no Threads yet. Thread views group Threads under Case header rows (title and Thread counts per Status), "No case" first, then by each Case's oldest Thread. Reason: Jeremy works Cases to completion (2026-10-13); Plain has no Case.
+  - [D] A Case may match one CRM record, such as an Attio deal, but holds none of its data; a link goes in its description. A Case whose Threads are all Done shows Done even if its goal is still open (accepted).
 - **FR-13** [C]: Person and Organization records list their Threads (with Status) and Cases.
 
 ### Console
@@ -856,6 +858,16 @@ All entries are dated 2026-10-10; exact times are unproven unless noted. Full de
   - Request / decision: Email Thread reconciliation uses exact Message-ID references only; fuzzy and AI matching are excluded. Reconcile same-mailbox reference-linked branches, late parents, and shared referenced ancestors. Preserve immutable Activities and raw mail through logical Thread aliases; old IDs remain usable. Retain the latest complete triage state, carry a single Case association, and hold conflicting Cases for review. Preserve saved drafts through alias-aware selection.
   - Source: Jeremy, "no fuzzy or ai matching, but yes to ref-based reconciliation" (2026-10-12).
   - Status: Completed (2026-10-12; code commit `902fd0a`). All 191 tests passed; rendered draft chooser/composer and reviewed reconciliation artifacts verified. Privileged restart succeeded; live schema 4 and the 0600 reply socket were verified. Prepared live audit: 126 mailbox messages, 106 verified raw headers, 20 missing raw sources held, zero eligible groups or Case conflicts. Added 204 derived references; all nine existing tables and 106 raw files remained unchanged, and repeat apply was a no-op. Existing console retained to protect drafts. A concurrent unrelated package upgrade was left untouched; live indexing used the exact reviewed schema-4 operator.
+
+- **119**
+  - Request / decision: Health Checks every 30 minutes: Resend, Slack, and Quo accept their keys and Quo's webhook is enabled; Fastmail's 10-minute Sent poll is its check. A failed check, or none for over 65 minutes, makes Connection Health BROKEN. Results are kept apart from Last Error.
+  - Source: Jeremy, "can we add a 30min health check to each?" (2026-10-13).
+  - Status: Completed (2026-10-13; commit `351394d`). Live: schema 8, all four checks passed.
+
+- **120**
+  - Request / decision: Work Cases to completion through their Threads. A Case is one goal with an end. Its Status rolls up as the earliest of its Threads' Statuses (Todo, Snoozed, Done, Ignored); an empty Case is Todo; no manual Case status and no recorded outcome. A Cases rail section with four views replaces the browse entry; Thread views group by Case, "No case" first, then by oldest Thread. A Case may match one Attio record with no field or integration. One Case per Thread stays. Starting a Thread from a Case is out of scope.
+  - Source: Jeremy's grilling answers (2026-10-13); `.agents/discovery/2026-10-13-case-work.md`. Supersedes FR-12's "a Case has no Status".
+  - Status: Built (2026-10-13). 216 tests passed, including the roll-up scenarios and a console test; Todo, Cases, Case, and All views checked in rendered screenshots. Not yet installed.
 
 ## 8. Work log
 

@@ -25,13 +25,13 @@ The parts of a message body that repeat or decorate rather than say something ne
 _Avoid_: Quote (when meaning all of it), Fluff
 
 **Case**:
-An optional grouping of Threads that serve one need across Platforms; it has no Status of its own.
-_Avoid_: Commitment, Issue, Project
+One goal with an end that Jeremy drives through one or more Threads across Platforms, such as getting someone to respond, fixing a customer's problem, or winning a deal. Its Status is the earliest of its Threads' Statuses, in the order Todo, Snoozed, Done, Ignored (Ignored counting after Done); Jeremy never sets it directly. A Case with no Threads yet is Todo. It may match one CRM record, such as a deal in Attio, but holds none of its data; funnel stage stays in the CRM.
+_Avoid_: Commitment, Issue, Project, Ticket
 
 ## Triage
 
 **Status**:
-Where a Thread stands, as in Plain: Todo, Snoozed, or Done. Every Thread also has one Status detail.
+Where a Thread stands, as in Plain: Todo, Snoozed, or Done. Every Thread also has one Status detail. A Case's Status is the roll-up of its Threads' Statuses.
 _Avoid_: State, Stage
 
 **Status detail**:

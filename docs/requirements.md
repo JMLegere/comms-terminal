@@ -36,7 +36,7 @@ Status: MVP confirmed 2026-10-10; revised 2026-10-12 to follow Plain's status mo
 - **People**:
   - A Person is a Slack user and/or a set of email addresses, auto-created on first contact.
   - Organizations are auto-created from email domains; free-mail domains never form one.
-- **Cases**: an optional grouping of Threads; a Thread is in at most one Case; a Case has no Status of its own.
+- **Cases**: one goal driven through Threads; a Thread is in at most one Case; a Case's Status is the earliest of its Threads' Statuses (Todo, Snoozed, Done, Ignored), Todo when it has none (#120).
 - **Records**: Person and Organization records list Threads (with Status) and Cases.
 - **Replying**: plain-text replies from the console on both channels. The console never edits, deletes, archives, or marks read anything in Gmail or Slack.
 - **Sync health** (Plain): a Connection shows broken when Slack revokes the token or uninstalls the app, a reply fails to send, or an inbound email request is rejected. No polling or reconciliation; completeness relies on event delivery.

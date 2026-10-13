@@ -1037,6 +1037,43 @@ def view_counts(db) -> dict[str, int]:
     return {name: sum(rows.get(d, 0) for d in details) for name, details in VIEWS.items()}
 
 
+CASE_VIEWS = ("Todo", "Snoozed", "Done", "Ignored")  # a Case's Status, earliest first (#120)
+
+
+def case_status(details) -> str:
+    """A Case's Status: the earliest of its Threads' views in CASE_VIEWS order; Todo with no Threads."""
+    return next((v for v in CASE_VIEWS if any(d in VIEWS[v] for d in details)), "Todo")
+
+
+def create_case(db, title: str) -> int:
+    """A Case with no Threads yet (#120)."""
+    with db:
+        return db.execute("INSERT INTO cases (title, created_at) VALUES (?, ?)", (title, _iso(_now()))).lastrowid
+
+
+def case_queue(db, view: str | None = None) -> list[dict]:
+    """Cases with their rolled-up Status and Thread counts per view; only `view`'s Cases when given.
+    Todo: longest-waiting first (when its oldest Todo Thread got there); other views: most recently changed
+    first; no view: by title."""
+    found = {}
+    for r in db.execute("SELECT c.id, c.title, c.created_at, t.status_detail, t.status_changed_at FROM cases c"
+                        " LEFT JOIN threads t ON t.case_id = c.id AND t.merged_into IS NULL"):
+        c = found.setdefault(r["id"], {"id": r["id"], "title": r["title"], "created_at": r["created_at"], "threads": []})
+        if r["status_detail"]:
+            c["threads"].append((r["status_detail"], r["status_changed_at"]))
+    out = []
+    for c in found.values():
+        details = [d for d, _ in c["threads"]]
+        status = case_status(details)
+        times = [at for d, at in c["threads"] if d in VIEWS[status]] or [c["created_at"]]
+        out.append({"id": c["id"], "title": c["title"], "status": status,
+                    "counts": {v: sum(d in VIEWS[v] for d in details) for v in CASE_VIEWS},
+                    "since": min(times) if status == "Todo" else max(times)})
+    if view is None:
+        return sorted(out, key=lambda c: c["title"])
+    return sorted((c for c in out if c["status"] == view), key=lambda c: c["since"], reverse=view != "Todo")
+
+
 def _sender(db, identity_id):
     """(label, identity row) for an identity: Person name, else the address."""
     i = db.execute("SELECT i.*, p.display_name FROM identities i LEFT JOIN persons p ON p.id = i.person_id"
@@ -1077,7 +1114,7 @@ def queue(db, view: str) -> list[dict]:
     for r in rows:
         label, identity = _sender(db, r["first_identity"]) if r["first_identity"] else ("You", None)
         out.append({"id": r["id"], "title": r["title"], "status": r["status"], "detail": r["status_detail"],
-                    "who": label, "where": _where(r, identity), "last_at": r["last_at"],
+                    "case_id": r["case_id"], "who": label, "where": _where(r, identity), "last_at": r["last_at"],
                     "waiting_since": r["last_in"] or r["last_at"]})
     if view == "Todo":
         return sorted(out, key=lambda x: x["waiting_since"])

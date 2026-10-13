@@ -97,6 +97,16 @@ Undo snapshots capture the complete triage state, including `follow_up_at`, the 
 
 `restore` acquires a write transaction, compares the saved canonical ID and membership with their current values, and raises `StaleThreadSnapshot(ValueError)` before changing state when either differs. This rejects pre-merge snapshots of both the survivor and a retired Thread, preserving the merged triage and Case. A snapshot from the current membership restores its saved state through any alias used to obtain it. Legacy snapshots lacking `_members` remain valid only for an unmerged singleton. Membership is derived from aliases; it needs no schema generation field.
 
+Case operations (#120), used from the Cases views and grouped Thread views:
+
+```python
+def case_status(details: list[str]) -> str
+    # The earliest of the Threads' views in the order Todo, Snoozed, Done, Ignored; "Todo" with no Threads.
+def create_case(db, title: str) -> int        # a Case with no Threads yet
+def case_queue(db, view: str | None = None) -> list[dict]
+    # Cases with their rolled-up status and Thread counts per view; filtered to one view when given.
+```
+
 People operations, used from Person pages:
 
 ```python

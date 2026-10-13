@@ -452,3 +452,22 @@ def delete_activity(ctx):
 def message_cleared(ctx):
     assert ctx.db.execute("SELECT content FROM activities WHERE kind = 'MESSAGE' AND native_id = ?",
                           (ctx.message_id,)).fetchone()[0] is None
+
+
+STATUS_OF = {d: s for s, details in (("TODO", inbox.VIEWS["Todo"]), ("SNOOZED", inbox.VIEWS["Snoozed"]),
+                                    ("DONE", inbox.VIEWS["Done"] + inbox.VIEWS["Ignored"])) for d in details}
+
+
+@given(parsers.re(r'a Case whose Threads have Status Details "(?P<details>[^"]*)"'))
+def case_with_details(ctx, details):
+    ctx.case_id = inbox.create_case(ctx.db, "Goal")
+    for i, d in enumerate(x.strip() for x in details.split(",") if x.strip()):
+        t = inbox.ingest(ctx.db, email_in(ctx, f"person{i}@acme.com", native_id=f"<goal{i}@test>"))
+        inbox.act(ctx.db, t.id, inbox.SetCase(case_id=ctx.case_id))
+        force(ctx, t.id, STATUS_OF[d], d)
+
+
+@then(parsers.parse("the Case's Status is \"{status}\""))
+def case_status_is(ctx, status):
+    assert next(c for c in inbox.case_queue(ctx.db) if c["id"] == ctx.case_id)["status"] == status
+    assert [c["id"] for c in inbox.case_queue(ctx.db, status)] == [ctx.case_id]
