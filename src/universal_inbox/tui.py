@@ -1688,8 +1688,8 @@ class CasePage(Page, ThreadActions):
             f"[b]Activity[/]\n[#928374]{ICON['case']} Case created · {ago(case['created_at'])}[/]")
         self.query_one(".caseprops").update(self.props_markup())
         cards = self.query_one(".cards")
-        if [c.thread_id for c in cards.query(CaseCard)] != [t.id for t in threads]:
-            old, retained = list(cards.query(CaseCard)), []
+        if [c.thread_id for c in self.live_cards()] != [t.id for t in threads]:
+            old, retained = self.live_cards(), []
             for i, t in enumerate(threads):
                 matches = [c for c in old if inbox.get_thread(db, c.thread_id).id == t.id]
                 if matches:
@@ -1702,6 +1702,7 @@ class CasePage(Page, ThreadActions):
             for card in old:
                 if card not in retained:
                     card.query_one(ReplyBox).keep_draft()
+                    card.thread_id = None  # removal finishes later; paint and the next refresh skip it
                     card.remove()
             cards.sort_children(key=lambda c: c.index)
             self.call_after_refresh(self.paint)
@@ -1712,8 +1713,12 @@ class CasePage(Page, ThreadActions):
         open_thread = v["thread"].status != "DONE"
         return open_thread != (v["thread"].id in self.toggled)
 
+    def live_cards(self) -> list:
+        """Cards for the Case's Threads, in order; a card being removed has no Thread."""
+        return sorted((c for c in self.query(CaseCard) if c.thread_id is not None), key=lambda c: c.index)
+
     def paint(self):
-        for card, v in zip(self.query(CaseCard), self.views):
+        for card, v in zip(self.live_cards(), self.views):
             card.show(v, self.expanded(v), card.index == self.sel)
 
     def props_markup(self) -> str:
@@ -1747,8 +1752,8 @@ class CasePage(Page, ThreadActions):
             return
         self.sel = max(0, min(i, len(self.views) - 1))
         self.paint()
-        cards = list(self.query(CaseCard))
-        if cards:
+        cards = self.live_cards()
+        if self.sel < len(cards):
             self.query_one(".activity").scroll_to_widget(cards[self.sel], animate=False)
 
     def action_down(self):
@@ -1770,7 +1775,7 @@ class CasePage(Page, ThreadActions):
         if not self.expanded(v):
             self.toggled ^= {v["thread"].id}
             self.paint()
-        list(self.query(CaseCard))[self.sel].query_one(ReplyBox).open(v, mode)
+        self.live_cards()[self.sel].query_one(ReplyBox).open(v, mode)
 
     def action_link(self):
         link = self.views and native_link(self.views[self.sel])

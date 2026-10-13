@@ -282,6 +282,9 @@ def test_case_merge_keeps_live_card_composer_and_original_draft_key(tmp_path):
         box = app.main.page.query("CaseCard").last().query_one(ReplyBox)
         bridge_console(path)
         app.check_changes()
+        # The merged-away card is still being removed: painting now must skip it, not paint or crash on it
+        assert [c.thread_id for c in app.main.page.live_cards()] == [ids["keep"]]
+        app.main.page.paint()
         await pilot.pause()
         cards = list(app.main.page.query(CaseCard))
         assert len(cards) == 1 and cards[0].thread_id == ids["keep"]
