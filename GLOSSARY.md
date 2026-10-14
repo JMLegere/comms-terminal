@@ -12,6 +12,15 @@ _Avoid_: Conversation, Ticket, Loop
 A retired Thread ID that resolves to the surviving Thread after exact-reference email reconciliation. Old links still reach the same work and its combined history.
 _Avoid_: Deleted thread, Duplicate activity
 
+**Draft**:
+An unsent email or SMS composition with its own Connection, sender, recipients, subject and body; it is neither a Thread nor an Activity.
+
+**Draft revision**:
+The monotonically increasing version of a saved Draft, checked before a later save may replace it.
+
+**Captured history**:
+Stored Threads matching an exact email or phone destination, whether or not it is linked to a Person; it makes no claim about external messages.
+
 **Activity**:
 A timestamped, never-rewritten record of a message received or sent in a Thread, or of an edit or deletion of one.
 _Avoid_: Event, Interaction, Message (when meaning the record)

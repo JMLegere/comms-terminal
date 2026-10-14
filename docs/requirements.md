@@ -47,12 +47,17 @@ Status: MVP confirmed 2026-10-10; revised 2026-10-12 to follow Plain's status mo
   - R opens the inline reply box; Ctrl+S sends.
   - Deviations: I Ignore and C add to Case; O links to the Thread in its native app.
 
+
+## Drafts-first expansion
+
+Authorized local expansion: Drafts replaces All under Threads, with ordinary page-row styling and native active state. Entering creates nothing; `n` creates a Draft. Email/SMS fields save with an expected Draft revision and resume after restart. Exact captured recipient history does not require a Person link. Sending new messages remains unavailable; existing replies and Thread data stay unchanged.
+
 ## Deferred (after MVP)
 
 - Other Platforms: tool comments, WhatsApp, LinkedIn.
 - Other mailboxes and Slack workspaces.
 - Rules by domain, category, or content.
-- Starting new conversations, attachments, rich text, drafts, undo-send, signatures.
+- Sending new conversations, attachments, rich text, undo-send, signatures. Persistent unsent Drafts are included in the Drafts-first expansion above.
 - Cmd+K command palette.
 - Linear context on records. (Tana and Attio context are built: FR-13a and FR-13b, decisions #122 and #123.)
 - Plain's "Close the loop" status detail and auto-resolution.

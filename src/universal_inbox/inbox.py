@@ -1,6 +1,6 @@
-"""The inbox module: Threads, Status, Activities, Persons, Organizations, Blocks, and Cases.
+"""The inbox module: Threads, Status, Activities, Persons, Organizations, Blocks, Cases, and Drafts.
 
-Interface: ingest, act, reply, wake, reopen_imported, reconcile_email_threads; people operations block, add_identity, remove_identity.
+Interface: ingest, act, reply, wake, reopen_imported, reconcile_email_threads; people operations block, add_identity, remove_identity; save_draft, get_draft, list_drafts, recipient_threads.
 Design: docs/design/api-and-database.md.
 """
 
@@ -15,11 +15,12 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from email import policy
 from email.parser import BytesHeaderParser
+from email.utils import getaddresses
 from typing import Protocol
 
 from . import platforms
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 WAIT = timedelta(days=5)  # Waiting for them ends after this with no reply: back to Todo to follow up (#116)
 MIGRATIONS = {  # version -> statement that upgrades an existing database to it
     2: "ALTER TABLE cases ADD COLUMN description TEXT NOT NULL DEFAULT ''",
@@ -105,6 +106,21 @@ FROM organizations WHERE org_key(domain) != domain GROUP BY org_key(domain);
 DELETE FROM organizations WHERE org_key(domain) != domain;""",
     # Health checks every 30 minutes (decision #119): their result apart from send and inbound errors.
     8: "ALTER TABLE connections ADD COLUMN probe_error TEXT; ALTER TABLE connections ADD COLUMN probed_at TEXT;",
+    9: """CREATE TABLE composition_drafts (
+  id INTEGER PRIMARY KEY,
+  revision INTEGER NOT NULL CHECK (revision > 0),
+  connection_id INTEGER REFERENCES connections (id),
+  kind TEXT NOT NULL CHECK (kind IN ('email', 'sms')),
+  sender TEXT NOT NULL,
+  "to" TEXT NOT NULL,
+  cc TEXT NOT NULL,
+  subject TEXT,
+  body TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  CHECK ((kind = 'email' AND subject IS NOT NULL)
+         OR (kind = 'sms' AND subject IS NULL AND cc = ''))
+) STRICT;""",
 }
 
 # ponytail: fixed list; extend when a free-mail sender forms an Organization by mistake.
@@ -129,6 +145,10 @@ class IdentityTaken(Exception):
 
 class StaleThreadSnapshot(ValueError):
     """The snapshot predates a merge of its Thread; restoring it would overwrite another triage state."""
+
+
+class DraftConflict(ValueError):
+    """A newer saved Draft revision exists; stale edits must not overwrite it."""
 
 
 @dataclass(frozen=True)
@@ -276,6 +296,70 @@ def get_thread(db, thread_id: int) -> Thread:
     if r is None:
         raise KeyError(f"thread {thread_id}")
     return Thread(*r)
+
+
+
+# --- unsent composition ------------------------------------------------------
+
+def save_draft(db, values: dict, *, draft_id: int | None = None,
+               expected_revision: int | None = None) -> dict:
+    """Persist the complete edited envelope, including incomplete text; never send or create work."""
+    if not isinstance(values, dict) or set(values) != {
+            "connection_id", "kind", "sender", "to", "cc", "subject", "body"}:
+        raise ValueError("draft values must contain exactly connection_id, kind, sender, to, cc, subject, body")
+    if type(values["kind"]) is not str or values["kind"] not in ("email", "sms"):
+        raise ValueError("draft kind must be email or sms")
+    if any(type(values[k]) is not str for k in ("sender", "to", "cc", "body")):
+        raise ValueError("draft sender, to, cc, and body must be strings")
+    if values["kind"] == "email":
+        if type(values["subject"]) is not str:
+            raise ValueError("email draft subject must be a string")
+    elif values["subject"] is not None or values["cc"] != "":
+        raise ValueError("SMS draft subject must be None and cc must be empty")
+    connection_id = values["connection_id"]
+    if connection_id is not None and (type(connection_id) is not int or connection_id <= 0):
+        raise ValueError("draft connection_id must be a positive integer or None")
+    if (draft_id, expected_revision) != (None, None) and (
+            type(draft_id) is not int or draft_id <= 0
+            or type(expected_revision) is not int or expected_revision <= 0):
+        raise ValueError("existing draft requires positive integer draft_id and expected_revision")
+    with db:
+        if not db.in_transaction:
+            db.execute("BEGIN IMMEDIATE")
+        if connection_id is not None:
+            c = db.execute("SELECT platform FROM connections WHERE id = ?", (connection_id,)).fetchone()
+            platform = platforms.PLATFORMS.get(c["platform"]) if c else None
+            if platform is None or platform.format != values["kind"]:
+                raise ValueError("draft Connection must support its message format")
+        at = _iso(_now())
+        envelope = tuple(values[k] for k in ("connection_id", "kind", "sender", "to", "cc", "subject", "body"))
+        if draft_id is None:
+            draft_id = db.execute(
+                'INSERT INTO composition_drafts (connection_id, kind, sender, "to", cc, subject, body,'
+                " revision, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
+                (*envelope, at, at)).lastrowid
+        else:
+            saved = db.execute(
+                'UPDATE composition_drafts SET connection_id = ?, kind = ?, sender = ?, "to" = ?,'
+                " cc = ?, subject = ?, body = ?, revision = revision + 1, updated_at = ?"
+                " WHERE id = ? AND revision = ?", (*envelope, at, draft_id, expected_revision)).rowcount
+            if not saved:
+                get_draft(db, draft_id)  # a missing row is distinct from a stale writer
+                raise DraftConflict("Draft changed since this revision; reload before saving.")
+        return get_draft(db, draft_id)
+
+
+def get_draft(db, draft_id: int) -> dict:
+    if type(draft_id) is not int or draft_id <= 0:
+        raise ValueError("draft_id must be a positive integer")
+    r = db.execute("SELECT * FROM composition_drafts WHERE id = ?", (draft_id,)).fetchone()
+    if r is None:
+        raise KeyError(f"draft {draft_id}")
+    return dict(r)
+
+
+def list_drafts(db) -> list[dict]:
+    return [dict(r) for r in db.execute("SELECT * FROM composition_drafts ORDER BY updated_at DESC, id DESC")]
 
 
 def _set_status(db, thread_id, status, detail, at, snoozed_until=None, before=None):
@@ -1016,6 +1100,50 @@ def person_threads(db, person_id: int) -> list[Thread]:
             "SELECT DISTINCT a.thread_id FROM thread_activities a JOIN identities i ON i.id = a.identity_id"
             " WHERE i.person_id = ? ORDER BY a.thread_id", (person_id,))]
         return [get_thread(db, i) for i in ids]
+
+
+def recipient_threads(db, kind: str, value: str) -> list[Thread]:
+    """Local captured history for one exact destination, not complete external contact history."""
+    if type(kind) is not str or kind not in ("email", "phone") or type(value) is not str:
+        raise ValueError("recipient history requires email or phone kind and a string value")
+    if kind == "email":
+        addresses = [a.lower() for _, a in getaddresses([value.strip()]) if a]
+        if len(addresses) != 1 or "@" not in addresses[0]:
+            return []
+        value = addresses[0]
+    elif re.fullmatch(r"\+[1-9][0-9]{1,14}", value) is None:
+        return []
+    formats = platforms.EMAIL if kind == "email" else tuple(
+        n for n, p in platforms.PLATFORMS.items() if p.format == "sms")
+    with _read_snapshot(db):
+        # ponytail: scan captured envelopes; indexed recipient relation if history volume makes this slow.
+        rows = db.execute(
+            "SELECT a.thread_id, a.data, a.identity_id, i.kind AS identity_kind, i.value AS identity_value,"
+            " ch.native_id AS channel_value, ch.kind AS channel_kind FROM thread_activities a"
+            " JOIN threads t ON t.id = a.thread_id JOIN channels ch ON ch.id = t.channel_id"
+            " JOIN connections c ON c.id = ch.connection_id LEFT JOIN identities i ON i.id = a.identity_id"
+            f" WHERE a.kind = 'MESSAGE' AND c.platform IN ({','.join('?' * len(formats))})",
+            formats)
+        ids = set()
+        for a in rows:
+            candidates = [a["identity_value"]] if a["identity_kind"] == kind else []
+            data = json.loads(a["data"])
+            if isinstance(data, dict):
+                keys = (("to", "cc") if a["identity_id"] is None else ("from",)) if kind == "email" else (
+                    ("peer", "to") if a["identity_id"] is None else ("peer", "from"))
+                for k in keys:
+                    v = data.get(k)
+                    if isinstance(v, str):
+                        candidates.append(v)
+                    elif isinstance(v, list):
+                        candidates.extend(s for s in v if isinstance(s, str))
+            if kind == "email":
+                candidates = [addr.lower() for _, addr in getaddresses(candidates) if addr]
+            elif a["channel_kind"] == "im":
+                candidates.append(a["channel_value"])  # existing SMS replies retain the peer on the Channel
+            if value in candidates:
+                ids.add(a["thread_id"])
+        return [get_thread(db, tid) for tid in sorted(ids)]
 
 
 def person_organizations(db, person_id: int) -> list[str]:

@@ -8,9 +8,11 @@ import http.client
 import json
 import re
 import socket
+import sqlite3
 import textwrap
 from collections import Counter
 from datetime import datetime, timedelta, timezone
+from email.utils import getaddresses
 
 from rich.markup import escape
 from rich.style import Style
@@ -133,6 +135,13 @@ DataTable > .datatable--header { background: #f9f5d7; color: #928374; }
 .composer TextArea { height: 8; margin: 1 0 0 0; background: #f9f5d7; color: #654735; border: none; }
 .replyhint { color: #928374; height: 1; }
 .replyhint.error { color: #c14a4a; }
+.draftview { height: 1fr; }
+.draftview.narrow .props { display: none; }
+.draftnotice, .drafthead, .history { height: auto; }
+.draftnotice { color: #928374; }
+.draftnotice.error { color: #c14a4a; }
+.draftconnection { color: #45707a; text-wrap: nowrap; text-overflow: ellipsis; }
+.draftconnection:focus { background: #f3eac7; text-style: bold; }
 #conn { padding: 1 1; }
 .box { width: 64; height: auto; max-height: 24; background: #f5edca; border: round #a89984;
        border-title-align: center; padding: 1 2; }
@@ -341,7 +350,7 @@ HELP = [  # (group, [(keys, what it does)]) — the full key map; Gmail-style wh
                      ("space", "scroll the thread (pgup / pgdn)"),
                      ("← / →", "focus previous / next pane (no item opens)"),
                      ("enter", "open the highlighted sidebar item"),
-                     ("1 – 5", "Todo, Snoozed, Done, Ignored, All"),
+                     ("1 – 5", "Todo, Snoozed, Done, Ignored, Drafts"),
                      ("6 – 9", "People, Organizations, Cases (Todo), Channels"), ("u", "back (esc also works)")]),
     ("Thread", [("r", "reply to the sender   ctrl+enter sends · esc keeps the draft"), ("a", "reply all"),
                 ("e", "done: it returns if they write again"), ("b", "snooze until a time (it also returns when they write)"),
@@ -350,6 +359,9 @@ HELP = [  # (group, [(keys, what it does)]) — the full key map; Gmail-style wh
                 ("p", "open the person"), ("o", "open in Gmail, Fastmail, or Slack"), ("z", "undo the last change"),
                 ("; / :", "expand / collapse every message (click a message or ••• to toggle one)"),
                 ("ctrl+shift+click", "open a link in your browser (shift lets Ghostty take the click)")]),
+    ("Drafts", [("n", "start a blank draft"), ("enter", "edit the selected draft"),
+                ("ctrl+s", "save exact fields and body"), ("esc", "save and return to the list"),
+                ("Connection", "choose email or SMS; sending unavailable")]),
     ("Case", [("n", "Cases views: start a case (a goal) with no threads yet"),
               ("enter", "Cases views or a case header row: open the case"),
               ("j / k", "select a thread card (↑/↓ also work)"), ("enter", "show or hide a done thread"),
@@ -529,8 +541,11 @@ class Rail(OptionList):
         gap = Option("", disabled=True)
         opts = [header("threads", "threads")]
         for i, name in enumerate(VIEW_NAMES):
-            icon_name, color = VIEW_ICON[name]
-            opts.append(item(f"view:{i}", icon_name, name, counts[name] if name != "All" else "", color))
+            if name == "All":
+                opts.append(item("drafts", "edited", "Drafts"))
+            else:
+                icon_name, color = VIEW_ICON[name]
+                opts.append(item(f"view:{i}", icon_name, name, counts[name], color))
         opts += [gap, header("cases", "cases")]
         case_counts = Counter(c["status"] for c in inbox.case_queue(db))
         for i, name in enumerate(inbox.CASE_VIEWS):
@@ -1430,6 +1445,8 @@ class ThreadView(Horizontal):
 
     def paint_status(self):
         """Header and properties: they carry the status, and a Snoozed Thread's countdown."""
+        if len(self.query(".thead, .detailtext")) != 2:  # countdown may tick while this pane is being removed
+            return
         v = self.view
         head = thread_head(v)
         if self.has_class("narrow"):  # properties column hidden: keep who, where, and case under the title
@@ -1451,6 +1468,430 @@ class ThreadView(Horizontal):
     def scroll_page(self, direction):
         tl = self.query_one(".timeline")
         tl.scroll_page_down() if direction > 0 else tl.scroll_page_up()
+
+
+# --- unsent drafts: independent envelopes, never recorded Threads ------------
+
+DRAFT_FIELDS = ("connection_id", "kind", "sender", "to", "cc", "subject", "body")
+SENDING_UNAVAILABLE = "Sending unavailable · drafts only."
+
+
+class DraftConnection(Static):
+    can_focus = True
+    BINDINGS = [Binding("enter", "choose", "choose Connection"), Binding("space", "choose", show=False)]
+
+    def action_choose(self):
+        next(a for a in self.ancestors if isinstance(a, DraftView)).choose_connection()
+
+    def on_click(self, event):
+        event.stop()
+        self.action_choose()
+
+
+class DraftEditor(Vertical):
+    """Native one-line envelope fields and eight-row, bottom-anchored plain-text body."""
+
+    def __init__(self, draft):
+        super().__init__(classes="drafteditor composer open")
+        self.draft = draft
+
+    def compose(self):
+        with Vertical(classes="fields"):
+            with Horizontal(classes="field connection"):
+                yield Static("Conn.", classes="flabel")
+                yield DraftConnection(classes="fvalue draftconnection")
+            for name, label, placeholder in (("sender", "From", "choose sender"), ("to", "To", "exact destination"),
+                                             ("cc", "Cc", "optional"), ("subject", "Subject", "explicitly empty")):
+                with Horizontal(classes=f"field {name}"):
+                    yield Static(label, classes="flabel")
+                    yield Input(value=self.draft[name] or "", placeholder=placeholder, classes=f"{name}input")
+        yield TextArea(self.draft["body"], show_line_numbers=False, classes="body-editor")
+        yield Static("ctrl+s save · esc close", classes="replyhint")
+
+
+class DraftView(Horizontal):
+    """Selected local draft plus exact captured history; no Thread ID or reply callback."""
+    BINDINGS = [Binding("ctrl+s", "save", "save draft"),
+                Binding("escape", "close", "save / close"),
+                Binding("ctrl+enter", "send", show=False),
+                Binding("ctrl+r", "reload", show=False)]
+
+    def __init__(self, draft):
+        super().__init__(classes="draftview")
+        self.draft = dict(draft)
+        self.draft_id, self.connection_id, self.kind = draft["id"], draft["connection_id"], draft["kind"]
+        self.notice, self.save_error = "", False
+        self.history_key, self.history_views, self.history_note = None, [], "Choose an exact recipient."
+
+    def compose(self):
+        with Vertical(classes="convo"):
+            with VerticalScroll(classes="timeline", can_focus=True):
+                yield Static(classes="thead drafthead")
+                yield Static(SENDING_UNAVAILABLE, classes="draftnotice")
+                yield Static(classes="draftnotice savenotice")
+                yield Static(classes="draftnotice historynotice")
+                yield Vertical(classes="history")
+            yield DraftEditor(self.draft)
+        with VerticalScroll(classes="props", can_focus=False):
+            yield Static(classes="detailtext")
+
+    def on_mount(self):
+        self.paint()
+        self.refresh_history()
+
+    def values(self):
+        if len(self.query(".senderinput, .toinput, .ccinput, .subjectinput")) != 4 or not self.query(TextArea):
+            return {k: self.draft[k] for k in DRAFT_FIELDS}
+        body = self.query_one(TextArea).text
+        if body.replace("\r\n", "\n").replace("\r", "\n") == self.draft["body"].replace("\r\n", "\n").replace("\r", "\n"):
+            body = self.draft["body"]  # TextArea normalizes line endings even when the body is untouched.
+        return dict(connection_id=self.connection_id, kind=self.kind,
+                    sender=self.query_one(".senderinput", Input).value,
+                    to=self.query_one(".toinput", Input).value,
+                    cc=self.query_one(".ccinput", Input).value if self.kind == "email" else "",
+                    subject=self.query_one(".subjectinput", Input).value if self.kind == "email" else None,
+                    body=body)
+
+    @property
+    def dirty(self):
+        return self.values() != {k: self.draft[k] for k in DRAFT_FIELDS}
+
+    def connection(self):
+        try:
+            return next((c for c in inbox.connections(self.app.db) if c["id"] == self.connection_id), None)
+        except Exception:  # a failed store must not also take the editable envelope off screen
+            return None
+
+    def paint(self):
+        if not self.query(".senderinput"):
+            return
+        values, connection = self.values(), self.connection()
+        label = f"{PLATFORMS[connection['platform']].title} · {conn_name(connection)}" if connection else (
+            "Connection unavailable" if self.connection_id is not None else "Choose Connection")
+        self.query_one(DraftConnection).update(escape(label))
+        for row in self.query(".field.cc, .field.subject"):
+            row.display = self.kind == "email"
+        state = "Unsaved" if self.dirty else "Saved"
+        title = (values["subject"] or ("New SMS" if self.kind == "sms" else "New email")).replace("\r", "↵").replace("\n", "↵")
+        head = f"[b #45707a]{escape(title)}[/]   [#928374]{ICON['edited']} {state}[/]"
+        if self.has_class("narrow"):
+            envelope = ["From " + (values["sender"] or "not selected"), "To " + (values["to"] or "not selected")]
+            if values["cc"]:
+                envelope.append("Cc " + values["cc"])
+            head += "\n[#928374]" + escape("\n".join(envelope)) + "[/]"
+        self.query_one(".thead").update(head + "\n")
+        notice = self.query_one(".savenotice")
+        notice.update(escape(self.notice))
+        notice.set_class(self.save_error, "error")
+        hint = self.query_one(".replyhint")
+        hint.update("Save conflict · edits kept" if self.save_error and self.notice.startswith("Save conflict") else
+                    "Save failed · edits kept" if self.save_error else "ctrl+s save · esc close")
+        hint.set_class(self.save_error, "error")
+        note = "none captured" if self.history_note.startswith("No captured match") else self.history_note
+        history = "\n".join(escape(v["thread"].title) for v in self.history_views) or escape(note)
+        self.query_one(".historynotice").display = self.has_class("narrow") or self.history_note.startswith("Captured history unavailable")
+        self.query_one(".detailtext").update(
+            f"[#928374]{ICON['status']} status[/]\n{state}\n\n"
+            f"[#928374]{ICON['person']} recipient[/]\n{escape(values['to'] or 'not selected')}\n\n"
+            f"[#928374]{ICON['channel']} channel[/]\n{'SMS' if self.kind == 'sms' else 'email'}\n\n"
+            f"[#928374]{ICON['connection']} connection[/]\n{escape(label)}\n\n"
+            f"[#928374]{ICON['person']} other threads[/]\n{history}\n\n"
+            "[#928374]External history unavailable[/]")
+
+    def on_resize(self, event):
+        self.set_class(event.size.width < 84, "narrow")
+        self.paint()
+
+    def on_input_changed(self, event):
+        event.stop()
+        self.paint()
+        if event.input.has_class("toinput"):
+            self.refresh_history()
+
+    def on_text_area_changed(self, event):
+        event.stop()
+        self.paint()
+
+    def refresh_data(self, draft):
+        """A storage refresh may update a clean editor, never replace current unsaved words."""
+        if not self.is_mounted:  # queued list refresh can run before editor fields mount
+            return
+        if not self.dirty and draft["revision"] > self.draft["revision"]:
+            self.draft = dict(draft)
+            self.connection_id, self.kind = draft["connection_id"], draft["kind"]
+            for name in ("sender", "to", "cc", "subject"):
+                self.query_one(f".{name}input", Input).value = draft[name] or ""
+            self.query_one(TextArea).text = draft["body"]
+        self.paint()
+        self.refresh_history(force=True)
+
+    def refresh_history(self, force=False):
+        if not self.query(".history"):
+            return
+        destination = self.query_one(".toinput", Input).value
+        key = self.kind, destination
+        if not force and key == self.history_key:
+            return
+        self.history_key, self.history_views = key, []
+        if self.kind == "email":
+            addresses = [a.lower() for _, a in getaddresses([destination])]
+            exact = bool(addresses) and all(re.fullmatch(r"[^@\s,;<>]+@[^@\s,;<>]+", a) for a in addresses)
+            kind = "email"
+        else:
+            addresses, kind = [destination.strip()], "phone"
+            exact = bool(re.fullmatch(r"\+[1-9]\d{6,14}", addresses[0]))
+        self.history_note = "Choose an exact recipient."
+        if exact:
+            try:
+                threads = {t.id: t for a in addresses for t in inbox.recipient_threads(self.app.db, kind, a)}
+                self.history_views = [inbox.thread_view(self.app.db, t.id) for t in threads.values()]
+                self.history_note = "No captured match · prior contact unknown." if not threads else "Captured local history"
+            except Exception:
+                self.history_views = []
+                self.history_note = "Captured history unavailable · lookup failed."
+        self.paint_history()
+        self.paint()
+
+    def paint_history(self):
+        if not self.query(".history"):
+            return
+        self.query_one(".historynotice").update(escape(self.history_note) + "\nExternal history unavailable")
+        widgets = []
+        for view in self.history_views:
+            t = view["thread"]
+            widgets.append(Static(
+                f"[@click=app.open_thread({t.id})][b #45707a]{escape(t.title)}[/][/]  {status_markup(t)}",
+                classes="sectionhead"))
+            widgets.append(Vertical(*message_widgets(view, self.app.message_state(t.id), self.app.raw), classes="msgs"))
+        show_messages(self.query_one(".history"), widgets, self.query_one(".timeline"))
+
+    def choose_connection(self):
+        try:
+            connections = {str(c["id"]): c for c in inbox.connections(self.app.db)
+                           if PLATFORMS[c["platform"]].format in ("email", "sms")}
+        except Exception:
+            self.app.notify("Connections unavailable · edits kept.", severity="error")
+            return
+        options = [("none", "Not selected · email")]
+        options += [(cid, f"{conn_icon(c)} {escape(PLATFORMS[c['platform']].title)} · {escape(conn_name(c))}")
+                    for cid, c in connections.items()]
+
+        def chosen(choice):
+            if choice is None or not self.is_attached:
+                return
+            connection = connections.get(choice)
+            kind = PLATFORMS[connection["platform"]].format if connection else "email"
+            values = self.values()
+            if kind == "sms" and (values["cc"] or values["subject"]):
+                self.app.push_screen(Pick("Switch to SMS", [("clear", "Clear Cc and subject · use SMS"),
+                                                           ("cancel", "Keep email")],
+                                          "SMS has no Cc or subject. Current email fields will be cleared."),
+                                     lambda answer: self.apply_connection(connection) if answer == "clear" and self.is_attached else None)
+            else:
+                self.apply_connection(connection)
+
+        self.app.push_screen(Pick("Connection", options), chosen)
+
+    def apply_connection(self, connection):
+        old = self.connection()
+        sender = self.query_one(".senderinput", Input)
+        if not sender.value or (old and sender.value == old["self_id"]):
+            sender.value = (connection["self_id"] or "") if connection else ""
+        self.connection_id = connection["id"] if connection else None
+        self.kind = PLATFORMS[connection["platform"]].format if connection else "email"
+        if self.kind == "sms":
+            self.query_one(".ccinput", Input).value = ""
+            self.query_one(".subjectinput", Input).value = ""
+        self.notice, self.save_error = "", False
+        self.paint()
+        self.refresh_history()
+
+    def save(self, refresh=True):
+        if not self.dirty:
+            return True
+        try:
+            draft = inbox.save_draft(self.app.db, self.values(), draft_id=self.draft_id,
+                                     expected_revision=self.draft["revision"])
+        except inbox.DraftConflict:
+            self.notice = "Save conflict · edits kept; ctrl+r reloads saved draft."
+        except Exception:
+            self.notice = "Save failed · edits kept; retry ctrl+s."
+        else:
+            self.draft, self.notice, self.save_error = dict(draft), "", False
+            self.paint()
+            if refresh and isinstance(self.app.main.current, DraftsPage):
+                self.app.main.current.refresh_data()
+            return True
+        self.save_error = True
+        self.paint()
+        self.query_one(TextArea).focus()
+        return False
+
+    def action_save(self):
+        self.save()
+
+    def action_close(self):
+        if self.save():
+            self.app.main.focus_list()
+
+
+    def action_reload(self):
+        def chosen(choice):
+            if choice != "reload" or not self.is_attached:
+                return
+            try:
+                draft = inbox.get_draft(self.app.db, self.draft_id)
+            except (KeyError, ValueError, sqlite3.Error):
+                self.app.notify("Saved draft unavailable · edits kept.", severity="error")
+                return
+            self.draft, self.connection_id, self.kind = draft, draft["connection_id"], draft["kind"]
+            for name in ("sender", "to", "cc", "subject"):
+                self.query_one(f".{name}input", Input).value = draft[name] or ""
+            self.query_one(TextArea).text = draft["body"]
+            self.notice, self.save_error = "", False
+            self.refresh_history(force=True)
+            self.app.main.current.refresh_data()
+        self.app.push_screen(Pick("Reload saved draft", [("keep", "Keep edits"),
+                                                       ("reload", "Discard edits · reload saved draft")],
+                                  "Reload replaces current unsaved fields with the saved revision."), chosen)
+
+    def check_action(self, action, parameters):
+        if action == "reload":
+            return self.save_error and self.notice.startswith("Save conflict")
+        return False if action == "send" else True
+
+    def action_send(self):
+        self.app.notify(SENDING_UNAVAILABLE)
+
+
+class DraftsPage(Page):
+    TITLE = f"{ICON['edited']} drafts"
+    RAIL = "drafts"
+    SIDE = f"{ICON['edited']} draft"
+    BINDINGS = [Binding("j", "down", "move", key_display="j/k"), Binding("k", "up", show=False),
+                Binding("n", "new", "new draft"), Binding("ctrl+s", "save", "save draft"),
+                Binding("ctrl+r", "reload", show=False)]
+
+    def __init__(self):
+        super().__init__()
+        self.items = []
+
+    def compose(self):
+        yield ClickTable(id="table", cursor_type="row", show_header=False)
+
+    def on_mount(self):
+        self.refresh_data()
+
+    def on_resize(self, _):
+        self.call_after_refresh(self.refresh_data)
+
+    def refresh_data(self, select_id=None):
+        if not self.query(DataTable) or self.app.main.current is not self:
+            return
+        try:
+            items = inbox.list_drafts(self.app.db)
+        except Exception:
+            self.app.notify("Draft list unavailable · current edits kept.", severity="error")
+            return
+        self.items = items
+        table = self.query_one(DataTable)
+        table.clear(columns=True)
+        narrow = self.size.width < 40
+        table.add_columns(*(("status", "title") if narrow else ("", "To", "Subject", "Status")))
+        room = max(1, self.size.width - 3 - (4 if narrow else 8) - 7 - (0 if narrow else 19))
+        cut = lambda text, width: text if len(text) <= width else text[:max(0, width - 1)] + "…"  # noqa: E731
+        for draft in items:
+            title = (draft["subject"] or draft["body"] or "New draft").replace("\r", "↵").replace("\n", " ")
+            view = self.app.main.draft_view
+            state = "unsaved" if view and view.draft_id == draft["id"] and view.dirty else "saved"
+            status = f"[#928374]{state:7}[/]"
+            cells = (status, escape(cut(title, room))) if narrow else (
+                f"[#928374]{ICON['sms'] if draft['kind'] == 'sms' else ICON['email']}[/]",
+                f"[b]{escape(cut(draft['to'] or 'No recipient', 18))}[/]", escape(cut(title, room)), status)
+            table.add_row(*cells, key=str(draft["id"]))
+        table.show_cursor = bool(items)
+        if items:
+            ids = [d["id"] for d in items]
+            wanted = self.app.selected_draft if select_id is None else select_id
+            table.move_cursor(row=ids.index(wanted) if wanted in ids else 0)
+        else:
+            table.add_row("[#928374]No drafts · n new[/]", "", *(("", "") if not narrow else ()))
+        self.show_selected()
+
+    def selected(self):
+        return self.items[min(self.query_one(DataTable).cursor_row, len(self.items) - 1)] if self.items else None
+
+    def show_selected(self):
+        selected = self.selected()
+        if selected:
+            try:
+                selected = inbox.get_draft(self.app.db, selected["id"])
+            except (KeyError, ValueError, sqlite3.Error):
+                ids = [d["id"] for d in self.items]
+                if self.app.selected_draft in ids:
+                    self.query_one(DataTable).move_cursor(row=ids.index(self.app.selected_draft))
+                self.app.notify("Draft unavailable · current edits kept.", severity="error")
+                return
+        view = self.app.main.draft_view
+        if view and selected and view.draft_id == selected["id"]:
+            view.refresh_data(selected)
+            return
+        showing = f"draft:{selected['id']}" if selected else "draft:none"
+        if self.app.main.showing == showing:  # mounting finishes later; queued highlights must not mount twice
+            return
+        if view and not view.save(refresh=False):
+            ids = [d["id"] for d in self.items]
+            if view.draft_id in ids:
+                self.query_one(DataTable).move_cursor(row=ids.index(view.draft_id))
+            return
+        self.app.selected_draft = selected["id"] if selected else None
+        self.app.main.showing = showing
+        pane = self.app.main.query_one("#thread")
+        pane.remove_children()
+        pane.mount(DraftView(selected) if selected else
+                   Static("[#928374]No draft selected. Press n for a blank draft.[/]", classes="threadempty"))
+
+    def on_data_table_row_highlighted(self, event):
+        event.stop()
+        if self.app.main.current is self:
+            self.show_selected()
+
+    def on_data_table_row_selected(self, event):
+        event.stop()
+        self.focus_editor()
+
+    def focus_editor(self):
+        view = self.app.main.draft_view
+        if view is not None and self.app.screen is self.app.main and view.query(DraftConnection):
+            view.query_one(DraftConnection).focus()
+
+    def action_down(self):
+        self.query_one(DataTable).action_cursor_down()
+
+    def action_up(self):
+        self.query_one(DataTable).action_cursor_up()
+
+    def action_save(self):
+        view = self.app.main.draft_view
+        if view:
+            view.save()
+
+    def action_reload(self):
+        view = self.app.main.draft_view
+        if view and view.check_action("reload", ()):
+            view.action_reload()
+
+    def action_new(self):
+        if not self.app.main.save_draft():
+            return
+        try:
+            draft = inbox.save_draft(self.app.db, dict(connection_id=None, kind="email", sender="", to="", cc="",
+                                                      subject="", body=""))
+        except Exception:
+            self.app.notify("Draft not created · save failed.", severity="error")
+            return
+        self.refresh_data(select_id=draft["id"])
+        self.call_after_refresh(self.focus_editor)
 
 
 class TablePage(Page):
@@ -2220,7 +2661,8 @@ class MainScreen(Screen):
         Binding("q", "app.quit", "quit"), Binding("u", "back", show=False),
         Binding("left", "focus_pane(-1)", show=False, priority=True),
         Binding("right", "focus_pane(1)", show=False, priority=True),
-        *[Binding(str(i + 1), f"go('view:{i}')", show=False) for i in range(5)],
+        *[Binding(str(i + 1), f"go('view:{i}')", show=False) for i in range(4)],
+        Binding("5", "go('drafts')", show=False),
         Binding("6", "go('people')", show=False), Binding("7", "go('organizations')", show=False),
         Binding("8", "go('cases:0')", show=False), Binding("9", "go('channels')", show=False),
         Binding("semicolon", "app.expand_all(True)", show=False), Binding("colon", "app.expand_all(False)", show=False),
@@ -2253,6 +2695,14 @@ class MainScreen(Screen):
         views = self.query("#thread ThreadView")
         return views.first() if views else None
 
+    @property
+    def draft_view(self) -> DraftView | None:
+        return next((v for v in self.query("#thread DraftView") if v.draft_id == self.app.selected_draft), None)
+
+    def save_draft(self):
+        view = self.draft_view if isinstance(self.current, DraftsPage) else None
+        return view.save(refresh=False) if view is not None else True
+
     def on_mount(self):
         self.go(f"view:{self.app.view}")
 
@@ -2270,7 +2720,7 @@ class MainScreen(Screen):
     def action_focus_pane(self, direction):
         if not self.check_action("focus_pane", (direction,)):
             return
-        tv = self.thread_view
+        tv = self.thread_view or self.draft_view
         if self.rail.has_focus:
             if direction > 0:
                 self.focus_list()
@@ -2279,7 +2729,7 @@ class MainScreen(Screen):
                 self.focus_list()
         elif direction < 0:
             self.rail.focus()
-        elif isinstance(self.current, ThreadsPage) and tv is not None:
+        elif isinstance(self.current, (ThreadsPage, DraftsPage)) and tv is not None:
             timelines = tv.query(".timeline")
             if timelines:
                 timeline = timelines.first()
@@ -2293,7 +2743,17 @@ class MainScreen(Screen):
 
     def go(self, target: str):
         """Open a rail section (resets the stack): a Status view, a browse list, or a Connection."""
-        if target.startswith("conn:"):
+        if target == "view:4":  # old UI callers; the backend's All query remains a Status read
+            target = "drafts"
+        if target == "drafts" and isinstance(self.current, DraftsPage):
+            self.focus_list()
+            return
+        if not self.save_draft():
+            self.refresh_chrome()
+            return
+        if target == "drafts":
+            self.stack = [DraftsPage]
+        elif target.startswith("conn:"):
             cid = int(target.split(":")[1])
             self.stack = [lambda: ConnectionPage(cid)]
         elif target.startswith("view:"):
@@ -2307,11 +2767,15 @@ class MainScreen(Screen):
         self._show()
 
     def open(self, factory):
+        if not self.save_draft():
+            return
         self.stack.append(factory)
         self._show()
 
     def open_thread(self, thread_id):
         """Show a Thread where it lives: its Status view, selected, in the thread pane."""
+        if not self.save_draft():
+            return
         thread = inbox.get_thread(self.app.db, thread_id)
         self.pending_select = thread.id
         view = next(i for i, name in enumerate(VIEW_NAMES) if thread.status_detail in inbox.VIEWS[name])
@@ -2328,7 +2792,7 @@ class MainScreen(Screen):
         self.open(lambda: PersonPage(person_id))
 
     def back(self):
-        if len(self.stack) > 1:
+        if len(self.stack) > 1 and self.save_draft():
             self.stack.pop()
             self._show()
 
@@ -2399,6 +2863,7 @@ class Console(App):
     def __init__(self, db_path: str, reply=None, sources=None):
         super().__init__()
         self.db_path, self.send_reply, self.drafts, self.view, self.cursor = db_path, reply, {}, 0, {}
+        self.selected_draft = None
         # Context sources (FR-13a, FR-13b), {"tana": fetch, "attio": fetch}; each state is None (not connected),
         # "checking", "ok", or the error
         self.sources = {k: f for k, f in (sources or {}).items() if f}
@@ -2425,6 +2890,10 @@ class Console(App):
         mine = [c["self_id"] for c in inbox.connections(self.db) if "@" in (c["self_id"] or "")]
         for key in self.sources:
             self.check_source(key, mine)
+
+    async def action_quit(self):
+        if self.main.save_draft():
+            self.exit()
 
     @work(thread=True)
     def check_source(self, key, emails):
@@ -2472,6 +2941,9 @@ class Console(App):
         tv = self.main.thread_view
         if tv is not None:
             tv.refresh_data()
+        draft = self.main.draft_view
+        if draft is not None:
+            draft.paint_history()
         if isinstance(self.main.page, CasePage):
             self.main.page.paint()
 

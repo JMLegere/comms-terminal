@@ -62,6 +62,18 @@ def reconcile_email_threads(db, apply: bool = False, channel_id: int | None = No
     # Preview exact-reference email groups; explicit apply persists references and stable aliases.
 ```
 
+### Drafts-first interface
+
+The authorized Drafts-first expansion persists unsent compositions independently of Threads. It adds no send route or provider call; reply behavior is unchanged.
+
+- **Save Draft** (`inbox.save_draft(db, values, *, draft_id=None, expected_revision=None)`): save the complete explicit `connection_id`, `kind`, `sender`, `to`, `cc`, `subject`, and `body` fields. Creation uses no ID/revision; replacement requires the exact positive Draft ID and expected Draft revision. **Draft Conflict** (`inbox.DraftConflict`) rejects a stale save without overwriting stored work.
+- **Get Draft** (`inbox.get_draft(db, draft_id)`): read one Draft, or raise `KeyError` if absent.
+- **List Drafts** (`inbox.list_drafts(db)`): read Drafts newest updated first.
+- **Recipient History** (`inbox.recipient_threads(db, kind, value)`): read canonical, deduplicated captured Threads for an exact normalized `email` or `phone` destination, without creating or merging a Person.
+
+Draft reads return a dictionary containing integer `id` and `revision`, the complete fields above, and UTC `created_at`/`updated_at`. Incomplete fields are allowed. Connection is optional until selected; a selected Connection must support the Draft's message format. Email subject is an explicit string, including empty; SMS subject is `None` and Cc is empty. Saving creates no Thread or Activity. The additive Draft table has no Thread relation or send attempts. Existing rows and append-only invariants remain.
+
+
 ### Exact-reference reconciliation
 
 `channel_id=None` covers every mailbox independently. A supplied Channel ID must be an integer naming an existing `kind='mailbox'` Channel, otherwise the operation raises `ValueError`. `apply` must be a boolean. The default preview reads persisted evidence and recovers validated raw headers in memory under a read-only SAVEPOINT, keeping its reads coherent while preserving the caller's existing transaction. SQL rows and raw files remain unchanged.

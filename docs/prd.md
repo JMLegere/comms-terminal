@@ -52,13 +52,18 @@ Source: discovery doc §Context.
 - Tool comments, WhatsApp, LinkedIn.
 - Other mailboxes and workspaces.
 - Domain, category, or content rules.
-- Starting new conversations (new email, new DM), attachments, rich text, drafts, undo-send, signatures.
+- Sending new conversations (new email, new DM), attachments, rich text, undo-send, signatures. Persistent unsent Drafts are authorized separately in the Drafts-first expansion below.
 - Cmd+K.
 - CRM / Tana / Linear context.
 - Plain's "Close the loop" (needs linked issues).
 - Auto-resolution.
 
 **Out of scope for now.** SMS and iMessage.
+
+**Drafts-first expansion.**
+
+The new-thread composition design is approved for a local Drafts-first release: create, edit, save and resume email/SMS Drafts with captured recipient history. Drafts is an ordinary page under Threads and replaces visible All; existing status pages and backend All query remain. Drafts are not Threads or Activities. Saves use expected Draft revisions to avoid overwriting concurrent edits. New-message sending and attempt/recovery work remain gated; existing replies are unchanged. This expansion preserves the existing single-console/SQLite architecture and adds no provider or service endpoint.
+
 
 **Success measures.**
 1. **Zero silent drops.** Every connected Thread ends Done, Snoozed, or Ignored; none sits unhandled. (Jeremy's review: "every connected thread, not just ones needing my reply.")

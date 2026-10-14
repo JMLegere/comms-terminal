@@ -161,3 +161,19 @@ WHEN NOT (
 BEGIN
   SELECT RAISE(ABORT, 'activities are append-only');
 END;
+
+CREATE TABLE composition_drafts (
+  id INTEGER PRIMARY KEY,
+  revision INTEGER NOT NULL CHECK (revision > 0),
+  connection_id INTEGER REFERENCES connections (id),
+  kind TEXT NOT NULL CHECK (kind IN ('email', 'sms')),
+  sender TEXT NOT NULL,
+  "to" TEXT NOT NULL,
+  cc TEXT NOT NULL,
+  subject TEXT,
+  body TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  CHECK ((kind = 'email' AND subject IS NOT NULL)
+         OR (kind = 'sms' AND subject IS NULL AND cc = ''))
+) STRICT;
