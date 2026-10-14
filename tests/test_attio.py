@@ -76,7 +76,7 @@ def test_context_summarizes_people_companies_open_deals_and_tasks():
     (p,), (c,) = ctx["people"], ctx["companies"]
     assert p["title"] == "Laila Theriault" and p["url"].endswith("/p1")
     assert p["fields"] == [["Company", "NBIF"], ["Job title", "Investment Director"],
-                           ["Last interaction", "meeting 2026-10-07"], ["Strongest connection", "Jeremy Legere"]]
+                           ["Last interaction", "meeting · Oct 7, 2026"], ["Strongest connection", "Jeremy Legere"]]
     assert c["fields"] == [["Categories", "Venture Capital, B2B"], ["Paying Customers", "Stage: Steady · Health: Good"]]
     assert ctx["deals"] == [{"id": "d1", "title": "NBIF Breakthru", "url": OPEN["web_url"], "stage": "Discovery",
                              "value": "CAD 50,000", "owner": "Jeremy Legere", "lists": ["Fundraising Deals"]}]
@@ -91,8 +91,8 @@ def test_section_and_service_route():
     client = attio.Client("t")
     client.call = fake.call
     text = attio_markup(attio.context(client, ["laila@nbif.ca"], ["nbif.ca"]))
-    for part in ("Laila Theriault", "Investment Director", "Paying Customers", "NBIF Breakthru",
-                 "Discovery · CAD 50,000 · Jeremy Legere · Fundraising Deals", "Send the model", "due 2026-10-20"):
+    for part in ("Laila Theriault", "Investment Director", "paying customers", "NBIF Breakthru", "Discovery · CAD",
+                 "Send the model", "due 2026-10-20", "  [#928374]last contact[/]", "  meeting · Oct 7, 2026"):
         assert part in text
     assert "Old deal" not in text
     assert "nothing in Attio" in attio_markup({"people": [], "companies": [], "deals": [], "tasks": []})

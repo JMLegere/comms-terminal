@@ -8,6 +8,7 @@ import http.client
 import json
 import re
 import socket
+import textwrap
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 
@@ -1232,7 +1233,7 @@ def box_head(icon, text) -> str:
     return f"[b #7c6f64]{text.upper()}[/]"
 
 
-def tana_markup(ctx: dict | None, error: str | None = None) -> str:
+def tana_markup(ctx: dict | None, error: str | None = None, width: int = 26) -> str:
     """The Tana section (FR-13a): records, then Meetings with their summary and linked documents by type."""
     head = box_head
     link = lambda r, text=None: (f"[link='{r['url']}'][underline]{escape(text or r['title'] or 'untitled')}[/]"  # noqa: E731
@@ -1265,33 +1266,51 @@ def tana_markup(ctx: dict | None, error: str | None = None) -> str:
     return "\n".join(lines).strip("\n") or "[#928374]nothing in Tana[/]"
 
 
-def attio_markup(ctx: dict | None, error: str | None = None) -> str:
-    """The Attio section (FR-13b): each Person and Company with its filled fields, open deals, and open tasks."""
-    head = box_head
-    link = lambda r: f"[link='{r['url']}'][underline]{escape(r['title'] or 'untitled')}[/][/link]" if r.get("url") \
-        else escape(r["title"] or "untitled")  # noqa: E731
-    cut = lambda text, n=90: text if len(text) <= n else text[:n - 1].rstrip() + "…"  # noqa: E731
-    lines = []
+# Attio field names, shortened for the narrow column; the rest are lowercased
+FIELD_LABELS = {"Description": "about", "Primary location": "location", "Foundation date": "founded",
+                "Last interaction": "last contact", "Next interaction": "next contact", "Connection strength": "connection",
+                "Strongest connection": "closest teammate", "Job title": "role"}
+
+
+def wrapped(text: str, width: int, indent: int = 0, style: str = "", url: str | None = None) -> list[str]:
+    """Plain text wrapped to `width` with a hanging indent, each line marked up (Textual's own wrapping
+    starts continuation lines at the margin, which loses the indent)."""
+    out = []
+    for row in textwrap.wrap(text, max(8, width - indent)) or [""]:
+        t = escape(row)
+        t = f"[link='{url}'][underline]{t}[/][/link]" if url else t
+        out.append(" " * indent + (f"[{style}]{t}[/]" if style else t))
+    return out
+
+
+def attio_markup(ctx: dict | None, error: str | None = None, width: int = 26) -> str:
+    """The Attio section (FR-13b): each Person and Company with its filled fields stacked as label then value
+    (like the column's own entries), its open deals, and open tasks."""
+    cut = lambda text, n=140: text if len(text) <= n else text[:n - 1].rstrip() + "…"  # noqa: E731
     if error:
         return f"[#c14a4a]{ICON['broken']} Attio unavailable: {escape(error)}[/]"
     if ctx is None:
         return "[#928374]loading…[/]"
-    for key, icon, label in (("people", "person", "people"), ("companies", "organization", "companies")):
+    lines = []
+    for key, label in (("people", "people"), ("companies", "companies")):
         if ctx[key]:
-            lines += ["", head(icon, label)]
-        for r in ctx[key]:
-            lines += [f"[b]{link(r)}[/]", *(f"[#928374]{escape(k)}:[/] {escape(cut(v))}" for k, v in r["fields"]), ""]
-        lines = lines[:-1] if ctx[key] else lines
+            lines += ["", box_head("", label)]
+        for i, r in enumerate(ctx[key]):
+            lines += ([""] if i else []) + wrapped(r["title"] or "untitled", width, style="b", url=r.get("url"))
+            for k, v in r["fields"]:
+                url = v if v.startswith("http") else None
+                v = re.sub(r"^https?://(www\.)?", "", v) if url else cut(v)
+                lines += wrapped(FIELD_LABELS.get(k, k.lower()), width, 2, "#928374") + wrapped(v, width, 2, url=url)
     if ctx["deals"]:
-        lines += ["", head("deal", "open deals")]
+        lines += ["", box_head("", "open deals")]
     for d in ctx["deals"]:
         facts = [x for x in (d["stage"], d["value"], d["owner"], *d["lists"]) if x]
-        lines += [f"[#928374]·[/] {link(d)}", f"[#928374]{escape(' · '.join(facts))}[/]"]
+        lines += wrapped(d["title"], width, url=d.get("url")) + wrapped(" · ".join(facts), width, 2, "#928374")
     if ctx["tasks"]:
-        lines += ["", head("task", "open tasks")]
+        lines += ["", box_head("", "open tasks")]
     for t in ctx["tasks"]:
         facts = [x for x in (f"due {t['due']}" if t["due"] else "", ", ".join(t["assignees"])) if x]
-        lines += [f"[#928374]·[/] {link(t)}"] + ([f"[#928374]{escape(' · '.join(facts))}[/]"] if facts else [])
+        lines += wrapped(t["title"], width, url=t.get("url")) + (wrapped(" · ".join(facts), width, 2, "#928374") if facts else [])
     return "\n".join(lines).strip("\n") or "[#928374]nothing in Attio[/]"
 
 
@@ -1305,7 +1324,7 @@ class ContextSection(Static):
 
     def __init__(self, source: str, **kwargs):
         super().__init__("", **kwargs)
-        self.source, self.key = source, None
+        self.source, self.key, self.answer = source, None, (None, None)
         title, icon, self.markup = CONTEXT_SOURCES[source]
         self.border_title = f"{ICON[icon]} {title.lower()}"
         self.display = False
@@ -1319,7 +1338,8 @@ class ContextSection(Static):
             self.display = False
             return
         self.display = True
-        self.update(self.markup(None))
+        self.answer = (None, None)
+        self.paint()
         self.fetch(key)
 
     @work(thread=True, exclusive=True)
@@ -1338,7 +1358,15 @@ class ContextSection(Static):
         self.app.main.refresh_chrome()
         self.display = connected
         if connected:
-            self.update(self.markup(ctx, error))
+            self.answer = (ctx, error)
+            self.call_after_refresh(self.paint)  # once shown, so the width is known
+
+    def paint(self):
+        self.update(self.markup(*self.answer, width=self.content_region.width or 26))
+
+    def on_resize(self):
+        if self.display:
+            self.paint()
 
 
 def context_sections() -> list[ContextSection]:

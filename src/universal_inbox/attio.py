@@ -9,6 +9,7 @@ Nothing is written to Attio. Answers are cached for five minutes, like Tana's.
 """
 
 import json
+from datetime import datetime
 import urllib.error
 import urllib.request
 
@@ -63,6 +64,15 @@ class Client:
         return self.list_names.get(slug, slug)
 
 
+def _day(value) -> str:
+    """"Oct 7, 2026" for a date or timestamp; the year alone for a January 1 (Attio's unknown month and day)."""
+    try:
+        d = datetime.fromisoformat(str(value)[:10])
+    except ValueError:
+        return str(value or "")
+    return str(d.year) if (d.month, d.day) == (1, 1) else f"{d:%b} {d.day}, {d.year}"
+
+
 def _one(client, v: dict, names: dict) -> str:
     t = v.get("attribute_type")
     if t == "personal-name":
@@ -78,7 +88,7 @@ def _one(client, v: dict, names: dict) -> str:
     if t == "location":
         return ", ".join(x for x in (v.get("locality"), v.get("region"), v.get("country_code")) if x)
     if t == "interaction":
-        return f"{v.get('interaction_type', '')} {str(v.get('interacted_at') or '')[:10]}".strip()
+        return " · ".join(x for x in (v.get("interaction_type"), _day(v.get("interacted_at"))) if x)
     if t == "email-address":
         return v.get("email_address", "")
     if t == "phone-number":
@@ -87,8 +97,8 @@ def _one(client, v: dict, names: dict) -> str:
         return v.get("domain", "")
     if t == "checkbox":
         return "yes" if v.get("value") else "no"
-    if t == "timestamp":
-        return str(v.get("value") or "")[:10]
+    if t in ("timestamp", "date"):
+        return _day(v.get("value"))
     return str(v.get("value") if v.get("value") is not None else "")
 
 
