@@ -546,6 +546,12 @@ class Rail(OptionList):
             name = name if len(name) <= 21 else name[:20] + "…"
             label = escape(name) if ok else f"[#c14a4a]{escape(name)}[/]"
             opts.append(Option(f"{mark}{conn_icon(c)} {label}{' ' * max(1, 22 - len(name))}{state}", id=f"conn:{c['id']}"))
+        tana = getattr(self.app, "tana_state", None)
+        if tana:  # Context sources (FR-13a) sit apart from Connections: they hold no Threads
+            state = {"ok": f"[#6c782e]{ICON['ok']}[/]", "checking": "[#928374]…[/]"}.get(tana, f"[#c14a4a]{ICON['broken']}[/]")
+            label = "Tana" if tana in ("ok", "checking") else "[#c14a4a]Tana[/]"
+            opts += [gap, header("tana", "context"),
+                     Option(f" [#654735]{ICON['tana']}[/] {label}{' ' * 18}{state}", id="context:tana")]
         self.clear_options()
         self.add_options(opts)
         self.highlighted = self.get_option_index(main.section) if self.has_focus else None
@@ -555,6 +561,11 @@ class Rail(OptionList):
             self.highlighted = self.get_option_index(self.app.main.section)
 
     def on_option_list_option_selected(self, event):
+        if event.option.id == "context:tana":  # no page of its own; its context shows on each page
+            state = self.app.tana_state
+            self.app.notify("Tana is connected." if state == "ok" else "Checking Tana…" if state == "checking"
+                            else f"Tana unavailable: {state}")
+            return
         self.app.main.go(event.option.id)
 
 
@@ -1826,7 +1837,7 @@ class StatusLine(Static):
                          f"[b {b['bg0']} on {b['red']}] {ICON['broken']} {escape(conn_name(c))} broken [/]")
         if app.tana_state == "ok":  # Tana is a Context source, shown apart from Connections (FR-13a)
             parts.append(f"[{b['grey1']}]{ICON['tana']}[/] [{b['green']}]{ICON['ok']}[/]")
-        elif app.tana_state:
+        elif app.tana_state not in (None, "checking"):
             parts.append(f"[b {b['bg0']} on {b['red']}] {ICON['broken']} Tana broken [/]")
         right = sep.join(parts) + " "
         from rich.text import Text
@@ -2304,7 +2315,8 @@ class Console(App):
     def __init__(self, db_path: str, reply=None, tana=None):
         super().__init__()
         self.db_path, self.send_reply, self.drafts, self.view, self.cursor = db_path, reply, {}, 0, {}
-        self.fetch_tana, self.tana_state = tana, None  # Tana context (FR-13a); state: None, "ok", or the error
+        # Tana context (FR-13a); state: None (not connected), "checking", "ok", or the error
+        self.fetch_tana, self.tana_state = tana, "checking" if tana else None
         self.case_view = 0  # the Cases section's Status view (#120)
         self.undo = None  # (message, restore) for the last change
         self.msg_states = {}  # thread id -> which messages, quotes, and recipient lines are open (#107)
@@ -2324,6 +2336,21 @@ class Console(App):
         self.set_interval(2, self.check_changes)
         self.set_interval(60, lambda: self.main.refresh_chrome())  # health goes stale with no write to notice
         self.set_interval(1, self.tick_countdowns)
+        if self.fetch_tana:
+            self.check_tana([c["self_id"] for c in inbox.connections(self.db) if "@" in (c["self_id"] or "")])
+
+    @work(thread=True)
+    def check_tana(self, emails):
+        """The rail's Tana row: one fetch for Jeremy's own addresses says whether Tana answers."""
+        try:
+            state = "ok" if self.fetch_tana(emails, []) is not None else None
+        except ReplyError as e:
+            state = str(e)
+        def show():
+            if self.tana_state == "checking":  # a page's fetch may have answered first
+                self.tana_state = state
+            self.main.refresh_chrome()
+        self.call_from_thread(show)
 
     def tick_countdowns(self):
         """Snoozed Threads count down beside their status every second (the lists tick on their own)."""
