@@ -92,7 +92,7 @@ def test_section_markup():
     from universal_inbox.tui import tana_markup
     text = tana_markup(tana.context(FakeTana(), ["laila@nbif.ca"], ["nbif.ca"], NOW))
     for part in ("Laïla Thériault", "NBIF — investment", "Send deck", "NBIF Interview", "Diligence next steps",
-                 "Observations (1)", "Wants milestones"):
+                 "Observations", "Wants milestones"):
         assert part in text
     empty = {k: [] for k in ("people", "organizations", "deals", "threats", "opportunities", "tasks", "meetings")}
     assert "nothing in Tana" in tana_markup(empty)

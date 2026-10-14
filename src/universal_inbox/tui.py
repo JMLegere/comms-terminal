@@ -147,6 +147,7 @@ DataTable > .datatable--header { background: #f9f5d7; color: #928374; }
 .descbox TextArea { margin: 0; }
 MainScreen > Horizontal { height: 1fr; }
 TanaSection { height: auto; }
+.props TanaSection { text-wrap: wrap; }  /* Tana titles are long; wrap them, unlike the one-line entries above */
 .sidescroll TanaSection { padding: 0 1 1 1; }
 """
 
@@ -1219,24 +1220,25 @@ def tana_markup(ctx: dict | None, error: str | None = None) -> str:
         return "\n".join(lines + [f"[#c14a4a]{ICON['broken']} Tana unavailable: {escape(error)}[/]"])
     if ctx is None:
         return "\n".join(lines + ["[#928374]loading…[/]"])
+    item = lambda r: f"[#928374]·[/] {link(r)}"  # noqa: E731  the section wraps, so each entry gets a mark
     for key, icon, label in TANA_RECORDS:
         if ctx[key]:
-            lines += ["", head(icon, label), *(link(r) for r in ctx[key])]
+            lines += ["", head(icon, label), *(item(r) for r in ctx[key])]
     if ctx["meetings"]:
         lines += ["", head("meeting", "meetings")]
     for m in ctx["meetings"]:
-        when_ = "[#45707a]next[/] " if m["upcoming"] else ""
-        lines.append(f"{when_}[#928374]{escape(stamp(m['start']))}[/] {link(m)}")
+        when_ = "[b #45707a]next[/] [#928374]·[/] " if m["upcoming"] else ""
+        lines += [f"{when_}[#928374]{escape(stamp(m['start']))}[/]", f"[b]{link(m)}[/]"]
         if m["summary"]:
-            text = escape(m["summary"])
-            lines.append(f"[#928374]{ICON['summary']} [link='{m['summary_url']}']{text}[/link][/]" if m["summary_url"]
-                         else f"[#928374]{ICON['summary']} {text}[/]")
+            text = m["summary"] if len(m["summary"]) <= 140 else m["summary"][:139].rstrip() + "…"
+            text = f"[link='{m['summary_url']}']{escape(text)}[/link]" if m["summary_url"] else escape(text)
+            lines.append(f"[#928374]{ICON['summary']} {text}[/]")
         groups: dict[str, list] = {}
         for d in m["linked"]:
             groups.setdefault(d["type"], []).append(d)
         for kind, docs in groups.items():
-            lines.append(f"  [#928374]{escape(kind)} ({len(docs)})[/]")
-            lines += [f"    {link(d)}" for d in docs[:3]]
+            more = f" [#928374]+{len(docs) - 3}[/]" if len(docs) > 3 else ""
+            lines += [f"[#928374]{escape(kind)}[/]{more}", *(item(d) for d in docs[:3])]
         lines.append("")
     if len(lines) == 1:
         lines.append("[#928374]nothing in Tana[/]")
