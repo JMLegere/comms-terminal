@@ -146,9 +146,11 @@ DataTable > .datatable--header { background: #f9f5d7; color: #928374; }
 .descbox { margin: 0 2 1 0; }
 .descbox TextArea { margin: 0; }
 MainScreen > Horizontal { height: 1fr; }
-ContextSection { height: auto; }
+/* each Context source in its own box, apart from Universal Inbox's own details (FR-13a, FR-13b) */
+ContextSection { height: auto; margin: 1 0 0 0; padding: 0 1; border: round #d5c4a1; border-title-align: left;
+                 border-title-color: #654735; }
 .props ContextSection { text-wrap: wrap; }  /* Tana and Attio titles are long; wrap them, unlike the one-line entries above */
-.sidescroll ContextSection { padding: 0 1 1 1; }
+.sidescroll ContextSection { margin: 1 1 1 1; }
 """
 
 
@@ -1225,16 +1227,21 @@ TANA_RECORDS = (("people", "person", "people"), ("organizations", "organization"
                 ("opportunities", "opportunity", "opportunities"), ("tasks", "task", "tasks"))
 
 
+def box_head(icon, text) -> str:
+    """A group heading inside a Context source's box: small capitals, a level below the column's own headings."""
+    return f"[b #7c6f64]{text.upper()}[/]"
+
+
 def tana_markup(ctx: dict | None, error: str | None = None) -> str:
     """The Tana section (FR-13a): records, then Meetings with their summary and linked documents by type."""
-    head = lambda icon, text: f"[#928374]{ICON[icon]} {text}[/]"  # noqa: E731
+    head = box_head
     link = lambda r, text=None: (f"[link='{r['url']}'][underline]{escape(text or r['title'] or 'untitled')}[/]"  # noqa: E731
                                  "[/link]")
-    lines = [head("tana", "tana")]
+    lines = []
     if error:
-        return "\n".join(lines + [f"[#c14a4a]{ICON['broken']} Tana unavailable: {escape(error)}[/]"])
+        return f"[#c14a4a]{ICON['broken']} Tana unavailable: {escape(error)}[/]"
     if ctx is None:
-        return "\n".join(lines + ["[#928374]loading…[/]"])
+        return "[#928374]loading…[/]"
     item = lambda r: f"[#928374]·[/] {link(r)}"  # noqa: E731  the section wraps, so each entry gets a mark
     for key, icon, label in TANA_RECORDS:
         if ctx[key]:
@@ -1255,27 +1262,25 @@ def tana_markup(ctx: dict | None, error: str | None = None) -> str:
             more = f" [#928374]+{len(docs) - 3}[/]" if len(docs) > 3 else ""
             lines += [f"[#928374]{escape(kind)}[/]{more}", *(item(d) for d in docs[:3])]
         lines.append("")
-    if len(lines) == 1:
-        lines.append("[#928374]nothing in Tana[/]")
-    return "\n".join(lines).rstrip()
+    return "\n".join(lines).strip("\n") or "[#928374]nothing in Tana[/]"
 
 
 def attio_markup(ctx: dict | None, error: str | None = None) -> str:
     """The Attio section (FR-13b): each Person and Company with its filled fields, open deals, and open tasks."""
-    head = lambda icon, text: f"[#928374]{ICON[icon]} {text}[/]"  # noqa: E731
+    head = box_head
     link = lambda r: f"[link='{r['url']}'][underline]{escape(r['title'] or 'untitled')}[/][/link]" if r.get("url") \
         else escape(r["title"] or "untitled")  # noqa: E731
-    cut = lambda text, n=200: text if len(text) <= n else text[:n - 1].rstrip() + "…"  # noqa: E731
-    lines = [head("attio", "attio")]
+    cut = lambda text, n=90: text if len(text) <= n else text[:n - 1].rstrip() + "…"  # noqa: E731
+    lines = []
     if error:
-        return "\n".join(lines + [f"[#c14a4a]{ICON['broken']} Attio unavailable: {escape(error)}[/]"])
+        return f"[#c14a4a]{ICON['broken']} Attio unavailable: {escape(error)}[/]"
     if ctx is None:
-        return "\n".join(lines + ["[#928374]loading…[/]"])
+        return "[#928374]loading…[/]"
     for key, icon, label in (("people", "person", "people"), ("companies", "organization", "companies")):
         if ctx[key]:
             lines += ["", head(icon, label)]
         for r in ctx[key]:
-            lines += [f"[b]{link(r)}[/]", *(f"[#928374]{escape(k)}[/] {escape(cut(v))}" for k, v in r["fields"]), ""]
+            lines += [f"[b]{link(r)}[/]", *(f"[#928374]{escape(k)}:[/] {escape(cut(v))}" for k, v in r["fields"]), ""]
         lines = lines[:-1] if ctx[key] else lines
     if ctx["deals"]:
         lines += ["", head("deal", "open deals")]
@@ -1287,9 +1292,7 @@ def attio_markup(ctx: dict | None, error: str | None = None) -> str:
     for t in ctx["tasks"]:
         facts = [x for x in (f"due {t['due']}" if t["due"] else "", ", ".join(t["assignees"])) if x]
         lines += [f"[#928374]·[/] {link(t)}"] + ([f"[#928374]{escape(' · '.join(facts))}[/]"] if facts else [])
-    if len(lines) == 1:
-        lines.append("[#928374]nothing in Attio[/]")
-    return "\n".join(lines).rstrip()
+    return "\n".join(lines).strip("\n") or "[#928374]nothing in Attio[/]"
 
 
 # Context sources the console shows (FR-13a, FR-13b): key -> (title, icon, markup), in page order
@@ -1303,7 +1306,8 @@ class ContextSection(Static):
     def __init__(self, source: str, **kwargs):
         super().__init__("", **kwargs)
         self.source, self.key = source, None
-        self.markup = CONTEXT_SOURCES[source][2]
+        title, icon, self.markup = CONTEXT_SOURCES[source]
+        self.border_title = f"{ICON[icon]} {title.lower()}"
         self.display = False
 
     def load(self, emails, domains):
@@ -1315,7 +1319,7 @@ class ContextSection(Static):
             self.display = False
             return
         self.display = True
-        self.update("\n" + self.markup(None))
+        self.update(self.markup(None))
         self.fetch(key)
 
     @work(thread=True, exclusive=True)
@@ -1334,7 +1338,7 @@ class ContextSection(Static):
         self.app.main.refresh_chrome()
         self.display = connected
         if connected:
-            self.update("\n" + self.markup(ctx, error))
+            self.update(self.markup(ctx, error))
 
 
 def context_sections() -> list[ContextSection]:
