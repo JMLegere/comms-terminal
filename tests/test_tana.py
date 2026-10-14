@@ -77,15 +77,15 @@ def test_context_is_cached():
 
 
 def test_socket_route_reports_not_connected_and_errors():
-    assert serve.handle_tana(b'{"emails": []}', None) == (503, {"error": "Tana is not connected"})
+    assert serve.handle_context(b'{"emails": []}', None) == (503, {"error": "Tana is not connected"})
 
     class Broken:
         def get(self, emails, domains):
             raise mcp.McpError("Tana sign-in expired or revoked (HTTP 400 invalid_grant)")
 
-    status, out = serve.handle_tana(b'{"emails": ["a@b.ca"], "domains": []}', Broken())
+    status, out = serve.handle_context(b'{"emails": ["a@b.ca"], "domains": []}', Broken())
     assert status == 502 and "sign-in expired" in out["error"]
-    assert serve.handle_tana(b"not json", Broken())[0] == 400
+    assert serve.handle_context(b"not json", Broken())[0] == 400
 
 
 def test_section_markup():
@@ -101,11 +101,11 @@ def test_section_markup():
 
 def test_console_treats_a_service_without_tana_as_not_connected(tmp_path):
     import threading
-    from universal_inbox.tui import socket_tana
+    from universal_inbox.tui import socket_context
     sock = str(tmp_path / "s.sock")
     old = serve.UnixHTTPServer(sock, serve._handler({}))  # a service from before /tana: HTML 404
     threading.Thread(target=old.serve_forever, daemon=True).start()
     try:
-        assert socket_tana(sock)(["a@b.ca"], []) is None
+        assert socket_context(sock, "tana")(["a@b.ca"], []) is None
     finally:
         old.shutdown()

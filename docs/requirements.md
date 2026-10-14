@@ -54,5 +54,5 @@ Status: MVP confirmed 2026-10-10; revised 2026-10-12 to follow Plain's status mo
 - Rules by domain, category, or content.
 - Starting new conversations, attachments, rich text, drafts, undo-send, signatures.
 - Cmd+K command palette.
-- CRM and Linear context on records. (Tana context is built: FR-13a, decision #122.)
+- Linear context on records. (Tana and Attio context are built: FR-13a and FR-13b, decisions #122 and #123.)
 - Plain's "Close the loop" status detail and auto-resolution.

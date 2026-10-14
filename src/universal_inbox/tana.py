@@ -121,10 +121,11 @@ def _linker(client, any_id: str):
 
 
 class Context:
-    """The service's Tana answers, cached by (emails, domains) for TTL seconds."""
+    """The service's answers from a Context source (Tana by default), cached by (emails, domains) for TTL seconds."""
 
-    def __init__(self, client, clock=time.monotonic):
+    def __init__(self, client, clock=time.monotonic, fetch=None):
         self.client, self.clock, self.cache, self.lock = client, clock, {}, threading.Lock()
+        self.fetch = fetch or context
 
     def get(self, emails, domains) -> dict:
         key = (tuple(sorted({e.lower() for e in emails})), tuple(sorted({d.lower() for d in domains})))
@@ -132,7 +133,7 @@ class Context:
             hit = self.cache.get(key)
             if hit and self.clock() - hit[0] < TTL:
                 return hit[1]
-        out = context(self.client, *key)
+        out = self.fetch(self.client, *key)
         with self.lock:
             self.cache[key] = (self.clock(), out)
         return out

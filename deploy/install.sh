@@ -16,7 +16,7 @@ store=/etc/credstore.encrypted
 for name in fastmail-oauth tana-oauth; do
   [[ -f "$conf/$name.json" ]] && mv "$conf/$name.json" "$conf/$name"
 done
-for name in email-hook-secret resend-api-key slack-signing-secret slack-user-token fastmail-oauth quo-webhook-secret quo-api-key tana-oauth; do
+for name in email-hook-secret resend-api-key slack-signing-secret slack-user-token fastmail-oauth quo-webhook-secret quo-api-key tana-oauth attio-token; do
   if [[ -f "$conf/$name" ]]; then
     systemd-creds encrypt --name="$name" "$conf/$name" "$store/universal-inbox.$name"
     shred -u "$conf/$name"
@@ -49,6 +49,11 @@ if [[ -f "$store/universal-inbox.tana-oauth" ]]; then
   install -D -m 0644 "$repo/deploy/universal-inbox.service.d/tana.conf" \
     /etc/systemd/system/universal-inbox.service.d/tana.conf
   echo "Tana enabled"
+fi
+if [[ -f "$store/universal-inbox.attio-token" ]]; then
+  install -D -m 0644 "$repo/deploy/universal-inbox.service.d/attio.conf" \
+    /etc/systemd/system/universal-inbox.service.d/attio.conf
+  echo "Attio enabled"
 fi
 systemctl daemon-reload
 systemctl enable --quiet universal-inbox

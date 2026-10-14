@@ -3,7 +3,7 @@ and a health check of every Connection each 30 minutes.
 
 Credentials come from systemd's $CREDENTIALS_DIRECTORY (LoadCredentialEncrypted=):
 email-hook-secret, slack-signing-secret, slack-user-token, resend-api-key, fastmail-oauth, quo-webhook-secret,
-quo-api-key, tana-oauth.
+quo-api-key, tana-oauth, attio-token.
 """
 
 import importlib
@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from . import email, fastmail, inbox, mcp, platforms, quo, slack, tana
+from . import attio, email, fastmail, inbox, mcp, platforms, quo, slack, tana
 
 
 def credential(name: str) -> bytes | None:
@@ -44,10 +44,16 @@ def tana_context(db) -> tana.Context | None:
     return tana.Context(tana.Client.load(cred, state)) if cred else None
 
 
-def handle_tana(body: bytes, context: tana.Context | None) -> tuple[int, dict]:
-    """POST /tana: {"emails", "domains"} -> (status, Tana context or {"error"}) (FR-13a)."""
+def attio_context(db) -> tana.Context | None:
+    token = credential("attio-token")
+    return attio.Context(attio.Client(token.decode())) if token else None
+
+
+def handle_context(body: bytes, context: tana.Context | None, name: str = "Tana") -> tuple[int, dict]:
+    """POST /tana and /attio: {"emails", "domains"} -> (status, that Context source's answer or {"error"})
+    (FR-13a, FR-13b)."""
     if context is None:
-        return 503, {"error": "Tana is not connected"}
+        return 503, {"error": f"{name} is not connected"}
     try:
         req = json.loads(body)
         emails, domains = [str(e) for e in req.get("emails") or []], [str(d) for d in req.get("domains") or []]
@@ -55,7 +61,7 @@ def handle_tana(body: bytes, context: tana.Context | None) -> tuple[int, dict]:
         return 400, {"error": "expected emails and domains"}
     try:
         return 200, context.get(emails, domains)
-    except (mcp.McpError, OSError, ValueError, KeyError, IndexError) as e:
+    except (mcp.McpError, attio.AttioError, OSError, ValueError, KeyError, IndexError) as e:
         return 502, {"error": str(e) or type(e).__name__}
 
 
@@ -128,7 +134,9 @@ class UnixHTTPServer(socketserver.ThreadingUnixStreamServer):
     daemon_threads = True
 
 
-def reply_server(db_path: str, socket_path: str, senders: Senders, context: tana.Context | None = None) -> UnixHTTPServer:
+def reply_server(db_path: str, socket_path: str, senders: Senders, contexts: dict | None = None) -> UnixHTTPServer:
+    """The local socket: POST /reply, and POST /<source> for each Context source in `contexts` ({"tana": …})."""
+    contexts = contexts or {}
     def reply(headers, body):
         db = inbox.connect(db_path)
         try:
@@ -137,15 +145,17 @@ def reply_server(db_path: str, socket_path: str, senders: Senders, context: tana
             db.close()
         return status, "application/json", json.dumps(out).encode()
 
-    def tana_route(headers, body):
-        status, out = handle_tana(body, context)
-        return status, "application/json", json.dumps(out).encode()
+    def context_route(name):
+        def route(headers, body):
+            status, out = handle_context(body, contexts.get(name), name.title())
+            return status, "application/json", json.dumps(out).encode()
+        return route
 
     if os.path.exists(socket_path):
         os.unlink(socket_path)
     old = os.umask(0o177)  # socket created 0600 (NFR-4)
     try:
-        return UnixHTTPServer(socket_path, _handler({"/reply": reply, "/tana": tana_route}))
+        return UnixHTTPServer(socket_path, _handler({"/reply": reply, "/tana": context_route("tana"), "/attio": context_route("attio")}))
     finally:
         os.umask(old)
 
@@ -239,10 +249,10 @@ def run(db_path: str, socket_path: str, host: str, port: int) -> None:
     inbox.migrate(db)
     fm = fastmail_client(db)
     senders = Senders({"fastmail": fm} if fm is not None else {})
-    context = tana_context(db)
+    contexts = {"tana": tana_context(db), "attio": attio_context(db)}
     db.close()
     stop = threading.Event()
-    servers = [hooks_server(db_path, host, port), reply_server(db_path, socket_path, senders, context)]
+    servers = [hooks_server(db_path, host, port), reply_server(db_path, socket_path, senders, contexts)]
     threads = [threading.Thread(target=s.serve_forever, daemon=True) for s in servers]
     threads.append(threading.Thread(target=wake_loop, args=(db_path, stop), daemon=True))
     threads.append(threading.Thread(target=probe_loop, args=(db_path, senders.shared, stop), daemon=True))
