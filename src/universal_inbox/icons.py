@@ -22,6 +22,8 @@ ICON = {
     "channel": "\U000f0423",        # md-pound
     "channels": "\U000f0423",       # md-pound
     "rule": "\U000f0233",           # md-filter_outline
+    "expanded": "\U000f0140",       # md-chevron_down
+    "collapsed": "\U000f0142",      # md-chevron_right
     # Tana, a Context source (FR-13a)
     "tana": "\U000f0ebf",           # md-notebook_outline
     "attio": "\U000f01bc",          # md-database

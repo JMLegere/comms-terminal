@@ -486,15 +486,15 @@ def test_drag_one_person_onto_another_previews_then_merges(tmp_path):
     app, seen = Console(path), {}
 
     async def drag(app, pilot):
-        items = [p for p, _ in page(app).items]
-        seen["drop"], seen["keep"] = items[0], items[1]
-        await pilot.mouse_down("#table", offset=(4, 1))  # row 0 (the header is line 0)
-        await pilot.mouse_up("#table", offset=(4, 2))  # row 1
+        rows = [i for i, (p, _) in enumerate(page(app).items) if "id" in p][:2]  # People, not letter headers
+        seen["drop"], seen["keep"] = (page(app).items[i][0] for i in rows)
+        await pilot.mouse_down("#table", offset=(4, rows[0] + 1))  # the column header is line 0
+        await pilot.mouse_up("#table", offset=(4, rows[1] + 1))
         await pilot.pause()
         seen["preview"] = str(app.screen.query_one(".body").render())
 
     async def kept_both(app, pilot):
-        seen["after_cancel"] = len(page(app).items)
+        seen["after_cancel"] = sum("id" in p for p, _ in page(app).items)
 
     run(app, ["6", drag, "escape", kept_both, "6", drag, "enter"])
     assert seen["drop"]["name"] in seen["preview"] and seen["keep"]["name"] in seen["preview"]

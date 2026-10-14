@@ -139,3 +139,43 @@ def test_people_count_blocked_identities_of_total():
     inbox.block(db, "email", "noreply@acme.com")
     p = next(p for p in inbox.people(db) if p["id"] == pid)
     assert (p["blocked"], p["identities"]) == (1, 2)
+
+
+def test_people_list_groups_by_first_letter_and_folds(tmp_path):
+    from textual.widgets import DataTable
+    from test_console import run, seeded
+    from universal_inbox.tui import Console, PeoplePage, initial
+    assert [initial(n) for n in ("Émile", "ana", "+1506", "")] == ["E", "A", "#", "#"]
+    path, _ = seeded(tmp_path)
+    app, seen = Console(path), {}
+
+    async def scenario(app, pilot):
+        app.main.go("people")
+        await pilot.pause()
+        page = app.main.current
+        assert isinstance(page, PeoplePage)
+        items = [item for item, _ in page.items]
+        letters = [i["letter"] for i in items if "letter" in i]
+        assert letters == sorted(letters, key=lambda k: (k == "#", k)) and "letter" in items[0]
+        assert "id" in page.selected()  # the cursor starts on the first Person
+        people = sum("id" in i for i in items)
+        table = page.query_one(DataTable)
+        table.move_cursor(row=0)
+        await pilot.press("enter")
+        await pilot.pause()
+        assert letters[0] in app.people_collapsed and page.selected() == {"letter": letters[0]}
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app.people_collapsed == set() and sum("id" in i for i, _ in page.items) == people
+        await pilot.press("c")
+        await pilot.pause()
+        assert all("letter" in i for i, _ in page.items) and len(page.items) == len(letters)
+        await pilot.press("g")  # merge needs a Person, not a letter
+        await pilot.pause()
+        seen["screen"] = type(app.screen).__name__
+        await pilot.press("c")
+        await pilot.pause()
+        assert sum("id" in i for i, _ in page.items) == people
+
+    run(app, [scenario])
+    assert seen["screen"] != "Pick"

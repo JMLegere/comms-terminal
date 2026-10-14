@@ -10,6 +10,7 @@ import re
 import socket
 import sqlite3
 import textwrap
+import unicodedata
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from email.errors import HeaderParseError
@@ -2276,6 +2277,12 @@ class TablePage(Page):
         self.app.main.back()
 
 
+def initial(name: str) -> str:
+    """The People list letter a name files under: its first letter without accents (É is E), else #."""
+    first = unicodedata.normalize("NFKD", name.strip()[:1]).encode("ascii", "ignore").decode().upper()
+    return first if first.isalpha() else "#"
+
+
 def thread_cells(t) -> tuple:
     return (glyph(t.status_detail), escape(t.title), status_markup(t))
 
@@ -2287,16 +2294,18 @@ class PeoplePage(TablePage):
     COLUMNS = ("", "Name", "Address", "Organizations", "Blocked", "Todo")
     EMPTY = "No people yet. Everyone who writes to you appears here."
     TABLE = DragTable
-    BINDINGS = [Binding("g", "merge", "merge into…")]
+    BINDINGS = [Binding("g", "merge", "merge into…"), Binding("c", "collapse_all", "collapse / expand all")]
 
     def on_drag_table_dropped(self, event):
-        self.offer_merge(self.items[event.source][0], self.items[event.target][0])
+        drop, keep = self.items[event.source][0], self.items[event.target][0]
+        if "id" in drop and "id" in keep:
+            self.offer_merge(drop, keep)
 
     def action_merge(self):
         drop = self.selected()
-        if drop is None:
+        if drop is None or "id" not in drop:
             return
-        others = {str(p["id"]): p for p, _ in self.items if p["id"] != drop["id"]}
+        others = {str(p["id"]): p for p, _ in self.items if p.get("id", drop["id"]) != drop["id"]}
         opts = [(pid, f"{ICON['person']} {escape(p['name'])}  [#928374]{escape(p['address'])}[/]")
                 for pid, p in others.items()]
         self.app.push_screen(Pick(f"Merge {drop['name']} into", opts),
@@ -2320,15 +2329,51 @@ class PeoplePage(TablePage):
         self.app.push_screen(Pick("Merge people", [("accept", f"{ICON['ok']} Accept"), ("cancel", "Cancel")], body), chosen)
 
     def rows(self):
-        return [(p, (f"[#654735]{ICON['person']}[/]", f"[b]{escape(p['name'])}[/]", f"[#928374]{escape(p['address'])}[/]",
-                     escape(", ".join(p["organizations"]) or "—"),
-                     f"[#c14a4a]{ICON['blocked']} {p['blocked']}/{p['identities']}[/]" if p["blocked"]
-                     else f"[#928374]0/{p['identities']}[/]",
-                     f"[#45707a]{ICON['TODO']} {p['todo']}[/]" if p["todo"] else ""))
-                for p in inbox.people(self.app.db)]
+        """A header row per first letter, like Case headers on Threads (#120); Enter on one folds it."""
+        groups = {}
+        for p in inbox.people(self.app.db):
+            groups.setdefault(initial(p["name"]), []).append(p)
+        self.letters, out = sorted(groups, key=lambda k: (k == "#", k)), []
+        for key in self.letters:
+            shut = key in self.app.people_collapsed
+            n = len(groups[key])
+            out.append(({"letter": key}, (f"[#928374]{ICON['collapsed' if shut else 'expanded']}[/]", f"[b #45707a]{key}[/]",
+                                          f"[#928374]{n} {'person' if n == 1 else 'people'}[/]", "", "", "")))
+            out += [] if shut else [(p, (
+                f"[#654735]{ICON['person']}[/]", f"[b]{escape(p['name'])}[/]", f"[#928374]{escape(p['address'])}[/]",
+                escape(", ".join(p["organizations"]) or "—"),
+                f"[#c14a4a]{ICON['blocked']} {p['blocked']}/{p['identities']}[/]" if p["blocked"]
+                else f"[#928374]0/{p['identities']}[/]",
+                f"[#45707a]{ICON['TODO']} {p['todo']}[/]" if p["todo"] else "")) for p in groups[key]]
+        return out
 
     def open(self, p):
-        self.app.main.open(lambda: PersonPage(p["id"]))
+        if "letter" in p:
+            self.app.people_collapsed ^= {p["letter"]}
+            self.refresh_data(p["letter"])
+        else:
+            self.app.main.open(lambda: PersonPage(p["id"]))
+
+    def on_mount(self):
+        super().on_mount()
+        if len(self.items) > 1:  # past the first letter header, like Threads past the first Case header
+            self.query_one(DataTable).move_cursor(row=1)
+
+    def action_collapse_all(self):
+        item = self.selected()
+        if item is None:
+            return
+        shut = set(self.letters) != self.app.people_collapsed
+        self.app.people_collapsed = set(self.letters) if shut else set()
+        self.refresh_data(item.get("letter") or initial(item["name"]))
+
+    def refresh_data(self, letter=None):
+        """`letter` keeps the cursor on that letter's header after folding."""
+        super().refresh_data()
+        if letter is not None:
+            rows = [i for i, (item, _) in enumerate(self.items) if item.get("letter") == letter]
+            if rows:
+                self.query_one(DataTable).move_cursor(row=rows[0])
 
 
 class OrganizationsPage(TablePage):
@@ -3196,6 +3241,7 @@ class Console(App):
         self.sources = {k: f for k, f in (sources or {}).items() if f}
         self.source_state = {k: "checking" for k in self.sources}
         self.case_view = 0  # the Cases section's Status view (#120)
+        self.people_collapsed = set()  # People list letters folded shut
         self.undo = None  # (message, restore) for the last change
         self.msg_states = {}  # thread id -> which messages, quotes, and recipient lines are open (#107)
 
