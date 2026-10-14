@@ -1984,18 +1984,9 @@ class DraftsPage(Page):
         table = self.query_one(DataTable)
         table.clear(columns=True)
         narrow = self.size.width < 40
-        table.add_columns(*(("status", "title") if narrow else ("", "To", "Subject", "Status")))
-        room = max(1, self.size.width - 3 - (4 if narrow else 8) - 7 - (0 if narrow else 19))
-        cut = lambda text, width: text if len(text) <= width else text[:max(0, width - 1)] + "…"  # noqa: E731
+        self.columns = table.add_columns(*(("status", "title") if narrow else ("", "To", "Subject", "Status")))
         for draft in items:
-            title = (draft["subject"] or draft["body"] or "New draft").replace("\r", "↵").replace("\n", " ")
-            view = self.app.main.draft_view
-            state = "unsaved" if view and view.draft_id == draft["id"] and view.dirty else "saved"
-            status = f"[#928374]{state:7}[/]"
-            cells = (status, escape(cut(title, room))) if narrow else (
-                f"[#928374]{ICON['sms'] if draft['kind'] == 'sms' else ICON['email']}[/]",
-                f"[b]{escape(cut(draft['to'] or 'No recipient', 18))}[/]", escape(cut(title, room)), status)
-            table.add_row(*cells, key=str(draft["id"]))
+            table.add_row(*self.cells(draft), key=str(draft["id"]))
         table.show_cursor = bool(items)
         if items:
             ids = [d["id"] for d in items]
@@ -2004,6 +1995,27 @@ class DraftsPage(Page):
         else:
             table.add_row("[#928374]No drafts · n new[/]", "", *(("", "") if not narrow else ()))
         self.show_selected()
+
+    def cells(self, draft):
+        narrow = self.size.width < 40
+        room = max(1, self.size.width - 3 - (4 if narrow else 8) - 7 - (0 if narrow else 19))
+        cut = lambda text, width: text if len(text) <= width else text[:max(0, width - 1)] + "…"  # noqa: E731
+        title = (draft["subject"] or draft["body"] or "New draft").replace("\r", "↵").replace("\n", " ")
+        view = self.app.main.draft_view
+        state = "unsaved" if view and view.draft_id == draft["id"] and view.dirty else "saved"
+        status = f"[#928374]{state:7}[/]"
+        return (status, escape(cut(title, room))) if len(self.columns) == 2 else (
+            f"[#928374]{ICON['sms'] if draft['kind'] == 'sms' else ICON['email']}[/]",
+            f"[b]{escape(cut(draft['to'] or 'No recipient', 18))}[/]", escape(cut(title, room)), status)
+
+    def repaint_row(self, draft):
+        """Show a draft saved while switching rows; the full refresh would move the cursor."""
+        ids = [d["id"] for d in self.items]
+        if draft["id"] in ids:
+            self.items[ids.index(draft["id"])] = draft
+            table = self.query_one(DataTable)
+            for column, value in zip(self.columns, self.cells(draft)):
+                table.update_cell(str(draft["id"]), column, value)
 
     def selected(self):
         return self.items[min(self.query_one(DataTable).cursor_row, len(self.items) - 1)] if self.items else None
@@ -2031,6 +2043,8 @@ class DraftsPage(Page):
             if view.draft_id in ids:
                 self.query_one(DataTable).move_cursor(row=ids.index(view.draft_id))
             return
+        if view:
+            self.repaint_row(view.draft)
         self.app.selected_draft = selected["id"] if selected else None
         self.app.main.showing = showing
         pane = self.app.main.query_one("#thread")

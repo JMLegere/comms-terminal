@@ -5,7 +5,7 @@ import sqlite3
 from datetime import datetime, timezone
 
 import pytest
-from textual.widgets import Input, OptionList, TextArea
+from textual.widgets import DataTable, Input, OptionList, TextArea
 
 from test_console import run, seeded
 from test_pane_arrows import check_editor_arrows
@@ -631,5 +631,26 @@ def test_drafts_list_keys_work_from_open_draft_but_text_fields_still_type(tmp_pa
         await pilot.pause()
         assert [d["id"] for d in inbox.list_drafts(app.db)] != [] and newest not in [
             d["id"] for d in inbox.list_drafts(app.db)]
+
+    run(app, [scenario])
+
+
+def test_switching_drafts_repaints_the_saved_row(tmp_path):
+    path, _ = seeded(tmp_path)
+    app = Console(path)
+
+    async def scenario(app, pilot):
+        await pilot.press("5", "n")
+        await pilot.pause()
+        await pilot.press("n")
+        await pilot.pause()
+        view, page = app.main.draft_view, app.main.page
+        view.query_one(".toinput", Input).value = "kory@example.test"
+        view.query_one(".subjectinput", Input).value = "Checklist follow up"
+        page.focus_first()
+        await pilot.press("j")
+        await pilot.pause()
+        row = page.query_one(DataTable).get_row(str(view.draft_id))
+        assert "kory@example.test" in row[1] and row[2].startswith("Ch")
 
     run(app, [scenario])
