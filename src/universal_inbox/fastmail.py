@@ -178,6 +178,23 @@ class FastmailSender:
             raise inbox.SendFailed(f"Fastmail send failed: {err}") from err
         return native_id(e.get("messageId")) if e.get("messageId") else f"<fastmail-{sent['emailId']}@inbox>"
 
+    def start(self, to, cc, subject, body, key) -> str:
+        """A new email via send_email with no reply mode; the Sent poll then sees it as already stored."""
+        args = {"to": [{"email": a} for a in to], "subject": subject, "body": body, "format": "text"}
+        if cc:
+            args["cc"] = [{"email": a} for a in cc]
+        try:
+            sent = self.client.tool("send_email", **args)
+        except McpError as err:  # a 5xx may come after Fastmail sent it
+            raise (inbox.SendUnknown if "MCP HTTP 5" in str(err) else inbox.SendFailed)(str(err)) from err
+        except (OSError, ValueError) as err:
+            raise inbox.SendUnknown(f"Fastmail send outcome unknown: {err}") from err
+        try:
+            e = self.client.tool("read_email", id=sent["emailId"])
+        except (McpError, OSError, KeyError, ValueError):
+            e = {}
+        return native_id(e["messageId"]) if e.get("messageId") else f"<fastmail-{sent.get('emailId')}@inbox>"
+
     def find(self, h) -> str:
         """Fastmail's ID for a message that arrived as a forwarded copy: search by sender, match Message-ID."""
         sender = h["data"].get("from") or ""

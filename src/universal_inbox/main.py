@@ -92,8 +92,9 @@ def main(argv=None) -> None:
         # SSH does not forward COLORTERM; without it Textual drops to a 256/16-colour palette.
         if not os.environ.get("COLORTERM") and any(t in os.environ.get("TERM", "") for t in TRUECOLOR_TERMS):
             os.environ["COLORTERM"] = "truecolor"
-        from .tui import CONTEXT_SOURCES, Console, socket_context, socket_reply
-        Console(a.db, socket_reply(a.socket), {k: socket_context(a.socket, k) for k in CONTEXT_SOURCES}).run()
+        from .tui import CONTEXT_SOURCES, Console, socket_context, socket_reply, socket_send_draft
+        Console(a.db, socket_reply(a.socket), {k: socket_context(a.socket, k) for k in CONTEXT_SOURCES},
+                socket_send_draft(a.socket)).run()
 
 
 if __name__ == "__main__":

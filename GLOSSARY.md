@@ -13,7 +13,11 @@ A retired Thread ID that resolves to the surviving Thread after exact-reference 
 _Avoid_: Deleted thread, Duplicate activity
 
 **Draft**:
-An unsent email or SMS composition with its own Connection, sender, recipients, subject and body; it is neither a Thread nor an Activity.
+An unsent email or SMS composition with its own Connection, recipients, subject and body; it sends as the Connection's own address or number. It is neither a Thread nor an Activity. Sending it turns it into a new Thread and removes it.
+
+**Send outcome unknown**:
+A Draft whose send was started but never confirmed or refused, so the message may or may not have gone out. It stays locked until Jeremy marks it sent, which removes it without making a Thread, or explicitly sends it again.
+_Avoid_: Failed send, Pending
 
 **Draft revision**:
 The monotonically increasing version of a saved Draft, checked before a later save may replace it.

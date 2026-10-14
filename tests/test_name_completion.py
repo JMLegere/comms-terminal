@@ -104,7 +104,7 @@ def test_named_recipients_show_destination_then_accept_bare_token(tmp_path, key,
 
 
 @pytest.mark.parametrize("kind", ["email", "sms"])
-def test_unknown_ambiguous_wrong_kind_and_contact_sender_names_keep_native_focus(tmp_path, kind):
+def test_unknown_ambiguous_and_wrong_kind_names_keep_native_focus(tmp_path, kind):
     path, _ = named_seeded(tmp_path)
 
     async def scenario(app, pilot):
@@ -112,15 +112,14 @@ def test_unknown_ambiguous_wrong_kind_and_contact_sender_names_keep_native_focus
         before = inbox.get_draft(app.db, view.draft_id)
         cases = [("to", "Morgan"), ("to", "Nobody Here"),
                  ("to", "Email Only" if kind == "sms" else "Phone Only"),
-                 ("to", "Invalid"), ("to", "Unsafe"), ("sender", "log")]
+                 ("to", "Invalid"), ("to", "Unsafe")]
         for name, prefix in cases:
             field = view.query_one(f".{name}input", Input)
             await type_address(field, pilot, prefix)
             assert field.render_line(0).text.rstrip() == prefix
             await pilot.press("tab")
             await pilot.pause()
-            target = view.query_one(".toinput", Input) if name == "sender" else (
-                view.query_one(".ccinput", Input) if kind == "email" else view.query_one(TextArea))
+            target = view.query_one(".ccinput", Input) if kind == "email" else view.query_one(TextArea)
             assert app.focused is target and field.value == prefix
         field = view.query_one(".toinput", Input)
         prefix, completed = ("m-one@", "m-one@example.test") if kind == "email" else (
@@ -136,13 +135,13 @@ def test_unknown_ambiguous_wrong_kind_and_contact_sender_names_keep_native_focus
 
 
 @pytest.mark.parametrize("key", ["tab", "right"])
-def test_repeated_own_connection_address_and_label_resolve_once(tmp_path, key):
+def test_repeated_own_connection_address_resolves_once(tmp_path, key):
     path, _ = named_seeded(tmp_path)
 
     async def scenario(app, pilot):
         view = await new_draft(app, pilot, "email")
         before = inbox.get_draft(app.db, view.draft_id)
-        for name, prefix, destination in (("to", "log", EMAIL), ("sender", "OWNER MA", OWN_EMAIL)):
+        for name, prefix, destination in (("to", "log", EMAIL),):
             field = view.query_one(f".{name}input", Input)
             await type_address(field, pilot, prefix)
             assert destination in field.render_line(0).text and field.value == prefix
@@ -225,7 +224,7 @@ def test_named_ghost_does_not_override_native_selection_or_backward_focus(tmp_pa
             assert not field.selection.is_empty
         await pilot.press("shift+tab" if state == "backward" else "tab")
         await pilot.pause()
-        target = ".senderinput" if state == "backward" else ".ccinput"
-        assert app.focused is view.query_one(target, Input) and field.value == "log"
+        target = view.query_one(DraftConnection) if state == "backward" else view.query_one(".ccinput", Input)
+        assert app.focused is target and field.value == "log"
 
     run(Console(path), [scenario], size=(187, 40))

@@ -103,6 +103,37 @@ def handle_reply(db, body: bytes, senders: Senders) -> tuple[int, dict]:
     return 200, {"status": t.status, "status_detail": t.status_detail}
 
 
+def handle_send_draft(db, body: bytes, senders: Senders) -> tuple[int, dict]:
+    """POST /send-draft: {"draft_id", "revision", "again"} -> 200 {thread_id}; 502 refused (Draft editable);
+    504 outcome unknown (Draft locked)."""
+    try:
+        req = json.loads(body)
+        draft_id, revision, again = int(req["draft_id"]), int(req["revision"]), bool(req.get("again"))
+    except (ValueError, KeyError, TypeError):
+        return 400, {"error": "expected draft_id and revision"}
+    try:
+        d = inbox.get_draft(db, draft_id)
+    except (KeyError, ValueError):
+        return 404, {"error": "unknown draft"}
+    r = db.execute("SELECT * FROM connections WHERE id = ?", (d["connection_id"],)).fetchone()
+    if r is None:
+        return 400, {"error": "Choose a Connection"}
+    sender = senders.get(r)
+    if sender is None:
+        return 503, {"error": f"{r['label'] or r['platform']} is not connected for sending"}
+    try:
+        t = inbox.send_draft(db, draft_id, revision, sender, again=again)
+    except inbox.DraftConflict as e:
+        return 409, {"error": str(e)}
+    except inbox.SendUnknown as e:
+        return 504, {"error": str(e)}
+    except inbox.SendFailed as e:
+        return 502, {"error": str(e)}
+    except ValueError as e:
+        return 400, {"error": str(e)}
+    return 200, {"thread_id": t.id}
+
+
 class _Handler(BaseHTTPRequestHandler):
     routes: dict = {}  # path -> callable(headers, body) -> (status, content_type, bytes)
 
@@ -135,12 +166,20 @@ class UnixHTTPServer(socketserver.ThreadingUnixStreamServer):
 
 
 def reply_server(db_path: str, socket_path: str, senders: Senders, contexts: dict | None = None) -> UnixHTTPServer:
-    """The local socket: POST /reply, and POST /<source> for each Context source in `contexts` ({"tana": …})."""
+    """The local socket: POST /reply, POST /send-draft, and POST /<source> for each Context source in `contexts` ({"tana": …})."""
     contexts = contexts or {}
     def reply(headers, body):
         db = inbox.connect(db_path)
         try:
             status, out = handle_reply(db, body, senders)
+        finally:
+            db.close()
+        return status, "application/json", json.dumps(out).encode()
+
+    def send_draft(headers, body):
+        db = inbox.connect(db_path)
+        try:
+            status, out = handle_send_draft(db, body, senders)
         finally:
             db.close()
         return status, "application/json", json.dumps(out).encode()
@@ -155,7 +194,7 @@ def reply_server(db_path: str, socket_path: str, senders: Senders, contexts: dic
         os.unlink(socket_path)
     old = os.umask(0o177)  # socket created 0600 (NFR-4)
     try:
-        return UnixHTTPServer(socket_path, _handler({"/reply": reply, "/tana": context_route("tana"), "/attio": context_route("attio")}))
+        return UnixHTTPServer(socket_path, _handler({"/reply": reply, "/send-draft": send_draft, "/tana": context_route("tana"), "/attio": context_route("attio")}))
     finally:
         os.umask(old)
 

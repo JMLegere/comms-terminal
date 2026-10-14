@@ -193,7 +193,7 @@ def test_v8_draft_migration_matches_fresh_preserves_old_rows_aliases_guards_and_
         before, old_shape = old_rows(old), shape(old)
         inbox.migrate(old)
         inbox.migrate(fresh)
-        assert inbox.SCHEMA_VERSION == 9 and old.execute("PRAGMA user_version").fetchone()[0] == 9
+        assert old.execute("PRAGMA user_version").fetchone()[0] == inbox.SCHEMA_VERSION
         assert shape(old) == shape(fresh)
         assert {k: v for k, v in shape(old).items() if k in old_shape} == old_shape
         assert old_rows(old) == before and inbox.get_thread(old, two.id).id == one.id

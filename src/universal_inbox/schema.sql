@@ -174,6 +174,7 @@ CREATE TABLE composition_drafts (
   body TEXT NOT NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
+  sending_at TEXT,
   CHECK ((kind = 'email' AND subject IS NOT NULL)
          OR (kind = 'sms' AND subject IS NULL AND cc = ''))
 ) STRICT;

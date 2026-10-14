@@ -5,6 +5,7 @@ import hmac
 import html
 import json
 import logging
+import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -180,8 +181,8 @@ def probe(connection, credential, shared, get=_get) -> str | None:
 class EmailSender:
     """Sends replies through Resend (decision #70). `post` is swappable for tests."""
 
-    def __init__(self, api_key: str, from_address: str, post=_post):
-        self.api_key, self.from_address, self.post = api_key, from_address, post
+    def __init__(self, api_key: str, from_address: str, post=_post, get=None):
+        self.api_key, self.from_address, self.post, self.get = api_key, from_address, post, get or _get
 
     def send(self, thread, text, to, cc, history) -> str:
         if not to:
@@ -204,6 +205,30 @@ class EmailSender:
         if status >= 300:
             raise inbox.SendFailed(f"email send failed: HTTP {status} {body.get('message', '')}".strip())
         return message_id
+
+    def start(self, to, cc, subject, body, key) -> str:
+        """A new email; returns the Message-ID SES gave it, so replies find the Thread."""
+        headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+        payload = {"from": self.from_address, "to": to, "cc": cc, "subject": subject, "text": body}
+        try:
+            status, r = self.post("https://api.resend.com/emails", headers | {"Idempotency-Key": key}, payload)
+        except (urllib.error.URLError, OSError, ValueError) as e:
+            raise inbox.SendUnknown(f"email send outcome unknown: {e}") from e
+        if status >= 500:
+            raise inbox.SendUnknown(f"email send outcome unknown: HTTP {status}")
+        if status >= 300:
+            raise inbox.SendFailed(f"HTTP {status} {r.get('message', '')}".strip())
+        # ponytail: SES assigns the Message-ID moments after acceptance; 3 tries, a webhook if that falls short
+        for _ in range(3):
+            time.sleep(1)
+            try:
+                status, sent = self.get(f"https://api.resend.com/emails/{r['id']}", headers)
+            except (urllib.error.URLError, OSError, ValueError):
+                continue
+            if status < 300 and sent.get("message_id"):
+                return sent["message_id"]
+        log.warning("no SES Message-ID for Resend email %s; replies will start their own Thread", r["id"])
+        return f"<{r['id']}@resend>"
 
 
 log = logging.getLogger("universal_inbox.email")

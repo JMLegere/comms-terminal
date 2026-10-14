@@ -201,6 +201,26 @@ def _post(socket_path, path, payload, timeout=30) -> tuple[int, dict]:
         return r.status, {"error": f"HTTP {r.status}"}
 
 
+class DraftSendError(ReplyError):
+    def __init__(self, message, status):
+        super().__init__(message)
+        self.status = status
+
+
+def socket_send_draft(socket_path):
+    """Send function that calls POST /send-draft; a lost response means the outcome is unknown (504)."""
+    def send(draft_id, revision, again=False):
+        try:
+            status, body = _post(socket_path, "/send-draft", {"draft_id": draft_id, "revision": revision,
+                                                              "again": again}, timeout=90)
+        except ReplyError as e:
+            raise DraftSendError(str(e), 503 if "not reachable" in str(e) else 504) from e
+        if status != 200:
+            raise DraftSendError(body.get("error", f"HTTP {status}"), status)
+        return body
+    return send
+
+
 def socket_reply(socket_path):
     """Reply function that calls POST /reply on the service's local socket."""
     def reply(thread_id, text, to, cc):
@@ -879,7 +899,7 @@ def address_values(value, kind):
                     yield address
 
 
-def local_addresses(db, kind, sender=False):
+def local_addresses(db, kind):
     """Read captured local envelopes, never bodies or providers."""
     formats = tuple(name for name, platform in PLATFORMS.items() if platform.format == kind)
     if not formats:
@@ -887,26 +907,25 @@ def local_addresses(db, kind, sender=False):
     slots = ",".join("?" * len(formats))
     values = [value for row in db.execute(
         f"SELECT self_id, external_id FROM connections WHERE platform IN ({slots})", formats) for value in row]
-    for draft in db.execute('SELECT sender, "to", cc FROM composition_drafts WHERE kind = ?', (kind,)):
-        values.extend(draft[:1] if sender else draft[1:])
-    if not sender:
-        values.extend(row[0] for row in db.execute(
-            "SELECT value FROM identities WHERE kind = ?", ("email" if kind == "email" else "phone",)))
-        # ponytail: scan local envelopes; index destinations if captured history makes typing slow.
-        for row in db.execute(
-                "SELECT a.data, ch.native_id, ch.kind FROM thread_activities a"
-                " JOIN threads t ON t.id = a.thread_id JOIN channels ch ON ch.id = t.channel_id"
-                " JOIN connections c ON c.id = ch.connection_id"
-                f" WHERE a.kind = 'MESSAGE' AND c.platform IN ({slots})", formats):
-            if kind == "sms" and row["kind"] == "im":
-                values.append(row["native_id"])
-            try:
-                data = json.loads(row["data"])
-            except (TypeError, ValueError):
-                continue
-            if isinstance(data, dict):
-                values.extend(data.get(key) for key in (("from", "to", "cc") if kind == "email" else
-                                                       ("peer", "from", "to")))
+    for draft in db.execute('SELECT "to", cc FROM composition_drafts WHERE kind = ?', (kind,)):
+        values.extend(draft)
+    values.extend(row[0] for row in db.execute(
+        "SELECT value FROM identities WHERE kind = ?", ("email" if kind == "email" else "phone",)))
+    # ponytail: scan local envelopes; index destinations if captured history makes typing slow.
+    for row in db.execute(
+            "SELECT a.data, ch.native_id, ch.kind FROM thread_activities a"
+            " JOIN threads t ON t.id = a.thread_id JOIN channels ch ON ch.id = t.channel_id"
+            " JOIN connections c ON c.id = ch.connection_id"
+            f" WHERE a.kind = 'MESSAGE' AND c.platform IN ({slots})", formats):
+        if kind == "sms" and row["kind"] == "im":
+            values.append(row["native_id"])
+        try:
+            data = json.loads(row["data"])
+        except (TypeError, ValueError):
+            continue
+        if isinstance(data, dict):
+            values.extend(data.get(key) for key in (("from", "to", "cc") if kind == "email" else
+                                                   ("peer", "from", "to")))
     return sorted({address for value in values for address in address_values(value, kind)}, key=str.casefold)
 
 
@@ -925,9 +944,9 @@ class LocalAddressSuggester(Suggester):
             return None
         try:
             kind = self.field.address_kind()
-            if comma and (self.field.sender_only or kind == "sms"):
+            if comma and kind == "sms":
                 return None
-            candidates = local_addresses(self.field.app.db, kind, self.field.sender_only)
+            candidates = local_addresses(self.field.app.db, kind)
             if any(address.casefold() == prefix.casefold() for address in candidates):
                 return None
             for address in candidates:
@@ -936,18 +955,10 @@ class LocalAddressSuggester(Suggester):
                     return completed, completed
             if kind not in ("email", "sms"):
                 return None
-            if self.field.sender_only:
-                formats = tuple(name for name, platform in PLATFORMS.items() if platform.format == kind)
-                slots = ",".join("?" * len(formats))
-                rows = self.field.app.db.execute(
-                    f"SELECT label, self_id, external_id FROM connections WHERE platform IN ({slots})"
-                    " ORDER BY label, self_id, external_id", formats)
-                named = ((row[0], text) for row in rows for text in row[1:])
-            else:
-                named = self.field.app.db.execute(
-                    "SELECT p.display_name, i.value FROM persons p"
-                    " JOIN identities i ON i.person_id = p.id WHERE i.kind = ?"
-                    " ORDER BY p.display_name, i.value", ("email" if kind == "email" else "phone",))
+            named = self.field.app.db.execute(
+                "SELECT p.display_name, i.value FROM persons p"
+                " JOIN identities i ON i.person_id = p.id WHERE i.kind = ?"
+                " ORDER BY p.display_name, i.value", ("email" if kind == "email" else "phone",))
             matches = {}
             for name, text in named:
                 if not isinstance(name, str) or not name.isprintable():
@@ -978,8 +989,8 @@ class AddressInput(Input):
     """Native inline ghost text; Tab accepts only a current, unselected end completion."""
     BINDINGS = [Binding("tab", "accept_completion", show=False)]
 
-    def __init__(self, kind, *, sender=False, **kwargs):
-        self.address_kind, self.sender_only = kind, sender
+    def __init__(self, kind, **kwargs):
+        self.address_kind = kind
         super().__init__(suggester=LocalAddressSuggester(self), **kwargs)
 
     def refresh_suggestion(self):
@@ -1648,6 +1659,8 @@ class ThreadView(Horizontal):
 
 DRAFT_FIELDS = ("connection_id", "kind", "sender", "to", "cc", "subject", "body")
 SENDING_UNAVAILABLE = "Sending unavailable · drafts only."
+DRAFT_HINT = "ctrl+enter send · ctrl+s save · esc close"
+SEND_UNKNOWN = "Send outcome unknown · it may have gone out. Check Sent, then ctrl+enter."
 
 
 class DraftConnection(Static):
@@ -1674,8 +1687,8 @@ class DraftEditor(Vertical):
             with Horizontal(classes="field connection"):
                 yield Static("Conn.", classes="flabel")
                 yield DraftConnection(classes="fvalue draftconnection")
-            for name, label, placeholder in (("sender", "From", "choose sender"), ("to", "To", "exact destination"),
-                                             ("cc", "Cc", "optional"), ("subject", "Subject", "explicitly empty")):
+            for name, label, placeholder in (("to", "To", "exact destination"), ("cc", "Cc", "optional"),
+                                             ("subject", "Subject", "required")):
                 with Horizontal(classes=f"field {name}"):
                     yield Static(label, classes="flabel")
                     kwargs = dict(value=self.draft[name] or "", placeholder=placeholder, classes=f"{name}input")
@@ -1683,9 +1696,9 @@ class DraftEditor(Vertical):
                         yield Input(**kwargs)
                     else:
                         yield AddressInput(lambda: next(a for a in self.ancestors if isinstance(a, DraftView)).kind,
-                                           sender=name == "sender", **kwargs)
+                                           **kwargs)
         yield TextArea(self.draft["body"], show_line_numbers=False, classes="body-editor")
-        yield Static("ctrl+s save · esc close", classes="replyhint")
+        yield Static(DRAFT_HINT, classes="replyhint")
 
 
 class DraftView(Horizontal):
@@ -1695,13 +1708,14 @@ class DraftView(Horizontal):
                 Binding("n", "page('new')", "new draft"), Binding("x", "page('delete')", "delete draft"),
                 Binding("ctrl+s", "save", "save draft"),
                 Binding("escape", "close", "save / close"),
-                Binding("ctrl+enter", "send", show=False),
+                Binding("ctrl+enter", "send", "send", key_display="ctrl+enter"),
                 Binding("ctrl+r", "reload", show=False)]
 
     def __init__(self, draft):
         super().__init__(classes="draftview")
         self.draft = dict(draft)
         self.draft_id, self.connection_id, self.kind = draft["id"], draft["connection_id"], draft["kind"]
+        self.from_address = draft["sender"]  # the Connection's own address or number; not editable
         self.notice, self.save_error = "", False
         self.history_key, self.history_views, self.history_note = None, [], "Choose an exact recipient."
 
@@ -1709,7 +1723,8 @@ class DraftView(Horizontal):
         with Vertical(classes="convo"):
             with VerticalScroll(classes="timeline", can_focus=True):
                 yield Static(classes="thead drafthead")
-                yield Static(SENDING_UNAVAILABLE, classes="draftnotice")
+                if self.app.send_draft is None:
+                    yield Static(SENDING_UNAVAILABLE, classes="draftnotice")
                 yield Static(classes="draftnotice savenotice")
                 yield Static(classes="draftnotice historynotice")
                 yield Vertical(classes="history")
@@ -1722,13 +1737,13 @@ class DraftView(Horizontal):
         self.refresh_history()
 
     def values(self):
-        if len(self.query(".senderinput, .toinput, .ccinput, .subjectinput")) != 4 or not self.query(TextArea):
+        if len(self.query(".toinput, .ccinput, .subjectinput")) != 3 or not self.query(TextArea):
             return {k: self.draft[k] for k in DRAFT_FIELDS}
         body = self.query_one(TextArea).text
         if body.replace("\r\n", "\n").replace("\r", "\n") == self.draft["body"].replace("\r\n", "\n").replace("\r", "\n"):
             body = self.draft["body"]  # TextArea normalizes line endings even when the body is untouched.
         return dict(connection_id=self.connection_id, kind=self.kind,
-                    sender=self.query_one(".senderinput", Input).value,
+                    sender=self.from_address,
                     to=self.query_one(".toinput", Input).value,
                     cc=self.query_one(".ccinput", Input).value if self.kind == "email" else "",
                     subject=self.query_one(".subjectinput", Input).value if self.kind == "email" else None,
@@ -1745,7 +1760,7 @@ class DraftView(Horizontal):
             return None
 
     def paint(self):
-        if not self.query(".senderinput"):
+        if not self.query(".toinput"):
             return
         values, connection = self.values(), self.connection()
         label = f"{PLATFORMS[connection['platform']].title} · {conn_name(connection)}" if connection else (
@@ -1757,23 +1772,29 @@ class DraftView(Horizontal):
         title = (values["subject"] or ("New SMS" if self.kind == "sms" else "New email")).replace("\r", "↵").replace("\n", "↵")
         head = f"[b #45707a]{escape(title)}[/]   [#928374]{ICON['edited']} {state}[/]"
         if self.has_class("narrow"):
-            envelope = ["From " + (values["sender"] or "not selected"), "To " + (values["to"] or "not selected")]
+            envelope = ["To " + (values["to"] or "not selected")]
             if values["cc"]:
                 envelope.append("Cc " + values["cc"])
             head += "\n[#928374]" + escape("\n".join(envelope)) + "[/]"
         self.query_one(".thead").update(head + "\n")
+        locked = bool(self.draft.get("sending_at"))
+        for field in self.query(".fields Input, TextArea, DraftConnection"):
+            field.disabled = locked
         notice = self.query_one(".savenotice")
-        notice.update(escape(self.notice))
-        notice.set_class(self.save_error, "error")
+        notice.update(escape(SEND_UNKNOWN if locked and not self.notice else self.notice))
+        notice.set_class(self.save_error or locked, "error")
         hint = self.query_one(".replyhint")
         hint.update("Save conflict · edits kept" if self.save_error and self.notice.startswith("Save conflict") else
-                    "Save failed · edits kept" if self.save_error else "ctrl+s save · esc close")
-        hint.set_class(self.save_error, "error")
+                    "Not sent · edits kept" if self.save_error and self.notice.startswith("Not sent") else
+                    "Save failed · edits kept" if self.save_error else
+                    "Locked · send outcome unknown" if locked else DRAFT_HINT)
+        hint.set_class(self.save_error or locked, "error")
         note = "none captured" if self.history_note.startswith("No captured match") else self.history_note
         history = "\n".join(escape(v["thread"].title) for v in self.history_views) or escape(note)
         self.query_one(".historynotice").display = self.has_class("narrow") or self.history_note.startswith("Captured history unavailable")
         self.query_one(".detailtext").update(
             f"[#928374]{ICON['status']} status[/]\n{state}\n\n"
+            f"[#928374]{ICON['person']} from[/]\n{escape(values['sender'] or 'not selected')}\n\n"
             f"[#928374]{ICON['person']} recipient[/]\n{escape(values['to'] or 'not selected')}\n\n"
             f"[#928374]{ICON['channel']} channel[/]\n{'SMS' if self.kind == 'sms' else 'email'}\n\n"
             f"[#928374]{ICON['connection']} connection[/]\n{escape(label)}\n\n"
@@ -1800,8 +1821,8 @@ class DraftView(Horizontal):
             return
         if not self.dirty and draft["revision"] > self.draft["revision"]:
             self.draft = dict(draft)
-            self.connection_id, self.kind = draft["connection_id"], draft["kind"]
-            for name in ("sender", "to", "cc", "subject"):
+            self.connection_id, self.kind, self.from_address = draft["connection_id"], draft["kind"], draft["sender"]
+            for name in ("to", "cc", "subject"):
                 self.query_one(f".{name}input", Input).value = draft[name] or ""
             self.query_one(TextArea).text = draft["body"]
             for field in self.query(AddressInput):
@@ -1877,10 +1898,7 @@ class DraftView(Horizontal):
         self.app.push_screen(Pick("Connection", options), chosen)
 
     def apply_connection(self, connection):
-        old = self.connection()
-        sender = self.query_one(".senderinput", Input)
-        if not sender.value or (old and sender.value == old["self_id"]):
-            sender.value = (connection["self_id"] or "") if connection else ""
+        self.from_address = (connection["self_id"] or "") if connection else ""
         self.connection_id = connection["id"] if connection else None
         self.kind = PLATFORMS[connection["platform"]].format if connection else "email"
         if self.kind == "sms":
@@ -1935,7 +1953,8 @@ class DraftView(Horizontal):
                 self.app.notify("Saved draft unavailable · edits kept.", severity="error")
                 return
             self.draft, self.connection_id, self.kind = draft, draft["connection_id"], draft["kind"]
-            for name in ("sender", "to", "cc", "subject"):
+            self.from_address = draft["sender"]
+            for name in ("to", "cc", "subject"):
                 self.query_one(f".{name}input", Input).value = draft[name] or ""
             self.query_one(TextArea).text = draft["body"]
             for field in self.query(AddressInput):
@@ -1950,10 +1969,83 @@ class DraftView(Horizontal):
     def check_action(self, action, parameters):
         if action == "reload":
             return self.save_error and self.notice.startswith("Save conflict")
-        return False if action == "send" else True
+        return True
 
     def action_send(self):
-        self.app.notify(SENDING_UNAVAILABLE)
+        if self.app.send_draft is None:
+            self.app.notify(SENDING_UNAVAILABLE)
+            return
+        if not self.save():
+            return
+        if self.draft.get("sending_at"):
+            self.app.push_screen(Pick("Send outcome unknown", [
+                ("keep", "Keep locked"), ("again", "Send again anyway"), ("sent", "Mark as sent · remove Draft")],
+                "This Draft may already have gone out. Check the provider's Sent folder first."), self.resolve_unknown)
+            return
+        problem = inbox.draft_problem(self.values())
+        if problem:
+            self.notice, self.save_error = f"Not sent · {problem}.", True
+            self.paint()
+            return
+        v, connection = self.values(), self.connection()
+        lines = [("Connection", f"{PLATFORMS[connection['platform']].title} · {conn_name(connection)}" if connection else ""),
+                 ("From", v["sender"]), ("To", v["to"])] + (
+                [("Cc", v["cc"]), ("Subject", v["subject"])] if self.kind == "email" else [])
+        body = "\n".join(f"[#928374]{k:<11}[/]{escape(val)}" for k, val in lines if val)
+        self.app.push_screen(Pick("Send", [("send", "Send"), ("keep", "Keep editing")], body),
+                             lambda choice: self.dispatch_send() if choice == "send" and self.is_attached else None)
+
+    def resolve_unknown(self, choice):
+        if not self.is_attached:
+            return
+        if choice == "again":
+            self.dispatch_send(again=True)
+        elif choice == "sent":
+            page = self.app.main.current
+            neighbor = page.neighbor(self.draft_id) if isinstance(page, DraftsPage) else None
+            try:
+                inbox.delete_draft(self.app.db, self.draft_id)
+            except Exception:
+                self.app.notify("Draft not removed · delete failed.", severity="error")
+                return
+            if isinstance(page, DraftsPage):
+                page.refresh_data(select_id=neighbor)
+
+    def dispatch_send(self, again=False):
+        self.notice, self.save_error = "", False
+        self.query_one(".replyhint").update("sending…")
+        self.send(self.draft["revision"], again)
+
+    @work(thread=True, exclusive=True)
+    def send(self, revision, again):
+        try:
+            self.app.send_draft(self.draft_id, revision, again)
+        except DraftSendError as e:
+            self.app.call_from_thread(self.not_sent, str(e), e.status)
+            return
+        self.app.call_from_thread(self.sent)
+
+    def not_sent(self, error, status):
+        try:
+            self.draft = dict(inbox.get_draft(self.app.db, self.draft_id))
+        except (KeyError, sqlite3.Error):  # the send went through after all and removed it
+            self.sent()
+            return
+        if status == 504:
+            self.notice, self.save_error = "", False
+        else:
+            self.notice, self.save_error = f"Not sent · {error}", True
+        if self.is_attached:
+            self.paint()
+            if status == 504:  # the editor is now disabled; keep ctrl+enter within reach
+                self.query_one(".timeline").focus()
+
+    def sent(self):
+        self.app.undo = None  # a sent message cannot be unsent
+        self.app.notify("Sent · Waiting for them.")
+        page = self.app.main.current
+        if isinstance(page, DraftsPage):
+            page.refresh_data(select_id=page.neighbor(self.draft_id))
 
 
 class DraftsPage(Page):
@@ -1962,7 +2054,8 @@ class DraftsPage(Page):
     SIDE = f"{ICON['edited']} draft"
     BINDINGS = [Binding("j", "down", "move", key_display="j/k"), Binding("k", "up", show=False),
                 Binding("n", "new", "new draft"), Binding("x", "delete", "delete draft"),
-                Binding("ctrl+s", "save", "save draft"), Binding("ctrl+r", "reload", show=False)]
+                Binding("ctrl+s", "save", "save draft"), Binding("ctrl+enter", "send", show=False),
+                Binding("ctrl+r", "reload", show=False)]
 
     def __init__(self):
         super().__init__()
@@ -2012,6 +2105,14 @@ class DraftsPage(Page):
         return (status, escape(cut(title, room))) if len(self.columns) == 2 else (
             f"[#928374]{ICON['sms'] if draft['kind'] == 'sms' else ICON['email']}[/]",
             f"[b]{escape(cut(draft['to'] or 'No recipient', 18))}[/]", escape(cut(title, room)), status)
+
+    def neighbor(self, draft_id):
+        """The Draft to select once this one leaves the list."""
+        ids = [d["id"] for d in self.items]
+        if draft_id not in ids:
+            return None
+        index = ids.index(draft_id)
+        return (ids[index + 1:] or ids[:index][-1:] or [None])[0]
 
     def repaint_row(self, draft):
         """Show a draft saved while switching rows; the full refresh would move the cursor."""
@@ -2082,6 +2183,11 @@ class DraftsPage(Page):
         if view:
             view.save()
 
+    def action_send(self):
+        view = self.app.main.draft_view
+        if view:
+            view.action_send()
+
     def action_reload(self):
         view = self.app.main.draft_view
         if view and view.check_action("reload", ()):
@@ -2091,9 +2197,7 @@ class DraftsPage(Page):
         selected = self.selected()
         if selected is None or not self.app.main.save_draft():  # undo restores the edits saved here
             return
-        ids = [d["id"] for d in self.items]
-        index = ids.index(selected["id"])
-        neighbor = (ids[index + 1:] or ids[:index][-1:] or [None])[0]
+        neighbor = self.neighbor(selected["id"])
         try:
             draft = inbox.delete_draft(self.app.db, selected["id"])
         except Exception:
@@ -3081,9 +3185,10 @@ class Console(App):
     TITLE = "Universal Inbox"
     ENABLE_COMMAND_PALETTE = False
 
-    def __init__(self, db_path: str, reply=None, sources=None):
+    def __init__(self, db_path: str, reply=None, sources=None, send_draft=None):
         super().__init__()
         self.db_path, self.send_reply, self.drafts, self.view, self.cursor = db_path, reply, {}, 0, {}
+        self.send_draft = send_draft
         self.selected_draft = None
         # Context sources (FR-13a, FR-13b), {"tana": fetch, "attio": fetch}; each state is None (not connected),
         # "checking", "ok", or the error

@@ -124,3 +124,13 @@ class QuoSender:
         except (urllib.error.URLError, OSError, ValueError) as e:
             raise inbox.SendFailed(f"quo send failed: {e}") from e
         return r["data"]["id"]
+
+    def start(self, to, cc, subject, body, key) -> str:
+        try:
+            r = self.post(SEND_URL, self.key, {"content": body, "from": self.number, "to": to})
+        except urllib.error.HTTPError as e:
+            error = inbox.SendUnknown if e.code >= 500 else inbox.SendFailed
+            raise error(f"HTTP {e.code} {e.read()[:200].decode(errors='replace')}") from e
+        except (urllib.error.URLError, OSError, ValueError) as e:
+            raise inbox.SendUnknown(f"quo send outcome unknown: {e}") from e
+        return r["data"]["id"]

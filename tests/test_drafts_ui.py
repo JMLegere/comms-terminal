@@ -10,7 +10,7 @@ from textual.widgets import DataTable, Input, OptionList, TextArea
 from test_console import run, seeded
 from test_pane_arrows import check_editor_arrows
 from universal_inbox import inbox
-from universal_inbox.tui import (DRAFT_FIELDS, Console, DraftConnection, DraftsPage,
+from universal_inbox.tui import (DRAFT_FIELDS, Console, DraftConnection, DraftSendError, DraftsPage,
                                  Pick, ReplyBox, ThreadsPage, VIEW_NAMES)
 
 
@@ -85,7 +85,7 @@ def test_drafts_entry_creation_native_focus_and_status_navigation(tmp_path, colu
         assert view is not None and len(inbox.list_drafts(app.db)) == 1
         assert view.values() == dict(connection_id=None, kind="email", sender="", to="", cc="", subject="", body="")
         assert not app.main.query(ReplyBox) and app.main.thread_view is None
-        assert not hasattr(view, "thread_id") and not view.check_action("send", ())
+        assert not hasattr(view, "thread_id")
         assert view.query_one(TextArea).size.height == 8
         assert all(row.size.height == 1 for row in view.query(".field"))
         table, timeline, rail = page.query_one("#table"), view.query_one(".timeline"), app.main.rail
@@ -146,9 +146,9 @@ def test_full_envelope_save_restart_and_explicit_format_switch(tmp_path):
         assert "2" not in [menu.get_option_at_index(i).id for i in range(menu.option_count)]
         await choose(app, pilot, "1")
         assert view.values()["sender"] == "jeremy@agentmaple.com"
-        values = dict(connection_id=1, kind="email", sender="custom@inbox.example", to="  ANA@acme.com  ",
+        values = dict(connection_id=1, kind="email", sender="jeremy@agentmaple.com", to="  ANA@acme.com  ",
                       cc=" ops@acme.com ", subject="  Exact subject  ", body="\n Exact words\nwith trailing space \n")
-        for name in ("sender", "to", "cc", "subject"):
+        for name in ("to", "cc", "subject"):
             view.query_one(f".{name}input", Input).value = values[name]
         view.query_one(TextArea).text = values["body"]
         view.query_one(TextArea).focus()
@@ -182,7 +182,7 @@ def test_full_envelope_save_restart_and_explicit_format_switch(tmp_path):
         await choose(app, pilot, "3")
         await choose(app, pilot, "clear")
         assert view.kind == "sms" and view.values()["subject"] is None and view.values()["cc"] == ""
-        assert view.values()["sender"] == "custom@inbox.example"  # never overwrite an edited sender
+        assert view.values()["sender"] == "+12025550100"  # the Connection's own number
         assert not view.query_one(".field.subject").display and not view.query_one(".field.cc").display
         view.query_one(".toinput", Input).value = "+12025550124"
         view.query_one(TextArea).focus()
@@ -361,9 +361,6 @@ def test_draft_address_ghosts_complete_exact_suffix_and_save_only_on_request(tmp
         counts = tuple(app.db.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
                        for table in ("threads", "activities", "identities", "persons"))
         cases = [
-            ("sender", "JEREMY@", "JEREMY@agentmaple.com"),
-            ("sender", "ALIAS@", "ALIAS@example.test"),
-            ("sender", "SAVED-SENDER@", "SAVED-SENDER@example.test"),
             ("to", "  X@Y.IO  ,  ANA@", "  X@Y.IO  ,  ANA@acme.com"),
             ("cc", '"X, Y" <x@y.io>,  OPS@', '"X, Y" <x@y.io>,  OPS@acme.com'),
             ("to", "SAVED-TO@", "SAVED-TO@example.test"),
@@ -401,8 +398,7 @@ def test_draft_address_ghosts_complete_exact_suffix_and_save_only_on_request(tmp
                     "cc": {"address": "metadata-only@example.test"}})))
         counts = tuple(app.db.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
                        for table in ("threads", "activities", "identities", "persons"))
-        for name, prefix in (("sender", "ANA@"), ("sender", "CAPTURED-TO@"),
-                             ("sender", "+120255501"), ("to", "+120255509"),
+        for name, prefix in (("to", "+120255509"),
                              ("to", "body-only@"), ("to", "subject-only@"),
                              ("to", "metadata-only@"), ("to", "broken@"),
                              ("to", "Saved Recipient"), ("subject", "ANA@")):
@@ -411,8 +407,7 @@ def test_draft_address_ghosts_complete_exact_suffix_and_save_only_on_request(tmp
             assert field.render_line(0).text.rstrip() == prefix
             await pilot.press("tab")
             await pilot.pause()
-            target = view.query_one(TextArea) if name == "subject" else view.query_one(
-                ".toinput" if name == "sender" else ".ccinput", Input)
+            target = view.query_one(TextArea) if name == "subject" else view.query_one(".ccinput", Input)
             assert app.focused is target and field.value == prefix
         assert inbox.get_draft(app.db, view.draft_id) == saved and sent == []
         assert view.connection_id is None and view.query_one(TextArea).text == ""
@@ -422,7 +417,7 @@ def test_draft_address_ghosts_complete_exact_suffix_and_save_only_on_request(tmp
     run(Console(path, reply=lambda *args: sent.append(args)), [scenario], size=(187, 40))
 
 
-def test_connection_switch_recomputes_sms_sender_and_destination_suggestions(tmp_path):
+def test_connection_switch_recomputes_sms_destination_suggestions(tmp_path):
     path, _ = completion_seeded(tmp_path)
     sent = []
 
@@ -450,8 +445,6 @@ def test_connection_switch_recomputes_sms_sender_and_destination_suggestions(tmp
         await pilot.pause()
         assert app.focused is view.query_one(TextArea) and to.value == "ANA@"
         for name, prefix, completed in (
-                ("sender", "+1202555010", "+12025550100"),
-                ("sender", "+120255508", "+12025550888"),
                 ("to", "+1202555012", "+12025550124"),
                 ("to", "+120255507", "+12025550777"),
                 ("to", "+120255509", "+12025550999")):
@@ -461,12 +454,6 @@ def test_connection_switch_recomputes_sms_sender_and_destination_suggestions(tmp
             await pilot.press("tab")
             await pilot.pause()
             assert app.focused is field and field.value == completed
-        sender = view.query_one(".senderinput", Input)
-        await type_address(sender, pilot, "+1202555012")
-        assert sender.render_line(0).text.rstrip() == "+1202555012"
-        await pilot.press("tab")
-        await pilot.pause()
-        assert app.focused is to and sender.value == "+1202555012"
         assert inbox.get_draft(app.db, view.draft_id) == before and sent == []
 
     run(Console(path, reply=lambda *args: sent.append(args)), [scenario])
@@ -527,8 +514,8 @@ def test_address_tab_keeps_native_traversal_when_completion_is_ineligible(tmp_pa
             assert not field.selection.is_empty and field.cursor_position == len(prefix)
         await pilot.press("shift+tab" if state == "backward" else "tab")
         await pilot.pause()
-        target = ".senderinput" if state == "backward" else ".ccinput"
-        assert app.focused is view.query_one(target, Input) and field.value == prefix
+        target = view.query_one(DraftConnection) if state == "backward" else view.query_one(".ccinput", Input)
+        assert app.focused is target and field.value == prefix
         if state == "missing":
             await pilot.press("shift+tab")
             await pilot.pause()
@@ -654,3 +641,59 @@ def test_switching_drafts_repaints_the_saved_row(tmp_path):
         assert "kory@example.test" in row[1] and row[2].startswith("Ch")
 
     run(app, [scenario])
+
+
+def test_send_confirms_envelope_then_removes_draft_or_locks_on_unknown(tmp_path):
+    path, _ = seeded(tmp_path)
+    db = inbox.connect(path)
+    first, second = (inbox.save_draft(db, dict(connection_id=1, kind="email", sender="jeremy@agentmaple.com",
+                                               to="kory@example.test", cc="", subject=s, body="Hi Kory"))
+                     for s in ("first", "second"))
+    db.close()
+    outcomes = iter([None, inbox.SendUnknown("lost"), None])
+
+    def send(draft_id, revision, again=False):  # the service's side, on its own connection
+        error, service = next(outcomes), inbox.connect(path)
+        try:
+            if error:
+                with service:
+                    service.execute("UPDATE composition_drafts SET sending_at = 'now' WHERE id = ?", (draft_id,))
+                raise DraftSendError(str(error), 504)
+            inbox.delete_draft(service, draft_id)
+        finally:
+            service.close()
+        return {"thread_id": 1}
+
+    app = Console(path, send_draft=send)
+
+    async def scenario(app, pilot):
+        await pilot.press("5")
+        await pilot.pause()
+        view = app.main.draft_view
+        assert view.draft_id == second["id"] and "Sending unavailable" not in str([n.render() for n in view.query(".draftnotice")])
+        view.query_one(TextArea).focus()
+        await pilot.press("ctrl+enter")
+        await pilot.pause()
+        assert isinstance(app.screen, Pick) and "kory@example.test" in str(app.screen.body)
+        await choose(app, pilot, "send")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert [d["id"] for d in inbox.list_drafts(app.db)] == [first["id"]]
+        view = app.main.draft_view
+        assert view.draft_id == first["id"]
+        view.query_one(TextArea).focus()
+        await pilot.press("ctrl+enter")
+        await pilot.pause()
+        await choose(app, pilot, "send")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert view.draft["sending_at"] and view.query_one(TextArea).disabled
+        assert "Send outcome unknown" in str(view.query_one(".savenotice").render())
+        await pilot.press("ctrl+enter")
+        await pilot.pause()
+        await choose(app, pilot, "again")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert inbox.list_drafts(app.db) == [] and app.main.draft_view is None
+
+    run(app, [scenario], size=(187, 40))

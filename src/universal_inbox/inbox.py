@@ -20,7 +20,7 @@ from typing import Protocol
 
 from . import platforms
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 WAIT = timedelta(days=5)  # Waiting for them ends after this with no reply: back to Todo to follow up (#116)
 MIGRATIONS = {  # version -> statement that upgrades an existing database to it
     2: "ALTER TABLE cases ADD COLUMN description TEXT NOT NULL DEFAULT ''",
@@ -121,6 +121,7 @@ DELETE FROM organizations WHERE org_key(domain) != domain;""",
   CHECK ((kind = 'email' AND subject IS NOT NULL)
          OR (kind = 'sms' AND subject IS NULL AND cc = ''))
 ) STRICT;""",
+    10: "ALTER TABLE composition_drafts ADD COLUMN sending_at TEXT;",
 }
 
 # ponytail: fixed list; extend when a free-mail sender forms an Organization by mistake.
@@ -138,6 +139,10 @@ CHANNEL_QUIET = timedelta(hours=1)  # a Slack channel's top-level messages group
 
 class SendFailed(Exception):
     """Raised by a Sender when a reply could not be sent."""
+
+
+class SendUnknown(SendFailed):
+    """The provider may or may not have sent the message (timeout, lost response, crash before recording)."""
 
 
 class IdentityTaken(Exception):
@@ -232,6 +237,10 @@ class Sender(Protocol):
              history: list[dict]) -> str:
         """Send a reply; return its native_id. history: the Thread's messages, oldest
         first, as {"native_id", "data"}. Raise SendFailed on failure."""
+
+    def start(self, to: list[str], cc: list[str], subject: str | None, body: str, key: str) -> str:
+        """Send a new message (no Thread); return its native_id. `key` is unique per send attempt.
+        Raise SendFailed when the provider refused it, SendUnknown when it may have gone out."""
 
 
 # --- storage ---------------------------------------------------------------
@@ -376,6 +385,88 @@ def restore_draft(db, draft: dict) -> None:
 
 def list_drafts(db) -> list[dict]:
     return [dict(r) for r in db.execute("SELECT * FROM composition_drafts ORDER BY updated_at DESC, id DESC")]
+
+
+def draft_problem(values: dict) -> str | None:
+    """What a Draft still needs before it can send; None when complete. Providers judge the addresses."""
+    if values["connection_id"] is None:
+        return "Choose a Connection"
+    if not values["to"].strip():
+        return "Add a recipient"
+    if values["kind"] == "sms" and len(_destinations(values["to"], "sms")) != 1:
+        return "SMS needs one number"
+    if values["kind"] == "email" and not values["subject"].strip():
+        return "Add a subject"
+    if not values["body"].strip():
+        return "Write a message"
+    return None
+
+
+def _destinations(text: str, kind: str) -> list[str]:
+    if kind == "sms":
+        return [n for n in re.split(r"[,;\s]+", text) if n]
+    return [a for _, a in getaddresses([text]) if a]
+
+
+def send_draft(db, draft_id: int, revision: int, sender: Sender, *, again: bool = False) -> Thread:
+    """Send one saved Draft revision as a new Thread, then remove the Draft.
+
+    `sending_at` is set before the provider call and cleared only on a refusal, so a send whose outcome is
+    unknown leaves the Draft locked; `again` is Jeremy's explicit choice to send it once more anyway.
+    """
+    with db:
+        if not db.in_transaction:
+            db.execute("BEGIN IMMEDIATE")
+        d = get_draft(db, draft_id)
+        if d["revision"] != revision:
+            raise DraftConflict("Draft changed since this revision; reload before sending.")
+        if d["sending_at"] and not again:
+            raise SendUnknown("Send outcome unknown; check before sending again.")
+        problem = draft_problem(d)
+        if problem:
+            raise ValueError(problem)
+        connection = db.execute("SELECT * FROM connections WHERE id = ?", (d["connection_id"],)).fetchone()
+        at = _iso(_now())
+        db.execute("UPDATE composition_drafts SET sending_at = ? WHERE id = ?", (at, draft_id))
+    sms = d["kind"] == "sms"
+    to, cc = _destinations(d["to"], d["kind"]), _destinations(d["cc"], d["kind"])
+    try:
+        native_id = sender.start(to, cc, d["subject"], d["body"], f"draft-{draft_id}-{revision}-{at}")
+    except SendUnknown:
+        raise
+    except SendFailed:
+        with db:
+            db.execute("UPDATE composition_drafts SET sending_at = NULL WHERE id = ?", (draft_id,))
+        raise
+    except Exception as e:  # anything unexpected after the claim may have reached the provider
+        raise SendUnknown(f"Send outcome unknown: {e}") from e
+    now = _now()
+    with db:
+        if not db.in_transaction:
+            db.execute("BEGIN IMMEDIATE")
+        echo = db.execute("SELECT thread_id FROM activities WHERE kind = 'MESSAGE' AND native_id = ?",
+                          (native_id,)).fetchone()
+        if echo:  # the provider's own copy arrived first (Fastmail Sent poll, Quo webhook)
+            thread_id = get_thread(db, echo["thread_id"]).id
+        else:
+            mailbox = db.execute("SELECT native_id FROM channels WHERE connection_id = ? AND kind = 'mailbox'",
+                                 (connection["id"],)).fetchone()
+            channel = to[0] if sms else mailbox["native_id"] if mailbox else connection["self_id"]
+            channel_id = _channel_id(db, Incoming(connection["id"], channel, "im" if sms else "mailbox", "MESSAGE",
+                                                  native_id, None, now, d["body"], channel_name=to[0] if sms else None))
+            title = (next((ln.strip() for ln in d["body"].splitlines() if ln.strip()), "Text") if sms
+                     else d["subject"].strip())[:80]
+            status = _initial_status(None)
+            thread_id = db.execute(
+                "INSERT INTO threads (channel_id, native_thread_id, title, status, status_detail,"
+                " status_changed_at, created_at, follow_up_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (channel_id, native_id, title, *status, _iso(now), _iso(now), _follow_up(status[1], now))).lastrowid
+            data = {"peer": to[0]} if sms else {"from": connection["self_id"], "to": to, "cc": cc,
+                                                "subject": d["subject"]}
+            db.execute("INSERT INTO activities (thread_id, kind, occurred_at, native_id, content, data)"
+                       " VALUES (?, 'MESSAGE', ?, ?, ?, ?)", (thread_id, _iso(now), native_id, d["body"], json.dumps(data)))
+        db.execute("DELETE FROM composition_drafts WHERE id = ?", (draft_id,))
+    return get_thread(db, thread_id)
 
 
 def _set_status(db, thread_id, status, detail, at, snoozed_until=None, before=None):
