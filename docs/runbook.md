@@ -70,11 +70,13 @@ Quo restricts the number from texting US numbers until US texting registration (
 
 Tana is a read-only Context source (FR-13a, decision #122): Thread, Person, Organization, and Case pages show what Tana knows about their people and Organizations. The service signs in to Tana's MCP server (`https://home.tana.inc/mcp`) and the console asks it over the reply socket (`POST /tana`).
 
-1. **You**, on Mani (browser): `python3 scripts/oauth_mcp.py --resource tana --out ~/.config/universal-inbox/tana-oauth.json`. Approve "Universal Inbox" on Tana's consent page. Copy the file to Workbox's `~/.config/universal-inbox/` (0600) and shred the Mani copy.
+1. On Workbox: `python3 scripts/oauth_mcp.py --resource tana --out ~/.config/universal-inbox/tana-oauth.json`. **You** open the printed link in Mani's browser and approve "Universal Inbox". The browser then fails to load `http://127.0.0.1:8733/callback?state=…&code=…`; deliver that exact URL to the waiting script on Workbox (`curl` it there), or run `ssh -N -L 8733:127.0.0.1:8733 workbox` on Mani first so the redirect lands by itself. Copy the long link from a file (`xdg-open` it), not the terminal: a wrapped copy gets "invalid parameters".
 2. **You:** `sudo bash deploy/install.sh`: it stores `tana-oauth`, adds `universal-inbox.service.d/tana.conf`, and restarts the service.
 3. Check: open a Thread with someone in Tana; its details column ends with a Tana section, and the bottom bar shows the Tana icon with a check. A failed fetch shows "Tana unavailable: …" and "Tana broken".
 
 As with Fastmail, the service keeps a rotated refresh token in `~/.local/share/universal-inbox/tana-oauth.json` (0600); only the service may hold it.
+
+Tana links in the console open with Ctrl+Shift+click (the console catches a plain click). To land in the Tana desktop app instead of the browser, choose **Open always** on Tana's "Open in Tana" chooser the first time; Tana's Settings → Preferences → Tana links resets it.
 
 ## 3. Connect Slack
 
