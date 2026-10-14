@@ -48,8 +48,12 @@ GLYPH = {d: (ICON[d], color, label) for d, (color, label) in DETAIL_STYLE.items(
 VIEW_NAMES = list(inbox.VIEWS)  # Todo, Snoozed, Done, Ignored, All
 VIEW_ICON = {"Todo": ("TODO", "#45707a"), "Snoozed": ("SNOOZED", "#928374"), "Done": ("DONE", "#6c782e"),
              "Ignored": ("IGNORED_VIEW", "#a89984"), "All": ("threads", "#654735")}
-LEGEND = "  ".join(f"[{GLYPH[d][1]}]{GLYPH[d][0]}[/] {GLYPH[d][2].lower()}"
-                   for d in ("CREATED", "NEW_REPLY", "IN_PROGRESS", "WAITING_FOR_CUSTOMER", "WAITING_INDEFINITELY"))
+LEGEND = {
+    name: "  ".join(dict.fromkeys(
+        f"[{GLYPH[d][1]}]{GLYPH[d][0]}[/] {GLYPH[d][2].lower()}" for d in details
+    ))
+    for name, details in inbox.VIEWS.items()
+}
 
 
 PALETTE = {  # gruvbox-material light, hard background (sainnhe/gruvbox-material); decision #88
@@ -85,7 +89,7 @@ ModalScreen { background: #7c6f64 25%; align: center middle; }
 #thread.open { display: block; width: 3fr; }
 .threadempty, .sidetext { padding: 1 1; }
 Page { height: 1fr; }
-#legend { color: #a89984; height: 1; }
+#legend { color: #a89984; height: auto; }
 #table { margin-top: 1; }
 DataTable { background: #f9f5d7; color: #654735; height: 1fr; scrollbar-size-horizontal: 0; }
 #ids { height: auto; }
@@ -711,7 +715,7 @@ class ThreadsPage(Page, ThreadActions):
 
     def compose(self) -> ComposeResult:
         yield ClickTable(id="table", cursor_type="row", show_header=False)
-        yield Static(LEGEND, id="legend")
+        yield Static(LEGEND[VIEW_NAMES[self.app.view]], id="legend")
 
     def on_mount(self):
         self.rows = []
@@ -750,6 +754,7 @@ class ThreadsPage(Page, ThreadActions):
                 view = self.app.view = next(i for i, name in enumerate(VIEW_NAMES) if detail in inbox.VIEWS[name])
                 self.app.main.query_one("#main").border_title = pill(self.TITLE, "blue")
                 self.app.main.refresh_chrome()
+        self.query_one("#legend", Static).update(LEGEND[VIEW_NAMES[view]])
         self.rows = self.grouped(inbox.queue(db, VIEW_NAMES[view]))
         threads = [r for r in self.rows if not r.get("header")]
         table = self.query_one(DataTable)
