@@ -910,7 +910,8 @@ class LocalAddressSuggester(Suggester):
         super().__init__(use_cache=False, case_sensitive=True)
         self.field = field
 
-    def complete(self, value):
+    def resolve(self, value):
+        """Return native ghost text and the bare envelope value accepted from it."""
         if not value or not value.isprintable():
             return None
         _, comma, token = value.rpartition(",")
@@ -922,14 +923,47 @@ class LocalAddressSuggester(Suggester):
             if comma and (self.field.sender_only or kind == "sms"):
                 return None
             candidates = local_addresses(self.field.app.db, kind, self.field.sender_only)
+            if any(address.casefold() == prefix.casefold() for address in candidates):
+                return None
+            for address in candidates:
+                if len(address) > len(prefix) and address[:len(prefix)].casefold() == prefix.casefold():
+                    completed = value + address[len(prefix):]
+                    return completed, completed
+            if kind not in ("email", "sms"):
+                return None
+            if self.field.sender_only:
+                formats = tuple(name for name, platform in PLATFORMS.items() if platform.format == kind)
+                slots = ",".join("?" * len(formats))
+                rows = self.field.app.db.execute(
+                    f"SELECT label, self_id, external_id FROM connections WHERE platform IN ({slots})"
+                    " ORDER BY label, self_id, external_id", formats)
+                named = ((row[0], text) for row in rows for text in row[1:])
+            else:
+                named = self.field.app.db.execute(
+                    "SELECT p.display_name, i.value FROM persons p"
+                    " JOIN identities i ON i.person_id = p.id WHERE i.kind = ?"
+                    " ORDER BY p.display_name, i.value", ("email" if kind == "email" else "phone",))
+            matches = {}
+            for name, text in named:
+                if not isinstance(name, str) or not name.isprintable():
+                    continue
+                name = name.strip()
+                start = next((m.start() for m in re.finditer(r"\S+", name)
+                              if name[m.start():].casefold().startswith(prefix.casefold())), None)
+                if start is not None:
+                    for address in address_values(text, kind):
+                        matches.setdefault(address.casefold(), (name, address, start))
+            if len(matches) == 1:
+                name, address, start = next(iter(matches.values()))
+                ghost = value + name[start + len(prefix):] + f" <{address}>"
+                return ghost, value[:-len(prefix)] + address
         except Exception:  # storage failure must leave ordinary editing and focus traversal usable
             return None
-        if any(address.casefold() == prefix.casefold() for address in candidates):
-            return None
-        for address in candidates:
-            if len(address) > len(prefix) and address[:len(prefix)].casefold() == prefix.casefold():
-                return value + address[len(prefix):]
         return None
+
+    def complete(self, value):
+        completion = self.resolve(value)
+        return completion[0] if completion else None
 
     async def get_suggestion(self, value):
         return self.complete(value)
@@ -956,19 +990,33 @@ class AddressInput(Input):
             self._suggestion = ""
             event.prevent_default()
 
+    def current_completion(self):
+        if not (self.has_focus and self.cursor_at_end and self.selection.is_empty and
+                len(self._suggestion) > len(self.value) and self._suggestion.startswith(self.value)):
+            return None
+        completion = self.suggester.resolve(self.value)
+        if not completion or self._suggestion != completion[0]:
+            self._suggestion = ""
+            return None
+        return completion
+
     def check_action(self, action, parameters):
         if action == "accept_completion":
-            if not (self.has_focus and self.cursor_at_end and self.selection.is_empty and
-                    len(self._suggestion) > len(self.value) and self._suggestion.startswith(self.value)):
-                return False
-            if self._suggestion != self.suggester.complete(self.value):
-                self._suggestion = ""
-                return False
-            return True
+            return self.current_completion() is not None
         return super().check_action(action, parameters)
 
     def action_accept_completion(self):
         self.action_cursor_right()
+
+    def action_cursor_right(self, select=False):
+        if not select and self.cursor_at_end and self._suggestion:
+            completion = self.current_completion()
+            if completion:
+                self.value = completion[1]
+                self.cursor_position = len(self.value)
+                return
+            self._suggestion = ""
+        super().action_cursor_right(select)
 
 
 class ReplyMode(Static):
