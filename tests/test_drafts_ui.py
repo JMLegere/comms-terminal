@@ -1,6 +1,8 @@
 """Local Drafts UI checks; no service, provider, or real-send path."""
 
+import json
 import sqlite3
+from datetime import datetime, timezone
 
 import pytest
 from textual.widgets import Input, OptionList, TextArea
@@ -17,6 +19,43 @@ async def choose(app, pilot, oid):
     menu.highlighted = menu.get_option_index(oid)
     await pilot.press("enter")
     await pilot.pause()
+
+
+async def type_address(field, pilot, value):
+    field.focus()
+    await pilot.pause()
+    await pilot.press("ctrl+shift+a", "backspace", *value)
+    await pilot.pause()
+
+
+def completion_seeded(tmp_path):
+    path, ids = seeded(tmp_path)
+    db = inbox.connect(path)
+    at = datetime(2026, 10, 14, tzinfo=timezone.utc)
+    with db:
+        db.executemany(
+            "INSERT INTO connections (id, platform, external_id, self_id, label, connected_at)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            [(3, "quo", "+12025550100", "+12025550100", "Work", at.isoformat()),
+             (4, "fastmail", "alias@example.test", "alias@example.test", "Alias", at.isoformat())])
+        db.execute("INSERT INTO identities (kind, value) VALUES ('phone', '+12025550124')")
+        db.execute(
+            "INSERT INTO activities (thread_id, kind, occurred_at, native_id, content, data)"
+            " VALUES (?, 'MESSAGE', ?, 'completion-outgoing', 'body-only@example.test', ?)",
+            (ids["ana"], at.isoformat(), json.dumps({
+                "to": ["Captured Person <captured-to@example.test>"],
+                "cc": ["captured-cc@example.test"], "subject": "subject-only@example.test"})))
+    inbox.save_draft(db, dict(connection_id=None, kind="email", sender="saved-sender@example.test",
+                             to="Saved Recipient <saved-to@example.test>", cc="saved-cc@example.test",
+                             subject="subject-only@example.test", body="body-only@example.test"))
+    inbox.save_draft(db, dict(connection_id=3, kind="sms", sender="+12025550888",
+                             to="+12025550777", cc="", subject=None, body="unsent SMS"))
+    inbox.ingest(db, inbox.Incoming(3, "+12025550999", "im", "MESSAGE", "completion-sms",
+                                   None, at, "captured SMS", data={"peer": "+12025550999"}))
+    assert db.execute("SELECT 1 FROM identities WHERE value IN"
+                      " ('captured-to@example.test', 'captured-cc@example.test', '+12025550999')").fetchone() is None
+    db.close()
+    return path, ids
 
 
 @pytest.mark.parametrize("columns", [187, 80])
@@ -306,5 +345,226 @@ def test_untouched_mixed_newline_body_survives_field_save_and_navigation(tmp_pat
         await pilot.press("5")
         await pilot.pause()
         assert app.main.draft_view.values()["body"] == body and not app.main.draft_view.dirty
+
+    run(Console(path), [scenario])
+
+
+def test_draft_address_ghosts_complete_exact_suffix_and_save_only_on_request(tmp_path):
+    path, ids = completion_seeded(tmp_path)
+    sent = []
+
+    async def scenario(app, pilot):
+        await pilot.press("5", "n")
+        await pilot.pause()
+        view = app.main.draft_view
+        before = inbox.get_draft(app.db, view.draft_id)
+        counts = tuple(app.db.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
+                       for table in ("threads", "activities", "identities", "persons"))
+        cases = [
+            ("sender", "JEREMY@", "JEREMY@agentmaple.com"),
+            ("sender", "ALIAS@", "ALIAS@example.test"),
+            ("sender", "SAVED-SENDER@", "SAVED-SENDER@example.test"),
+            ("to", "  X@Y.IO  ,  ANA@", "  X@Y.IO  ,  ANA@acme.com"),
+            ("cc", '"X, Y" <x@y.io>,  OPS@', '"X, Y" <x@y.io>,  OPS@acme.com'),
+            ("to", "SAVED-TO@", "SAVED-TO@example.test"),
+            ("cc", "SAVED-CC@", "SAVED-CC@example.test"),
+            ("to", "CAPTURED-TO@", "CAPTURED-TO@example.test"),
+            ("cc", "CAPTURED-CC@", "CAPTURED-CC@example.test"),
+        ]
+        for name, prefix, completed in cases:
+            field = view.query_one(f".{name}input", Input)
+            await type_address(field, pilot, prefix)
+            assert field.value == prefix and view.dirty
+            assert completed[len(prefix):] in field.render_line(0).text
+            assert inbox.get_draft(app.db, view.draft_id) == before and sent == []
+            await pilot.press("tab")
+            await pilot.pause()
+            assert app.focused is field and field.value == completed
+            assert field.cursor_position == len(completed) and field.selection.is_empty
+            assert view.connection_id is None and inbox.get_draft(app.db, view.draft_id) == before
+        assert [v["thread"].id for v in view.history_views] == [ids["ana"]]
+        values = view.values()
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        saved = inbox.get_draft(app.db, view.draft_id)
+        assert {k: saved[k] for k in DRAFT_FIELDS} == values and not view.dirty
+        assert saved["revision"] == before["revision"] + 1
+        assert counts == tuple(app.db.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
+                               for table in ("threads", "activities", "identities", "persons"))
+        # Inject after history renders; malformed envelope shapes exercise completion only.
+        with app.db:
+            app.db.execute(
+                "INSERT INTO activities (thread_id, kind, occurred_at, native_id, data)"
+                " VALUES (?, 'MESSAGE', ?, 'completion-malformed', ?)",
+                (ids["ana"], saved["updated_at"], json.dumps({
+                    "to": [None, 42, {"email": "metadata-only@example.test"}, "broken@@example.test"],
+                    "cc": {"address": "metadata-only@example.test"}})))
+        counts = tuple(app.db.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
+                       for table in ("threads", "activities", "identities", "persons"))
+        for name, prefix in (("sender", "ANA@"), ("sender", "CAPTURED-TO@"),
+                             ("sender", "+120255501"), ("to", "+120255509"),
+                             ("to", "body-only@"), ("to", "subject-only@"),
+                             ("to", "metadata-only@"), ("to", "broken@"),
+                             ("to", "Saved Recipient"), ("subject", "ANA@")):
+            field = view.query_one(f".{name}input", Input)
+            await type_address(field, pilot, prefix)
+            assert field.render_line(0).text.rstrip() == prefix
+            await pilot.press("tab")
+            await pilot.pause()
+            target = view.query_one(TextArea) if name == "subject" else view.query_one(
+                ".toinput" if name == "sender" else ".ccinput", Input)
+            assert app.focused is target and field.value == prefix
+        assert inbox.get_draft(app.db, view.draft_id) == saved and sent == []
+        assert view.connection_id is None and view.query_one(TextArea).text == ""
+        assert counts == tuple(app.db.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
+                               for table in ("threads", "activities", "identities", "persons"))
+
+    run(Console(path, reply=lambda *args: sent.append(args)), [scenario], size=(187, 40))
+
+
+def test_connection_switch_recomputes_sms_sender_and_destination_suggestions(tmp_path):
+    path, _ = completion_seeded(tmp_path)
+    sent = []
+
+    async def scenario(app, pilot):
+        await pilot.press("5", "n")
+        await pilot.pause()
+        view = app.main.draft_view
+        before = inbox.get_draft(app.db, view.draft_id)
+        to = view.query_one(".toinput", Input)
+        await type_address(to, pilot, "ANA@")
+        assert "acme.com" in to.render_line(0).text
+        view.query_one(DraftConnection).focus()
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        await choose(app, pilot, "3")
+        assert view.kind == "sms" and view.connection_id == 3 and to.value == "ANA@"
+        assert not view.query_one(".field.cc").display and not view.query_one(".field.subject").display
+        to.focus()
+        await pilot.pause()
+        await pilot.press("end")
+        await pilot.pause()
+        assert to.render_line(0).text.rstrip() == "ANA@"
+        await pilot.press("tab")
+        await pilot.pause()
+        assert app.focused is view.query_one(TextArea) and to.value == "ANA@"
+        for name, prefix, completed in (
+                ("sender", "+1202555010", "+12025550100"),
+                ("sender", "+120255508", "+12025550888"),
+                ("to", "+1202555012", "+12025550124"),
+                ("to", "+120255507", "+12025550777"),
+                ("to", "+120255509", "+12025550999")):
+            field = view.query_one(f".{name}input", Input)
+            await type_address(field, pilot, prefix)
+            assert field.value == prefix and completed in field.render_line(0).text
+            await pilot.press("tab")
+            await pilot.pause()
+            assert app.focused is field and field.value == completed
+        sender = view.query_one(".senderinput", Input)
+        await type_address(sender, pilot, "+1202555012")
+        assert sender.render_line(0).text.rstrip() == "+1202555012"
+        await pilot.press("tab")
+        await pilot.pause()
+        assert app.focused is to and sender.value == "+1202555012"
+        assert inbox.get_draft(app.db, view.draft_id) == before and sent == []
+
+    run(Console(path, reply=lambda *args: sent.append(args)), [scenario])
+
+
+@pytest.mark.parametrize("name,prefix,completed", [
+    ("to", "  X@Y.IO  ,  ANA@", "  X@Y.IO  ,  ANA@acme.com"),
+    ("cc", '"X, Y" <x@y.io>,  OPS@', '"X, Y" <x@y.io>,  OPS@acme.com'),
+])
+def test_existing_email_reply_recipients_accept_ghost_without_sending(tmp_path, name, prefix, completed):
+    path, ids = seeded(tmp_path)
+    sent = []
+
+    async def scenario(app, pilot):
+        app.main.open_thread(ids["ana"])
+        await pilot.pause()
+        await pilot.press("r")
+        await pilot.pause()
+        box = app.main.thread_view.query_one(ReplyBox)
+        area = box.query_one(TextArea)
+        area.text = "unsent reply"
+        field = box.query_one(f".{name}input", Input)
+        counts = tuple(app.db.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
+                       for table in ("threads", "activities"))
+        await type_address(field, pilot, prefix)
+        assert field.value == prefix and completed[len(prefix):] in field.render_line(0).text
+        await pilot.press("tab")
+        await pilot.pause()
+        assert app.focused is field and field.value == completed and area.text == "unsent reply"
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not box.has_class("open") and app.drafts[ids["ana"]] == "unsent reply"
+        assert inbox.list_drafts(app.db) == [] and sent == []
+        assert counts == tuple(app.db.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
+                               for table in ("threads", "activities"))
+
+    run(Console(path, reply=lambda *args: sent.append(args)), [scenario], size=(187, 40))
+
+
+@pytest.mark.parametrize("state", ["missing", "mid-cursor", "selection", "backward"])
+def test_address_tab_keeps_native_traversal_when_completion_is_ineligible(tmp_path, state):
+    path, _ = seeded(tmp_path)
+
+    async def scenario(app, pilot):
+        await pilot.press("5", "n")
+        await pilot.pause()
+        view = app.main.draft_view
+        field = view.query_one(".toinput", Input)
+        prefix = "no-such-address" if state == "missing" else "ANA@"
+        await type_address(field, pilot, prefix)
+        if state != "missing":
+            assert "acme.com" in field.render_line(0).text
+        if state == "mid-cursor":
+            await pilot.press("left")
+            assert field.cursor_position == len(prefix) - 1
+        elif state == "selection":
+            await pilot.press("home", "shift+end")
+            assert not field.selection.is_empty and field.cursor_position == len(prefix)
+        await pilot.press("shift+tab" if state == "backward" else "tab")
+        await pilot.pause()
+        target = ".senderinput" if state == "backward" else ".ccinput"
+        assert app.focused is view.query_one(target, Input) and field.value == prefix
+        if state == "missing":
+            await pilot.press("shift+tab")
+            await pilot.pause()
+            assert app.focused is field and field.value == prefix
+
+    run(Console(path), [scenario])
+
+
+def test_address_storage_failure_clears_ghost_and_preserves_tab_focus(tmp_path):
+    path, _ = seeded(tmp_path)
+
+    async def scenario(app, pilot):
+        await pilot.press("5", "n")
+        await pilot.pause()
+        view = app.main.draft_view
+        field = view.query_one(".toinput", Input)
+        before = inbox.get_draft(app.db, view.draft_id)
+        await type_address(field, pilot, "ANA")
+        assert field.render_line(0).text.rstrip() != "ANA"
+        app.db.set_authorizer(lambda action, table, *args: sqlite3.SQLITE_DENY
+                              if action == sqlite3.SQLITE_READ and table == "identities" else sqlite3.SQLITE_OK)
+        try:
+            await pilot.press("@")
+            await pilot.pause()
+            assert field.value == "ANA@" and field.render_line(0).text.rstrip() == "ANA@"
+            await pilot.press("tab")
+            await pilot.pause()
+            assert app.focused is view.query_one(".ccinput", Input) and field.value == "ANA@"
+            await pilot.press("shift+tab")
+            await pilot.pause()
+            assert app.focused is field and field.value == "ANA@"
+        finally:
+            app.db.set_authorizer(None)
+        assert inbox.get_draft(app.db, view.draft_id) == before and view.dirty
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        assert inbox.get_draft(app.db, view.draft_id)["to"] == "ANA@" and not view.dirty
 
     run(Console(path), [scenario])

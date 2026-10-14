@@ -12,6 +12,8 @@ import sqlite3
 import textwrap
 from collections import Counter
 from datetime import datetime, timedelta, timezone
+from email.errors import HeaderParseError
+from email.headerregistry import Address
 from email.utils import getaddresses
 
 from rich.markup import escape
@@ -23,6 +25,7 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.coordinate import Coordinate
 from textual.message import Message
 from textual.screen import ModalScreen, Screen
+from textual.suggester import Suggester
 from textual.widgets import DataTable, Input, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 
@@ -852,6 +855,122 @@ class ThreadsPage(Page, ThreadActions):
 
 # --- reply composer -----------------------------------------------------------
 
+def address_values(value, kind):
+    """Usable addresses only; envelope display names never become suggestions."""
+    values = [value] if isinstance(value, str) else value if isinstance(value, list) else []
+    for text in values:
+        if not isinstance(text, str) or not text.isprintable():
+            continue
+        if kind == "sms":
+            if re.fullmatch(r"\+[1-9][0-9]{1,14}", text):
+                yield text
+        elif kind == "email":
+            for _, address in getaddresses([text]):
+                try:
+                    parsed = Address(addr_spec=address)
+                except (ValueError, HeaderParseError):
+                    continue
+                if parsed.username and parsed.domain and address.isprintable():
+                    yield address
+
+
+def local_addresses(db, kind, sender=False):
+    """Read captured local envelopes, never bodies or providers."""
+    formats = tuple(name for name, platform in PLATFORMS.items() if platform.format == kind)
+    if not formats:
+        return []
+    slots = ",".join("?" * len(formats))
+    values = [value for row in db.execute(
+        f"SELECT self_id, external_id FROM connections WHERE platform IN ({slots})", formats) for value in row]
+    for draft in db.execute('SELECT sender, "to", cc FROM composition_drafts WHERE kind = ?', (kind,)):
+        values.extend(draft[:1] if sender else draft[1:])
+    if not sender:
+        values.extend(row[0] for row in db.execute(
+            "SELECT value FROM identities WHERE kind = ?", ("email" if kind == "email" else "phone",)))
+        # ponytail: scan local envelopes; index destinations if captured history makes typing slow.
+        for row in db.execute(
+                "SELECT a.data, ch.native_id, ch.kind FROM thread_activities a"
+                " JOIN threads t ON t.id = a.thread_id JOIN channels ch ON ch.id = t.channel_id"
+                " JOIN connections c ON c.id = ch.connection_id"
+                f" WHERE a.kind = 'MESSAGE' AND c.platform IN ({slots})", formats):
+            if kind == "sms" and row["kind"] == "im":
+                values.append(row["native_id"])
+            try:
+                data = json.loads(row["data"])
+            except (TypeError, ValueError):
+                continue
+            if isinstance(data, dict):
+                values.extend(data.get(key) for key in (("from", "to", "cc") if kind == "email" else
+                                                       ("peer", "from", "to")))
+    return sorted({address for value in values for address in address_values(value, kind)}, key=str.casefold)
+
+
+class LocalAddressSuggester(Suggester):
+    def __init__(self, field):
+        super().__init__(use_cache=False, case_sensitive=True)
+        self.field = field
+
+    def complete(self, value):
+        if not value or not value.isprintable():
+            return None
+        _, comma, token = value.rpartition(",")
+        prefix = token.lstrip()
+        if not prefix:
+            return None
+        try:
+            kind = self.field.address_kind()
+            if comma and (self.field.sender_only or kind == "sms"):
+                return None
+            candidates = local_addresses(self.field.app.db, kind, self.field.sender_only)
+        except Exception:  # storage failure must leave ordinary editing and focus traversal usable
+            return None
+        if any(address.casefold() == prefix.casefold() for address in candidates):
+            return None
+        for address in candidates:
+            if len(address) > len(prefix) and address[:len(prefix)].casefold() == prefix.casefold():
+                return value + address[len(prefix):]
+        return None
+
+    async def get_suggestion(self, value):
+        return self.complete(value)
+
+
+class AddressInput(Input):
+    """Native inline ghost text; Tab accepts only a current, unselected end completion."""
+    BINDINGS = [Binding("tab", "accept_completion", show=False)]
+
+    def __init__(self, kind, *, sender=False, **kwargs):
+        self.address_kind, self.sender_only = kind, sender
+        super().__init__(suggester=LocalAddressSuggester(self), **kwargs)
+
+    def refresh_suggestion(self):
+        self._suggestion = ""
+        if self.value:
+            self.run_worker(self.suggester._get_suggestion(self, self.value))
+
+    def on_focus(self, event):
+        self.call_after_refresh(self.refresh_suggestion)
+
+    async def _on_suggestion_ready(self, event):
+        if event.value == self.value and event.suggestion != self.suggester.complete(self.value):
+            self._suggestion = ""
+            event.prevent_default()
+
+    def check_action(self, action, parameters):
+        if action == "accept_completion":
+            if not (self.has_focus and self.cursor_at_end and self.selection.is_empty and
+                    len(self._suggestion) > len(self.value) and self._suggestion.startswith(self.value)):
+                return False
+            if self._suggestion != self.suggester.complete(self.value):
+                self._suggestion = ""
+                return False
+            return True
+        return super().check_action(action, parameters)
+
+    def action_accept_completion(self):
+        self.action_cursor_right()
+
+
 class ReplyMode(Static):
     """Reply / Reply all switch for email (clickable)."""
 
@@ -882,10 +1001,12 @@ class ReplyBox(Vertical):
                 yield ReplyMode(classes="mode")
             with Horizontal(classes="field to"):
                 yield Static("To", classes="flabel")
-                yield Input(classes="toinput", placeholder="recipients, comma-separated")
+                yield AddressInput(lambda: "email" if self.view and self.email else None,
+                                   classes="toinput", placeholder="recipients, comma-separated")
             with Horizontal(classes="field cc"):
                 yield Static("Cc", classes="flabel")
-                yield Input(classes="ccinput", placeholder="optional")
+                yield AddressInput(lambda: "email" if self.view and self.email else None,
+                                   classes="ccinput", placeholder="optional")
             with Horizontal(classes="field subject"):
                 yield Static("Subject", classes="flabel")
                 yield Static(classes="fvalue subjectvalue")
@@ -1504,7 +1625,12 @@ class DraftEditor(Vertical):
                                              ("cc", "Cc", "optional"), ("subject", "Subject", "explicitly empty")):
                 with Horizontal(classes=f"field {name}"):
                     yield Static(label, classes="flabel")
-                    yield Input(value=self.draft[name] or "", placeholder=placeholder, classes=f"{name}input")
+                    kwargs = dict(value=self.draft[name] or "", placeholder=placeholder, classes=f"{name}input")
+                    if name == "subject":
+                        yield Input(**kwargs)
+                    else:
+                        yield AddressInput(lambda: next(a for a in self.ancestors if isinstance(a, DraftView)).kind,
+                                           sender=name == "sender", **kwargs)
         yield TextArea(self.draft["body"], show_line_numbers=False, classes="body-editor")
         yield Static("ctrl+s save · esc close", classes="replyhint")
 
@@ -1622,6 +1748,8 @@ class DraftView(Horizontal):
             for name in ("sender", "to", "cc", "subject"):
                 self.query_one(f".{name}input", Input).value = draft[name] or ""
             self.query_one(TextArea).text = draft["body"]
+            for field in self.query(AddressInput):
+                field.refresh_suggestion()
         self.paint()
         self.refresh_history(force=True)
 
@@ -1702,6 +1830,8 @@ class DraftView(Horizontal):
         if self.kind == "sms":
             self.query_one(".ccinput", Input).value = ""
             self.query_one(".subjectinput", Input).value = ""
+        for field in self.query(AddressInput):
+            field.refresh_suggestion()
         self.notice, self.save_error = "", False
         self.paint()
         self.refresh_history()
@@ -1748,6 +1878,8 @@ class DraftView(Horizontal):
             for name in ("sender", "to", "cc", "subject"):
                 self.query_one(f".{name}input", Input).value = draft[name] or ""
             self.query_one(TextArea).text = draft["body"]
+            for field in self.query(AddressInput):
+                field.refresh_suggestion()
             self.notice, self.save_error = "", False
             self.refresh_history(force=True)
             self.app.main.current.refresh_data()
