@@ -2106,7 +2106,7 @@ class DraftsPage(Page):
         status = f"[#928374]{state:7}[/]"
         return (status, escape(cut(title, room))) if len(self.columns) == 2 else (
             f"[#928374]{ICON['sms'] if draft['kind'] == 'sms' else ICON['email']}[/]",
-            f"[b]{escape(cut(draft['to'] or 'No recipient', 18))}[/]", escape(cut(title, room)), status)
+            f"[b]{escape(cut(inbox.recipient_names(self.app.db, draft['to'], draft['kind']) or 'No recipient', 18))}[/]", escape(cut(title, room)), status)
 
     def neighbor(self, draft_id):
         """The Draft to select once this one leaves the list."""

@@ -331,3 +331,14 @@ def test_recipient_history_rejects_wrong_types_without_mutation(db, kind, value)
     with pytest.raises(ValueError):
         inbox.recipient_threads(db, kind, value)
     assert old_rows(db) == before
+
+
+def test_recipient_names_show_people_and_keep_unknown_addresses(db):
+    with db:
+        nick = inbox._new_person(db, "Nick Doe")
+        ann = inbox._new_person(db, "Ann Roe")
+    inbox.add_identity(db, nick, "phone", "+15064354343")
+    inbox.add_identity(db, ann, "email", "Ann@Example.test")
+    assert inbox.recipient_names(db, "506-435-4343", "sms") == "Nick Doe"
+    assert inbox.recipient_names(db, "ANN@example.test, Bo <bo@x.test>, c@x.test", "email") == "Ann Roe, Bo, c@x.test"
+    assert inbox.recipient_names(db, "", "email") == ""

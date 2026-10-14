@@ -1,6 +1,6 @@
 """The inbox module: Threads, Status, Activities, Persons, Organizations, Blocks, Cases, and Drafts.
 
-Interface: ingest, act, reply, wake, reopen_imported, reconcile_email_threads; people operations block, add_identity, remove_identity; save_draft, get_draft, delete_draft, restore_draft, list_drafts, recipient_threads.
+Interface: ingest, act, reply, wake, reopen_imported, reconcile_email_threads; people operations block, add_identity, remove_identity; save_draft, get_draft, delete_draft, restore_draft, list_drafts, recipient_names, recipient_threads.
 Design: docs/design/api-and-database.md.
 """
 
@@ -386,6 +386,17 @@ def restore_draft(db, draft: dict) -> None:
 
 def list_drafts(db) -> list[dict]:
     return [dict(r) for r in db.execute("SELECT * FROM composition_drafts ORDER BY updated_at DESC, id DESC")]
+
+
+def recipient_names(db, to: str, kind: str) -> str:
+    """Draft recipients as People names; addresses no Person owns stay as typed."""
+    names = []
+    for typed, value in ([(n, n) for n in _destinations(to, "sms")] if kind == "sms"
+                         else [(person_name(n) or a, a.lower()) for n, a in getaddresses([to]) if a]):
+        row = db.execute("SELECT p.display_name FROM identities i JOIN persons p ON p.id = i.person_id"
+                         " WHERE i.kind = ? AND i.value = ?", ("phone" if kind == "sms" else "email", value)).fetchone()
+        names.append(row[0] if row else typed)
+    return ", ".join(names)
 
 
 def draft_problem(values: dict) -> str | None:
