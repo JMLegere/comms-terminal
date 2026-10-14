@@ -304,10 +304,11 @@ class SlackSender:
         channel = next((h["data"]["channel"] for h in history if "channel" in h["data"]), None)
         if channel is None:
             raise inbox.SendFailed("slack send failed: Thread has no Slack channel")
-        # A Thread made of replies answers inside that Slack thread; a Thread of top-level messages answers
-        # top-level, where its conversation is (FR-4c).
-        thread_ts = next((h["data"]["thread_ts"] for h in history
-                          if h["data"].get("thread_ts") not in (None, h["data"].get("ts"))), None)
+        # Always answer inside a Slack reply-thread, never top-level (FR-4c): a Thread made of replies answers
+        # in that reply-thread, a Thread of top-level messages under its latest top-level message.
+        slack = [h["data"] for h in history if h["data"].get("ts")]
+        replies = [d["thread_ts"] for d in slack if d.get("thread_ts") not in (None, d["ts"])]
+        thread_ts = replies[-1] if replies else slack[-1]["ts"] if slack else None
         payload = {"channel": channel, "text": text, **({"thread_ts": thread_ts} if thread_ts else {})}
         try:
             r = self.post("https://slack.com/api/chat.postMessage", self.token, payload)

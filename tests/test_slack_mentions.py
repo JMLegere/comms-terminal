@@ -168,13 +168,15 @@ def test_replies_post_inside_the_slack_thread():
     channel_thread = [{"native_id": "C1:100.1", "data": {"channel": "C1", "ts": "100.1", "kind": "channel"}},
                       {"native_id": "C1:100.5", "data": {"channel": "C1", "ts": "100.5", "kind": "channel",
                                                           "thread_ts": "100.1"}}]
-    sender.send(None, "on it", [], [], channel_thread[:1])  # top-level conversation: answered top-level
-    sender.send(None, "on it", [], [], channel_thread[1:])  # a Thread of replies: inside the Slack thread
-    parent = [{"native_id": "C1:100.1", "data": {"channel": "C1", "ts": "100.1", "thread_ts": "100.1"}}]
-    sender.send(None, "on it", [], [], parent)  # a parent carries its own ts as thread_ts once replied to
+    top_level = [{"native_id": "C1:100.1", "data": {"channel": "C1", "ts": "100.1", "kind": "channel"}},
+                 {"native_id": "C1:100.3", "data": {"channel": "C1", "ts": "100.3", "thread_ts": "100.3"}},
+                 {"native_id": "C1:100.4", "data": {"to": [], "cc": []}}]  # Jeremy's earlier console reply
+    sender.send(None, "on it", [], [], top_level)  # under the latest top-level message
+    sender.send(None, "on it", [], [], channel_thread[1:])  # a Thread of replies: inside that Slack thread
+    sender.send(None, "on it", [], [], channel_thread)  # replies win over their parent
     dm = [{"native_id": "D1:5.0", "data": {"channel": "D1", "ts": "5.0", "kind": "im"}}]
     sender.send(None, "hi", [], [], dm)
-    assert [p.get("thread_ts") for p in sent] == [None, "100.1", None, None]
+    assert [p.get("thread_ts") for p in sent] == ["100.3", "100.1", "100.1", "5.0"]  # never top-level
 
 
 def test_channel_top_level_groups_until_an_hour_quiet():
