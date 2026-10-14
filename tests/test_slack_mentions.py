@@ -175,8 +175,10 @@ def test_replies_post_inside_the_slack_thread():
     sender.send(None, "on it", [], [], channel_thread[1:])  # a Thread of replies: inside that Slack thread
     sender.send(None, "on it", [], [], channel_thread)  # replies win over their parent
     dm = [{"native_id": "D1:5.0", "data": {"channel": "D1", "ts": "5.0", "kind": "im"}}]
-    sender.send(None, "hi", [], [], dm)
-    assert [p.get("thread_ts") for p in sent] == ["100.3", "100.1", "100.1", "5.0"]  # never top-level
+    sender.send(None, "hi", [], [], dm)  # DMs stay top-level
+    sender.send(None, "hi", [], [], dm + [{"native_id": "D1:5.2", "data": {"channel": "D1", "ts": "5.2", "kind": "im",
+                                                                          "thread_ts": "5.0"}}])
+    assert [p.get("thread_ts") for p in sent] == ["100.3", "100.1", "100.1", None, "5.0"]
 
 
 def test_channel_top_level_groups_until_an_hour_quiet():

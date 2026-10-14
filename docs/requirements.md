@@ -18,7 +18,7 @@ Status: MVP confirmed 2026-10-10; revised 2026-10-12 to follow Plain's status mo
   - A bot joins selected channels, chosen by hand or by name prefix/suffix rules; messages arrive as events.
   - Messages group by time: the same user within 2 hours, or different users within 1 hour, form one Thread.
   - Deviation: a top-level message Jeremy posts starts a Thread in Waiting for them, because he is waiting on an answer.
-  - Console replies post from Jeremy's Slack profile: always inside a Slack reply-thread: the Thread's own, or under its latest top-level message.
+  - Console replies post from Jeremy's Slack profile: in a channel always inside a Slack reply-thread (the Thread's own, or under its latest top-level message); in a DM top-level unless the Thread is made of replies.
   - Deviation: DMs and group DMs also sync, through events on Jeremy's behalf, because they carry most of Jeremy's Slack comms.
 - **Status** (Plain): a Status and a Status detail.
   - Todo: Needs first response, Needs next response, Investigating.
