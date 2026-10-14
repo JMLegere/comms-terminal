@@ -1293,7 +1293,7 @@ def attio_markup(ctx: dict | None, error: str | None = None) -> str:
 
 
 # Context sources the console shows (FR-13a, FR-13b): key -> (title, icon, markup), in page order
-CONTEXT_SOURCES = {"tana": ("Tana", "tana", tana_markup), "attio": ("Attio", "attio", attio_markup)}
+CONTEXT_SOURCES = {"attio": ("Attio", "attio", attio_markup), "tana": ("Tana", "tana", tana_markup)}
 
 
 class ContextSection(Static):

@@ -80,12 +80,12 @@ Tana links in the console open with Ctrl+Shift+click (the console catches a plai
 
 ## 3d. Connect Attio (context)
 
-Attio is a read-only Context source (FR-13b, decision #123): the same pages show what Attio knows about their people and Organizations, below Tana. The service reads Attio's REST API with a read-only workspace access token and the console asks it over the reply socket (`POST /attio`).
+Attio is a read-only Context source (FR-13b, decision #123): the same pages show what Attio knows about their people and Organizations, above Tana. The service reads Attio's REST API with a read-only workspace access token and the console asks it over the reply socket (`POST /attio`).
 
 1. **You** (or the agent, in your browser): Attio → Settings → Developers → New access token "Universal Inbox", every scope Disabled except Read on User Management, Records, Object Configuration, List Entries, List Configuration, and Tasks.
 2. Save it on Workbox as `~/.config/universal-inbox/attio-token` (0600), keeping it out of shells' history: `read -s -P 'Attio token: ' t; and printf %s $t > ~/.config/universal-inbox/attio-token; and chmod 600 ~/.config/universal-inbox/attio-token; set -e t`.
 3. **You:** `sudo bash deploy/install.sh`: it stores `attio-token`, adds `universal-inbox.service.d/attio.conf`, and restarts the service.
-4. Check: the rail's context section lists Attio with a check, and a Thread with someone in Attio shows an Attio section under Tana's.
+4. Check: the rail's context section lists Attio with a check, and a Thread with someone in Attio shows an Attio section above Tana's.
 
 ## 3. Connect Slack
 
