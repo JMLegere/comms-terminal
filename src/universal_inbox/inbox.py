@@ -404,8 +404,21 @@ def draft_problem(values: dict) -> str | None:
 
 def _destinations(text: str, kind: str) -> list[str]:
     if kind == "sms":
-        return [n for n in re.split(r"[,;\s]+", text) if n]
+        return [_e164(n) for n in re.split(r"[,;]+", text) if n.strip()]
     return [a for _, a in getaddresses([text]) if a]
+
+
+def _e164(number: str) -> str:
+    """The +E.164 form Quo files messages under, so replies find the Thread.
+    ponytail: bare numbers are taken as North American; type + for other countries."""
+    digits = re.sub(r"\D", "", number)
+    if number.strip().startswith("+"):
+        return "+" + digits
+    if len(digits) == 10:
+        return "+1" + digits
+    if len(digits) == 11 and digits.startswith("1"):
+        return "+" + digits
+    return number.strip()
 
 
 def send_draft(db, draft_id: int, revision: int, sender: Sender, *, again: bool = False) -> Thread:

@@ -87,6 +87,13 @@ def test_sms_draft_starts_its_own_thread_even_inside_the_grouping_window(db):
     t = inbox.send_draft(db, d["id"], d["revision"], FakeSender("quo-2"))
     assert t.title == "New topic" and t.status_detail == "WAITING_FOR_CUSTOMER"
     assert db.execute("SELECT count(*) FROM threads").fetchone()[0] == 2
+    bare = inbox.save_draft(db, envelope("sms", connection_id=3, sender=PHONE, to="1 (555) 000-1002", body="y"))
+    sender = FakeSender("quo-3")
+    inbox.send_draft(db, bare["id"], bare["revision"], sender)
+    assert sender.calls[0][0] == [PEER]
+    reply = inbox.Incoming(3, PEER, "im", "MESSAGE", "quo-4", inbox.Identity("phone", PEER), AT, "Thanks",
+                           data={"peer": PEER})
+    assert inbox.ingest(db, reply).title == "y"  # the reply joins the sent Thread
     # Quo's webhook echo of the sent text is a duplicate, not a second Activity
     echo = inbox.Incoming(3, PEER, "im", "MESSAGE", "quo-2", None, AT, "New topic\nmore", data={"peer": PEER})
     assert inbox.ingest(db, echo) is None
