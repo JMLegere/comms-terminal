@@ -51,7 +51,9 @@ def parse(event: dict, connection, rules, client, thread_member=lambda channel, 
     DMs, group DMs, and ruled channels are taken whole (FR-4). From any other channel Jeremy is in, the
     user token also delivers messages (#114); only those that need him are kept: a message mentioning him,
     and a reply in a thread that is already in the inbox or that he has posted in. `thread_member(channel,
-    thread_ts)` returns a stored message of that Slack thread, if any (the hook passes a DB lookup).
+    thread_ts)` returns a stored message of that Slack thread, if any: an earlier reply, else its parent
+    (the hook passes `stored_member`). A reply joins the Thread of an earlier reply; the first reply to a
+    top-level message starts its own Thread (FR-4b).
     """
     if event.get("type") != "message":
         return None
@@ -85,12 +87,12 @@ def parse(event: dict, connection, rules, client, thread_member=lambda channel, 
             return None
     sender = None if user == self_id else inbox.Identity("slack_user", user, client.real_name(user),
                                                          profile_email=client.user_email(user))
-    refs = [f"{channel}:{thread_ts}"] + ([member] if member else []) if reply else []
+    refs = [member] if member and member != f"{channel}:{thread_ts}" else []
     return inbox.Incoming(
         connection_id=connection["id"], channel=channel, channel_kind=kind, kind=kind_,
         native_id=native_id, sender=sender, occurred_at=_at(event.get("event_ts", ts)),
         content=client.name_mentions(content) if content else content, thread_ref=refs,
-        title=_title(content) if kind_ == "MESSAGE" and not reply else None,
+        title=_title(content) if kind_ == "MESSAGE" else None,
         data={"channel": channel, "ts": ts, "kind": kind, **({"thread_ts": thread_ts} if thread_ts else {}),
               **({"attachments": files} if files else {})},
         channel_name=client.conversation_label(channel, kind))
@@ -241,6 +243,15 @@ def history_events(client, since: datetime):
                         yield c["id"], kind, r
 
 
+def stored_member(db, channel, thread_ts) -> str | None:
+    """A stored message of this Slack thread: an earlier reply first, else the parent message."""
+    parent = f"{channel}:{thread_ts}"
+    r = db.execute("SELECT native_id FROM activities WHERE kind = 'MESSAGE' AND (native_id = ? OR"
+                   " (json_extract(data, '$.channel') = ? AND json_extract(data, '$.thread_ts') = ?))"
+                   " ORDER BY native_id = ? LIMIT 1", (parent, channel, thread_ts, parent)).fetchone()
+    return r["native_id"] if r else None
+
+
 def import_recent(db, connection, client, days: int) -> int:
     """One-time import (Jeremy, 2026-10-12): the last `days` of Slack through the live filter, oldest first,
     so Threads form as they would have live; then every touched Thread goes to Todo, as Jeremy asked.
@@ -254,15 +265,9 @@ def import_recent(db, connection, client, days: int) -> int:
                      for ch, kind, m in history_events(client, datetime.fromtimestamp(since, timezone.utc))),
                     key=lambda e: float(e["ts"]))
 
-    def thread_member(channel, thread_ts):
-        r = db.execute("SELECT native_id FROM activities WHERE kind = 'MESSAGE' AND (native_id = ? OR"
-                       " (json_extract(data, '$.channel') = ? AND json_extract(data, '$.thread_ts') = ?)) LIMIT 1",
-                       (f"{channel}:{thread_ts}", channel, thread_ts)).fetchone()
-        return r["native_id"] if r else None
-
     stored, threads = 0, set()
     for e in events:
-        inc = parse(e, connection, rules, client, thread_member)
+        inc = parse(e, connection, rules, client, lambda c, t: stored_member(db, c, t))
         t = inbox.ingest(db, inc) if inc is not None else None
         if t is not None:
             stored += 1
@@ -299,12 +304,10 @@ class SlackSender:
         channel = next((h["data"]["channel"] for h in history if "channel" in h["data"]), None)
         if channel is None:
             raise inbox.SendFailed("slack send failed: Thread has no Slack channel")
-        # Reply inside the Slack thread: in a channel the Thread is one Slack thread, rooted at its first
-        # message (#115); in a DM or group DM only when the conversation is already a Slack thread.
-        first = history[0]["data"] if history else {}
-        in_channel = first.get("kind", "channel" if not channel.startswith("D") else "im") in ("channel", "private")
-        thread_ts = first.get("thread_ts") or (first.get("ts") if in_channel else None) or next(
-            (h["data"]["thread_ts"] for h in history if h["data"].get("thread_ts")), None)
+        # A Thread made of replies answers inside that Slack thread; a Thread of top-level messages answers
+        # top-level, where its conversation is (FR-4c).
+        thread_ts = next((h["data"]["thread_ts"] for h in history
+                          if h["data"].get("thread_ts") not in (None, h["data"].get("ts"))), None)
         payload = {"channel": channel, "text": text, **({"thread_ts": thread_ts} if thread_ts else {})}
         try:
             r = self.post("https://slack.com/api/chat.postMessage", self.token, payload)
@@ -330,13 +333,7 @@ def handle_hook(db, connection_id: int, headers, body: bytes, signing_secret: by
     connection = db.execute("SELECT * FROM connections WHERE id = ?", (connection_id,)).fetchone()
     rules = [(r["kind"], r["value"]) for r in db.execute(
         "SELECT kind, value FROM channel_rules WHERE connection_id = ?", (connection_id,))]
-    def thread_member(channel, thread_ts):
-        r = db.execute("SELECT native_id FROM activities WHERE kind = 'MESSAGE' AND (native_id = ? OR"
-                       " (json_extract(data, '$.channel') = ? AND json_extract(data, '$.thread_ts') = ?)) LIMIT 1",
-                       (f"{channel}:{thread_ts}", channel, thread_ts)).fetchone()
-        return r["native_id"] if r else None
-
-    incoming = parse(event, connection, rules, client, thread_member)
+    incoming = parse(event, connection, rules, client, lambda c, t: stored_member(db, c, t))
     if incoming is not None:
         inbox.ingest(db, incoming)
     return 200, ""

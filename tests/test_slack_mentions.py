@@ -46,12 +46,7 @@ def event(text, ts, user="U1", channel="C1", thread_ts=None):
 
 
 def hook(db, conn, ev, client, rules=()):
-    def member(channel, thread_ts):
-        r = db.execute("SELECT native_id FROM activities WHERE native_id = ? OR (json_extract(data, '$.channel') = ?"
-                       " AND json_extract(data, '$.thread_ts') = ?) LIMIT 1",
-                       (f"{channel}:{thread_ts}", channel, thread_ts)).fetchone()
-        return r[0] if r else None
-    inc = slack.parse(ev, conn, list(rules), client, member)
+    inc = slack.parse(ev, conn, list(rules), client, lambda c, t: slack.stored_member(db, c, t))
     return inbox.ingest(db, inc) if inc else None
 
 
@@ -63,8 +58,10 @@ def test_unruled_channel_keeps_only_mentions_and_their_thread():
     assert t is not None and t.status_detail == "CREATED"
     v = inbox.thread_view(db, t.id)
     assert v["messages"][0]["content"] == f"<@{ME}|Jeremy> can you review the deck?"
-    # A reply in that Slack thread joins it, mention or not.
-    assert hook(db, conn, event("link is in the doc", "100.3", thread_ts="100.2"), c).id == t.id
+    # A reply in that Slack thread is kept, mention or not, and starts its own Thread; later replies join it.
+    r = hook(db, conn, event("link is in the doc", "100.3", thread_ts="100.2"), c)
+    assert r is not None and r.id != t.id and r.title == "link is in the doc"
+    assert hook(db, conn, event("thanks", "100.4", thread_ts="100.2"), c).id == r.id
 
 
 def test_threads_jeremy_posted_in_are_followed_and_his_reply_waits():
@@ -119,7 +116,7 @@ def test_import_replays_history_through_the_live_filter_into_todo():
     n = slack.import_recent(db, conn, slack.SlackClient("x", get=get), 7)
     assert n == 4  # the mention, the #business thread (2), and the DM; #general chatter is skipped
     rows = db.execute("SELECT status, status_detail FROM threads ORDER BY id").fetchall()
-    assert [r["status"] for r in rows] == ["TODO", "TODO", "TODO"]
+    assert [r["status"] for r in rows] == ["TODO"] * 4  # the #business reply is its own Thread
 
 
 def test_channels_get_friendly_names():
@@ -171,8 +168,24 @@ def test_replies_post_inside_the_slack_thread():
     channel_thread = [{"native_id": "C1:100.1", "data": {"channel": "C1", "ts": "100.1", "kind": "channel"}},
                       {"native_id": "C1:100.5", "data": {"channel": "C1", "ts": "100.5", "kind": "channel",
                                                           "thread_ts": "100.1"}}]
-    sender.send(None, "on it", [], [], channel_thread[:1])  # a top-level message with no replies yet
-    sender.send(None, "on it", [], [], channel_thread)
+    sender.send(None, "on it", [], [], channel_thread[:1])  # top-level conversation: answered top-level
+    sender.send(None, "on it", [], [], channel_thread[1:])  # a Thread of replies: inside the Slack thread
+    parent = [{"native_id": "C1:100.1", "data": {"channel": "C1", "ts": "100.1", "thread_ts": "100.1"}}]
+    sender.send(None, "on it", [], [], parent)  # a parent carries its own ts as thread_ts once replied to
     dm = [{"native_id": "D1:5.0", "data": {"channel": "D1", "ts": "5.0", "kind": "im"}}]
     sender.send(None, "hi", [], [], dm)
-    assert [p.get("thread_ts") for p in sent] == ["100.1", "100.1", None]
+    assert [p.get("thread_ts") for p in sent] == [None, "100.1", None, None]
+
+
+def test_channel_top_level_groups_until_an_hour_quiet():
+    db, conn = setup()
+    rules = [("channel", "general")]
+    hour = 3600
+    t = hook(db, conn, event("deploy is red", f"{1000:.1f}"), Client(), rules)
+    assert hook(db, conn, event("looking", f"{1000 + 50 * 60:.1f}", user=ME), Client(), rules).id == t.id
+    # A reply-thread keeps the channel active, but its messages stay in their own Thread.
+    side = hook(db, conn, event("which job?", f"{1000 + 100 * 60:.1f}", thread_ts=f"{1000:.1f}"), Client(), rules)
+    assert side.id != t.id
+    assert hook(db, conn, event("fixed", f"{1000 + 150 * 60:.1f}", user="U2"), Client(), rules).id == t.id
+    later = hook(db, conn, event("new topic", f"{1000 + 150 * 60 + hour + 1:.1f}"), Client(), rules)
+    assert later.id not in (t.id, side.id)

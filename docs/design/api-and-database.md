@@ -244,8 +244,8 @@ Stored values are Plain's enum names. The console shows the product label.
 - **Raw recovery**: explicit preview/apply reads `data.raw` only as a lowercase 64-hex SHA256 pointer to `raw/<sha>.eml` beside the database. It rejects symlinks, verifies the complete byte hash, parses headers only, and requires the raw Message-ID to agree with the stored normalized identity. Mail lacking a Message-ID may instead prove the existing `<sha256-<verified hash>@inbox>` fallback. Recovery indexes `In-Reply-To` and `References`; missing or invalid evidence remains a coverage gap.
 - **Triage during ingest**: reconciliation first selects the latest complete existing triage state, then the new Activity follows the ordinary inbound/outbound status rules. Duplicate evidence never repeats those rules. Existing sent-echo deduplication remains a separate operation.
 - **Slack**:
-  - A message whose `thread_ref` names a stored message joins that message's Thread (reply-threads).
-  - Otherwise a top-level message in a channel or private channel starts a Thread (#115, one-to-one ingestion). A DM or group DM joins its Channel's latest Thread for the same sender within 2 hours, or a different sender within 1 hour, of the last message (FR-4b); otherwise it starts one.
+  - A reply whose `thread_ref` names an earlier stored reply of the same Slack reply-thread joins that reply's Thread. The first reply to a top-level message starts a Thread (#124).
+  - A top-level message in a channel or private channel joins the Channel's latest top-level Thread unless the Channel has had no message for 1 hour; otherwise it starts one (#124). A DM or group DM joins its Channel's latest Thread for the same sender within 2 hours, or a different sender within 1 hour, of the last message (FR-4b); otherwise it starts one.
 - An `EDIT` or `DELETE` joins the Thread of the message it targets. A `DELETE` also clears the stored content of that message and its edits (FR-2a).
 
 ## 5. Database

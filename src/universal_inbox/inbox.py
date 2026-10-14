@@ -133,6 +133,7 @@ FREE_MAIL = frozenset({
 
 SAME_SENDER_WINDOW = timedelta(hours=2)
 OTHER_SENDER_WINDOW = timedelta(hours=1)
+CHANNEL_QUIET = timedelta(hours=1)  # a Slack channel's top-level messages group until it is quiet this long
 
 
 class SendFailed(Exception):
@@ -667,9 +668,21 @@ def _thread_for_message(db, channel_id, inc: Incoming, identity_id):
                        (channel_id, ref)).fetchone()
         if r:
             return r["thread_id"]
+    if inc.data.get("thread_ts") not in (None, inc.data.get("ts")):
+        return None  # the first reply to a top-level Slack message starts its own Thread (FR-4b)
     if inc.channel_kind in ("channel", "private"):
-        # Slack channels mirror Slack threads one to one, as Plain's "one-to-one" ingestion mode (#115).
-        return None
+        # A top-level message joins the channel's latest top-level conversation unless the channel has been
+        # quiet for an hour (FR-4b).
+        last = db.execute("SELECT max(a.occurred_at) FROM thread_activities a JOIN threads t ON t.id = a.thread_id"
+                          " WHERE t.channel_id = ? AND a.kind = 'MESSAGE'", (channel_id,)).fetchone()[0]
+        if last is None or inc.occurred_at - datetime.fromisoformat(last) > CHANNEL_QUIET:
+            return None
+        r = db.execute(
+            "SELECT a.thread_id FROM thread_activities a JOIN threads t ON t.id = a.thread_id"
+            " WHERE t.channel_id = ? AND a.kind = 'MESSAGE' AND json_extract(a.data, '$.ts') IS NOT NULL"
+            " AND coalesce(json_extract(a.data, '$.thread_ts'), json_extract(a.data, '$.ts')) = json_extract(a.data, '$.ts')"
+            " ORDER BY a.occurred_at DESC, a.id DESC LIMIT 1", (channel_id,)).fetchone()
+        return r["thread_id"] if r else None
     last = db.execute(
         "SELECT a.thread_id, a.identity_id, a.occurred_at FROM thread_activities a"
         " JOIN threads t ON t.id = a.thread_id"

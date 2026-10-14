@@ -109,11 +109,12 @@ Status key in brackets:
   - Jeremy selects channels by hand, or by name prefix/suffix rules (Plain's auto-join rules).
   - Unselected channels are not ingested (Plain's "disabled").
 - **FR-4a** [D]: **Slack DMs and group DMs** arrive as events on Jeremy's behalf (his user token), following the same Thread rules. Reason: DMs carry most of Jeremy's Slack comms, and a Plain bot cannot read them.
-- **FR-4b** [PL]: **Slack grouping is time-based** (Plain's default ingestion mode):
-  - A new top-level message joins the conversation's latest Thread when it is from the same user within 2 hours, or from a different user within 1 hour, of that Thread's last message. Otherwise it starts a new Thread.
-  - Replies in a Slack reply-thread attach to the Thread holding its parent message (inferred from Plain).
+- **FR-4b** [PL + D]: **Slack grouping is time-based** (Plain's default ingestion mode):
+  - [D] In a channel or private channel, a new top-level message joins the channel's latest top-level Thread unless the channel has had no message for 1 hour; then it starts a new Thread (decision #124).
+  - In a DM or group DM, a new top-level message joins the conversation's latest Thread when it is from the same user within 2 hours, or from a different user within 1 hour, of that Thread's last message. Otherwise it starts a new Thread.
+  - [D] The first reply to a top-level message starts its own Thread; later replies in that Slack reply-thread join it (decision #124).
   - [D] A top-level message Jeremy posts starts a Thread in Snoozed / Waiting for them. Reason: it shows he is waiting on an answer (decision #61); replaces the Plain-inferred rule that his own post makes no Thread until someone else posts.
-- **FR-4c** [PL]: **Slack sending.** A reply written in the console posts to the Thread's conversation from Jeremy's Slack profile, "as if you typed it there". A Thread that began in a Slack reply-thread gets its reply in that reply-thread.
+- **FR-4c** [PL]: **Slack sending.** A reply written in the console posts to the Thread's conversation from Jeremy's Slack profile, "as if you typed it there". A Thread made of Slack reply-thread messages gets its reply in that reply-thread; a Thread of top-level messages gets its reply top-level in the conversation (decision #124).
 - **FR-5** [PL]: **No history backfill.** Ingestion starts when a Connection is connected (Plain is forward-only).
 
 ### Status (Plain logic)
@@ -890,6 +891,10 @@ All entries are dated 2026-10-10; exact times are unproven unless noted. Full de
   - Request / decision: Integrate Attio as a second read-only Context source (FR-13b), shaped like Tana (#122): same pages, same five-minute service cache, same socket route pattern (`POST /attio`), its own section above Tana's (Jeremy, 2026-10-14). Auth is a read-only workspace access token (Records, Object configuration, List entries, List configuration, Tasks, User management: read), stored as the `attio-token` credential, over Attio's REST API; Attio's MCP server (OAuth, rotating tokens) was the alternative. Shows every filled field of the Person and Company, their list entries, open deals (stage not Lost) with stage, value, owner, and list, and open tasks on the Person, Company, or those deals (most tasks hang off a deal). Teammates match like everyone else.
   - Source: Jeremy's answers (2026-10-14): "can we do a similar attio integration like tana?", "it should summarize the structured data and open tasks for the person and org", "Access token", "Every filled field", "Yes, open deals too", "Same pages as Tana".
   - Status: Built (2026-10-14): `attio.py`, `POST /attio`, the console's Attio section, the rail's context section and bottom-bar health for both sources (`ContextSection` replaces `TanaSection`), `deploy/universal-inbox.service.d/attio.conf`, runbook §3d. The token was created in Attio ("Universal Inbox") on 2026-10-14.
+- **124**
+  - Request / decision: Slack channels group top-level messages by time again, replacing #115's one Thread per top-level message: a top-level message joins the channel's latest top-level Thread until the channel has been quiet for 1 hour (any message, replies included, counts as activity). The first reply to a top-level message starts its own Thread, and later replies in that Slack reply-thread join it. A console reply goes inside the Slack reply-thread when the Thread is made of replies, and top-level otherwise. DMs keep FR-4b's sender windows. Found live: #dev talks top-level, so each message became its own Thread, and console replies went into a Slack reply-thread under the first message.
+  - Source: Jeremy, "the slack threads are not combining and my replies are not replying to the thread. can you only start a new slack thread once 1h has been passed in the channel with no activity? also start a new thread when someone replies to a top-level comment." (2026-10-14)
+  - Status: Built (2026-10-14): `inbox._thread_for_message`, `slack.stored_member`, `SlackSender.send`. Threads stored before stay as they are.
 
 ## 8. Work log
 
