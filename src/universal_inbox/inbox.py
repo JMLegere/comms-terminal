@@ -688,6 +688,50 @@ def merge_duplicates(db) -> list[tuple[str, str]]:
     return merged
 
 
+def import_people(db, people: list[dict]) -> dict:
+    """Attio People into local Persons (Jeremy, 2026-10-14). One Attio person is one Person: local Persons that
+    own any of their addresses or numbers are merged, and the rest are added. Attio's name wins unless the
+    local one is fuller ("Kevin McFarlane" over "Kevin"). Their Company names the Organizations of its domains."""
+    report = {"created": [], "merged": [], "renamed": [], "organizations": []}
+    mine = {r[0].lower() for r in db.execute("SELECT self_id FROM connections") if r[0]}
+    for p in people:
+        ids = [("email", e.lower()) for e in p["emails"]] + [("phone", n) for n in p["phones"]]
+        if not ids or any(value in mine for _, value in ids):  # Jeremy himself is never a Person
+            continue
+        owners = sorted({r[0] for kind, value in ids for r in db.execute(
+            "SELECT person_id FROM identities WHERE kind = ? AND value = ? AND person_id IS NOT NULL", (kind, value))})
+        name = person_name(p["name"])
+        if not owners:
+            with db:
+                keep = _new_person(db, name or ids[0][1])
+            report["created"].append(name or ids[0][1])
+        else:
+            keep = owners[0]
+            for drop in owners[1:]:
+                names = [display_name(db, keep), display_name(db, drop)]
+                merge_persons(db, keep, drop)
+                report["merged"].append(names)
+        current = display_name(db, keep)
+        new, old = _name_key(name).split(), _name_key(current).split()
+        fuller = len(old) > len(new) and old[:len(new)] == new and "@" not in current
+        if name and new != old and not fuller:
+            rename_person(db, keep, name)
+            report["renamed"].append([current, name])
+        for kind, value in ids:
+            add_identity(db, keep, kind, value)
+        company = p["company"]["name"].strip()
+        for domain in p["company"]["domains"] if company else []:
+            with db:
+                if db.execute("UPDATE organizations SET name = ? WHERE domain = ? AND name != ?",
+                              (company, _org(domain), company)).rowcount:
+                    report["organizations"].append([_org(domain), company])
+    return report
+
+
+def display_name(db, person_id: int) -> str:
+    return db.execute("SELECT display_name FROM persons WHERE id = ?", (person_id,)).fetchone()[0]
+
+
 def _new_person(db, name) -> int:
     return db.execute("INSERT INTO persons (display_name, created_at) VALUES (?, ?)",
                       (name, _iso(_now()))).lastrowid

@@ -44,6 +44,8 @@ def main(argv=None) -> None:
     f = sub.add_parser("fastmail-import", help="one-time import of recent Fastmail Inbox and Sent, left in Todo")
     f.add_argument("--cred", default=str(Path.home() / ".config/universal-inbox/fastmail-oauth.json"))
     f.add_argument("--days", type=int, default=30)
+    ai = sub.add_parser("attio-import", help="add Attio People touched recently; merge and rename to match Attio")
+    ai.add_argument("--days", type=int, default=89)
     a = p.parse_args(argv)
     Path(a.db).parent.mkdir(parents=True, exist_ok=True)
 
@@ -78,6 +80,19 @@ def main(argv=None) -> None:
             raise SystemExit("no Slack Connection: run `universal-inbox init --slack-team … --slack-user …` first")
         n = slack.import_recent(db, conn, slack.SlackClient(token.decode()), a.days)
         print(f"Slack: stored {n} messages from the last {a.days} days")
+    elif a.cmd == "attio-import":
+        # The service holds the Attio token; it reads Attio, this writes the database.
+        import json
+        from . import inbox
+        from .tui import _post
+        status, body = _post(a.socket, "/attio-people", {"days": a.days}, timeout=600)
+        if status != 200:
+            raise SystemExit(f"Attio: {body.get('error', status)}")
+        db = inbox.connect(a.db)
+        inbox.migrate(db)
+        report = inbox.import_people(db, body["people"])
+        report["same name"] = inbox.merge_duplicates(db)
+        print(json.dumps({"attio people": len(body["people"]), **report}, indent=1, ensure_ascii=False))
     elif a.cmd == "fastmail-import":
         from . import fastmail, inbox
         db = inbox.connect(a.db)

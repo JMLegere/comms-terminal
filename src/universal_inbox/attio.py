@@ -173,5 +173,45 @@ def context(client, emails, domains) -> dict:
             "deals": open_deals, "tasks": sorted(tasks.values(), key=lambda t: t["due"] or "9999")}
 
 
+def _all(client, obj) -> list[dict]:
+    out, offset = [], 0
+    while True:
+        page = client.call(f"/objects/{obj}/records/query", {"limit": 500, "offset": offset})["data"]
+        out += page
+        if len(page) < 500:
+            return out
+        offset += 500
+
+
+def _last_touch(values: dict) -> str:
+    """The latest interaction, creation, or edit of a record: Attio stamps every value with `active_from`."""
+    stamps = [v.get("interacted_at") or "" for vs in values.values() for v in vs]
+    stamps += [v.get("active_from") or "" for vs in values.values() for v in vs]
+    stamps += [v.get("value") or "" for v in values.get("created_at") or []]
+    return max(stamps, default="")
+
+
+def recent_people(client, since: datetime) -> list[dict]:
+    """People with an interaction, creation, or edit since `since`, each with their Company's name and domains."""
+    # ponytail: reads every Person and Company and filters here; use a server-side filter if the workspace grows
+    since = since.isoformat()
+    companies = {c["id"]["record_id"]: c["values"] for c in _all(client, "companies")}
+    out = []
+    for p in _all(client, "people"):
+        v = p["values"]
+        if _last_touch(v)[:26] < since[:26]:
+            continue
+        ref = next((c.get("target_record_id") for c in v.get("company") or []), None)
+        company = companies.get(ref) or {}
+        out.append({
+            "id": p["id"]["record_id"],
+            "name": (v.get("name") or [{}])[0].get("full_name") or "",
+            "emails": [e["email_address"] for e in v.get("email_addresses") or [] if e.get("email_address")],
+            "phones": [n["phone_number"] for n in v.get("phone_numbers") or [] if n.get("phone_number")],
+            "company": {"name": (company.get("name") or [{}])[0].get("value") or "",
+                        "domains": [d["domain"] for d in company.get("domains") or [] if d.get("domain")]}})
+    return out
+
+
 def Context(client, clock=None):  # noqa: N802  the service's cached answers, the same cache as Tana's
     return tana.Context(client, **({"clock": clock} if clock else {}), fetch=context)

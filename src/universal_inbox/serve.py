@@ -12,7 +12,7 @@ import os
 import socketserver
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -62,6 +62,20 @@ def handle_context(body: bytes, context: tana.Context | None, name: str = "Tana"
     try:
         return 200, context.get(emails, domains)
     except (mcp.McpError, attio.AttioError, OSError, ValueError, KeyError, IndexError) as e:
+        return 502, {"error": str(e) or type(e).__name__}
+
+
+def handle_attio_people(body: bytes, context: tana.Context | None) -> tuple[int, dict]:
+    """POST /attio-people: {"days"} -> Attio People touched in that many days, for `universal-inbox attio-import`."""
+    if context is None:
+        return 503, {"error": "Attio is not connected"}
+    try:
+        days = int(json.loads(body)["days"])
+    except (ValueError, KeyError, TypeError):
+        return 400, {"error": "expected days"}
+    try:
+        return 200, {"people": attio.recent_people(context.client, datetime.now(timezone.utc) - timedelta(days=days))}
+    except (attio.AttioError, OSError, ValueError, KeyError, IndexError) as e:
         return 502, {"error": str(e) or type(e).__name__}
 
 
@@ -184,6 +198,10 @@ def reply_server(db_path: str, socket_path: str, senders: Senders, contexts: dic
             db.close()
         return status, "application/json", json.dumps(out).encode()
 
+    def attio_people(headers, body):
+        status, out = handle_attio_people(body, contexts.get("attio"))
+        return status, "application/json", json.dumps(out).encode()
+
     def context_route(name):
         def route(headers, body):
             status, out = handle_context(body, contexts.get(name), name.title())
@@ -194,7 +212,7 @@ def reply_server(db_path: str, socket_path: str, senders: Senders, contexts: dic
         os.unlink(socket_path)
     old = os.umask(0o177)  # socket created 0600 (NFR-4)
     try:
-        return UnixHTTPServer(socket_path, _handler({"/reply": reply, "/send-draft": send_draft, "/tana": context_route("tana"), "/attio": context_route("attio")}))
+        return UnixHTTPServer(socket_path, _handler({"/reply": reply, "/send-draft": send_draft, "/attio-people": attio_people, "/tana": context_route("tana"), "/attio": context_route("attio")}))
     finally:
         os.umask(old)
 
