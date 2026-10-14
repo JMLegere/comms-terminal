@@ -1,6 +1,6 @@
 """The inbox module: Threads, Status, Activities, Persons, Organizations, Blocks, Cases, and Drafts.
 
-Interface: ingest, act, reply, wake, reopen_imported, reconcile_email_threads; people operations block, add_identity, remove_identity; save_draft, get_draft, list_drafts, recipient_threads.
+Interface: ingest, act, reply, wake, reopen_imported, reconcile_email_threads; people operations block, add_identity, remove_identity; save_draft, get_draft, delete_draft, restore_draft, list_drafts, recipient_threads.
 Design: docs/design/api-and-database.md.
 """
 
@@ -357,6 +357,21 @@ def get_draft(db, draft_id: int) -> dict:
     if r is None:
         raise KeyError(f"draft {draft_id}")
     return dict(r)
+
+
+def delete_draft(db, draft_id: int) -> dict:
+    """Remove one unsent Draft; return its row so `restore_draft` can put it back."""
+    with db:
+        draft = get_draft(db, draft_id)
+        db.execute("DELETE FROM composition_drafts WHERE id = ?", (draft_id,))
+    return draft
+
+
+def restore_draft(db, draft: dict) -> None:
+    columns = ", ".join(f'"{c}"' for c in draft)
+    with db:
+        db.execute(f"INSERT INTO composition_drafts ({columns}) VALUES ({', '.join('?' * len(draft))})",
+                   tuple(draft.values()))
 
 
 def list_drafts(db) -> list[dict]:

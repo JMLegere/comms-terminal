@@ -568,3 +568,68 @@ def test_address_storage_failure_clears_ghost_and_preserves_tab_focus(tmp_path):
         assert inbox.get_draft(app.db, view.draft_id)["to"] == "ANA@" and not view.dirty
 
     run(Console(path), [scenario])
+
+
+def test_delete_draft_saves_edits_selects_neighbor_and_undo_restores(tmp_path):
+    path, _ = seeded(tmp_path)
+    db = inbox.connect(path)
+    first, second = (inbox.save_draft(db, dict(connection_id=None, kind="email", sender="", to="", cc="",
+                                               subject=s, body="")) for s in ("first", "second"))
+    db.close()
+    app = Console(path)
+
+    async def scenario(app, pilot):
+        await pilot.press("5")
+        await pilot.pause()
+        page = app.main.page
+        page.focus_first()
+        await pilot.pause()
+        assert app.main.draft_view.draft_id == second["id"]
+        app.main.draft_view.query_one(TextArea).text = "edited before delete"
+        await pilot.press("x")
+        await pilot.pause()
+        assert [d["id"] for d in inbox.list_drafts(app.db)] == [first["id"]]
+        assert app.main.draft_view.draft_id == first["id"]
+        await pilot.press("z")
+        await pilot.pause()
+        restored = inbox.get_draft(app.db, second["id"])
+        assert restored["body"] == "edited before delete" and len(page.items) == 2
+        await pilot.press("x", "x")
+        await pilot.pause()
+        assert inbox.list_drafts(app.db) == [] and app.main.draft_view is None
+
+    run(app, [scenario])
+
+
+def test_drafts_list_keys_work_from_open_draft_but_text_fields_still_type(tmp_path):
+    path, _ = seeded(tmp_path)
+    app = Console(path)
+
+    async def scenario(app, pilot):
+        await pilot.press("5", "n")
+        await pilot.pause()
+        app.main.draft_view.query_one(DraftConnection).focus()
+        await pilot.pause()
+        assert len(inbox.list_drafts(app.db)) == 1
+        await pilot.press("n")
+        await pilot.pause()
+        assert len(inbox.list_drafts(app.db)) == 2
+        newest = app.main.draft_view.draft_id
+        await pilot.press("j")
+        await pilot.pause()
+        assert app.main.draft_view.draft_id != newest
+        await pilot.press("k")
+        await pilot.pause()
+        assert app.main.draft_view.draft_id == newest
+        area = app.main.draft_view.query_one(TextArea)
+        area.focus()
+        await pilot.press("n", "x", "j")
+        await pilot.pause()
+        assert area.text == "nxj" and len(inbox.list_drafts(app.db)) == 2
+        app.main.draft_view.query_one(DraftConnection).focus()
+        await pilot.press("x")
+        await pilot.pause()
+        assert [d["id"] for d in inbox.list_drafts(app.db)] != [] and newest not in [
+            d["id"] for d in inbox.list_drafts(app.db)]
+
+    run(app, [scenario])

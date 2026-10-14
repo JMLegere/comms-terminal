@@ -362,7 +362,7 @@ HELP = [  # (group, [(keys, what it does)]) — the full key map; Gmail-style wh
                 ("p", "open the person"), ("o", "open in Gmail, Fastmail, or Slack"), ("z", "undo the last change"),
                 ("; / :", "expand / collapse every message (click a message or ••• to toggle one)"),
                 ("ctrl+shift+click", "open a link in your browser (shift lets Ghostty take the click)")]),
-    ("Drafts", [("n", "start a blank draft"), ("enter", "edit the selected draft"),
+    ("Drafts", [("n", "start a blank draft"), ("enter", "edit the selected draft"), ("x", "delete the selected draft (z undoes)"),
                 ("ctrl+s", "save exact fields and body"), ("esc", "save and return to the list"),
                 ("Connection", "choose email or SMS; sending unavailable")]),
     ("Case", [("n", "Cases views: start a case (a goal) with no threads yet"),
@@ -1637,7 +1637,10 @@ class DraftEditor(Vertical):
 
 class DraftView(Horizontal):
     """Selected local draft plus exact captured history; no Thread ID or reply callback."""
-    BINDINGS = [Binding("ctrl+s", "save", "save draft"),
+    # The Drafts list keys work here too; text fields consume printable keys before these fire.
+    BINDINGS = [Binding("j", "page('down')", "move", key_display="j/k"), Binding("k", "page('up')", show=False),
+                Binding("n", "page('new')", "new draft"), Binding("x", "page('delete')", "delete draft"),
+                Binding("ctrl+s", "save", "save draft"),
                 Binding("escape", "close", "save / close"),
                 Binding("ctrl+enter", "send", show=False),
                 Binding("ctrl+r", "reload", show=False)]
@@ -1860,6 +1863,10 @@ class DraftView(Horizontal):
     def action_save(self):
         self.save()
 
+    def action_page(self, action):
+        if isinstance(self.app.main.current, DraftsPage):
+            getattr(self.app.main.current, f"action_{action}")()
+
     def action_close(self):
         if self.save():
             self.app.main.focus_list()
@@ -1901,8 +1908,8 @@ class DraftsPage(Page):
     RAIL = "drafts"
     SIDE = f"{ICON['edited']} draft"
     BINDINGS = [Binding("j", "down", "move", key_display="j/k"), Binding("k", "up", show=False),
-                Binding("n", "new", "new draft"), Binding("ctrl+s", "save", "save draft"),
-                Binding("ctrl+r", "reload", show=False)]
+                Binding("n", "new", "new draft"), Binding("x", "delete", "delete draft"),
+                Binding("ctrl+s", "save", "save draft"), Binding("ctrl+r", "reload", show=False)]
 
     def __init__(self):
         super().__init__()
@@ -2012,6 +2019,21 @@ class DraftsPage(Page):
         view = self.app.main.draft_view
         if view and view.check_action("reload", ()):
             view.action_reload()
+
+    def action_delete(self):
+        selected = self.selected()
+        if selected is None or not self.app.main.save_draft():  # undo restores the edits saved here
+            return
+        ids = [d["id"] for d in self.items]
+        index = ids.index(selected["id"])
+        neighbor = (ids[index + 1:] or ids[:index][-1:] or [None])[0]
+        try:
+            draft = inbox.delete_draft(self.app.db, selected["id"])
+        except Exception:
+            self.app.notify("Draft not deleted · delete failed.", severity="error")
+            return
+        self.app.offer_undo("Draft deleted.", lambda: inbox.restore_draft(self.app.db, draft))
+        self.refresh_data(select_id=neighbor)
 
     def action_new(self):
         if not self.app.main.save_draft():
