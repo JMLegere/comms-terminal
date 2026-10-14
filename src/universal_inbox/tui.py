@@ -569,7 +569,7 @@ class Rail(OptionList):
         opts = [header("threads", "threads")]
         for i, name in enumerate(VIEW_NAMES):
             if name == "All":
-                opts.append(item("drafts", "edited", "Drafts"))
+                opts.append(item("drafts", "edited", "Drafts", db.execute("SELECT count(*) FROM composition_drafts").fetchone()[0]))
             else:
                 icon_name, color = VIEW_ICON[name]
                 opts.append(item(f"view:{i}", icon_name, name, counts[name], color))
@@ -2093,6 +2093,7 @@ class DraftsPage(Page):
         else:
             table.add_row("[#928374]No drafts · n new[/]", "", *(("", "") if not narrow else ()))
         self.show_selected()
+        self.app.main.refresh_chrome()
 
     def cells(self, draft):
         narrow = self.size.width < 40
