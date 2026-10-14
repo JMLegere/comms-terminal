@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import re
+from collections import Counter
 import sqlite3
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -694,17 +695,38 @@ def import_people(db, people: list[dict]) -> dict:
     local one is fuller ("Kevin McFarlane" over "Kevin"). Their Company names the Organizations of its domains."""
     report = {"created": [], "merged": [], "renamed": [], "organizations": []}
     mine = {r[0].lower() for r in db.execute("SELECT self_id FROM connections") if r[0]}
-    for p in people:
-        ids = [("email", e.lower()) for e in p["emails"]] + [("phone", n) for n in p["phones"]]
-        if not ids or any(value in mine for _, value in ids):  # Jeremy himself is never a Person
+    own_domains = {m.rsplit("@", 1)[1] for m in mine if "@" in m}
+
+    def usable(kind, value):  # an address that is one human's own
+        if kind != "email":
+            return True
+        local, _, domain = value.partition("@")
+        return not (AUTOMATED.match(value) or local.startswith(("prvs=", "postmaster", "unsubscribe"))
+                    or domain.startswith(("noreply.", "reply.")) or ("+" in local and domain in own_domains))
+
+    def vendor(p):  # a brand writing as itself: "Cloudflare" from cloudflare.com, "The Quo Team", "NoReply"
+        name = p["name"].strip()
+        if re.search(r"\b(team|support|no-?reply)\b", name, re.I):
+            return True
+        return " " not in name and any(name.lower() in _org(e.rsplit("@", 1)[-1]) for e in p["emails"] if name)
+
+    every = [[("email", e.lower()) for e in p["emails"]] + [("phone", n) for n in p["phones"]] for p in people]
+    claims = Counter(i for ids in every for i in set(ids))
+    for p, ids in zip(people, every):
+        if any(value in mine for _, value in ids) or vendor(p):  # Jeremy himself is never a Person
+            continue
+        # a company's main line or a shared inbox listed on several Attio People belongs to none of them
+        ids = [i for i in ids if claims[i] == 1 and usable(*i)]
+        if not ids:
             continue
         owners = sorted({r[0] for kind, value in ids for r in db.execute(
             "SELECT person_id FROM identities WHERE kind = ? AND value = ? AND person_id IS NOT NULL", (kind, value))})
-        name = person_name(p["name"])
+        name = clean_name(p["name"])
         if not owners:
+            name = name or address_name(ids[0][1]) or ids[0][1]
             with db:
-                keep = _new_person(db, name or ids[0][1])
-            report["created"].append(name or ids[0][1])
+                keep = _new_person(db, name)
+            report["created"].append(name)
         else:
             keep = owners[0]
             for drop in owners[1:]:
@@ -726,6 +748,20 @@ def import_people(db, people: list[dict]) -> dict:
                               (company, _org(domain), company)).rowcount:
                     report["organizations"].append([_org(domain), company])
     return report
+
+
+def address_name(value: str) -> str:
+    """A name read from an address like leslie.magee@… ("Leslie Magee"); "" when it holds no first and last name."""
+    parts = re.split(r"[._]", re.sub(r"\d+", "", value.partition("@")[0])) if "@" in value else []
+    return " ".join(x.capitalize() for x in parts) if len(parts) >= 2 and all(
+        len(x) >= 2 and x.isalpha() for x in parts) else ""
+
+
+def clean_name(name: str) -> str:
+    """A CRM name as a Person's name: First Last, without notes in brackets or a P.Eng credential."""
+    name = re.sub(r"\([^)]*\)", " ", name or "")
+    name = re.sub(r"(?:^|[\s,-]+)P\.\s?Eng\.?(?=\s|,|$)", " ", name, flags=re.I)
+    return person_name(re.sub(r"\s+", " ", name).strip(" ,-"))
 
 
 def display_name(db, person_id: int) -> str:

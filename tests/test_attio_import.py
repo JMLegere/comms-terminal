@@ -78,3 +78,30 @@ def test_attio_people_route():
     assert serve.handle_attio_people(b'{}', SimpleNamespace(client=None))[0] == 400
     context = SimpleNamespace(client=FakeAttio({"people": [], "companies": []}))
     assert serve.handle_attio_people(b'{"days": 89}', context) == (200, {"people": []})
+
+
+def test_shared_lines_and_service_addresses_never_merge_or_import(db):
+    main_line = "+15064531025"
+    report = inbox.import_people(db, [
+        person("Jill Mullin", ["jill@gemtec.test"], [main_line]),
+        person("Dave Purdue", ["dave@gemtec.test"], [main_line]),
+        person("Docs Bot", ["hello@getoutline.test"]),
+        person("Bounce", ["prvs=5428e7654=kory@rbc.test"]),
+        person("Test Account", ["jeremy+app.dev@example.test"]),
+        person("P.Eng. Drew (DTI) MacDonald", ["drew@eng.test"]),
+    ])
+    assert sorted(report["created"]) == ["Dave Purdue", "Drew MacDonald", "Jill Mullin"]
+    assert db.execute("SELECT count(*) FROM identities WHERE value = ?", (main_line,)).fetchone()[0] == 0
+
+
+def test_vendor_senders_skip_and_unnamed_people_take_a_name_from_their_address(db):
+    report = inbox.import_people(db, [
+        person("Cloudflare", ["noreply@notify.cloudflare.test"]),
+        person("Pinterest", ["recommendations@pinterest.test"]),
+        person("The Quo Team", ["hi@quo.test"]),
+        person("", ["leslie.magee@east.test"]),
+        person("", ["daniel.doiron5@gmail.com"]),
+        person("", ["ethan@mulli.test"]),
+        person("Alex", ["alex@acme.test"]),
+    ])
+    assert report["created"] == ["Leslie Magee", "Daniel Doiron", "ethan@mulli.test", "Alex"]
