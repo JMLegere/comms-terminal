@@ -225,7 +225,7 @@ Stored values are Plain's enum names. The console shows the product label.
 
 **`wake`** → `WAITING_FOR_DURATION` past `snoozed_until` → `TODO` with the detail it had when Jeremy snoozed it (`detail_before_snooze`); if it was not in `TODO` then, `NEW_REPLY` if Jeremy has replied on the Thread, else `CREATED` **[C]** (FR-6d).
 
-`WAITING_FOR_CUSTOMER` records `follow_up_at` five days after entering that detail (#116). At that time, `wake` returns the active Thread to `TODO` / `NEW_REPLY` for follow-up. Reconciliation preserves the selected triage state's existing timer.
+`WAITING_FOR_CUSTOMER` records `follow_up_at` four days after entering that detail (#116). At that time, `wake` returns the active Thread to `TODO` / `NEW_REPLY` for follow-up. Reconciliation preserves the selected triage state's existing timer.
 
 **`act`** (key, Plain mutation)
 - `Done` (E, `markThreadAsDone`) → `DONE` / `DONE_MANUALLY_SET`.

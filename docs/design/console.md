@@ -136,7 +136,7 @@ Text-first, like a terminal mail client with Gmail's habits. No images in the co
 - `r` opens the box under the timeline; the conversation stays visible.
 - Email: `To` and `Cc` are prefilled reply-all (FR-3b) and editable with `tab` into a one-line field. Slack: no recipient line; the box shows the channel or DM.
 - `ctrl+enter` sends (#100; `ctrl+s` still works where a terminal cannot report `ctrl+enter`); `esc` closes the box and keeps the draft in memory for that Thread until the app exits.
-- While sending: the box shows `sending…`. On success the app returns to the queue with a toast `Sent → Waiting for them` (back to Todo when they reply, or after 5 days to follow up, #116). On failure the box stays open with the text and shows the error in red.
+- While sending: the box shows `sending…`. On success the app returns to the queue with a toast `Sent → Waiting for them` (back to Todo when they reply, or after 4 days to follow up, #116). On failure the box stays open with the text and shows the error in red.
 
 ### Status, Case, and Person pickers
 

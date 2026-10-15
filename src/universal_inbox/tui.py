@@ -1200,7 +1200,7 @@ class ReplyBox(Vertical):
         self.remove_class("open")
         self.show_idle(self.view)
         self.app.undo = None  # a sent message cannot be unsent
-        self.app.notify("Sent. Waiting for them: back to Todo when they reply, or in 5 days to follow up.")
+        self.app.notify("Sent. Waiting for them: back to Todo when they reply, or in 4 days to follow up.")
         page = self.app.main.page
         if page is not None:
             page.after_change()

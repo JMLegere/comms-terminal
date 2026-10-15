@@ -22,7 +22,7 @@ from typing import Protocol
 from . import platforms
 
 SCHEMA_VERSION = 10
-WAIT = timedelta(days=5)  # Waiting for them ends after this with no reply: back to Todo to follow up (#116)
+WAIT = timedelta(days=4)  # Waiting for them ends after this with no reply: back to Todo to follow up (#116)
 MIGRATIONS = {  # version -> statement that upgrades an existing database to it
     2: "ALTER TABLE cases ADD COLUMN description TEXT NOT NULL DEFAULT ''",
     3: "ALTER TABLE threads ADD COLUMN follow_up_at TEXT;"
