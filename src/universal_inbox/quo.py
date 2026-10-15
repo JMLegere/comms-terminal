@@ -6,6 +6,11 @@ from the Quo app or the console. Each 1:1 conversation is a Channel threaded lik
 are out of scope: Quo fires no event for a group Text sent from the app (V2), so they are dropped.
 Replies go out through Quo's send API; the delivered event for a console reply carries the same message ID
 and is dropped by ingest as a duplicate.
+
+Calls (.agents/discovery/2026-10-15-phone-calls.md): call.completed becomes a Phone call, stored as a MESSAGE
+Activity whose data carries `call` (direction, outcome, length); its content is the one-line summary. A Call
+transcript (call.transcript.completed, or call.voicemail.completed's text) is an EDIT Activity targeting the
+call, from Jeremy so it never moves Status; thread_view shows it under the summary.
 """
 
 import base64
@@ -20,6 +25,7 @@ from . import inbox
 
 SIGNATURE_WINDOW = 300  # seconds
 EVENTS = {"message.received", "message.delivered"}
+TRANSCRIPTS = {"call.transcript.completed": "transcript", "call.voicemail.completed": "voicemail"}
 SEND_URL = "https://api.openphone.com/v1/messages"
 
 
@@ -34,8 +40,74 @@ def verify(headers, body: bytes, key: bytes, now: datetime) -> bool:
     return any(hmac.compare_digest(want, s.partition(",")[2]) for s in sigs.split() if s.startswith("v1,"))
 
 
+def _length(seconds: int) -> str:
+    return f"{seconds // 60}m {seconds % 60}s" if seconds >= 60 else f"{seconds}s"
+
+
+def call_summary(call: dict) -> str:
+    """The Phone call's one line, also the title of a Thread it starts: "Missed call", "Phone call, 4m 12s"."""
+    outcome, length = call["outcome"], call["length"]
+    if outcome == "missed":
+        return "Missed call"
+    if outcome == "voicemail":
+        return f"Voicemail, {_length(length)}"
+    if outcome == "no answer":
+        return "Outgoing call, no answer"
+    return f"{call['direction'].capitalize()} call, {_length(length)}"
+
+
+def _peer(context) -> str | None:
+    """The one other party on a call; None for conference calls and unresolved participants."""
+    external = (context.get("participants") or {}).get("external") or []
+    return external[0] if len(external) == 1 else None
+
+
+def _call(event: dict, connection) -> inbox.Incoming | None:
+    r, c = event["data"]["resource"], event["data"]["context"]
+    peer = _peer(c)
+    if peer is None:
+        return None
+    incoming, status = r["direction"] == "incoming", r.get("status")
+    # Forwarded and AI-handled calls read as missed: Jeremy did not talk (discovery, 2026-10-15).
+    # ponytail: an outgoing call that reaches their voicemail may report "answered" (V2); fix once a test call shows it.
+    outcome = ("connected" if status == "answered" else "voicemail" if incoming and r.get("hasVoicemail")
+               else "missed" if incoming else "no answer")
+    call = {"direction": r["direction"], "outcome": outcome,
+            "length": int(r.get("duration") or 0) if outcome in ("connected", "voicemail") else 0}
+    link = (event["data"].get("links") or {}).get("quo")
+    summary = call_summary(call)
+    return inbox.Incoming(
+        connection_id=connection["id"], channel=peer, channel_kind="im", kind="MESSAGE", native_id=r["id"],
+        sender=inbox.Identity("phone", peer) if incoming else None,
+        occurred_at=datetime.fromisoformat(r["createdAt"].replace("Z", "+00:00")), content=summary, title=summary,
+        data={"peer": peer, "conversation": c.get("conversationId"), "call": call, **({"link": link} if link else {})},
+        channel_name=peer)
+
+
+def _transcript(event: dict, connection) -> inbox.Incoming | None:
+    """A Call transcript as an EDIT of its call, from Jeremy so it never changes Status; None when empty."""
+    kind, r = TRANSCRIPTS[event["type"]], event["data"]["resource"]
+    peer = _peer(event["data"]["context"])
+    if kind == "voicemail":
+        text = (r.get("transcript") or "").strip()
+    else:
+        text = "\n".join(f"{'You' if d.get('userId') else 'Them'}: {d.get('content', '').strip()}"
+                         for d in (r.get("dialogue") or []) if (d.get("content") or "").strip())
+    if not text or not r.get("callId") or peer is None:
+        return None
+    return inbox.Incoming(
+        connection_id=connection["id"], channel=peer, channel_kind="im", kind="EDIT",
+        native_id=f"{r['callId']}:{kind}", sender=None,
+        occurred_at=datetime.fromisoformat(r["createdAt"].replace("Z", "+00:00")), content=text,
+        data={"peer": peer, "transcript": kind})
+
+
 def parse(event: dict, connection) -> inbox.Incoming | None:
-    """One Quo message event -> Incoming, or None for other events and group Texts."""
+    """One Quo event -> Incoming, or None for other events and group Texts."""
+    if event.get("type") == "call.completed":
+        return _call(event, connection)
+    if event.get("type") in TRANSCRIPTS:
+        return _transcript(event, connection)
     if event.get("type") not in EVENTS:
         return None
     r, c = event["data"]["resource"], event["data"]["context"]
@@ -66,8 +138,13 @@ def handle_hook(db, connection_id: int | None, headers, body: bytes, key: bytes,
         return 503
     connection = db.execute("SELECT * FROM connections WHERE id = ?", (connection_id,)).fetchone()
     incoming = parse(json.loads(body), connection)
-    if incoming is not None:
-        inbox.ingest(db, incoming)
+    if incoming is None:
+        return 204
+    if incoming.kind == "EDIT" and db.execute(  # a transcript before its call: 503 so Quo delivers it again
+            "SELECT 1 FROM activities WHERE kind = 'MESSAGE' AND native_id = ?",
+            (incoming.native_id.rsplit(":", 1)[0],)).fetchone() is None:
+        return 503
+    inbox.ingest(db, incoming)
     return 204
 
 

@@ -104,3 +104,85 @@ def test_console_reply_sends_from_the_work_number_and_its_echo_is_not_stored_twi
     assert sent == [(quo.SEND_URL, "k", {"content": "On it", "from": ME, "to": [ANA]})]
     hook(db, cid, event("message.delivered", "AC9", "On it", ME, [ANA], at="2026-10-12T21:19:30Z"), "msg_9")
     assert [r[0] for r in db.execute("SELECT native_id FROM activities ORDER BY id")] == ["AC1", "AC9"]
+
+
+def call_event(kind, cid, peer, at="2026-10-12T21:18:00Z", **resource):
+    """Call events as Quo's 2026-03-30 docs describe them (webhooks-event-payloads); untested live."""
+    return json.dumps({"type": kind, "data": {
+        "resource": {"id": cid, "createdAt": at, **resource},
+        "context": {"phoneNumberId": "PN2ppcGyMM", "conversationId": "CN1", "userId": "US1",
+                    "participants": {"workspace": [ME], "external": [peer], "resolution": "available"}},
+        "links": {"quo": "https://my.quo.com/inbox/CN1"}}}).encode()
+
+
+def completed(cid, peer, direction, status, duration=0, voicemail=False, at="2026-10-12T21:18:00Z"):
+    return call_event("call.completed", cid, peer, at, direction=direction, status=status,
+                      duration=duration, hasVoicemail=voicemail)
+
+
+def test_call_outcomes():
+    con = {"id": 1, "external_id": ME}
+    out = lambda *a, **k: quo.parse(json.loads(completed("AC9", ANA, *a, **k)), con)  # noqa: E731
+    assert out("incoming", "answered", 252).data["call"] == {"direction": "incoming", "outcome": "connected", "length": 252}
+    assert out("incoming", "answered", 252).content == "Incoming call, 4m 12s"
+    assert out("incoming", "unanswered").content == "Missed call"
+    assert out("incoming", "forwarded").data["call"]["outcome"] == "missed"
+    assert out("incoming", "unanswered", 42, voicemail=True).content == "Voicemail, 42s"
+    assert out("outgoing", "unanswered", 30).data["call"] == {"direction": "outgoing", "outcome": "no answer", "length": 0}
+    assert out("outgoing", "unanswered").sender is None and out("incoming", "unanswered").sender.value == ANA
+
+
+def test_every_call_puts_its_thread_in_todo_and_joins_the_texts():
+    db, cid = setup()
+    hook(db, cid, event("message.received", "AC1", "Call me", ANA, [ME]))
+    hook(db, cid, event("message.delivered", "AC2", "Calling now", ME, [ANA], at="2026-10-12T21:19:00Z"), "msg_2")
+    assert inbox.queue(db, "Todo") == []
+    # Jeremy's own outgoing call still lands in Todo, in the same Thread as the Texts
+    assert hook(db, cid, completed("AC3", ANA, "outgoing", "answered", 252, at="2026-10-12T21:20:00Z"), "msg_3") == 204
+    assert [(r["title"], r["detail"]) for r in inbox.queue(db, "Todo")] == [("Call me", "NEW_REPLY")]
+    assert db.execute("SELECT count(*) FROM threads").fetchone()[0] == 1
+    # Repeats are stored once; a Quo retry is not a second call
+    hook(db, cid, completed("AC3", ANA, "outgoing", "answered", 252, at="2026-10-12T21:20:00Z"), "msg_3")
+    assert db.execute("SELECT count(*) FROM activities").fetchone()[0] == 3
+
+
+def test_a_call_from_a_new_number_starts_a_thread_titled_by_outcome():
+    db, cid = setup()
+    hook(db, cid, completed("AC4", BEN, "incoming", "unanswered"))
+    assert [(r["title"], r["detail"]) for r in inbox.queue(db, "Todo")] == [("Missed call", "CREATED")]
+    assert [tuple(r) for r in db.execute("SELECT kind, value FROM identities")] == [("phone", BEN)]
+    db2, cid2 = setup()
+    hook(db2, cid2, completed("AC5", BEN, "outgoing", "unanswered"))  # Jeremy's call starts it: still Todo
+    assert [(r["title"], r["detail"]) for r in inbox.queue(db2, "Todo")] == [("Outgoing call, no answer", "CREATED")]
+
+
+def test_transcripts_append_under_the_call_without_moving_status():
+    db, cid = setup()
+    transcript = call_event("call.transcript.completed", None, ANA, "2026-10-12T21:30:00Z", callId="AC6",
+                            duration=60, processingStatus="completed",
+                            dialogue=[{"userId": "US1", "identifier": ME, "content": "Hi Ana."},
+                                      {"userId": None, "identifier": ANA, "content": "The pour moved to Friday."}])
+    assert hook(db, cid, transcript, "msg_t") == 503  # before its call: Quo delivers it again later
+    hook(db, cid, completed("AC6", ANA, "incoming", "answered", 60))
+    tid = db.execute("SELECT id FROM threads").fetchone()[0]
+    inbox.act(db, tid, inbox.Done())
+    assert hook(db, cid, transcript, "msg_t") == 204
+    assert inbox.get_thread(db, tid).status == "DONE"
+    m = inbox.thread_view(db, tid)["messages"][0]
+    assert m["content"] == "Incoming call, 1m 0s\n\nYou: Hi Ana.\nThem: The pour moved to Friday."
+    assert not m["edited"] and m["link"] == "https://my.quo.com/inbox/CN1"
+    # A voicemail's text arrives the same way
+    hook(db, cid, completed("AC7", BEN, "incoming", "unanswered", 12, voicemail=True))
+    hook(db, cid, call_event("call.voicemail.completed", "VM1", BEN, callId="AC7", direction="incoming",
+                             duration=12, transcript="Call me back about the bid."), "msg_v")
+    vm = inbox.thread_view(db, inbox.queue(db, "Todo")[0]["id"])["messages"][0]
+    assert vm["content"] == "Voicemail, 12s\n\nCall me back about the bid."
+
+
+def test_conference_calls_and_unresolved_participants_are_dropped():
+    con = {"id": 1, "external_id": ME}
+    e = json.loads(completed("AC8", ANA, "incoming", "answered", 10))
+    e["data"]["context"]["participants"]["external"] = [ANA, BEN]
+    assert quo.parse(e, con) is None
+    e["data"]["context"]["participants"] = {"workspace": [], "external": [], "resolution": "unavailable"}
+    assert quo.parse(e, con) is None

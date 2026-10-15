@@ -1339,6 +1339,7 @@ def _ingest(db, inc: Incoming) -> Thread | None:
     at = inc.occurred_at
 
     target_id = None
+    call = inc.kind == "MESSAGE" and "call" in inc.data  # a Phone call: every one puts its Thread in Todo
     if inc.kind == "MESSAGE":
         thread_id = _thread_for_message(db, channel_id, inc, identity_id)
     else:
@@ -1353,14 +1354,15 @@ def _ingest(db, inc: Incoming) -> Thread | None:
 
     created = thread_id is None
     if thread_id is None:
-        status = _initial_status(identity)
+        status = (("DONE", "IGNORED") if identity and identity["blocked"] else ("TODO", "CREATED")) if call \
+            else _initial_status(identity)
         title = inc.title or (inc.content or "").strip()[:80] or "(no subject)"
         until = _follow_up(status[1], at)
         thread_id = db.execute(
             "INSERT INTO threads (channel_id, native_thread_id, title, status, status_detail,"
             " status_changed_at, created_at, follow_up_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (channel_id, inc.native_id, title, *status, _iso(at), _iso(at), until)).lastrowid
-    elif inc.kind == "MESSAGE" and identity is None and _echo_of_sent(db, thread_id, inc):
+    elif inc.kind == "MESSAGE" and identity is None and not call and _echo_of_sent(db, thread_id, inc):
         return None
 
     activity_id = db.execute(
@@ -1374,7 +1376,7 @@ def _ingest(db, inc: Incoming) -> Thread | None:
         _reconcile_email_threads(db, True, channel_id)
     t = get_thread(db, thread_id)
     if not created or t.id != thread_id:
-        nxt = _after_activity(t.status, t.status_detail, identity is None, inc.kind)
+        nxt = _after_activity(t.status, t.status_detail, identity is None and not call, inc.kind)
         if nxt:
             _set_status(db, t.id, *nxt, at)
     if inc.kind == "DELETE":  # FR-2a
@@ -1708,7 +1710,9 @@ def thread_view(db, thread_id: int) -> dict:
                 msgs.append(m)
             elif a["target_id"] in by_id:
                 m = by_id[a["target_id"]]
-                if a["kind"] == "EDIT":
+                if a["kind"] == "EDIT" and "call" in m["data"]:  # a Call transcript goes under the call's summary
+                    m["content"] = m["content"].partition("\n")[0] + "\n\n" + (a["content"] or "")
+                elif a["kind"] == "EDIT":
                     m["edited"], m["content"] = True, a["content"]
                 else:
                     m["deleted"], m["content"] = True, None

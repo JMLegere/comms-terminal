@@ -26,8 +26,18 @@ The monotonically increasing version of a saved Draft, checked before a later sa
 Stored Threads matching an exact email or phone destination, whether or not it is linked to a Person; it makes no claim about external messages.
 
 **Activity**:
-A timestamped, never-rewritten record of a message received or sent in a Thread, or of an edit or deletion of one.
+A timestamped, never-rewritten record of a message received or sent in a Thread, a Phone call, or an edit or deletion of one.
 _Avoid_: Event, Interaction, Message (when meaning the record)
+
+**Phone call**:
+An Activity recording one call on the Work number, incoming or outgoing, from any Quo app, with its direction, Call outcome, and length. It joins its number's Thread by the same 7-day rule as Texts, and every Phone call puts its Thread in Todo.
+_Avoid_: Call log, Call event, Dial
+
+**Call outcome**:
+Connected, missed, voicemail, or no answer. Missed and voicemail are incoming only; no answer is outgoing only. Forwarded and AI-handled calls count as missed.
+
+**Call transcript**:
+A later record appended to a Phone call, holding Quo's transcript of the conversation or the voicemail. It never changes the Thread's Status.
 
 **Attachment**:
 A file that arrives or is sent with a message, or is added to a Draft to go with it, listed beside the message rather than placed in its body. A Slack file or an SMS photo is an Attachment.
