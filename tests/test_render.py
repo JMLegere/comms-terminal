@@ -42,6 +42,16 @@ def test_hidden_text_tracking_pixels_and_decorative_links_are_dropped():
     assert text == "Hello there\n[image: Q3 chart]"
 
 
+def test_inline_cid_images_leave_a_marker_where_they_sit_and_remote_ones_their_alt():
+    html = ('<p>Before</p><a href="https://x.test"><img src="cid:shot1@x"></a><p>After <b>bold <img src="cid:two">'
+            ' end</b></p><img src="https://t.example/c.png" alt="Remote chart"><img src="https://t.example/d.png">')
+    b = render.from_raw(html_mail(html))
+    assert b.text == ("Before\n\n\ue000shot1@x\ue001\n\nAfter [b]bold\n\ue000two\ue001\nend[/b]\n"
+                      "[#928374]\\[image: Remote chart][/]")
+    assert render.IMG.findall(b.text) == ["shot1@x", "two"]
+    assert shown(b) == "Before\n\n[image]\n\nAfter bold\n[image]\nend\n[image: Remote chart]"  # no markers
+
+
 def test_gmail_quote_and_signature_are_trimmed():
     html = ('<div dir="ltr">Friday works for me!</div><br><div class="gmail_quote"><div class="gmail_attr">'
             'On Fri, Oct 9, 2026 at 8:06 AM Tony &lt;tony@x.com&gt; wrote:<br></div>'

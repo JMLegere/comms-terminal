@@ -78,7 +78,8 @@ def test_photo_is_an_attachment_and_group_texts_are_dropped():
     assert db.execute("SELECT title FROM threads").fetchone()[0] == "Photo"
     v = inbox.thread_view(db, db.execute("SELECT id FROM threads").fetchone()[0])
     assert v["messages"][0]["attachments"] == [{"name": "photo", "type": "image/jpeg", "size": 0, "inline": False,
-                                                "state": "pending", "sha": None, "path": None, "url": "https://share.quo.com/AC3"}]
+                                                "state": "pending", "content_id": None, "sha": None, "path": None,
+                                                "url": "https://share.quo.com/AC3"}]
     assert v["link"] == "https://my.quo.com/inbox/CN1" and v["where"] == f"SMS · {ANA}"
     assert hook(db, cid, event("message.received", "AC4", "group", ANA, [ME, BEN])) == 204
     assert db.execute("SELECT count(*) FROM activities").fetchone()[0] == 1

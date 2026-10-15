@@ -2,7 +2,9 @@
 attach menu, paste, unstaging, SMS, and forward."""
 
 import io
+import json
 from datetime import datetime, timezone
+from email.message import EmailMessage
 
 import textual_image.widget  # noqa: F401 - as main.py does before the app starts
 from PIL import Image
@@ -61,6 +63,54 @@ def test_chips_link_stored_files_and_pending_ones_say_not_copied_and_images_show
     assert "not copied" not in chips[0] and "/f/" in chips[1]
     assert "late.zip" in chips[2] and "not copied" in chips[2] and "/f/" not in chips[2]
     assert seen["images"] == 1
+
+
+def with_inline_image(tmp_path, stored):
+    """A new newest message from Ana, kept raw: text, a pasted screenshot (cid), more text."""
+    path, ids = seeded(tmp_path)
+    db, pic = inbox.connect(path), png()
+    m = EmailMessage()
+    m["From"], m["To"], m["Subject"] = "Ana <ana@acme.com>", "me@x.io", "Look"
+    m.set_content('<p>Look at this:</p><img src="cid:shot1@x"><p>Thoughts?</p>', subtype="html")
+    m.add_related(pic, "image", "png", cid="<shot1@x>")
+    with db:
+        mid = db.execute("INSERT INTO activities (thread_id, kind, occurred_at, identity_id, native_id, content, data)"
+                         " SELECT thread_id, 'MESSAGE', ?, identity_id, '<look@acme.com>', 'Look', ? FROM activities"
+                         " WHERE id = ?", (datetime.now(timezone.utc).isoformat(),
+                                           json.dumps({"raw": inbox.store_raw(db, bytes(m))}),
+                                           newest(db, ids["ana"]))).lastrowid
+    inbox.add_attachments(db, mid, [{"name": "shot1_x.png", "type": "image/png", "size": len(pic), "inline": True,
+                                     "content_id": "shot1@x", "sha": inbox.store_file(db, pic) if stored else None}])
+    return path, ids, db
+
+
+def card_parts(tmp_path, stored):
+    path, ids, db = with_inline_image(tmp_path, stored)
+    app, seen = Console(path), {}
+
+    async def go(app, pilot):
+        app.main.open_thread(ids["ana"])
+        await pilot.pause()
+        card = app.main.thread_view.query(".msg").last()
+        seen["parts"] = [(c.classes & {"mbody", "mimage"}, str(getattr(c, "content", ""))) for c in card.children
+                         if c.classes & {"mbody", "mimage"}]
+
+    run(app, [go])
+    return [(next(iter(k)), text) for k, text in seen["parts"]], thread_text(inbox.thread_view(db, ids["ana"]),
+                                                                              inbox.raw_dir(db))
+
+
+def test_an_inline_image_shows_where_it_sits_in_the_body_once(tmp_path):
+    parts, text = card_parts(tmp_path, stored=True)
+    assert [k for k, _ in parts] == ["mbody", "mimage", "mbody"]  # not again below the text
+    assert parts[0][1] == "Look at this:" and parts[2][1] == "Thoughts?"
+    assert "Look at this:\n\n[image: shot1_x.png]\n\nThoughts?" in text and "\ue000" not in text
+
+
+def test_an_inline_image_not_stored_reads_as_its_name_in_place(tmp_path):
+    parts, _ = card_parts(tmp_path, stored=False)
+    assert [k for k, _ in parts] == ["mbody"]
+    assert "Look at this:" in parts[0][1] and "[image: shot1_x.png]" in parts[0][1] and "Thoughts?" in parts[0][1]
 
 
 def test_y_lists_each_stored_file_path_for_threads_and_drafts(tmp_path):

@@ -1,8 +1,9 @@
 """Message bodies for the console: Gmail's habits in a terminal (decisions #105-#109).
 
 Text-first. HTML is converted to Rich markup with the standard library (chosen over `lynx -dump` in a
-bake-off on real mail): links keep their label and show their real domain, images become `[image: alt]`,
-tracking pixels and hidden preheaders are dropped. Trimmed content (quoted earlier messages, signatures,
+bake-off on real mail): links keep their label and show their real domain, inline (cid:) images leave an
+`IMG` marker where they sit for the console to paint, remote images become `[image: alt]`, tracking pixels
+and hidden preheaders are dropped. Trimmed content (quoted earlier messages, signatures,
 boilerplate footers) is split off so the console can fold it behind `•••`. Calendar invites become an
 event card; Attachments are listed for chips.
 """
@@ -37,9 +38,14 @@ class Body:
         return re.sub(r"\s+", " ", plain(self.text)).strip()
 
 
+# An inline (cid:) image's place on a line of its own: private-use characters carrying its Content-ID, which
+# escaping, trimming, and the Trimmed content split all leave alone.
+IMG = re.compile("\ue000([^\ue001\n]*)\ue001")
+
+
 def plain(markup: str) -> str:
-    """Rich markup -> text."""
-    return re.sub(r"(?<!\\)\[(?:/?[a-z#@][^\]\n]*|/)\]", "", markup).replace("\\[", "[")
+    """Rich markup -> text; an inline image's marker reads [image]."""
+    return IMG.sub("[image]", re.sub(r"(?<!\\)\[(?:/?[a-z#@][^\]\n]*|/)\]", "", markup).replace("\\[", "["))
 
 
 # --- links -------------------------------------------------------------------------------------------
@@ -193,8 +199,8 @@ class _Html(HTMLParser):
     def hidden(self):
         return any(h for _, h, _, _ in self.stack)
 
-    def emit(self, s: str):
-        if self.href is not None and s != "\n":
+    def emit(self, s: str, label: bool = True):
+        if label and self.href is not None and s != "\n":
             self.label.append(s)
         else:
             (self.trim if any(t for _, _, t, _ in self.stack) else self.out).append(s)
@@ -208,6 +214,8 @@ class _Html(HTMLParser):
                 self.emit("\n")
             elif tag == "hr":
                 self.emit("\n───\n")
+            elif tag == "img" and a.get("src", "").lower().startswith("cid:"):
+                self.emit(f"\n\ue000{a['src'][4:].strip('<> ')}\ue001\n", label=False)  # not a link's label
             elif tag == "img":
                 alt = WS.sub(" ", a.get("alt", "")).strip()
                 tiny = a.get("width") in ("0", "1") or a.get("height") in ("0", "1")

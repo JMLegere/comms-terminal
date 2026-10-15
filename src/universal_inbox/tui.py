@@ -25,6 +25,7 @@ from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.content import Content
 from textual.coordinate import Coordinate
 from textual.message import Message
 from textual.screen import ModalScreen, Screen
@@ -1456,26 +1457,60 @@ def message_files(m, body, inline=False) -> list[dict]:
 IMAGE_ROWS = 20  # an image's height cap in a message card (FR-A6)
 
 
-def message_images(m) -> list:
-    """Stored image Attachments and inline (cid) images as pictures (FR-A6): Kitty graphics where the terminal
-    paints them (probed in main.py before the app starts), else textual-image's own fallback. One that does not
-    open is left to its chip."""
+def picture(a):
+    """A stored image Attachment as a picture (FR-A6): Kitty graphics where the terminal paints it (probed in
+    main.py before the app starts), else textual-image's own fallback. None when it does not open."""
     from PIL import Image as Picture
     from textual_image.widget import Image, get_cell_size
-    out = []
-    for a in m["attachments"]:
-        if not (a["path"] and a["type"].startswith("image/")):
-            continue
-        try:
-            with Picture.open(a["path"]) as p:
-                height = p.size[1]
-        except (OSError, ValueError, Picture.DecompressionBombError):
-            continue
-        # ponytail: width follows the height; a very wide image is squeezed to the card's width
-        img = Image(a["path"], classes="mimage", on_error=lambda _: Static(""))
-        img.styles.height = max(1, min(IMAGE_ROWS, round(height / get_cell_size().height)))
-        out.append(img)
-    return out
+    if not (a and a["path"] and a["type"].startswith("image/")):
+        return None
+    try:
+        with Picture.open(a["path"]) as p:
+            height = p.size[1]
+    except (OSError, ValueError, Picture.DecompressionBombError):
+        return None
+    # ponytail: width follows the height; a very wide image is squeezed to the card's width
+    img = Image(a["path"], classes="mimage", on_error=lambda _: Static(""))
+    img.styles.height = max(1, min(IMAGE_ROWS, round(height / get_cell_size().height)))
+    return img
+
+
+def message_images(m, placed=frozenset()) -> list:
+    """Image Attachments as pictures below the body, except inline ones `placed` (by content_id) in it. One that
+    does not open is left to its chip."""
+    return [p for a in m["attachments"] if not (a["inline"] and a.get("content_id") in placed) and (p := picture(a))]
+
+
+def inline_attachment(m, cid):
+    return next((a for a in m["attachments"] if a["inline"] and a.get("content_id") == cid), None)
+
+
+def image_label(a) -> str:
+    return "\\[image" + (f": {escape(a['name'])}" if a else "") + "]"
+
+
+AROUND_IMG = re.compile(r"\n*" + render.IMG.pattern + r"\n*")
+
+
+def body_parts(markup: str, m, cls: str) -> list:
+    """Body markup as text with each inline (cid) image painted where it sits; one not stored (pending,
+    expired, or never copied) reads [image: name] there instead."""
+    pics = []
+
+    def place(x):
+        a = inline_attachment(m, x[1])
+        pic = picture(a)
+        if pic is None:
+            return f"[{render.DIM}]{image_label(a)}[/]"
+        pics.append(pic)
+        return x[0]
+    content = Content.from_markup(render.IMG.sub(place, markup))  # split after parsing: markup stays balanced
+    out, at = [], 0
+    for x, pic in zip(AROUND_IMG.finditer(content.plain), pics):
+        out += [MessageText(content[at:x.start()], classes=cls)] if x.start() > at else []
+        out.append(pic)
+        at = x.end()
+    return out + ([MessageText(content[at:], classes=cls)] if at < len(content.plain) else [])
 
 
 def default_open(msgs) -> set[int]:
@@ -1561,12 +1596,12 @@ def message_widgets(v, st: dict | None = None, raw=None) -> list:
             parts.append(MessageText(f"[{dim}]{ICON['calendar']} invitation[/]\n" + render.invite_card(body.invite),
                                      classes="mbody"))
         if body.text:
-            parts.append(MessageText(body.text, classes="mbody"))
+            parts += body_parts(body.text, m, "mbody")
         if body.trimmed:
             parts.append(MessageText(f"[@click=app.msg_trim({tid},{message_action_id(m['native_id'])})][{dim} on #ebdbb2] ••• [/][/]", classes="mtoggle"))
             if m["native_id"] in st["trim"]:
-                parts.append(MessageText(body.trimmed, classes="mtrim"))
-        parts += message_images(m)
+                parts += body_parts(body.trimmed, m, "mtrim")
+        parts += message_images(m, set(render.IMG.findall(body.text + "\n" + body.trimmed)))
         files = message_files(m, body)
         if files:  # each chip opens its stored copy (FR-A5), or the message in its service
             chips = [f"[link='{a['url'] or ''}'][#45707a]{ICON['attachment']} "
@@ -1977,9 +2012,10 @@ def thread_text(v, raw=None, context=None) -> str:
             lines.append("(message deleted)")
             continue
         body = message_body(m, raw, slack)
-        lines += ["", agent_text(body.text)]
+        named = lambda s: render.IMG.sub(lambda x: image_label(inline_attachment(m, x[1])), s)  # noqa: E731
+        lines += ["", agent_text(named(body.text))]
         if body.trimmed:
-            lines += ["", "Trimmed content:", agent_text(body.trimmed)]
+            lines += ["", "Trimmed content:", agent_text(named(body.trimmed))]
         lines += [attachment_line(a) for a in message_files(m, body, inline=True)]
     for source, (answer, error) in (context or {}).items():
         if answer is not None or error:

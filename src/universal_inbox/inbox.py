@@ -1857,9 +1857,9 @@ def _shaped(db, m: dict, platform, channel, files) -> dict:
     """A message as the console shows it, whatever its Platform: raw source (email), recipients, a link that
     opens it in the service, and attachments; `data` stays for email reply-all.
 
-    Each attachment: name, type, size, inline, state (None when the Platform only lists it), sha and path (the
-    stored copy, else None), and url: the LAN file link once stored and `files` = (host, port) is given (FR-A5),
-    else the Platform link."""
+    Each attachment: name, type, size, inline and content_id, state (None when the Platform only lists it), sha
+    and path (the stored copy, else None), and url: the LAN file link once stored and `files` = (host, port) is
+    given (FR-A5), else the Platform link."""
     d = m["data"]
     m["link"] = platform.link(m, channel)
     urls = [u for _, u in d.get("media") or []]  # Quo media: each photo has its own signed URL
@@ -1867,7 +1867,8 @@ def _shaped(db, m: dict, platform, channel, files) -> dict:
     rows = attachments(db, m["id"])
     m["attachments"] = [
         {"name": r["name"], "type": r["type"], "size": r["size"], "inline": bool(r["inline"]), "state": r["state"],
-         "sha": r["sha"], "path": str(attachment_path(db, r["sha"])) if r["sha"] else None,
+         "content_id": r["content_id"], "sha": r["sha"],
+         "path": str(attachment_path(db, r["sha"])) if r["sha"] else None,
          "url": file_url(db, r["sha"], r["name"], *files) if r["sha"] and files else link(r["position"])}
         for r in rows] or [
         {"name": a[0], "type": a[1], "size": a[2], "inline": False, "state": None, "sha": None, "path": None,
