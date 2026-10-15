@@ -1,4 +1,5 @@
-"""universal-inbox: the console (default), `serve` (the systemd service), and `init` (create Connections)."""
+"""universal-inbox: the console (default), `serve` (the systemd service), `init` (create Connections), and
+`threads`/`thread`/`drafts`/`draft` for a terminal agent (agent.py)."""
 
 import argparse
 import os
@@ -46,10 +47,17 @@ def main(argv=None) -> None:
     f.add_argument("--days", type=int, default=30)
     ai = sub.add_parser("attio-import", help="add Attio People touched recently; merge and rename to match Attio")
     ai.add_argument("--days", type=int, default=89)
+    from . import agent
+    agent.add_parsers(sub)
     a = p.parse_args(argv)
     Path(a.db).parent.mkdir(parents=True, exist_ok=True)
 
-    if a.cmd == "serve":
+    if a.cmd in ("threads", "thread", "drafts", "draft"):
+        from . import inbox
+        db = inbox.connect(a.db)
+        inbox.migrate(db)
+        agent.run(a, db)
+    elif a.cmd == "serve":
         from . import serve
         serve.run(a.db, a.socket, a.host, a.port)
     elif a.cmd == "init":

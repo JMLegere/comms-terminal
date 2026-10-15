@@ -551,7 +551,8 @@ class ThreadActions:
                      if tv.thread_id == tid and getattr(tv, "view", None)), None)
         v = pane.view if pane else inbox.thread_view(self.app.db, tid)
         context = {s.source: s.answer for s in (pane or self).query(ContextSection)}
-        copy_for_agent(self.app, thread_text(v, self.app.raw, context), "the thread")
+        text = thread_text(v, self.app.raw, context) + f"\nFresh copy: `universal-inbox thread {v['thread'].id}`\n"
+        copy_for_agent(self.app, text, "the thread")
 
     def action_person(self):
         tid = self.current_thread_id()
@@ -1740,10 +1741,37 @@ def thread_text(v, raw=None, context=None) -> str:
     return "\n".join(lines) + "\n"
 
 
-def draft_text(values, connection_label, history, raw=None) -> str:
-    """A Draft as Markdown: its envelope and body, then each captured-history Thread in full."""
-    lines = [f"# Draft: {values['subject'] or 'no subject'}", "", f"- Connection: {connection_label}",
-             f"- From: {values['sender'] or 'not selected'}", f"- To: {values['to'] or 'not selected'}"]
+def draft_history(db, kind, connection_id, destination) -> list | None:
+    """Thread views of a Draft's Captured history; None until the recipient is exact."""
+    if kind == "slack":
+        addresses, lookup = inbox._destinations(destination, "slack"), "slack"
+        exact = len(addresses) == 1
+    elif kind == "email":
+        addresses, lookup = [a.lower() for _, a in getaddresses([destination])], "email"
+        exact = bool(addresses) and all(re.fullmatch(r"[^@\s,;<>]+@[^@\s,;<>]+", a) for a in addresses)
+    else:
+        addresses, lookup = [destination.strip()], "phone"
+        exact = bool(re.fullmatch(r"\+[1-9]\d{6,14}", addresses[0]))
+    if not exact:
+        return None
+    threads = {t.id: t for a in addresses for t in (
+        inbox.channel_threads(db, connection_id, a) if lookup == "slack" else inbox.recipient_threads(db, lookup, a))}
+    return [inbox.thread_view(db, t.id) for t in threads.values()]
+
+
+def connection_label(connection) -> str:
+    return f"{PLATFORMS[connection['platform']].title} · {conn_name(connection)}" if connection else "none"
+
+
+def draft_text(values, connection_label, history, raw=None, ref=None) -> str:
+    """A Draft as Markdown: its envelope and body, then each captured-history Thread in full. `ref` is the
+    saved Draft's (id, revision), which the `universal-inbox draft` command needs to change it."""
+    lines = [f"# Draft: {values['subject'] or 'no subject'}", ""]
+    if ref:
+        lines.append(f"- Draft: {ref[0]} · revision {ref[1]} · change it with "
+                     f"`universal-inbox draft {ref[0]} --revision {ref[1]} --body -` (also --to, --cc, --subject)")
+    lines += [f"- Connection: {connection_label}",
+              f"- From: {values['sender'] or 'not selected'}", f"- To: {values['to'] or 'not selected'}"]
     lines += [f"- Cc: {values['cc']}"] if values["cc"] else []
     lines += ["", "## Body", "", values["body"] or "(empty)"]
     if history:
@@ -1975,27 +2003,15 @@ class DraftView(Horizontal):
         if not force and key == self.history_key:
             return
         self.history_key, self.history_views = key, []
-        if self.kind == "slack":
-            addresses, kind = inbox._destinations(destination, "slack"), "slack"
-            exact = len(addresses) == 1
-        elif self.kind == "email":
-            addresses = [a.lower() for _, a in getaddresses([destination])]
-            exact = bool(addresses) and all(re.fullmatch(r"[^@\s,;<>]+@[^@\s,;<>]+", a) for a in addresses)
-            kind = "email"
-        else:
-            addresses, kind = [destination.strip()], "phone"
-            exact = bool(re.fullmatch(r"\+[1-9]\d{6,14}", addresses[0]))
         self.history_note = "Choose an exact recipient."
-        if exact:
-            try:
-                threads = {t.id: t for a in addresses for t in (
-                    inbox.channel_threads(self.app.db, self.connection_id, a) if kind == "slack"
-                    else inbox.recipient_threads(self.app.db, kind, a))}
-                self.history_views = [inbox.thread_view(self.app.db, t.id) for t in threads.values()]
-                self.history_note = "No captured match · prior contact unknown." if not threads else "Captured local history"
-            except Exception:
-                self.history_views = []
-                self.history_note = "Captured history unavailable · lookup failed."
+        try:
+            views = draft_history(self.app.db, self.kind, self.connection_id, destination)
+            if views is not None:
+                self.history_views = views
+                self.history_note = "No captured match · prior contact unknown." if not views else "Captured local history"
+        except Exception:
+            self.history_views = []
+            self.history_note = "Captured history unavailable · lookup failed."
         self.paint_history()
         self.paint()
 
@@ -2345,9 +2361,8 @@ class DraftsPage(Page):
         view = self.app.main.draft_view
         if view is None:
             return
-        connection = view.connection()
-        label = f"{PLATFORMS[connection['platform']].title} · {conn_name(connection)}" if connection else "none"
-        copy_for_agent(self.app, draft_text(view.values(), label, view.history_views, self.app.raw), "the draft")
+        copy_for_agent(self.app, draft_text(view.values(), connection_label(view.connection()), view.history_views,
+                                            self.app.raw, (view.draft_id, view.draft["revision"])), "the draft")
 
     def action_delete(self):
         selected = self.selected()
