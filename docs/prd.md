@@ -3,7 +3,7 @@
 ## 1. Document control
 
 - **Title**: Universal Inbox MVP (Gmail + Slack)
-- **Status**: **Draft (revision 3; updated 2026-10-15).** Revision 3 adopted Plain's status model and integration architecture and added replying from the console (decisions #51–#56). Behavior follows Plain unless a deviation is stated with its reason. The technical design in §4–§5 is **Approved** (D1, decision #67). Each phase needs its own implementation authorization. D2 is resolved (SSH, #71); D3 is resolved (Cloudflare Tunnel, Email Routing with an Email Worker, Resend; #102). Phases 0–5 and the 6.1 and 6.3 builds are done; 6.2 and 6.4 are Jeremy's connect steps in `docs/runbook.md`. Linear context (FR-13c, #125) was built under Jeremy's "execute the plan"; under his subsequent "ship it", release `38e196e` is published to `main`/`dev` and deployed to the existing Workbox package/service. Linear remains unconnected; exact key, workspace, and required-team authorization remain separately gated.
+- **Status**: **Draft (revision 3; updated 2026-10-15).** Revision 3 adopted Plain's status model and integration architecture and added replying from the console (decisions #51–#56). Behavior follows Plain unless a deviation is stated with its reason. The technical design in §4–§5 is **Approved** (D1, decision #67). Each phase needs its own implementation authorization. D2 is resolved (SSH, #71); D3 is resolved (Cloudflare Tunnel, Email Routing with an Email Worker, Resend; #102). Phases 0–5 and the 6.1 and 6.3 builds are done; 6.2 and 6.4 are Jeremy's connect steps in `docs/runbook.md`. Linear context (FR-13c, #125) was built under Jeremy's "execute the plan"; under his subsequent "ship it", release `38e196e` is published to `main`/`dev` and deployed to the existing Workbox package/service. Linear remains unconnected; exact key, workspace, and required-team authorization remain separately gated. Attachments (#127–#137) are built on `dev` (P1–P6) and their release (P7) is authorized; plan: `.agents/prd/2026-10-15-attachments.md`.
 - **Owner / authority**: Jeremy Legere (single user and product owner)
 - **Created**: 2026-10-10T20:04+00:00
 - **Updated**: 2026-10-15
@@ -52,7 +52,7 @@ Source: discovery doc §Context.
 - Tool comments, WhatsApp, LinkedIn.
 - Other mailboxes and workspaces.
 - Domain, category, or content rules.
-- Sending new conversations (new email, new DM), attachments, rich text, undo-send, signatures. Persistent unsent Drafts are authorized separately in the Drafts-first expansion below.
+- Sending new conversations (new email, new DM), rich text, undo-send, signatures. Persistent unsent Drafts are authorized separately in the Drafts-first expansion below.
 - Cmd+K.
 - Additional Context sources beyond Tana, Attio, and the Linear contract in FR-13c.
 - Plain's "Close the loop" (needs linked issues).
@@ -63,6 +63,10 @@ Source: discovery doc §Context.
 **Drafts-first expansion.**
 
 The new-thread composition design is approved for a local Drafts-first release: create, edit, save and resume email/SMS Drafts with captured recipient history. Drafts is an ordinary page under Threads and replaces visible All; existing status pages and backend All query remain. Drafts are not Threads or Activities. Saves use expected Draft revisions to avoid overwriting concurrent edits. New-message sending and attempt/recovery work remain gated; existing replies are unchanged. This expansion preserves the existing single-console/SQLite architecture and adds no provider or service endpoint.
+
+**Attachments expansion.**
+
+Received Attachments and Inline images on Gmail, Slack, and SMS are copied on arrival into one store on Workbox, open on Mani through LAN links, and show in the console; `y` gives agents their paths. Email and Slack replies and Drafts send Attachments (#127–#137).
 
 
 **Success measures.**
@@ -170,7 +174,7 @@ Status key in brackets:
   - [PL] Plain's keys: J / K next and previous; E Done; Z Pause for later; W Wait for them; S change status (for example, Investigating).
   - [P] R opens the inline reply box on the Thread; Ctrl+S sends (decision #75; terminals cannot tell Ctrl+Enter from Enter).
   - [D] I Ignore; C add to Case. Reason: Plain ignores through status changes and workflows, and has no Case.
-  - [D] Enter opens the Thread in the console; O shows a Ctrl-clickable link to it in Gmail or Slack. Reason: reading full context or attachments in the native app. Other console keys: `docs/design/console.md` §4.
+  - [D] Enter opens the Thread in the console; O shows a Ctrl-clickable link to it in Gmail or Slack. Reason: reading full context in the native app; Attachments open from their chips (#130). Other console keys: `docs/design/console.md` §4.
 - **FR-15** [C]: The console sends only replies Jeremy writes. It never edits, deletes, archives, or marks read anything in Gmail or Slack.
 
 ### Non-functional
@@ -698,7 +702,7 @@ All entries are dated 2026-10-10; exact times are unproven unless noted. Full de
 - **51**
   - Request / decision: Reply from inside the inbox, as in Plain, on both Gmail and Slack, in the MVP. Plain text replies; email defaults to reply-all; R opens the reply box. New conversations, attachments, rich text, drafts, and undo-send deferred
   - Source: Jeremy, "i want to reply from inside this inbox similar to how plain works", and ask tool answer
-  - Status: Accepted
+  - Status: Accepted; attachments deferral superseded by #127
   - Supersedes: read-only mirror (FR-15 rev 2), write-back deferral, `gmail.readonly` only
 - **52**
   - Request / decision: Status follows Plain's architecture exactly: Status (Todo, Snoozed, Done) plus Status detail
@@ -836,7 +840,7 @@ All entries are dated 2026-10-10; exact times are unproven unless noted. Full de
 - **105–109**
   - Request / decision: Gmail-like Thread rendering, text-first (reopens FR-16 body rendering, removed in #635, and rich text and attachments, deferred in #678). No images in the console: omp turns terminal images off under Herdr, Herdr has open Kitty-graphics bugs (#3697, #4858), and terminal mail clients (aerc, neomutt, meli) render HTML as text with a key to open visual mail elsewhere; visual mail opens in Gmail (`o`) (#105). Each inbound email's raw RFC 822 bytes are kept, content-addressed on Workbox, forever; older messages stay text-only. The HTML part is rendered, converted to terminal text; plain is the fallback. Links show their label and real domain (known tracking redirects unwrapped for the domain shown) and open the original link; images show as `[image: alt]`; Attachments show as chips (name, type, size) that open the message in Gmail, since Gmail's per-attachment link needs Gmail's internal message ID, which a forwarded copy lacks (#106). Messages after Jeremy's last reply and the newest are expanded, the rest collapse to one line; Trimmed content (quoted text, signatures, boilerplate footers) folds behind `•••`; each message header shows name, absolute and relative time (relative within 7 days), and to/cc, with full addresses on expand; no clipping of long messages; newsletters follow the same rules (#107). Calendar invites render as an event card (RSVP stays in Gmail); forwarded mail renders as a nested message card, untrimmed (#108). Replies quote the earlier message Gmail-style (`On … wrote:`, HTML with `gmail_quote` plus plain text) and still target the latest inbound message; Slack rendering follows when Slack connects (#109). The HTML-to-text converter is chosen by a bake-off on real mail between a stdlib converter and `w3m -dump`
   - Source: Jeremy, "i want the thread rendering to be like gmail, images, rendering things smartly, etc", "do discovery on this - not sure the best way to do this in a tui, or if this is even a good idea", the Attio notification screenshot ("it should be smart about things like this"), "aerc, neomutt and meli all render HTML through w3m or lynx as text. should we try this?", ask tool answers 2026-10-12
-  - Status: Accepted
+  - Status: Accepted; #105's no-images rule superseded by #133, #106's chips by #130
 - **110**
   - Request / decision: The HTML-to-text converter is our own, on the standard library (`render.py`). Bake-off on six real messages exported from Gmail (Attio notification, Tana newsletter, Gmail reply chain, CDL reply, RBC Zoom invite, Outlook reply with inline images) against `lynx -dump` (`w3m` is not installed; `lynx` is the same family): lynx printed every image as its file name, numbered every link as a footnote, kept quoted history, and leaked spacer characters; ours read like Gmail. Gaps found and fixed: Outlook `From:/Sent:` quote blocks, markup inside link labels, Proofpoint `urldefense` links
   - Source: Jeremy, "aerc, neomutt and meli all render HTML through w3m or lynx as text. should we try this?", ask tool answer "Bake-off first" (2026-10-12)
@@ -912,6 +916,50 @@ All entries are dated 2026-10-10; exact times are unproven unless noted. Full de
   - Request / decision: Slack Drafts and one grouping rule. A Draft may be Slack: plain text posted as Jeremy into one existing conversation he is in (channel, private channel, DM, or group DM; no new DMs, so no new OAuth scope), picked from his live Slack conversations. Grouping windows change for every message: Slack DMs, group DMs, and channels group until quiet for 24 hours, SMS until quiet for 7 days, one window whoever sent last. A sent SMS or Slack Draft groups like any other message Jeremy sends (replacing always-new-Thread for SMS Drafts); email Drafts still start a new Thread. Existing Threads are not regrouped.
   - Source: Jeremy, "i want to add slack as a connection type for drafts", "channel or existing dm", "i think we should not start a new thread and just use the existing timing behaviour", "sms should be 7 days with no activity to start a new thread, slack should be 24h", and "go ahead once we have agreement" (2026-10-15). Plan: `.agents/prd/2026-10-15-slack-drafts.md`.
   - Status: Built (2026-10-15): schema 11, `inbox.send_draft` through `_ingest`, `SLACK_QUIET` / `SMS_QUIET`, `SlackSender.start` / `conversations`, `POST /slack-conversations`, the console's Slack Draft picker.
+- **127**
+  - Request / decision: Attachments in both directions. Received Attachments and Inline images on Gmail, Slack, and SMS are copied on arrival into one content-addressed store beside the database (`files/<sha256>`, 0600), recorded in their own table because `activities.data` is immutable (option S1 of S0–S4). Gmail parts are stored at ingest; Slack and Quo files download after the hook answers, on the service's wake loop (up to 5 tries); `universal-inbox attachments-backfill` copies those in already-stored raw emails. Email and Slack replies and Drafts send staged Attachments: Gmail through Resend `attachments`, Slack through the files upload flow, with `files.info`'s share `ts` recorded so the echo is a duplicate. Forward makes an email Draft with the message's Attachments. Supersedes #51's attachments deferral and the Deferred list entry. Slack user scopes add `files:read` and `files:write` (re-consented 2026-10-15)
+  - Source: Jeremy, "i want to add support for attachments", grilling round 1 (both directions), discovery Phases 1–4 (2026-10-15); `.agents/discovery/2026-10-15-attachments.md`; `.agents/prd/2026-10-15-attachments.md`
+  - Status: Built (2026-10-15): `53f565d` (P1, migration 12), `b39b0aa` (P2), `6e1ea2c` (P3), `c16cdad` (P6), `f1cad01`, `f1a9876`, `37e48fd` (P4–P5)
+- **128**
+  - Request / decision: Attachments non-goals: Fastmail Attachments in either direction (its MCP server has no attachment access), sending by SMS (Quo's send API has no media field), file handling for Drive files (sent as links), rich text, and links reachable away from home
+  - Source: Jeremy via the ask tool and chat (2026-10-15); `.agents/discovery/2026-10-15-attachments.md`; `.agents/prd/2026-10-15-attachments.md` §6–§7.
+  - Status: Accepted
+- **129**
+  - Request / decision: Everything stays inside the inbox app; nothing is installed on Mani. Mani files reach a reply or Draft through an upload link from the inbox; pasted images arrive through Herdr's clipboard-image bridge. A Mani helper and reach-back over SSH from Workbox to Mani were rejected
+  - Source: Jeremy, "everything should be contained in the inbox app. i don't think anything should be installed on mani extra" (2026-10-15)
+  - Status: Accepted
+- **130**
+  - Request / decision: LAN links now, public later. A file server binds Workbox's LAN address only (`serve --files-host 192.168.0.107 --files-port 8789`); the tunnel stays limited to the hook paths. A stored Attachment's chip links to its file there and opens on Mani with Ctrl+Shift+click; an Attachment not yet copied keeps its Platform link and says "not copied". Supersedes #106's chips that open the message in Gmail. Fastmail chips are unchanged
+  - Source: Jeremy, "LAN now, public later" (2026-10-15)
+  - Status: Built (2026-10-15)
+- **131**
+  - Request / decision: D-A1: remote images in an email body are never fetched (tracking pixels, privacy); only Attachments and cid Inline images display
+  - Source: Jeremy, "Never fetch" (2026-10-15)
+  - Status: Approved
+- **132**
+  - Request / decision: D-A2: file links are permanent, unguessable capability URLs, `/f/<sha>.<HMAC>/<name>` keyed by `files-secret` (0600) beside the database; upload links (`/up/…`) expire after 1 hour
+  - Source: Jeremy, "Permanent, unguessable" (2026-10-15)
+  - Status: Approved
+- **133**
+  - Request / decision: D-A3: images render in the terminal through `textual-image` with Pillow: Kitty graphics where the terminal paints them (Herdr does), half-block otherwise. Reopens #105
+  - Source: Jeremy, images in the terminal with a fallback (discovery Phase 1), "Add both", P0.2 result "1 and 3 look great, 2 is blocky" (2026-10-15)
+  - Status: Approved
+- **134**
+  - Request / decision: D-A4: keys `ctrl+o` attach (a file on Workbox or an upload from Mani), `delete` removes a staged file, `f` forwards; pasting an image path (Herdr Ctrl+V) stages the image. No attach on SMS or Fastmail
+  - Source: Jeremy, "Use them" (2026-10-15)
+  - Status: Approved
+- **135**
+  - Request / decision: D-A5: an email whose staged Attachments total more than 25 MB is refused before sending, naming the total and the limit (Resend accepts 40 MB after Base64)
+  - Source: Jeremy, "Block over 25 MB" (2026-10-15)
+  - Status: Approved
+- **136**
+  - Request / decision: D-A6: a stored file expires a year after its newest Attachment, unless it is staged; its chips fall back to the Platform link
+  - Source: Jeremy, "Expire after a year", replacing the proposed "forever" (2026-10-15)
+  - Status: Approved
+- **137**
+  - Request / decision: D-A7: each phase needs its own go. P1 first, then P2–P6 together, then the release (P7: deploy, live migration, backfill, live checks)
+  - Source: Jeremy, "P1 only", "Build P2 through P6", release go (2026-10-15)
+  - Status: Approved; P1–P6 built, release authorized
 
 ## 8. Work log
 

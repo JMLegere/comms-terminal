@@ -12,6 +12,8 @@ uv tool install --force --reinstall /home/jerry/workspace/universal-inbox
 
 Puts `universal-inbox` in `~/.local/bin`, which the unit runs. Re-run after pulling changes, then `sudo systemctl restart universal-inbox`. Keep `--reinstall`: the version stays 0.1.0, and without it uv reuses its cached build of the old code.
 
+Deploy a release from a clean checkout of it, since the main checkout often holds other agents' uncommitted work: `uv tool install --force --reinstall <clean checkout>` (for example a worktree at `origin/dev` with no local changes).
+
 ## 2. Connect email (Slack later)
 
 D3 (decision #102): Cloudflare Tunnel publishes `https://hooks.agentmaple.com/hooks/{email,slack}`; Cloudflare Email Routing receives `inbox.agentmaple.com` and the Email Worker (`deploy/email-worker/`) posts each message, signed, to `/hooks/email`; Resend sends replies. `agentmaple.com` mail stays on Google.
@@ -119,6 +121,15 @@ Linear is a read-only Context source (FR-13c, decision #125), after Attio and Ta
 
 The local route defaults omitted arrays to `[]`; explicit `null`, non-array values, and non-string entries return 400. An unconnected source returns 503, connected empty keys return `{"issues":[]}` without a provider call, and adapter failures return a safe 502 error. Linear reads leave Connections, Threads, Activities, and Inbox Status unchanged. The socket remains private; public hook routes are unchanged.
 
+## 3f. Attachments and the file server
+
+Attachments (#127–#137): received files are copied into `~/.local/share/universal-inbox/files/<sha256>` (0600). Gmail parts are stored at ingest; Slack and Quo files download on the service's wake loop, up to 5 tries, after which the chip says "not copied" and keeps its Platform link. Files over 100 MB stay link-only. A file expires a year after its newest Attachment unless it is staged (checked daily).
+
+- **File server**: the unit runs `serve … --files-host 192.168.0.107` (`--files-port` defaults to 8789). It binds that LAN address only; the tunnel carries the hook paths alone. File links are `http://192.168.0.107:8789/f/<sha>.<mac>/<name>` and never expire; upload pages `/up/…` expire after 1 hour. The console builds links with `--files-host`/`--files-port`, defaulting to 192.168.0.107:8789. The flag reaches the installed unit through `sudo bash deploy/install.sh`; dropping it stops the listener and chips fall back to Platform links.
+- **Secret**: `~/.local/share/universal-inbox/files-secret` (0600), made on first use. Rotate it with `rm ~/.local/share/universal-inbox/files-secret` and `sudo systemctl restart universal-inbox`; every earlier file and upload link then answers 404, and the console builds new links from the new secret.
+- **Backfill**: after the first deploy, `universal-inbox attachments-backfill` copies the Attachments of raw emails stored before this release. It repeats safely and prints counts only.
+- Check: `curl -s -o /dev/null -w '%{http_code}\n' http://192.168.0.107:8789/f/x/y` prints `404`; a chip in the console opens its file on Mani with Ctrl+Shift+click.
+
 ## 3. Connect Slack
 
 1. **You:** https://api.slack.com/apps → Create New App → From a manifest → paste `deploy/slack-app-manifest.yml`. Save the signing secret (Basic Information) as `~/.config/universal-inbox/slack-signing-secret`.
@@ -129,6 +140,7 @@ The local route defaults omitted arrays to `[]`; explicit `null`, non-array valu
    shred -u ~/.config/universal-inbox/slack-tokens.json
    universal-inbox init --slack-team <T…> --slack-user <U…>
    ```
+   User scopes include `files:read` and `files:write` for Attachments (re-consented 2026-10-15). After a scope change in the manifest or `scripts/oauth_slack.py`, reinstall the app (Slack app → OAuth & Permissions → Reinstall), stage the new user token as above, and re-run step 4.
 4. **You:** `sudo bash deploy/install.sh` again: it stores both Slack secrets and adds `universal-inbox.service.d/slack.conf`.
 5. **You:** in the Slack app's Event Subscriptions, retry the request URL (it verifies now). Invite the bot to each channel to cover whole (`/invite @Universal Inbox`) and add a Channel rule in the console (`9`, then `a`). DMs and group DMs need no rule. From every other channel Jeremy is in, only messages that mention him and replies in threads he has posted in (or that are already in the inbox) come in (#114).
 6. **You:** turn off Slack's email notifications (Slack → Preferences → Notifications → email), or they arrive through Gmail as duplicate email threads.

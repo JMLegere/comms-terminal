@@ -114,13 +114,14 @@ The side rail stays visible on every screen (Thread, Person, Cases, Channels); o
 - Right panel: the sender's Person (all Identities, blocked ones marked `⊘`), Organization, Case, Channel.
 - `o` shows a Ctrl-clickable link (OSC 8) to the message in its app: a Gmail search for the `Message-ID`, or the Slack permalink.
 
-### Message body (decisions #105–#110)
+### Message body (decisions #105–#110, #127–#136)
 
-Text-first, like a terminal mail client with Gmail's habits. No images in the console; `o` opens visual mail in Gmail.
+Text-first, like a terminal mail client with Gmail's habits. Images show in the terminal (#133); `o` opens the message in Gmail or Slack.
 
 - Source: the raw message kept on Workbox (`raw/<sha256>.eml` beside the database); the HTML part converted to terminal text by `render.py` (standard library, chosen over `lynx -dump` in a bake-off, #110), plain as fallback. Messages from before raw storage render their stored text, with bare URLs shortened to `↗ domain` links.
 - Links: `View all tasks ↗ app.attio.com`, label a terminal hyperlink (OSC 8) opened with Ctrl+Shift+click in Ghostty (the console captures plain clicks; Shift hands the click to the terminal), domain from the real destination (known tracking redirects unwrapped); the click opens the original link.
-- Images: `[image: alt]`. Attachments: a chip under the message (name, type, size) that opens the message in Gmail.
+- Images: image Attachments and stored Inline images are shown in the message card through `textual-image`: Kitty graphics under Herdr, half-block where the terminal paints no graphics, at most 20 rows tall. Remote email images are never fetched and read `[image: alt]` (#131).
+- Attachments (#130): a chip under the message (name, type, size) that links to the copy on Workbox's LAN file server; Ctrl+Shift+click opens it in Mani's browser. A chip whose file is not copied yet (or failed) says `not copied` and keeps its Platform link; Fastmail chips open Fastmail.
 - Layout: a left gutter of initials badges (one colour per person, blue for Jeremy, grey when collapsed) to scan who said what; each open message is a card (header, blank line, body) at most ~100 columns wide; shown Trimmed content is grey under a left rule. Long link labels (whole task cards) are coloured, not underlined.
 - Collapse: messages after Jeremy's last reply, and the newest, are expanded; older ones are one faded line (the gutter badge, then age and snippet, cut with …), and a long run shows as `N older messages`. Click toggles; `;` expands all, `:` collapses all.
 - Trimmed content (quoted text, signatures, boilerplate footers) folds behind `•••`; click to show.
@@ -136,6 +137,8 @@ Text-first, like a terminal mail client with Gmail's habits. No images in the co
 - `r` opens the box under the timeline; the conversation stays visible.
 - Email: `To` and `Cc` are prefilled reply-all (FR-3b) and editable with `tab` into a one-line field. Slack: no recipient line; the box shows the channel or DM.
 - `ctrl+enter` sends (#100; `ctrl+s` still works where a terminal cannot report `ctrl+enter`); `esc` closes the box and keeps the draft in memory for that Thread until the app exits.
+- Attachments (#134), email and Slack only (SMS and Fastmail have no attach): `ctrl+o` opens the attach menu, "File on Workbox…" (a file tree from `~`) or "Upload from Mani" (a link to a 1-hour upload page, opened with Ctrl+Shift+click). Pasting an image path, which is what Herdr's Ctrl+V sends, stages the image. Staged files list under the message; `delete` removes the highlighted one. They are kept with the Thread across restarts, sent with the reply, and cleared once it is sent. Email refuses to send over 25 MB in total (#135).
+- Drafts take the same attach menu, paste, and file list.
 - While sending: the box shows `sending…`. On success the app returns to the queue with a toast `Sent → Waiting for them` (back to Todo when they reply, or after 4 days to follow up, #116). On failure the box stays open with the text and shows the error in red.
 
 ### Status, Case, and Person pickers
@@ -168,8 +171,9 @@ Thread, Person, Organization, and Case pages show separate details-column sectio
 **Decision #93**: Gmail-style where Gmail has an equivalent.
 
 - Move: `←`/`→` focus the previous/next pane without opening an item or changing contents; `↑`/`↓` or `j`/`k` move in the main page. In the rail, `↑`/`↓` highlight and `enter` opens; in the thread pane, `↑`/`↓` scroll. `space`/`pgdn`/`pgup` scroll the thread, `u` or `esc` back, `1`–`5` Status views, `6`–`9` People, Organizations, Cases, Channels.
-- Thread (main list, focused thread pane, or selected Case card): `r` reply to the sender, `a` reply all (FR-3b's reply-all stays one key away), `e` Done (Gmail archive), `b` snooze (Gmail snooze), `m` Ignore (Gmail mute), `l` Case (Gmail label), `z` undo (Gmail undo), `s` change status, `p` Person, `o` open in Gmail or Slack, `ctrl+enter` send (#100).
-- Copy for an agent: `y` on a Thread (or its Case card) or a Draft copies it to the clipboard (OSC 52) as Markdown to paste into a terminal agent. A Thread gives its properties, every message in full with link URLs and Trimmed content, and the Attio, Tana, and Linear answers as JSON. A Draft gives its envelope and current unsaved body, then each Thread in its Captured history.
+- Thread (main list, focused thread pane, or selected Case card): `r` reply to the sender, `a` reply all (FR-3b's reply-all stays one key away), `e` Done (Gmail archive), `b` snooze (Gmail snooze), `m` Ignore (Gmail mute), `l` Case (Gmail label), `z` undo (Gmail undo), `s` change status, `p` Person, `o` open in Gmail or Slack, `f` forward the newest message as an email Draft with its Attachments (#134), `ctrl+enter` send (#100).
+- Reply and Draft: `ctrl+o` attach, `delete` remove the highlighted staged file, paste an image path to attach it.
+- Copy for an agent: `y` on a Thread (or its Case card) or a Draft copies it to the clipboard (OSC 52) as Markdown to paste into a terminal agent. A Thread gives its properties, every message in full with link URLs, Trimmed content, and each Attachment's Workbox path, and the Attio, Tana, and Linear answers as JSON. A Draft gives its envelope, current unsaved body, and staged files with their paths, then each Thread in its Captured history.
 - The same Markdown comes from the command line, so an agent can fetch it fresh: `universal-inbox threads [view]`, `universal-inbox thread ID`, `universal-inbox drafts`, `universal-inbox draft ID`. `universal-inbox draft ID --revision N --body -` (or `--to`, `--cc`, `--subject`) changes a Draft only at the revision the agent read, and `universal-inbox draft new --connection ID` starts one. Nothing on the command line sends; Jeremy sends from the console.
 - General: `?` all keys, `q` quit.
 - The footer lists every action for the page as plain text: key in blue, description in grey, no icons or blocks (#94).

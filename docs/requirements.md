@@ -53,11 +53,21 @@ Status: MVP confirmed 2026-10-10; revised 2026-10-12 to follow Plain's status mo
 
 Authorized local expansion: Drafts replaces All under Threads, with ordinary page-row styling and native active state. Entering creates nothing; `n` creates a Draft. Email, SMS, and Slack fields save with an expected Draft revision and resume after restart. A Slack Draft posts into one existing conversation Jeremy is in, chosen from his live Slack conversations. Exact captured recipient history does not require a Person link. Sending an email Draft starts a new Thread; a sent SMS or Slack Draft groups with its conversation like any message (decision #126).
 
+## Attachments
+
+Approved 2026-10-15 (decisions #127–#137; `.agents/discovery/2026-10-15-attachments.md`). Everything stays inside the inbox app; nothing is installed on Mani.
+
+- **Receiving**: Gmail, Slack, and SMS Attachments and Inline images are copied on arrival into one store on Workbox. Each chip opens its copy on Mani through a LAN link; a file that could not be copied keeps its Platform link. Images show in the message card. Remote email images are never fetched.
+- **Agents**: `y` gives each Attachment's Workbox path.
+- **Sending**: email and Slack replies and Drafts attach a file on Workbox, a file uploaded from Mani through a 1-hour link, or a pasted image. Forward makes an email Draft with the message's Attachments. Email Attachments are capped at 25 MB before sending.
+- **Retention**: copies expire after a year, unless staged or shared with a newer message.
+- **Non-goals**: Fastmail Attachments in either direction, sending by SMS, Drive files (sent as links), rich text, and links away from the home network.
+
 ## Deferred (after MVP)
 
 - Other Platforms: tool comments, WhatsApp, LinkedIn.
 - Other mailboxes and Slack workspaces.
 - Rules by domain, category, or content.
-- Sending new conversations, attachments, rich text, undo-send, signatures. Persistent unsent Drafts are included in the Drafts-first expansion above.
+- Sending new conversations, rich text, undo-send, signatures. Persistent unsent Drafts are included in the Drafts-first expansion above.
 - Cmd+K command palette.
 - Plain's "Close the loop" status detail and auto-resolution.
