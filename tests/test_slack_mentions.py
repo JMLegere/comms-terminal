@@ -181,15 +181,15 @@ def test_replies_post_inside_the_slack_thread():
     assert [p.get("thread_ts") for p in sent] == ["100.3", "100.1", "100.1", None, "5.0"]
 
 
-def test_channel_top_level_groups_until_an_hour_quiet():
+def test_channel_top_level_groups_until_a_day_quiet():
     db, conn = setup()
     rules = [("channel", "general")]
-    hour = 3600
+    hour, day = 3600, 86400
     t = hook(db, conn, event("deploy is red", f"{1000:.1f}"), Client(), rules)
-    assert hook(db, conn, event("looking", f"{1000 + 50 * 60:.1f}", user=ME), Client(), rules).id == t.id
+    assert hook(db, conn, event("looking", f"{1000 + 5 * hour:.1f}", user=ME), Client(), rules).id == t.id
     # A reply-thread keeps the channel active, but its messages stay in their own Thread.
-    side = hook(db, conn, event("which job?", f"{1000 + 100 * 60:.1f}", thread_ts=f"{1000:.1f}"), Client(), rules)
+    side = hook(db, conn, event("which job?", f"{1000 + 10 * hour:.1f}", thread_ts=f"{1000:.1f}"), Client(), rules)
     assert side.id != t.id
-    assert hook(db, conn, event("fixed", f"{1000 + 150 * 60:.1f}", user="U2"), Client(), rules).id == t.id
-    later = hook(db, conn, event("new topic", f"{1000 + 150 * 60 + hour + 1:.1f}"), Client(), rules)
+    assert hook(db, conn, event("fixed", f"{1000 + 30 * hour:.1f}", user="U2"), Client(), rules).id == t.id
+    later = hook(db, conn, event("new topic", f"{1000 + 30 * hour + day + 1:.1f}"), Client(), rules)
     assert later.id not in (t.id, side.id)

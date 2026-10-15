@@ -49,6 +49,8 @@ def tick(ctx):
 
 
 def at(hhmm):
+    if " " in hhmm:  # "2026-10-13 23:31": a later day
+        return datetime.fromisoformat(hhmm).replace(tzinfo=timezone.utc)
     h, m = map(int, hhmm.split(":"))
     return datetime(2026, 10, 12, h, m, tzinfo=timezone.utc)
 
