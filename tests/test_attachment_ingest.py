@@ -60,6 +60,17 @@ def test_gmail_parts_are_stored_with_cid_images_inline_and_ics_skipped(tmp_path)
     assert len(rows(db)) == 2
 
 
+def test_nameless_cid_images_are_inline_parts_named_from_their_cid():
+    m = EmailMessage()
+    m["From"], m["To"], m["Subject"] = "Ana <ana@acme.com>", "me@x.io", "Look"
+    m.set_content('<p>here <img src="cid:shot1@x"></p>', subtype="html")
+    m.add_related(PNG, "image", "png", cid="<shot1@x>")
+    del m.get_payload()[1]["Content-Disposition"]
+    raw = bytes(m)
+    assert render.parts(raw) == [render.Part("shot1_x.png", "image/png", PNG, True, "shot1@x")]
+    assert render.from_raw(raw).attachments == []
+
+
 def test_fastmail_copies_through_the_hook_keep_link_only_chips(tmp_path):
     db, conn = connect(tmp_path, "fastmail")
     post_email(db, conn["id"], gmail_raw())

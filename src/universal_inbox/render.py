@@ -8,6 +8,7 @@ event card; Attachments are listed for chips.
 """
 
 import functools
+import mimetypes
 import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
@@ -423,7 +424,7 @@ class Part:
 
 
 def _files(msg, html) -> tuple[list[Part], dict | None]:
-    """A message's named file parts and its first readable invite; .ics files stay with the invite."""
+    """A message's named file parts (plus nameless cid-referenced images) and its first readable invite; .ics files stay with the invite."""
     cids = set(re.findall(r'cid:([^"\'\s>)]+)', html.get_content() if html is not None else ""))
     files, ev = [], None
     for part in msg.walk():
@@ -438,6 +439,8 @@ def _files(msg, html) -> tuple[list[Part], dict | None]:
             continue
         name = part.get_filename()
         cid = (part.get("Content-ID") or "").strip("<> ")
+        if not name and cid in cids and ctype.startswith("image/"):  # pasted screenshots carry no filename
+            name = re.sub(r"[^\w.-]", "_", cid) + (mimetypes.guess_extension(ctype) or ".bin")
         if not name or ctype == "application/ics":
             continue
         files.append(Part(name, ctype, part.get_payload(decode=True) or b"", bool(cid and cid in cids), cid or None))
