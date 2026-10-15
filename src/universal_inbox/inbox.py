@@ -472,6 +472,8 @@ def draft_problem(values: dict, files: Sequence[Staged] = ()) -> str | None:
     """What a Draft still needs before it can send; None when complete. Providers judge the addresses."""
     if values["kind"] == "email" and (problem := email_size_problem(files)):
         return problem
+    if values["kind"] == "slack" and (problem := slack_size_problem(files)):
+        return problem
     if values["connection_id"] is None:
         return "Choose a Connection"
     if values["kind"] == "slack" and len(_destinations(values["to"], "slack")) != 1:
@@ -1280,6 +1282,18 @@ def email_size_problem(files: Sequence[Staged]) -> str | None:
     return f"Email Attachments total {mb:g} MB; the limit is 25 MB"
 
 
+SLACK_FILE_LIMIT = 2**30  # https://slack.com/help/articles/201330736-Add-files-to-Slack: files up to 1 GB
+
+
+def slack_size_problem(files: Sequence[Staged]) -> str | None:
+    """A Slack message with any staged file over 1 GB is refused before any Slack call."""
+    big = next((f for f in files if f.size > SLACK_FILE_LIMIT), None)
+    if big is None:
+        return None
+    gb = -(-big.size * 10 // 2**30) / 10  # rounded up, so a file just over 1 GB never reads as 1 GB
+    return f"Slack files can be at most 1 GB; {big.name} is {gb:g} GB"
+
+
 def unstage(db, staged_id: int) -> None:
     with db:
         db.execute("DELETE FROM staged_attachments WHERE id = ?", (staged_id,))
@@ -1606,6 +1620,8 @@ def reply(db, thread_id: int, text: str, sender: Sender,
                                              " ON c.id = ch.connection_id WHERE ch.id = ?", (t.channel_id,)).fetchone()
         files = staged_files(db, thread_id=staged_on)
     if platform in platforms.EMAIL and (problem := email_size_problem(files)):
+        raise ValueError(problem)
+    if platform == "slack" and (problem := slack_size_problem(files)):
         raise ValueError(problem)
     try:
         native_id = sender.send(t, text, list(to), list(cc), history, files=files)

@@ -86,6 +86,40 @@ def test_a_stored_file_is_served_by_its_capability_only(env):
     assert get(port, "/")[0] == 404 and get(port, "/f/x")[0] == 404
 
 
+def request(port, path, method="GET", range=None):
+    c = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    c.request(method, path, headers={"Range": range} if range else {})
+    r = c.getresponse()
+    out = r.status, r.headers, r.read()
+    c.close()
+    return out
+
+
+def test_head_and_byte_ranges_let_video_seek(env):
+    db, thread_id, _, _, port = env
+    data = bytes(range(100))
+    sha = inbox.store_file(db, data)
+    inbox.stage(db, sha=sha, name="clip.mp4", type="video/mp4", size=100, thread_id=thread_id)
+    path = urllib.parse.urlsplit(inbox.file_url(db, sha, "clip.mp4", "127.0.0.1", port)).path
+    status, headers, body = request(port, path, "HEAD")
+    assert (status, body, headers["Content-Length"], headers["Accept-Ranges"]) == (200, b"", "100", "bytes")
+    assert headers["Content-Type"] == "video/mp4" and headers["X-Content-Type-Options"] == "nosniff"
+    for spec, start, end in (("bytes=10-19", 10, 19), ("bytes=90-", 90, 99), ("bytes=-5", 95, 99),
+                             ("bytes=95-500", 95, 99), ("bytes=-500", 0, 99)):
+        status, headers, body = request(port, path, range=spec)
+        assert (status, body, headers["Content-Range"]) == (206, data[start:end + 1], f"bytes {start}-{end}/100")
+        assert headers["Content-Length"] == str(end - start + 1) and headers["Accept-Ranges"] == "bytes"
+    status, headers, body = request(port, path, "HEAD", "bytes=10-19")
+    assert (status, body, headers["Content-Length"]) == (206, b"", "10")
+    for spec in ("bytes=100-", "bytes=200-300", "bytes=-0"):
+        status, headers, body = request(port, path, range=spec)
+        assert (status, body, headers["Content-Range"]) == (416, b"", "bytes */100")
+    for spec in ("bytes=5-2", "bytes=-", "items=0-1", "bytes=0-1,5-6", "bytes=x-1"):
+        status, headers, body = request(port, path, range=spec)
+        assert (status, body, headers["Content-Range"], headers["Accept-Ranges"]) == (200, data, None, "bytes")
+    assert request(port, f"/f/{sha}/clip.mp4", "HEAD")[0] == 404
+
+
 def test_names_with_spaces_and_unicode_and_active_types_are_sandboxed(env):
     db, thread_id, _, _, port = env
     sha = inbox.store_file(db, b"<svg xmlns='http://www.w3.org/2000/svg'><script>alert(1)</script></svg>")

@@ -10,7 +10,6 @@ import importlib
 import json
 import os
 import re
-import shutil
 import sqlite3
 import socketserver
 import threading
@@ -465,7 +464,8 @@ class _FilesHandler(_Handler):
         for k, v in headers:
             self.send_header(k, v)
         self.end_headers()
-        self.wfile.write(out)
+        if self.command != "HEAD":
+            self.wfile.write(out)
 
     def do_GET(self):
         parts = self.path.split("?")[0].split("/")
@@ -481,16 +481,37 @@ class _FilesHandler(_Handler):
         if not path or not path.is_file():
             return self.send_error(404)
         name = urllib.parse.unquote(parts[3]) or sha
-        self.send_response(200)
+        total = path.stat().st_size
+        try:
+            span = byte_range(self.headers.get("Range"), total)
+        except ValueError:
+            self.send_response(416)
+            self.send_header("Content-Range", f"bytes */{total}")
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Content-Length", "0")
+            return self.end_headers()
+        start, end = span or (0, total - 1)
+        self.send_response(206 if span else 200)
         self.send_header("Content-Type", ctype)
-        self.send_header("Content-Length", str(path.stat().st_size))
+        self.send_header("Content-Length", str(end - start + 1))
+        if span:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{total}")
+        self.send_header("Accept-Ranges", "bytes")
         self.send_header("Content-Disposition", f"inline; filename*=UTF-8''{urllib.parse.quote(name, safe='')}")
         self.send_header("X-Content-Type-Options", "nosniff")
         if ctype in ACTIVE_TYPES or ctype.endswith("+xml"):
             self.send_header("Content-Security-Policy", "sandbox")
         self.end_headers()
+        if self.command == "HEAD":
+            return
         with path.open("rb") as f:
-            shutil.copyfileobj(f, self.wfile)
+            f.seek(start)
+            left = end - start + 1
+            while left > 0 and (chunk := f.read(min(left, 2**16))):
+                self.wfile.write(chunk)
+                left -= len(chunk)
+
+    do_HEAD = do_GET
 
     def do_POST(self):
         parts = self.path.split("?")[0].split("/")
@@ -515,9 +536,30 @@ class _FilesHandler(_Handler):
         self._send(status, "application/json", json.dumps(out).encode())
 
 
+RANGE = re.compile(r"bytes=(\d*)-(\d*)")
+
+
+def byte_range(header: str | None, total: int) -> tuple[int, int] | None:
+    """One `bytes=a-b`, `a-` or `-n` Range as inclusive (start, end). None serves the whole file: no Range,
+    a malformed one, or several (RFC 9110 lets a server ignore it). ValueError: no byte of it exists (416)."""
+    m = RANGE.fullmatch((header or "").strip())
+    if not m or m.groups() == ("", ""):
+        return None
+    a, b = m.groups()
+    if not a:
+        if int(b) == 0 or total == 0:
+            raise ValueError
+        return max(total - int(b), 0), total - 1
+    if b and int(b) < int(a):
+        return None
+    if int(a) >= total:
+        raise ValueError
+    return int(a), min(int(b), total - 1) if b else total - 1
+
+
 def files_server(db_path: str, host: str, port: int) -> ThreadingHTTPServer:
-    """The LAN file server (NFR-A2): GET /f/<cap>/<name> serves a stored file; GET and POST /up/<token> take
-    uploads onto a Draft or reply. Anything else, a bad capability, or an expired token is 404 (AS-A11)."""
+    """The LAN file server (NFR-A2): GET or HEAD /f/<cap>/<name> serves a stored file, with one byte Range
+    for seeking video; GET and POST /up/<token> take uploads onto a Draft or reply. Anything else, a bad capability, or an expired token is 404 (AS-A11)."""
     db = inbox.connect(db_path)
     try:
         secret = inbox.files_secret(db)

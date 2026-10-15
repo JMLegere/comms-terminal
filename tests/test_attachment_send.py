@@ -7,7 +7,7 @@ import urllib.error
 import pytest
 
 from universal_inbox import email, fastmail, inbox, quo, serve, slack
-from test_composition import SELF, db, envelope, incoming  # noqa: F401  (db is a fixture)
+from test_composition import AT, SELF, db, envelope, incoming  # noqa: F401  (db is a fixture)
 
 PDF = b"%PDF-1.4 contract"
 MB = 2**20
@@ -179,6 +179,26 @@ def test_email_reply_over_25_mb_is_refused_before_the_sender(db):
                                      serve.Senders(made={1: sender}))
     assert (status, out) == (400, {"error": "Email Attachments total 30 MB; the limit is 25 MB"})
     assert sender.files is None and len(inbox.staged(db, thread_id=t.id)) == 1
+
+
+def test_slack_draft_or_reply_with_a_file_over_1_gb_is_refused_before_slack(db):
+    big = 2**30 + 2**30 // 5
+    d = inbox.save_draft(db, envelope("slack", connection_id=4, sender="USELF", to="#eng <C1>", body="Cut"))
+    inbox.stage(db, sha=pdf(db), name="big.mov", type="video/quicktime", size=big, draft_id=d["id"])
+    sender = FakeSender()
+    with pytest.raises(ValueError, match=r"^Slack files can be at most 1 GB; big.mov is 1.2 GB$"):
+        inbox.send_draft(db, d["id"], d["revision"], sender)
+    assert sender.files is None and inbox.get_draft(db, d["id"])["sending_at"] is None
+    t = inbox.ingest(db, inbox.Incoming(4, "C1", "channel", "MESSAGE", "C1:1.0",
+                                        inbox.Identity("slack_user", "USAM"), AT, "hi"))
+    inbox.stage(db, sha=pdf(db), name="big.mov", type="video/quicktime", size=big, thread_id=t.id)
+    status, out = serve.handle_reply(db, json.dumps({"thread_id": t.id, "text": "x"}).encode(),
+                                     serve.Senders(made={4: sender}))
+    assert (status, out) == (400, {"error": "Slack files can be at most 1 GB; big.mov is 1.2 GB"})
+    assert sender.files is None and len(inbox.staged(db, thread_id=t.id)) == 1
+    assert inbox.slack_size_problem([inbox.Staged(None, "a", "", 2**30)]) is None
+    assert inbox.slack_size_problem([inbox.Staged(None, "a", "", 2**30 + 1)]) == \
+        "Slack files can be at most 1 GB; a is 1.1 GB"
 
 
 def test_reply_sends_staged_files_and_clears_them_only_on_success(db):
