@@ -246,7 +246,7 @@ def test_threads_refresh_when_the_service_writes(tmp_path):
 
 
 class FakeSender:
-    def send(self, thread, text, to, cc, history):
+    def send(self, thread, text, to, cc, history, files=()):
         return f"<fake-{len(text)}@agentmaple.com>"
 
 

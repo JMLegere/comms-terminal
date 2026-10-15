@@ -435,7 +435,7 @@ def test_case_conflicting_bridge_attaches_to_first_explicit_parent_without_mergi
 
 
 class RecordingSender:
-    def send(self, thread, text, to, cc, history):
+    def send(self, thread, text, to, cc, history, files=()):
         self.thread, self.history = thread, history
         self.arguments = text, to, cc
         return "<sent@test>"
@@ -540,7 +540,7 @@ def test_reply_resolves_alias_again_after_sender_returns(db, ignore_during_send)
     child_state = triage(db, child.id)
 
     class MergingSender(RecordingSender):
-        def send(self, thread, text, to, cc, history):
+        def send(self, thread, text, to, cc, history, files=()):
             assert thread.id == child.id
             assert inbox.reconcile_email_threads(db, apply=True)["merged"] == 1
             if ignore_during_send:
@@ -574,7 +574,7 @@ def test_reply_prepares_coherent_history_before_wal_merge_and_releases_snapshot_
                 merged.append(exc)
 
     class CoherentSender(RecordingSender):
-        def send(self, thread, text, to, cc, history):
+        def send(self, thread, text, to, cc, history, files=()):
             assert merged == [1] and not db.in_transaction
             assert thread.id == child.id and thread.channel_id == child.channel_id
             assert [m["native_id"] for m in history] == ["<child@test>"]

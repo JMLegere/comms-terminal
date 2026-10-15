@@ -12,7 +12,7 @@ class Sender:
     def __init__(self, fail=False):
         self.fail = fail
 
-    def send(self, thread, text, to, cc, history):
+    def send(self, thread, text, to, cc, history, files=()):
         if self.fail:
             raise inbox.SendFailed("slack send failed: invalid_auth")
         return "D0ANA:1728700999.000100"

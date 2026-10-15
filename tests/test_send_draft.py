@@ -15,7 +15,7 @@ class FakeSender:
     def __init__(self, result="<sent-1@example.test>"):
         self.result, self.calls = result, []
 
-    def start(self, to, cc, subject, body, key):
+    def start(self, to, cc, subject, body, key, files=()):
         self.calls.append((to, cc, subject, body, key))
         if isinstance(self.result, Exception):
             raise self.result

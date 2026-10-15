@@ -156,7 +156,9 @@ class FastmailSender:
     def __init__(self, client):
         self.client, self.mine = client, None
 
-    def send(self, thread, text, to, cc, history) -> str:
+    def send(self, thread, text, to, cc, history, files=()) -> str:
+        if files:
+            raise inbox.SendFailed("Fastmail can't send Attachments")
         try:
             self.mine = self.mine or identities(self.client)
         except (McpError, OSError, ValueError) as err:
@@ -178,8 +180,10 @@ class FastmailSender:
             raise inbox.SendFailed(f"Fastmail send failed: {err}") from err
         return native_id(e.get("messageId")) if e.get("messageId") else f"<fastmail-{sent['emailId']}@inbox>"
 
-    def start(self, to, cc, subject, body, key) -> str:
+    def start(self, to, cc, subject, body, key, files=()) -> str:
         """A new email via send_email with no reply mode; the Sent poll then sees it as already stored."""
+        if files:
+            raise inbox.SendFailed("Fastmail can't send Attachments")
         args = {"to": [{"email": a} for a in to], "subject": subject, "body": body, "format": "text"}
         if cc:
             args["cc"] = [{"email": a} for a in cc]

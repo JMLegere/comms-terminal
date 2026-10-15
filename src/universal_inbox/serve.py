@@ -155,7 +155,8 @@ class Senders:
 
 
 def handle_reply(db, body: bytes, senders: Senders) -> tuple[int, dict]:
-    """POST /reply: {"thread_id", "text", "to", "cc"} -> (status, JSON body)."""
+    """POST /reply: {"thread_id", "text", "to", "cc"} -> (status, JSON body). The Thread's staged Attachments
+    go with it."""
     try:
         req = json.loads(body)
         thread_id, text = int(req["thread_id"]), str(req["text"])
@@ -172,6 +173,8 @@ def handle_reply(db, body: bytes, senders: Senders) -> tuple[int, dict]:
         t = inbox.reply(db, thread_id, text, sender, req.get("to") or [], req.get("cc") or [])
     except inbox.SendFailed as e:
         return 502, {"error": str(e)}
+    except ValueError as e:  # an Attachment problem found before sending (FR-A15)
+        return 400, {"error": str(e)}
     return 200, {"status": t.status, "status_detail": t.status_detail}
 
 

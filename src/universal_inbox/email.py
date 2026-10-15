@@ -1,5 +1,6 @@
 """Email adapter (Plain-style, ADR 0002): forwarded mail in through /hooks/email, replies out through Resend."""
 
+import base64
 import hashlib
 import hmac
 import html
@@ -178,13 +179,22 @@ def probe(connection, credential, shared, get=_get) -> str | None:
     return f"Resend refused the key: HTTP {status} {body.get('message', '')}".strip()
 
 
+def _attachments(files) -> dict:
+    """Resend `attachments` for staged files (FR-A13); empty when there are none."""
+    try:
+        return {"attachments": [{"filename": f.name, "content": base64.b64encode(f.path.read_bytes()).decode(),
+                                 **({"content_type": f.type} if f.type else {})} for f in files]} if files else {}
+    except OSError as e:  # nothing has been sent yet
+        raise inbox.SendFailed(f"Attachment unreadable: {e}") from e
+
+
 class EmailSender:
     """Sends replies through Resend (decision #70). `post` is swappable for tests."""
 
     def __init__(self, api_key: str, from_address: str, post=_post, get=None):
         self.api_key, self.from_address, self.post, self.get = api_key, from_address, post, get or _get
 
-    def send(self, thread, text, to, cc, history) -> str:
+    def send(self, thread, text, to, cc, history, files=()) -> str:
         if not to:
             to, cc = reply_all(history, self.from_address)
         ids = [h["native_id"] for h in history]
@@ -194,7 +204,7 @@ class EmailSender:
         if ids:
             headers |= {"In-Reply-To": ids[-1], "References": " ".join(ids)}
         payload = {"from": self.from_address, "to": to, "cc": cc, "subject": subject,
-                   **quoted(text, history, self.from_address), "headers": headers}
+                   **quoted(text, history, self.from_address), "headers": headers, **_attachments(files)}
         try:
             status, body = self.post("https://api.resend.com/emails",
                                      {"Authorization": f"Bearer {self.api_key}",
@@ -206,10 +216,11 @@ class EmailSender:
             raise inbox.SendFailed(f"email send failed: HTTP {status} {body.get('message', '')}".strip())
         return message_id
 
-    def start(self, to, cc, subject, body, key) -> str:
+    def start(self, to, cc, subject, body, key, files=()) -> str:
         """A new email; returns the Message-ID SES gave it, so replies find the Thread."""
         headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
-        payload = {"from": self.from_address, "to": to, "cc": cc, "subject": subject, "text": body}
+        payload = {"from": self.from_address, "to": to, "cc": cc, "subject": subject, "text": body,
+                   **_attachments(files)}
         try:
             status, r = self.post("https://api.resend.com/emails", headers | {"Idempotency-Key": key}, payload)
         except (urllib.error.URLError, OSError, ValueError) as e:

@@ -17,7 +17,7 @@ class FakeSender:
     def __init__(self):
         self.sent, self.fail, self.n = [], False, 0
 
-    def send(self, thread, text, to, cc, history):
+    def send(self, thread, text, to, cc, history, files=()):
         if self.fail:
             raise inbox.SendFailed("provider returned HTTP 500")
         self.n += 1

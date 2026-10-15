@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import json
 import re
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -115,6 +116,14 @@ def _get(url, token, params):
                                  headers={"Authorization": f"Bearer {token}", "User-Agent": USER_AGENT})
     with urllib.request.urlopen(req, timeout=15) as r:
         return json.loads(r.read())
+
+
+def _upload(url, data: bytes) -> int:
+    """POST a file's bytes to a files.getUploadURLExternal upload_url."""
+    req = urllib.request.Request(url, data, {"Content-Type": "application/octet-stream", "User-Agent": USER_AGENT},
+                                 method="POST")
+    with urllib.request.urlopen(req, timeout=60) as r:
+        return r.status
 
 
 class SlackClient:
@@ -298,12 +307,14 @@ def probe(connection, credential, shared, get=_get) -> str | None:
 class SlackSender:
     """Posts replies and Slack Drafts with Jeremy's user token, so they appear under his name (FR-4c)."""
 
-    def __init__(self, token: str, post=_post, client=None):
-        self.token, self.post, self.client = token, post, client
+    def __init__(self, token: str, post=_post, client=None, get=_get, upload=_upload, sleep=time.sleep):
+        self.token, self.post, self.client, self.get, self.upload, self.sleep = token, post, client, get, upload, sleep
 
-    def start(self, to, cc, subject, body, key) -> str:
+    def start(self, to, cc, subject, body, key, files=()) -> str:
         """A Slack Draft: one top-level message in an existing conversation. Slack has no idempotency key."""
         channel = to[0]
+        if files:
+            return self._share(channel, body, None, files)
         try:
             r = self.post("https://slack.com/api/chat.postMessage", self.token, {"channel": channel, "text": body})
         except urllib.error.HTTPError as e:
@@ -346,7 +357,7 @@ class SlackSender:
             out.append({"id": c["id"], "kind": kind, "label": f"#{label}" if kind in ("channel", "private") else label})
         return sorted(out, key=lambda c: c["label"].lstrip("#").casefold())
 
-    def send(self, thread, text, to, cc, history) -> str:
+    def send(self, thread, text, to, cc, history, files=()) -> str:
         channel = next((h["data"]["channel"] for h in history if "channel" in h["data"]), None)
         if channel is None:
             raise inbox.SendFailed("slack send failed: Thread has no Slack channel")
@@ -357,6 +368,8 @@ class SlackSender:
         replies = [d["thread_ts"] for d in slack if d.get("thread_ts") not in (None, d["ts"])]
         dm = any(d.get("kind") in ("im", "mpim") for d in slack)
         thread_ts = replies[-1] if replies else slack[-1]["ts"] if slack and not dm else None
+        if files:
+            return self._share(channel, text, thread_ts, files)
         payload = {"channel": channel, "text": text, **({"thread_ts": thread_ts} if thread_ts else {})}
         try:
             r = self.post("https://slack.com/api/chat.postMessage", self.token, payload)
@@ -365,6 +378,45 @@ class SlackSender:
         if not r.get("ok"):
             raise inbox.SendFailed(f"slack send failed: {r.get('error', 'unknown')}")
         return f"{channel}:{r['ts']}"
+
+    def _share(self, channel, text, thread_ts, files) -> str:
+        """Text with files as one message (FR-A14): upload each file, share them all with the text as
+        initial_comment, then read the message ts from a file's share, which completeUploadExternal leaves
+        empty (U3). Returns the `channel:ts` chat.postMessage would, so the echo is a duplicate."""
+        ids = []
+        try:  # nothing is posted before completeUploadExternal
+            for f in files:
+                data = f.path.read_bytes()
+                r = self.get("https://slack.com/api/files.getUploadURLExternal", self.token,
+                             {"filename": f.name, "length": len(data)})
+                if not r.get("ok"):
+                    raise inbox.SendFailed(f"slack upload failed: {r.get('error', 'unknown')}")
+                self.upload(r["upload_url"], data)
+                ids.append({"id": r["file_id"], "title": f.name})
+        except (urllib.error.URLError, OSError, ValueError) as e:
+            raise inbox.SendFailed(f"slack upload failed: {e}") from e
+        payload = {"files": ids, "channel_id": channel, "initial_comment": text,
+                   **({"thread_ts": thread_ts} if thread_ts else {})}
+        try:
+            r = self.post("https://slack.com/api/files.completeUploadExternal", self.token, payload)
+        except urllib.error.HTTPError as e:
+            error = inbox.SendUnknown if e.code >= 500 else inbox.SendFailed
+            raise error(f"slack send: HTTP {e.code}") from e
+        except (urllib.error.URLError, OSError, ValueError) as e:
+            raise inbox.SendUnknown(f"slack send outcome unknown: {e}") from e
+        if not r.get("ok"):
+            raise inbox.SendFailed(f"slack send failed: {r.get('error', 'unknown')}")
+        for _ in range(10):  # the share appeared after about 1.7 s in the P0.3 spike
+            self.sleep(1)
+            try:
+                info = self.get("https://slack.com/api/files.info", self.token, {"file": ids[0]["id"]})
+            except (urllib.error.URLError, OSError, ValueError):
+                continue
+            shares = info.get("file", {}).get("shares", {})
+            ts = next((s["ts"] for kind in ("private", "public") for s in shares.get(kind, {}).get(channel) or []), None)
+            if ts:
+                return f"{channel}:{ts}"
+        raise inbox.SendUnknown("slack send outcome unknown: the shared files' message was not found")
 
 
 def handle_hook(db, connection_id: int, headers, body: bytes, signing_secret: bytes, now: datetime,

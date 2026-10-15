@@ -56,7 +56,7 @@ class FakeSender:
     def __init__(self, connection_id):
         self.connection_id, self.calls = connection_id, []
 
-    def send(self, thread, text, to, cc, history):
+    def send(self, thread, text, to, cc, history, files=()):
         self.calls.append((thread.id, text, to, cc, [m["native_id"] for m in history]))
         return f"<fake-{self.connection_id}-{len(self.calls)}@example.test>"
 

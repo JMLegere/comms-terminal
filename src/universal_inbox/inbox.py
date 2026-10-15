@@ -19,7 +19,7 @@ from pathlib import Path
 from email import policy
 from email.parser import BytesHeaderParser
 from email.utils import getaddresses
-from typing import Protocol
+from typing import Protocol, Sequence
 
 from . import platforms
 
@@ -289,13 +289,23 @@ class SetCase:
 Action = Done | Snooze | Wait | Investigate | MarkTodo | Ignore | Unignore | SetCase
 
 
+@dataclass(frozen=True)
+class Staged:
+    """A staged Attachment as a Sender sends it: its stored file and the name and type to give it."""
+    path: Path
+    name: str
+    type: str
+    size: int
+
+
 class Sender(Protocol):
     def send(self, thread: Thread, text: str, to: list[str], cc: list[str],
-             history: list[dict]) -> str:
-        """Send a reply; return its native_id. history: the Thread's messages, oldest
+             history: list[dict], files: Sequence[Staged] = ()) -> str:
+        """Send a reply with `files` attached; return its native_id. history: the Thread's messages, oldest
         first, as {"native_id", "data"}. Raise SendFailed on failure."""
 
-    def start(self, to: list[str], cc: list[str], subject: str | None, body: str, key: str) -> str:
+    def start(self, to: list[str], cc: list[str], subject: str | None, body: str, key: str,
+              files: Sequence[Staged] = ()) -> str:
         """Send a new message (no Thread); return its native_id. `key` is unique per send attempt.
         Raise SendFailed when the provider refused it, SendUnknown when it may have gone out."""
 
@@ -457,8 +467,10 @@ def recipient_names(db, to: str, kind: str) -> str:
     return ", ".join(names)
 
 
-def draft_problem(values: dict) -> str | None:
+def draft_problem(values: dict, files: Sequence[Staged] = ()) -> str | None:
     """What a Draft still needs before it can send; None when complete. Providers judge the addresses."""
+    if values["kind"] == "email" and (problem := email_size_problem(files)):
+        return problem
     if values["connection_id"] is None:
         return "Choose a Connection"
     if values["kind"] == "slack" and len(_destinations(values["to"], "slack")) != 1:
@@ -511,7 +523,8 @@ def send_draft(db, draft_id: int, revision: int, sender: Sender, *, again: bool 
             raise DraftConflict("Draft changed since this revision; reload before sending.")
         if d["sending_at"] and not again:
             raise SendUnknown("Send outcome unknown; check before sending again.")
-        problem = draft_problem(d)
+        files = staged_files(db, draft_id=draft_id)
+        problem = draft_problem(d, files)
         if problem:
             raise ValueError(problem)
         connection = db.execute("SELECT * FROM connections WHERE id = ?", (d["connection_id"],)).fetchone()
@@ -520,7 +533,7 @@ def send_draft(db, draft_id: int, revision: int, sender: Sender, *, again: bool 
     sms = d["kind"] == "sms"
     to, cc = _destinations(d["to"], d["kind"]), _destinations(d["cc"], d["kind"])
     try:
-        native_id = sender.start(to, cc, d["subject"], d["body"], f"draft-{draft_id}-{revision}-{at}")
+        native_id = sender.start(to, cc, d["subject"], d["body"], f"draft-{draft_id}-{revision}-{at}", files=files)
     except SendUnknown:
         raise
     except SendFailed:
@@ -1233,6 +1246,29 @@ def staged(db, *, draft_id: int | None = None, thread_id: int | None = None) -> 
         f"SELECT * FROM staged_attachments WHERE {column} = ? ORDER BY id", (owner,))]
 
 
+def staged_files(db, *, draft_id: int | None = None, thread_id: int | None = None) -> list[Staged]:
+    """A Draft's or reply's staged Attachments as files to send; ValueError when a stored file is gone."""
+    out = []
+    for s in staged(db, draft_id=draft_id, thread_id=thread_id):
+        path = attachment_path(db, s["sha"])
+        if path is None or not path.is_file():
+            raise ValueError(f"Attachment {s['name']} is missing from the file store; remove it and attach it again")
+        out.append(Staged(path, s["name"], s["type"], s["size"]))
+    return out
+
+
+EMAIL_ATTACHMENTS_LIMIT = 25 * 2**20  # D-A5: Resend takes 40 MB after Base64
+
+
+def email_size_problem(files: Sequence[Staged]) -> str | None:
+    """FR-A15: an email whose staged Attachments total more than 25 MB is refused before any send."""
+    total = sum(f.size for f in files)
+    if total <= EMAIL_ATTACHMENTS_LIMIT:
+        return None
+    mb = -(-total * 10 // 2**20) / 10  # rounded up to 0.1 MB, so a total just over 25 never reads as 25
+    return f"Email Attachments total {mb:g} MB; the limit is 25 MB"
+
+
 def unstage(db, staged_id: int) -> None:
     with db:
         db.execute("DELETE FROM staged_attachments WHERE id = ?", (staged_id,))
@@ -1544,8 +1580,10 @@ def act(db, thread_id: int, action: Action) -> Thread:
 
 def reply(db, thread_id: int, text: str, sender: Sender,
           to: list[str] = (), cc: list[str] = ()) -> Thread:
-    """Send first; store the outbound Activity only on success (decision #59).
-    SendFailed propagates and nothing is stored."""
+    """Send first, with the reply's staged Attachments; store the outbound Activity and clear them only on
+    success (decision #59). SendFailed propagates, nothing is stored, and they stay staged. ValueError: an
+    Attachment problem found before sending (FR-A15)."""
+    staged_on = thread_id
     with _read_snapshot(db):
         t = get_thread(db, thread_id)
         thread_id = t.id
@@ -1553,14 +1591,19 @@ def reply(db, thread_id: int, text: str, sender: Sender,
                     "at": r["occurred_at"]} for r in db.execute(
             "SELECT native_id, data, content, occurred_at FROM thread_activities WHERE thread_id = ? AND kind = 'MESSAGE'"
             " ORDER BY occurred_at, id", (thread_id,))]
-        connection_id = db.execute("SELECT connection_id FROM channels WHERE id = ?",
-                                   (t.channel_id,)).fetchone()[0]
+        connection_id, platform = db.execute("SELECT c.id, c.platform FROM channels ch JOIN connections c"
+                                             " ON c.id = ch.connection_id WHERE ch.id = ?", (t.channel_id,)).fetchone()
+        files = staged_files(db, thread_id=staged_on)
+    if platform in platforms.EMAIL and (problem := email_size_problem(files)):
+        raise ValueError(problem)
     try:
-        native_id = sender.send(t, text, list(to), list(cc), history)
+        native_id = sender.send(t, text, list(to), list(cc), history, files=files)
     except SendFailed as e:
         set_connection_error(db, connection_id, str(e))
         raise
     set_connection_error(db, connection_id, None)
+    if files:
+        clear_staged(db, thread_id=staged_on)
     now = _now()
     with db:
         if not db.in_transaction:

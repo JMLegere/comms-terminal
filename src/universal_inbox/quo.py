@@ -190,7 +190,9 @@ class QuoSender:
     def __init__(self, key: str, number: str, post=_post):
         self.key, self.number, self.post = key, number, post
 
-    def send(self, thread, text, to, cc, history) -> str:
+    def send(self, thread, text, to, cc, history, files=()) -> str:
+        if files:
+            raise inbox.SendFailed("SMS can't send Attachments")
         peer = next((h["data"]["peer"] for h in history if "peer" in h["data"]), None)
         if peer is None:
             raise inbox.SendFailed("quo send failed: Thread has no phone number")
@@ -202,7 +204,9 @@ class QuoSender:
             raise inbox.SendFailed(f"quo send failed: {e}") from e
         return r["data"]["id"]
 
-    def start(self, to, cc, subject, body, key) -> str:
+    def start(self, to, cc, subject, body, key, files=()) -> str:
+        if files:
+            raise inbox.SendFailed("SMS can't send Attachments")
         try:
             r = self.post(SEND_URL, self.key, {"content": body, "from": self.number, "to": to})
         except urllib.error.HTTPError as e:

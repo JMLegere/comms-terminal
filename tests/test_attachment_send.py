@@ -1,0 +1,213 @@
+"""P6: staged Attachments go out with replies and Drafts (FR-A13 to FR-A17)."""
+
+import base64
+import json
+import urllib.error
+
+import pytest
+
+from universal_inbox import email, fastmail, inbox, quo, serve, slack
+from test_composition import SELF, db, envelope, incoming  # noqa: F401  (db is a fixture)
+
+PDF = b"%PDF-1.4 contract"
+MB = 2**20
+
+
+class FakeSender:
+    def __init__(self, result="<sent-1@example.test>"):
+        self.result, self.files = result, None
+
+    def _done(self, files):
+        self.files = list(files)
+        if isinstance(self.result, Exception):
+            raise self.result
+        return self.result
+
+    def send(self, thread, text, to, cc, history, files=()):
+        return self._done(files)
+
+    def start(self, to, cc, subject, body, key, files=()):
+        return self._done(files)
+
+
+def pdf(db):
+    return inbox.store_file(db, PDF)
+
+
+def staged_file(db):
+    return inbox.Staged(inbox.attachment_path(db, pdf(db)), "contract.pdf", "application/pdf", len(PDF))
+
+
+def email_draft(db, size=len(PDF)):
+    d = inbox.save_draft(db, envelope(connection_id=1, sender=SELF, to="ana@acme.test", subject="Contract", body="Attached"))
+    inbox.stage(db, sha=pdf(db), name="contract.pdf", type="application/pdf", size=size, draft_id=d["id"])
+    return d
+
+
+def gmail_thread(db, size=len(PDF)):
+    t = inbox.ingest(db, incoming("<m1@acme.test>"))
+    inbox.stage(db, sha=pdf(db), name="contract.pdf", type="application/pdf", size=size, thread_id=t.id)
+    return t
+
+
+# --- email (FR-A13) ----------------------------------------------------------
+
+def test_resend_payload_carries_base64_attachments(db, monkeypatch):
+    monkeypatch.setattr(email.time, "sleep", lambda s: None)
+    posts = []
+    sender = email.EmailSender("re_key", SELF, post=lambda url, headers, payload: posts.append(payload) or (200, {"id": "r1"}),
+                               get=lambda url, headers: (200, {"message_id": "<ses-1@example.test>"}))
+    f = staged_file(db)
+    want = [{"filename": "contract.pdf", "content": base64.b64encode(PDF).decode(), "content_type": "application/pdf"}]
+    assert sender.start(["ana@acme.test"], [], "Contract", "Attached", "k1", files=[f]) == "<ses-1@example.test>"
+    t = inbox.get_thread(db, inbox.ingest(db, incoming("<m1@acme.test>")).id)
+    sender.send(t, "Here it is", ["ana@acme.test"], [], [], files=[f])
+    assert [p["attachments"] for p in posts] == [want, want]
+    sender.start(["ana@acme.test"], [], "No files", "x", "k2")
+    assert "attachments" not in posts[-1]
+
+
+# --- Slack (FR-A14) ----------------------------------------------------------
+
+class FakeSlack:
+    """getUploadURLExternal, the upload, completeUploadExternal, and files.info, recorded."""
+
+    def __init__(self, share_after=2, complete=None):
+        self.calls, self.share_after, self.complete, self.infos = [], share_after, complete, 0
+
+    def get(self, url, token, params):
+        method = url.rsplit("/", 1)[1]
+        self.calls.append((method, params))
+        if method == "files.getUploadURLExternal":
+            n = sum(m == method for m, _ in self.calls)
+            return {"ok": True, "upload_url": f"https://files.slack.test/up/{n}", "file_id": f"F{n}"}
+        self.infos += 1
+        shares = {"public": {"C1": [{"ts": "1728700999.000200", "thread_ts": "1728700000.000100"}]}}
+        return {"ok": True, "file": {"id": params["file"], "shares": shares if self.infos >= self.share_after else {}}}
+
+    def upload(self, url, data):
+        self.calls.append(("upload", (url, data)))
+        return 200
+
+    def post(self, url, token, payload):
+        self.calls.append((url.rsplit("/", 1)[1], payload))
+        if isinstance(self.complete, Exception):
+            raise self.complete
+        return self.complete or {"ok": True, "files": [{"id": "F1"}]}
+
+
+def slack_sender(fake, sleeps=None):
+    return slack.SlackSender("xoxp", post=fake.post, get=fake.get, upload=fake.upload,
+                             sleep=lambda s: sleeps.append(s) if sleeps is not None else None)
+
+
+def channel_history():
+    return [{"native_id": "C1:1728700000.000100", "data": {"channel": "C1", "ts": "1728700000.000100", "kind": "channel"}}]
+
+
+def test_slack_reply_uploads_files_and_records_the_shared_message_ts(db):
+    fake, sleeps = FakeSlack(), []
+    f = staged_file(db)
+    native = slack_sender(fake, sleeps).send(None, "See attached", [], [], channel_history(), files=[f, f])
+    assert native == "C1:1728700999.000200"  # the echo's native_id, so it is a duplicate
+    methods = [m for m, _ in fake.calls]
+    assert methods == ["files.getUploadURLExternal", "upload", "files.getUploadURLExternal", "upload",
+                       "files.completeUploadExternal", "files.info", "files.info"]
+    assert fake.calls[0][1] == {"filename": "contract.pdf", "length": len(PDF)}
+    assert fake.calls[1][1] == ("https://files.slack.test/up/1", PDF)
+    assert fake.calls[4][1] == {"files": [{"id": "F1", "title": "contract.pdf"}, {"id": "F2", "title": "contract.pdf"}],
+                                "channel_id": "C1", "initial_comment": "See attached", "thread_ts": "1728700000.000100"}
+    assert sleeps == [1, 1]
+
+
+def test_slack_draft_with_files_posts_top_level(db):
+    fake = FakeSlack(share_after=1)
+    assert slack_sender(fake).start(["C1"], [], None, "Notes", "k", files=[staged_file(db)]) == "C1:1728700999.000200"
+    assert "thread_ts" not in fake.calls[2][1]
+
+
+def test_slack_share_not_found_in_10_seconds_is_unknown(db):
+    fake, sleeps = FakeSlack(share_after=99), []
+    with pytest.raises(inbox.SendUnknown):
+        slack_sender(fake, sleeps).start(["C1"], [], None, "Notes", "k", files=[staged_file(db)])
+    assert sleeps == [1] * 10
+
+
+def test_slack_upload_errors_map_like_chat_post_message(db):
+    f = staged_file(db)
+    with pytest.raises(inbox.SendFailed) as refused:
+        slack_sender(FakeSlack(complete={"ok": False, "error": "not_in_channel"})).start(["C1"], [], None, "x", "k", files=[f])
+    assert type(refused.value) is inbox.SendFailed and "not_in_channel" in str(refused.value)
+    with pytest.raises(inbox.SendUnknown):
+        slack_sender(FakeSlack(complete=urllib.error.HTTPError("u", 503, "down", {}, None))).start(
+            ["C1"], [], None, "x", "k", files=[f])
+    with pytest.raises(inbox.SendUnknown):
+        slack_sender(FakeSlack(complete=urllib.error.URLError("timed out"))).start(["C1"], [], None, "x", "k", files=[f])
+
+
+# --- SMS and Fastmail (FR-A16) ---------------------------------------------------
+
+def test_sms_and_fastmail_refuse_files_before_any_call(db):
+    f = staged_file(db)
+    q = quo.QuoSender("key", "+15550001001", post=lambda *a: pytest.fail("Quo was called"))
+    fm = fastmail.FastmailSender(client=None)
+    for call in (lambda: q.start(["+15550001002"], [], None, "x", "k", files=[f]),
+                 lambda: q.send(None, "x", [], [], [], files=[f]),
+                 lambda: fm.start(["a@b.test"], [], "s", "x", "k", files=[f]),
+                 lambda: fm.send(None, "x", [], [], [], files=[f])):
+        with pytest.raises(inbox.SendFailed, match="can't send Attachments"):
+            call()
+
+
+# --- size check (FR-A15) and clearing (FR-A17) ------------------------------------
+
+def test_email_draft_over_25_mb_is_refused_before_resend(db):
+    d = email_draft(db, size=30 * MB)
+    sender = FakeSender()
+    with pytest.raises(ValueError, match=r"^Email Attachments total 30 MB; the limit is 25 MB$"):
+        inbox.send_draft(db, d["id"], d["revision"], sender)
+    assert sender.files is None and inbox.get_draft(db, d["id"])["sending_at"] is None
+    assert inbox.email_size_problem([inbox.Staged(None, "a", "", 25 * MB + 1)]) == \
+        "Email Attachments total 25.1 MB; the limit is 25 MB"
+    assert inbox.email_size_problem([inbox.Staged(None, "a", "", 25 * MB)]) is None
+
+
+def test_email_reply_over_25_mb_is_refused_before_the_sender(db):
+    t = gmail_thread(db, size=30 * MB)
+    sender = FakeSender()
+    status, out = serve.handle_reply(db, json.dumps({"thread_id": t.id, "text": "x"}).encode(),
+                                     serve.Senders(made={1: sender}))
+    assert (status, out) == (400, {"error": "Email Attachments total 30 MB; the limit is 25 MB"})
+    assert sender.files is None and len(inbox.staged(db, thread_id=t.id)) == 1
+
+
+def test_reply_sends_staged_files_and_clears_them_only_on_success(db):
+    t = gmail_thread(db)
+    with pytest.raises(inbox.SendFailed):
+        inbox.reply(db, t.id, "Here", FakeSender(inbox.SendFailed("HTTP 422")))
+    assert len(inbox.staged(db, thread_id=t.id)) == 1
+    sender = FakeSender("<r1@example.test>")
+    inbox.reply(db, t.id, "Here", sender)
+    assert [(f.name, f.path.read_bytes()) for f in sender.files] == [("contract.pdf", PDF)]
+    assert inbox.staged(db, thread_id=t.id) == []
+
+
+def test_draft_keeps_files_when_refused_or_unknown_and_drops_them_when_sent(db):
+    d = email_draft(db)
+    with pytest.raises(inbox.SendFailed):
+        inbox.send_draft(db, d["id"], d["revision"], FakeSender(inbox.SendFailed("HTTP 422")))
+    assert len(inbox.staged(db, draft_id=d["id"])) == 1
+    with pytest.raises(inbox.SendUnknown):
+        inbox.send_draft(db, d["id"], d["revision"], FakeSender(inbox.SendUnknown("timeout")))
+    assert len(inbox.staged(db, draft_id=d["id"])) == 1 and inbox.get_draft(db, d["id"])["sending_at"]
+    sender = FakeSender()
+    inbox.send_draft(db, d["id"], d["revision"], sender, again=True)
+    assert [f.name for f in sender.files] == ["contract.pdf"]
+    assert db.execute("SELECT COUNT(*) FROM staged_attachments").fetchone()[0] == 0
+
+
+def test_missing_stored_file_refuses_the_send(db):
+    d = email_draft(db)
+    inbox.attachment_path(db, pdf(db)).unlink()
+    with pytest.raises(ValueError, match="contract.pdf is missing"):
+        inbox.send_draft(db, d["id"], d["revision"], FakeSender())
