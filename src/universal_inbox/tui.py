@@ -6,6 +6,7 @@ It reads and writes the SQLite file through `inbox`; replies go through the serv
 import hashlib
 import http.client
 import json
+import mimetypes
 import re
 import socket
 import sqlite3
@@ -16,6 +17,7 @@ from datetime import datetime, timedelta, timezone
 from email.errors import HeaderParseError
 from email.headerregistry import Address
 from email.utils import getaddresses
+from pathlib import Path
 
 from rich.markup import escape
 from rich.style import Style
@@ -27,7 +29,7 @@ from textual.coordinate import Coordinate
 from textual.message import Message
 from textual.screen import ModalScreen, Screen
 from textual.suggester import Suggester
-from textual.widgets import DataTable, Input, OptionList, Static, TextArea
+from textual.widgets import DataTable, DirectoryTree, Input, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 
 from . import inbox, render
@@ -142,6 +144,10 @@ DataTable > .datatable--header { background: #f9f5d7; color: #928374; }
 .card .composer { border: none; border-top: solid #ebdbb2; background: transparent; margin: 1 0 0 0; padding: 0 0 1 0; }
 .composer TextArea { height: 8; margin: 1 0 0 0; background: #f9f5d7; color: #654735; border: none; }
 .replyhint { color: #928374; height: 1; }
+.composer > .staged { height: auto; max-height: 6; border: none; padding: 0; background: #f9f5d7; color: #654735; }
+.mimage { width: auto; margin: 1 0 0 0; }
+.box.files { height: 24; }
+.box DirectoryTree { height: 1fr; background: #f5edca; color: #654735; }
 .replyhint.error { color: #c14a4a; }
 .draftview { height: 1fr; }
 .draftview.narrow .props { display: none; }
@@ -395,12 +401,18 @@ HELP = [  # (group, [(keys, what it does)]) — the full key map; Gmail-style wh
 ("m", "ignore: it stays out of Todo (m again un-ignores)"),
                 ("l", "add to a case"), ("s", "change status: needs a response, investigating"),
                 ("p", "open the person"), ("o", "open in Gmail, Fastmail, or Slack"), ("z", "undo the last change"),
-                ("y", "copy the thread, its people, and Attio/Tana context as Markdown for an agent"),
+                ("y", "copy the thread, its people, and Attio/Tana context as Markdown for an agent (file paths too)"),
+                ("f", "forward the newest message as a new email draft, its files attached"),
+                ("ctrl+o", "in a reply: attach a file on Workbox, or upload one from Mani (not SMS or Fastmail)"),
+                ("paste", "in a reply: pasting an image's path (Herdr's ctrl+v) attaches the image"),
+                ("delete", "in the reply's file list: remove the highlighted file"),
                 ("; / :", "expand / collapse every message (click a message or ••• to toggle one)"),
                 ("ctrl+shift+click", "open a link in your browser (shift lets Ghostty take the click)")]),
     ("Drafts", [("n", "start a blank draft"), ("enter", "edit the selected draft"), ("x", "delete the selected draft (z undoes)"),
                 ("y", "copy the draft and its recipients' threads as Markdown for an agent"),
                 ("ctrl+s", "save exact fields and body"), ("esc", "save and return to the list"),
+                ("ctrl+o", "attach a file on Workbox, or upload one from Mani; paste an image path to attach it"),
+                ("delete", "in the draft's file list: remove the highlighted file"),
                 ("Connection", "choose email or SMS; sending unavailable")]),
     ("Case", [("n", "Cases views: start a case (a goal) with no threads yet"),
               ("enter", "Cases views or a case header row: open the case"),
@@ -553,6 +565,28 @@ class ThreadActions:
         context = {s.source: s.answer for s in (pane or self).query(ContextSection)}
         text = thread_text(v, self.app.raw, context) + f"\nFresh copy: `universal-inbox thread {v['thread'].id}`\n"
         copy_for_agent(self.app, text, "the thread")
+
+    def action_forward(self):
+        """f (FR-A11): the Thread's newest message as a new email Draft with its stored files staged; opens it."""
+        tid = self.current_thread_id()
+        if tid is None:
+            return
+        db = self.app.db
+        v = inbox.thread_view(db, tid)
+        m = next((m for m in reversed(v["messages"]) if not m["deleted"]), None)
+        if m is None:
+            return
+        draft = inbox.save_draft(db, forward_values(v, m, inbox.connections(db)))
+        files = [a for a in m["attachments"] if not a["inline"]]
+        for a in files:
+            if a["sha"]:
+                inbox.stage(db, sha=a["sha"], name=a["name"], type=a["type"], size=a["size"], draft_id=draft["id"])
+        missing = sum(1 for a in files if not a["sha"])
+        self.app.selected_draft = draft["id"]
+        self.app.main.go("drafts")
+        self.app.edit_draft = draft["id"]
+        self.app.notify("Forward draft ready: add a recipient." + (f" {len(files) - missing} files attached." if files else "")
+                        + (f" {missing} not copied: open them from the message." if missing else ""))
 
     def action_person(self):
         tid = self.current_thread_id()
@@ -726,6 +760,7 @@ THREAD_KEYS = [  # Thread actions, Gmail-style (decision #93); shared by the Thr
     Binding("e", "done", "done"), Binding("b", "pause", "snooze"),
     Binding("m", "ignore", "ignore"), Binding("l", "case", "case"), Binding("s", "status", "status"),
     Binding("p", "person", show=False), Binding("o", "link", show=False), Binding("y", "copy", "copy for agent"),
+    Binding("f", "forward", show=False),
 ]
 
 
@@ -1087,6 +1122,121 @@ class ReplyMode(Static):
         next(a for a in self.ancestors if isinstance(a, ReplyBox)).set_mode(mode)
 
 
+def attachable(platform: str | None) -> bool:
+    """FR-A16: SMS and Fastmail send no files; a Draft with no Connection yet is email."""
+    return platform is None or (PLATFORMS[platform].format != "sms" and platform != "fastmail")
+
+
+def staged_files(db, owner) -> list[dict]:
+    """The files staged on ("draft", id) or ("thread", id) (FR-A8), each with its stored copy's path."""
+    return [r | {"path": str(inbox.attachment_path(db, r["sha"]))}
+            for r in inbox.staged(db, **{f"{owner[0]}_id": owner[1]})]
+
+
+def stage_file(host, owner, path) -> None:
+    """Copy one file into the store and stage it on `owner`; the host's staged list shows it."""
+    p = Path(path)
+    try:
+        data = p.read_bytes()
+    except OSError as e:
+        host.app.notify(f"Not attached · {e.strerror or e}", severity="error")
+        return
+    inbox.stage(host.app.db, sha=inbox.store_file(host.app.db, data), name=p.name, size=len(data),
+                type=mimetypes.guess_type(p.name)[0] or "application/octet-stream", **{f"{owner[0]}_id": owner[1]})
+    for staged in host.query(StagedList):
+        staged.refresh_staged()
+    host.app.notify(f"Attached {escape(p.name)}.")
+
+
+def attach(host, owner) -> None:
+    """ctrl+o (FR-A9): a file on Workbox, or a 1-hour upload page for Mani's browser whose files land here."""
+    if owner is None:
+        return
+    app = host.app
+
+    def chosen(choice):
+        if choice == "workbox":
+            app.push_screen(PickFile(), lambda path: stage_file(host, owner, path) if path and host.is_attached else None)
+        elif choice == "upload":
+            url = inbox.upload_url(app.db, owner, *app.files)
+            app.notify(f"Upload from Mani (ctrl+shift+click; works for 1 hour): [link='{url}']{url}[/link]", timeout=60)
+    app.push_screen(Pick("Attach", [("workbox", f"{ICON['attachment']} File on Workbox…"),
+                                    ("upload", f"{ICON['open']} Upload from Mani")]), chosen)
+
+
+class HomeTree(DirectoryTree):
+    def filter_paths(self, paths):
+        return [p for p in paths if not p.name.startswith(".")]
+
+
+class PickFile(ModalScreen):
+    """A file on Workbox, browsed from ~; dismisses with its path, or None."""
+    BINDINGS = [Binding("escape", "dismiss(None)", "cancel")]
+
+    def compose(self) -> ComposeResult:
+        box = Vertical(classes="box files")
+        box.border_title = pill("File on Workbox", "red")
+        box.border_subtitle = "[#928374]enter attach · esc cancel[/]"
+        with box:
+            yield HomeTree(Path.home())
+
+    def on_directory_tree_file_selected(self, event):
+        self.dismiss(str(event.path))
+
+
+class StagedList(OptionList):
+    """A reply's or Draft's staged files (FR-A8, FR-A12): delete removes the highlighted one. Uploads from Mani
+    arrive through the service, so it re-reads them every 2 s while it has an owner."""
+    BINDINGS = [Binding("delete", "unstage", "remove file")]
+
+    def __init__(self, owner=None):
+        super().__init__(classes="staged")
+        self.owner = owner  # ("draft", id) or ("thread", id); None while the reply is closed
+
+    def on_mount(self):
+        self.refresh_staged()
+        self.set_interval(2, self.refresh_staged)
+
+    def on_focus(self):
+        self.refresh_staged()
+        if self.highlighted is None and self.option_count:
+            self.highlighted = 0
+
+    def show(self, owner):
+        self.owner = owner
+        self.refresh_staged()
+
+    def refresh_staged(self):
+        rows = inbox.staged(self.app.db, **{f"{self.owner[0]}_id": self.owner[1]}) if self.owner else []
+        if [str(r["id"]) for r in rows] != [self.get_option_at_index(i).id for i in range(self.option_count)]:
+            keep = self.highlighted
+            self.set_options([Option(f"{ICON['attachment']} {render.chip(r['name'], r['type'], r['size'])}",
+                                     id=str(r["id"])) for r in rows])
+            if rows and keep is not None:
+                self.highlighted = min(keep, len(rows) - 1)
+        self.display = bool(rows)
+
+    def action_unstage(self):
+        if self.highlighted is not None:
+            inbox.unstage(self.app.db, int(self.get_option_at_index(self.highlighted).id))
+            self.refresh_staged()
+
+
+class ComposeArea(TextArea):
+    """A reply or Draft body. Pasting one path to an image file, which is what Herdr's Ctrl+V sends, stages a
+    copy of the image instead of inserting the path (FR-A10)."""
+
+    async def _on_paste(self, event):
+        text = event.text.strip()
+        host = next((a for a in self.ancestors if isinstance(a, (ReplyBox, DraftView))), None)
+        owner = host.attach_owner() if host is not None else None
+        if owner and "\n" not in text and text.startswith("/") and Path(text).is_file() \
+                and (mimetypes.guess_type(text)[0] or "").startswith("image/"):
+            event.prevent_default()  # TextArea's own paste handler would insert the path
+            event.stop()
+            stage_file(host, owner, text)
+
+
 class ReplyBox(Vertical):
     """Inline reply for one Thread, laid out like an email composer.
 
@@ -1094,7 +1244,8 @@ class ReplyBox(Vertical):
     refill them. Slack: the destination (the channel or DM, in thread) is shown the same way, read-only.
     """
     BINDINGS = [Binding("ctrl+enter", "send", "send", key_display="ctrl+enter"),
-                Binding("ctrl+s", "send", show=False), Binding("escape", "close", "keep draft")]
+                Binding("ctrl+s", "send", show=False), Binding("escape", "close", "keep draft"),
+                Binding("ctrl+o", "attach", "attach")]
 
     def __init__(self, thread_id):
         super().__init__(classes="replybox composer")
@@ -1119,12 +1270,25 @@ class ReplyBox(Vertical):
             with Horizontal(classes="field subject"):
                 yield Static("Subject", classes="flabel")
                 yield Static(classes="fvalue subjectvalue")
-        yield TextArea(classes="reply")
+        yield ComposeArea(classes="reply")
+        yield StagedList()
         yield Static("", classes="replyhint")
 
     @property
     def email(self) -> bool:
         return is_email(self.view)
+
+    def attach_owner(self):
+        """Where an attached file goes: this Thread's open reply (FR-A8); None where files cannot be sent (FR-A16)."""
+        if self.view is None or not self.has_class("open") or not attachable(self.view["channel"]["platform"]):
+            return None
+        return ("thread", inbox.get_thread(self.app.db, self.thread_id).id)
+
+    def check_action(self, action, parameters):
+        return action != "attach" or self.attach_owner() is not None
+
+    def action_attach(self):
+        attach(self, self.attach_owner())
 
     def show_idle(self, view):
         """Closed state: the saved draft, or where a reply would go."""
@@ -1178,11 +1342,13 @@ class ReplyBox(Vertical):
         else:
             self.query_one(".flabel").update("To")
             self.query_one(".fromvalue").update(f"{escape(view['where'])} [#928374]· in thread[/]")
-        self.hint("ctrl+enter send · esc close (keeps draft)")
         area = self.query_one(TextArea)
         area.text = self.app.drafts.get(self.draft_key, "")
         area.move_cursor(area.document.end)
         self.add_class("open")
+        owner = self.attach_owner()
+        self.hint("ctrl+enter send · " + ("ctrl+o attach · " if owner else "") + "esc close (keeps draft)")
+        self.query_one(StagedList).show(owner)
         self.query_one(TextArea).focus()
 
     def set_mode(self, mode):
@@ -1212,6 +1378,7 @@ class ReplyBox(Vertical):
     def action_close(self):
         self.keep_draft()
         self.remove_class("open")
+        self.query_one(StagedList).show(None)  # staged files stay with the Thread for the next reply
         self.show_idle(self.view)
         self.app.main.focus_list()
 
@@ -1242,6 +1409,7 @@ class ReplyBox(Vertical):
     def sent(self):
         self.app.drafts.pop(self.draft_key, None)
         self.remove_class("open")
+        self.query_one(StagedList).show(None)
         self.show_idle(self.view)
         self.app.undo = None  # a sent message cannot be unsent
         self.app.notify("Sent. Waiting for them: back to Todo when they reply, or in 4 days to follow up.")
@@ -1273,9 +1441,41 @@ def message_body(m, raw, slack: bool = False) -> render.Body:
         body = render.load(str(raw / f"{sha}.eml"))
         if body is not None:
             return body
-    body = render.from_slack(m["content"]) if slack else render.from_text(m["content"])
-    body.attachments = [tuple(a[:3]) for a in m["attachments"]]  # Fastmail, Slack, and Quo list them as data
-    return body
+    return render.from_slack(m["content"]) if slack else render.from_text(m["content"])
+
+
+def message_files(m, body, inline=False) -> list[dict]:
+    """A message's Attachments (thread_view's shape): its stored or listed ones, else those its raw message
+    names, which open the message in its service. Inline images only when asked."""
+    if m["attachments"]:
+        return [a for a in m["attachments"] if inline or not a["inline"]]
+    return [{"name": n, "type": t, "size": s, "inline": False, "state": None, "sha": None, "path": None,
+             "url": m["link"]} for n, t, s in body.attachments]
+
+
+IMAGE_ROWS = 20  # an image's height cap in a message card (FR-A6)
+
+
+def message_images(m) -> list:
+    """Stored image Attachments and inline (cid) images as pictures (FR-A6): Kitty graphics where the terminal
+    paints them (probed in main.py before the app starts), else textual-image's own fallback. One that does not
+    open is left to its chip."""
+    from PIL import Image as Picture
+    from textual_image.widget import Image, get_cell_size
+    out = []
+    for a in m["attachments"]:
+        if not (a["path"] and a["type"].startswith("image/")):
+            continue
+        try:
+            with Picture.open(a["path"]) as p:
+                height = p.size[1]
+        except (OSError, ValueError, Picture.DecompressionBombError):
+            continue
+        # ponytail: width follows the height; a very wide image is squeezed to the card's width
+        img = Image(a["path"], classes="mimage", on_error=lambda _: Static(""))
+        img.styles.height = max(1, min(IMAGE_ROWS, round(height / get_cell_size().height)))
+        out.append(img)
+    return out
 
 
 def default_open(msgs) -> set[int]:
@@ -1366,10 +1566,12 @@ def message_widgets(v, st: dict | None = None, raw=None) -> list:
             parts.append(MessageText(f"[@click=app.msg_trim({tid},{message_action_id(m['native_id'])})][{dim} on #ebdbb2] ••• [/][/]", classes="mtoggle"))
             if m["native_id"] in st["trim"]:
                 parts.append(MessageText(body.trimmed, classes="mtrim"))
-        if body.attachments:
-            urls = [a[3] for a in m["attachments"]]  # each chip opens its attachment, or the message in its service
-            chips = [f"[link='{(urls[k] if k < len(urls) else m['link']) or ''}'][#45707a]{ICON['attachment']} "
-                     f"{render.chip(*a)}[/][/link]" for k, a in enumerate(body.attachments)]
+        parts += message_images(m)
+        files = message_files(m, body)
+        if files:  # each chip opens its stored copy (FR-A5), or the message in its service
+            chips = [f"[link='{a['url'] or ''}'][#45707a]{ICON['attachment']} "
+                     f"{render.chip(a['name'], a['type'], a['size'])}[/][/link]"
+                     + (f" [{dim}]· not copied[/]" if a["state"] in ("pending", "failed") else "") for a in files]
             parts.append(MessageText("\n".join(chips), classes="mchips"))
         return gutter_row(badge(m["who"]), Vertical(*parts, classes="msg"), "open")
 
@@ -1699,7 +1901,7 @@ class ThreadView(Horizontal):
     def refresh_data(self):
         if not self.query(".thead"):  # not composed yet; on_mount fills it
             return
-        v = inbox.thread_view(self.app.db, self.thread_id)
+        v = inbox.thread_view(self.app.db, self.thread_id, self.app.files)
         self.thread_id = v["thread"].id
         if self.members is None:
             self.members = v["members"]
@@ -1750,6 +1952,11 @@ def agent_text(markup: str) -> str:
     return render.plain(re.sub(r"\[link='([^']*)'\](.*?)\[/link\]", url, markup, flags=re.S)).strip()
 
 
+def attachment_line(a) -> str:
+    """`y`'s Attachment line, with the stored copy's path an agent can read (FR-A7)."""
+    return f"Attachment: {a['name']} ({a['type']}, {a['size']} bytes)" + (f" — {a['path']}" if a.get("path") else "")
+
+
 def thread_text(v, raw=None, context=None) -> str:
     """One Thread as Markdown: properties, every message in full (Trimmed content too), and the Context
     sources' answers (`context`: source -> (answer, error)) as JSON."""
@@ -1773,7 +1980,7 @@ def thread_text(v, raw=None, context=None) -> str:
         lines += ["", agent_text(body.text)]
         if body.trimmed:
             lines += ["", "Trimmed content:", agent_text(body.trimmed)]
-        lines += [f"Attachment: {a[0]} ({a[1]}, {a[2]} bytes)" for a in body.attachments]
+        lines += [attachment_line(a) for a in message_files(m, body, inline=True)]
     for source, (answer, error) in (context or {}).items():
         if answer is not None or error:
             lines += ["", f"## {CONTEXT_SOURCES[source][0]}", "",
@@ -1781,7 +1988,7 @@ def thread_text(v, raw=None, context=None) -> str:
     return "\n".join(lines) + "\n"
 
 
-def draft_history(db, kind, connection_id, destination) -> list | None:
+def draft_history(db, kind, connection_id, destination, files=None) -> list | None:
     """Thread views of a Draft's Captured history; None until the recipient is exact."""
     if kind == "slack":
         addresses, lookup = inbox._destinations(destination, "slack"), "slack"
@@ -1796,16 +2003,16 @@ def draft_history(db, kind, connection_id, destination) -> list | None:
         return None
     threads = {t.id: t for a in addresses for t in (
         inbox.channel_threads(db, connection_id, a) if lookup == "slack" else inbox.recipient_threads(db, lookup, a))}
-    return [inbox.thread_view(db, t.id) for t in threads.values()]
+    return [inbox.thread_view(db, t.id, files) for t in threads.values()]
 
 
 def connection_label(connection) -> str:
     return f"{PLATFORMS[connection['platform']].title} · {conn_name(connection)}" if connection else "none"
 
 
-def draft_text(values, connection_label, history, raw=None, ref=None) -> str:
-    """A Draft as Markdown: its envelope and body, then each captured-history Thread in full. `ref` is the
-    saved Draft's (id, revision), which the `universal-inbox draft` command needs to change it."""
+def draft_text(values, connection_label, history, raw=None, ref=None, staged=()) -> str:
+    """A Draft as Markdown: its envelope, body, and staged files, then each captured-history Thread in full.
+    `ref` is the saved Draft's (id, revision), which the `universal-inbox draft` command needs to change it."""
     lines = [f"# Draft: {values['subject'] or 'no subject'}", ""]
     if ref:
         lines.append(f"- Draft: {ref[0]} · revision {ref[1]} · change it with "
@@ -1814,9 +2021,26 @@ def draft_text(values, connection_label, history, raw=None, ref=None) -> str:
               f"- From: {values['sender'] or 'not selected'}", f"- To: {values['to'] or 'not selected'}"]
     lines += [f"- Cc: {values['cc']}"] if values["cc"] else []
     lines += ["", "## Body", "", values["body"] or "(empty)"]
+    lines += [""] + [attachment_line(a) for a in staged] if staged else []
     if history:
         lines += ["", "## Captured history with these recipients", ""] + [thread_text(v, raw) for v in history]
     return "\n".join(lines) + "\n"
+
+
+def forward_values(v, m, connections) -> dict:
+    """A forward of message `m` as Draft fields: Gmail's forwarded-message block, then the text. It sends from
+    Gmail when connected, else the first email Connection."""
+    c = next((c for c in sorted(connections, key=lambda c: c["platform"] != "gmail")
+              if PLATFORMS[c["platform"]].format == "email"), None)
+    title = v["thread"].title
+    at = datetime.fromisoformat(m["at"]).astimezone()
+    head = ["---------- Forwarded message ---------", f"From: {m['from'] or m['who']}",
+            f"Date: {at:%a, %b %-d, %Y at %-I:%M %p}", f"Subject: {title}"]
+    head += [f"To: {', '.join(m['to'])}"] if m["to"] else []
+    head += [f"Cc: {', '.join(m['cc'])}"] if m["cc"] else []
+    return dict(connection_id=c["id"] if c else None, kind="email", sender=(c["self_id"] or "") if c else "",
+                to="", cc="", subject=title if re.match(r"(?i)\s*fwd?:", title) else f"Fwd: {title}",
+                body="\n\n" + "\n".join(head) + "\n\n" + (m["content"] or ""))
 
 
 def copy_for_agent(app, text: str, what: str):
@@ -1828,7 +2052,8 @@ def copy_for_agent(app, text: str, what: str):
 
 DRAFT_FIELDS = ("connection_id", "kind", "sender", "to", "cc", "subject", "body")
 SENDING_UNAVAILABLE = "Sending unavailable · drafts only."
-DRAFT_HINT = "ctrl+enter send · ctrl+s save · esc close"
+FILE_SERVER = ("192.168.0.107", 8789)  # serve --files-host/--files-port in production (deploy/universal-inbox.service)
+DRAFT_HINT = "ctrl+enter send · ctrl+s save · ctrl+o attach · esc close"
 NEW_TITLE = {"email": "New email", "sms": "New SMS", "slack": "New Slack message"}
 KIND_NAME_DRAFT = {"email": "email", "sms": "SMS", "slack": "Slack"}
 SEND_UNKNOWN = "Send outcome unknown · it may have gone out. Check Sent, then ctrl+enter."
@@ -1868,7 +2093,8 @@ class DraftEditor(Vertical):
                     else:
                         view = lambda: next(a for a in self.ancestors if isinstance(a, DraftView))  # noqa: E731
                         yield AddressInput(lambda: view().kind, lambda: view().conversations, **kwargs)
-        yield TextArea(self.draft["body"], show_line_numbers=False, classes="body-editor")
+        yield ComposeArea(self.draft["body"], show_line_numbers=False, classes="body-editor")
+        yield StagedList(("draft", self.draft["id"]))
         yield Static(DRAFT_HINT, classes="replyhint")
 
 
@@ -1881,7 +2107,7 @@ class DraftView(Horizontal):
                 Binding("ctrl+s", "save", "save draft"),
                 Binding("escape", "close", "save / close"),
                 Binding("ctrl+enter", "send", "send", key_display="ctrl+enter"),
-                Binding("ctrl+r", "reload", show=False)]
+                Binding("ctrl+r", "reload", show=False), Binding("ctrl+o", "attach", "attach")]
 
     def __init__(self, draft):
         super().__init__(classes="draftview")
@@ -1909,6 +2135,9 @@ class DraftView(Horizontal):
         self.paint()
         self.refresh_history()
         self.load_conversations()
+        if self.app.edit_draft == self.draft_id:  # a new forward opens ready to edit
+            self.app.edit_draft = None
+            self.call_after_refresh(self.query_one(DraftConnection).focus)
 
     def load_conversations(self):
         if self.kind == "slack" and self.conversations is None and self.connection_id and self.app.slack_conversations:
@@ -1984,7 +2213,8 @@ class DraftView(Horizontal):
         hint.update("Save conflict · edits kept" if self.save_error and self.notice.startswith("Save conflict") else
                     "Not sent · edits kept" if self.save_error and self.notice.startswith("Not sent") else
                     "Save failed · edits kept" if self.save_error else
-                    "Locked · send outcome unknown" if locked else DRAFT_HINT)
+                    "Locked · send outcome unknown" if locked else
+                    DRAFT_HINT if self.attach_owner() else DRAFT_HINT.replace(" · ctrl+o attach", ""))
         hint.set_class(self.save_error or locked, "error")
         note = "none captured" if self.history_note.startswith("No captured match") else self.history_note
         history = "\n".join(escape(v["thread"].title) for v in self.history_views) or escape(note)
@@ -2045,7 +2275,7 @@ class DraftView(Horizontal):
         self.history_key, self.history_views = key, []
         self.history_note = "Choose an exact recipient."
         try:
-            views = draft_history(self.app.db, self.kind, self.connection_id, destination)
+            views = draft_history(self.app.db, self.kind, self.connection_id, destination, self.app.files)
             if views is not None:
                 self.history_views = views
                 self.history_note = "No captured match · prior contact unknown." if not views else "Captured local history"
@@ -2170,7 +2400,17 @@ class DraftView(Horizontal):
     def check_action(self, action, parameters):
         if action == "reload":
             return self.save_error and self.notice.startswith("Save conflict")
+        if action == "attach":
+            return self.attach_owner() is not None
         return True
+
+    def attach_owner(self):
+        """This Draft (FR-A8); None for SMS and Fastmail (FR-A16) or while its send outcome is unknown."""
+        c = self.connection()
+        return ("draft", self.draft_id) if attachable(c and c["platform"]) and not self.draft.get("sending_at") else None
+
+    def action_attach(self):
+        attach(self, self.attach_owner())
 
     def action_send(self):
         if self.app.send_draft is None:
@@ -2402,7 +2642,8 @@ class DraftsPage(Page):
         if view is None:
             return
         copy_for_agent(self.app, draft_text(view.values(), connection_label(view.connection()), view.history_views,
-                                            self.app.raw, (view.draft_id, view.draft["revision"])), "the draft")
+                                            self.app.raw, (view.draft_id, view.draft["revision"]),
+                                            staged_files(self.app.db, ("draft", view.draft_id))), "the draft")
 
     def action_delete(self):
         selected = self.selected()
@@ -2893,7 +3134,7 @@ class ConnectionPage(Page):
 
 
 KEY_GROUP = {  # bottom bar order: move · reply · triage · organize · general
-    "j": 0, "escape": 0, "u": 0, "r": 1, "a": 1, "ctrl+enter": 1, "e": 2, "b": 2, "m": 2,
+    "j": 0, "escape": 0, "u": 0, "r": 1, "a": 1, "ctrl+enter": 1, "ctrl+o": 1, "e": 2, "b": 2, "m": 2,
     "l": 3, "s": 3, "z": 4, "question_mark": 4, "q": 4,
 }
 
@@ -3110,7 +3351,7 @@ class CasePage(Page, ThreadActions):
         case = db.execute("SELECT title, description, created_at FROM cases WHERE id = ?", (self.case_id,)).fetchone()
         self.description = case["description"]
         # Cards sit in the activity by when each Thread started (its first message), like Linear's synced threads.
-        self.views = sorted((inbox.thread_view(db, t.id) for t in inbox.case_threads(db, self.case_id)),
+        self.views = sorted((inbox.thread_view(db, t.id, self.app.files) for t in inbox.case_threads(db, self.case_id)),
                             key=lambda v: v["messages"][0]["at"] if v["messages"] else "")
         threads = [v["thread"] for v in self.views]
         ids = [t.id for t in threads]
@@ -3440,11 +3681,14 @@ class Console(App):
     TITLE = "Universal Inbox"
     ENABLE_COMMAND_PALETTE = False
 
-    def __init__(self, db_path: str, reply=None, sources=None, send_draft=None, slack_conversations=None):
+    def __init__(self, db_path: str, reply=None, sources=None, send_draft=None, slack_conversations=None,
+                 files=FILE_SERVER):
         super().__init__()
         self.db_path, self.send_reply, self.drafts, self.view, self.cursor = db_path, reply, {}, 0, {}
+        self.files = files  # the service's LAN file server (host, port): Attachment links and upload pages
         self.send_draft, self.slack_conversations = send_draft, slack_conversations
         self.selected_draft = None
+        self.edit_draft = None  # the Draft whose editor takes focus when it opens
         # Context sources (FR-13a, FR-13b), {"tana": fetch, "attio": fetch}; each state is None (not connected),
         # "checking", "ok", or the error
         self.sources = {k: f for k, f in (sources or {}).items() if f}

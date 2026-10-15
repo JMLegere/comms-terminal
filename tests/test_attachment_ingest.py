@@ -130,7 +130,7 @@ def test_slack_keeps_file_references_and_waits_to_download(tmp_path):
         ("deck.pdf", "pending", {"id": "F1", "url": "https://files.slack.com/files-pri/T1-F1/download/deck.pdf"}),
         ("shot.png", "pending", {"id": "F2", "url": "https://files.slack.com/files-pri/T1-F2/shot.png"})]
     msg = inbox.thread_view(db, t.id)["messages"][0]
-    assert [a[:3] for a in msg["attachments"]] == [("deck.pdf", "application/pdf", 1200), ("shot.png", "image/png", 300)]
+    assert [(a["name"], a["type"], a["size"]) for a in msg["attachments"]] == [("deck.pdf", "application/pdf", 1200), ("shot.png", "image/png", 300)]
     # Slack data from before this release has no file ids: link-only, no rows
     inbox.ingest(db, inbox.Incoming(conn["id"], "D1", "im", "MESSAGE", "D1:99.1", None, NOW, "old",
                                     data={"channel": "D1", "ts": "99.1", "attachments": [["a.pdf", "application/pdf", 9]]}))

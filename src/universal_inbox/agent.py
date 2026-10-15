@@ -6,7 +6,7 @@ import sys
 from . import inbox
 from .platforms import PLATFORMS
 from .tui import (CONTEXT_SOURCES, DRAFT_FIELDS, ReplyError, connection_label, draft_history, draft_text,
-                  socket_context, thread_addresses, thread_text)
+                  socket_context, staged_files, thread_addresses, thread_text)
 
 
 def add_parsers(sub):
@@ -76,4 +76,5 @@ def draft(db, ref, changes, revision, connection_id) -> str:
                                  expected_revision=revision)
     c = next((c for c in inbox.connections(db) if c["id"] == d["connection_id"]), None)
     history = draft_history(db, d["kind"], d["connection_id"], d["to"]) or []
-    return draft_text(d, connection_label(c), history, inbox.raw_dir(db), (d["id"], d["revision"]))
+    return draft_text(d, connection_label(c), history, inbox.raw_dir(db), (d["id"], d["revision"]),
+                      staged_files(db, ("draft", d["id"])))

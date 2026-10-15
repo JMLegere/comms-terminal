@@ -30,6 +30,8 @@ def main(argv=None) -> None:
     p = argparse.ArgumentParser(prog="universal-inbox")
     p.add_argument("--db", default=default_db())
     p.add_argument("--socket", default=default_socket())
+    p.add_argument("--files-host", help="console: the file server's LAN address in Attachment links (192.168.0.107)")
+    p.add_argument("--files-port", type=int, help="console: the file server's port (8789)")
     sub = p.add_subparsers(dest="cmd")
     s = sub.add_parser("serve", help="run the hooks server, reply socket, and wake timer")
     s.add_argument("--host", default="127.0.0.1")
@@ -124,10 +126,12 @@ def main(argv=None) -> None:
         # SSH does not forward COLORTERM; without it Textual drops to a 256/16-colour palette.
         if not os.environ.get("COLORTERM") and any(t in os.environ.get("TERM", "") for t in TRUECOLOR_TERMS):
             os.environ["COLORTERM"] = "truecolor"
-        from .tui import (CONTEXT_SOURCES, Console, socket_context, socket_reply, socket_send_draft,
+        import textual_image.widget  # noqa: F401 - asks the terminal about Kitty graphics before Textual owns it
+        from .tui import (CONTEXT_SOURCES, FILE_SERVER, Console, socket_context, socket_reply, socket_send_draft,
                           socket_slack_conversations)
         Console(a.db, socket_reply(a.socket), {k: socket_context(a.socket, k) for k in CONTEXT_SOURCES},
-                socket_send_draft(a.socket), socket_slack_conversations(a.socket)).run()
+                socket_send_draft(a.socket), socket_slack_conversations(a.socket),
+                (a.files_host or FILE_SERVER[0], a.files_port or FILE_SERVER[1])).run()
 
 
 if __name__ == "__main__":

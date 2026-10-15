@@ -1853,20 +1853,33 @@ def queue(db, view: str) -> list[dict]:
     return sorted(out, key=lambda x: x["last_at"], reverse=True)
 
 
-def _shaped(m: dict, platform, channel) -> dict:
+def _shaped(db, m: dict, platform, channel, files) -> dict:
     """A message as the console shows it, whatever its Platform: raw source (email), recipients, a link that
-    opens it in the service, and attachments as (name, type, bytes, url); `data` stays for email reply-all."""
+    opens it in the service, and attachments; `data` stays for email reply-all.
+
+    Each attachment: name, type, size, inline, state (None when the Platform only lists it), sha and path (the
+    stored copy, else None), and url: the LAN file link once stored and `files` = (host, port) is given (FR-A5),
+    else the Platform link."""
     d = m["data"]
     m["link"] = platform.link(m, channel)
     urls = [u for _, u in d.get("media") or []]  # Quo media: each photo has its own signed URL
-    m["attachments"] = [(*a[:3], urls[k] if k < len(urls) else m["link"])
-                        for k, a in enumerate(d.get("attachments") or [])]
+    link = lambda k: urls[k] if k < len(urls) else m["link"]  # noqa: E731
+    rows = attachments(db, m["id"])
+    m["attachments"] = [
+        {"name": r["name"], "type": r["type"], "size": r["size"], "inline": bool(r["inline"]), "state": r["state"],
+         "sha": r["sha"], "path": str(attachment_path(db, r["sha"])) if r["sha"] else None,
+         "url": file_url(db, r["sha"], r["name"], *files) if r["sha"] and files else link(r["position"])}
+        for r in rows] or [
+        {"name": a[0], "type": a[1], "size": a[2], "inline": False, "state": None, "sha": None, "path": None,
+         "url": link(k)}
+        for k, a in enumerate(d.get("attachments") or [])]
     m["raw"], m["to"], m["cc"], m["from"] = d.get("raw"), d.get("to") or [], d.get("cc") or [], d.get("from")
     return m
 
 
-def thread_view(db, thread_id: int) -> dict:
-    """Timeline (latest edit wins; deleted messages have no content) and the sender's records."""
+def thread_view(db, thread_id: int, files: tuple[str, int] | None = None) -> dict:
+    """Timeline (latest edit wins; deleted messages have no content) and the sender's records. `files` is the
+    file server's (host, port), for stored Attachments' links."""
     with _read_snapshot(db):
         t = get_thread(db, thread_id)
         thread_id = t.id
@@ -1877,8 +1890,8 @@ def thread_view(db, thread_id: int) -> dict:
         for a in acts:
             if a["kind"] == "MESSAGE":
                 who, _ = _sender(db, a["identity_id"]) if a["identity_id"] else ("You", None)
-                m = {"who": who, "at": a["occurred_at"], "content": a["content"], "edited": False, "deleted": False,
-                     "native_id": a["native_id"], "data": json.loads(a["data"])}
+                m = {"id": a["id"], "who": who, "at": a["occurred_at"], "content": a["content"], "edited": False,
+                     "deleted": False, "native_id": a["native_id"], "data": json.loads(a["data"])}
                 by_id[a["id"]] = m
                 msgs.append(m)
             elif a["target_id"] in by_id:
@@ -1897,7 +1910,7 @@ def thread_view(db, thread_id: int) -> dict:
         people, others, orgs = _participants(db, acts)
         case = db.execute("SELECT title FROM cases WHERE id = ?", (t.case_id,)).fetchone() if t.case_id else None
         platform = platforms.PLATFORMS[ch["platform"]]
-        msgs = [_shaped(m, platform, ch) for m in msgs]
+        msgs = [_shaped(db, m, platform, ch, files) for m in msgs]
         return {"thread": t, "channel": dict(ch), "messages": msgs, "person": person, "people": people,
                 "others": others, "organizations": orgs, "members": snapshot(db, thread_id)["_members"],
                 "link": next((m["link"] for m in reversed(msgs) if m["link"]), None),
