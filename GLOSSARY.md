@@ -30,8 +30,12 @@ A timestamped, never-rewritten record of a message received or sent in a Thread,
 _Avoid_: Event, Interaction, Message (when meaning the record)
 
 **Attachment**:
-A file sent with a message. It is seen in the console and fetched from the Platform.
-_Avoid_: File (alone), Part
+A file that arrives or is sent with a message, or is added to a Draft to go with it, listed beside the message rather than placed in its body. A Slack file or an SMS photo is an Attachment.
+_Avoid_: File (alone), Part, Upload
+
+**Inline image**:
+An image placed inside an email body where it appears, rather than listed beside the message. It is part of the body, not an Attachment.
+_Avoid_: Embedded image, Attachment (for an image in the body)
 
 **Trimmed content**:
 The parts of a message body that repeat or decorate rather than say something new: quoted earlier messages, signatures, and boilerplate footers. They are folded behind `•••`, as in Gmail.
