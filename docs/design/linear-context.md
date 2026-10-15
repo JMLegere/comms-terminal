@@ -1,6 +1,6 @@
 # Linear context
 
-Status: Local Phases 1–4 implemented and checked after Jeremy's "execute the plan". Verification results and regression-suite limitations are below. Jeremy's subsequent "ship it" authorizes code publication and the existing Workbox package/service deployment. Deployment is pending sudo authentication; account/credential and workspace/team-access changes remain separately gated. Human acceptance remains separate.
+Status: Phases 1–4 implemented and checked after Jeremy's "execute the plan". Verification results and regression-suite limitations are below. Under his subsequent "ship it", release `38e196e` is published to `main`/`dev` and deployed to the existing Workbox package/service. Linear remains unconnected; exact key, workspace, and required-team authorization remain separately gated. Installed UI evidence uses synthetic fixtures; human acceptance remains separate.
 
 This document covers only the Linear addition. Product requirement and decision record: [FR-13c and decision 125](../prd.md).
 
@@ -111,7 +111,7 @@ Jeremy authorized local Phases 1–4 with "execute the plan", then code publicat
   - Inspect rendered narrow/wide, loading, empty, and failure states; present the implemented UI on Mani for human review.
 - **Phase 5 — Connection — planned**
   - Obtain separate authorization for the exact key creation/connection, workspace, and required-team scope before creating or connecting the Jeremy-owned personal API key restricted to **Read**.
-  - Deploy the reviewed package to the existing Workbox service under Jeremy's subsequent "ship it" authorization. Deployment is pending: the noninteractive sudo restart authorization check failed because authentication is required.
+  - Reviewed package deployment is complete under Jeremy's subsequent "ship it" authorization; see the deployment receipt below. Provider connection remains separately gated.
   - Install a credential only after separate authorization for the exact key, workspace, and team scope. Then verify live workspace identity, effective access, representative matches, cache behavior, and source health.
 
 ## Local implementation evidence — 2026-10-15
@@ -125,10 +125,18 @@ Jeremy authorized local Phases 1–4 with "execute the plan", then code publicat
 - Render proof: 19 synthetic Textual captures at 220, 160, 100, and 80 columns, plus loading/empty/error states, in temporary `/tmp/linear-context-proof-u9g3_wez/`. Opened and inspected representative captures for all four page types, all four widths, and all three transient states. Thread properties, including all Context sources, retain their existing collapse below the wide layout; narrower Person/Organization/Case pages still show Linear.
 - Presented a current-source, isolated `Linear demo (fixtures)` in Herdr (`wQ:p1X`); source hashes, active workspace/tab/pane, zoom, and visible issue/match/Request/link markers were verified. The fixture uses no real inbox data or provider credential. Human review/acceptance remains separate.
 - During the earlier local implementation verification above, no Linear key was created or installed; no private workspace query, installer execution, service restart, external write, commit, or deployment occurred. Restricted-key workspace/team/Customer Request coverage and live links/health remain Phase 5 checks in the [runbook](../runbook.md#3e-connect-linear-context-later-authorization).
-- Subsequent release authority: Jeremy's "ship it" authorizes code publication and the existing Workbox package/service deployment. Deployment remains pending sudo authentication; no deployment is claimed. Key creation/connection and workspace/team-access changes remain separately gated. The test counts above describe the earlier local source, before release integration.
+- Subsequent release authority and execution: Jeremy's "ship it" authorized code publication and the existing Workbox package/service deployment, now completed as recorded below. Key creation/connection and workspace/team-access changes remain separately gated. The test counts above describe the earlier local source, before release integration.
 - Release integration preserves published upstream `a41d18d`, including agent CLI/Markdown commands and Attachment/Inline image definitions. Added a fixture-backed actual CLI check that fresh Thread Markdown includes Linear; no upstream agent-command code needed changes.
 - Post-rebase checks: the same six focused modules plus `tests/test_copy_for_agent.py` and `tests/test_reconcile_console.py` — **240 passed, 1 failed**. The failure was `test_domain_literal_message_controls_keep_exact_identity_through_merge`'s date-header assertion; it passed on an isolated release rerun. Three isolated unchanged-`a41d18d` runs also passed, so this failure is intermittent and is **not proven pre-existing**. No unrelated test was changed, and no green full-suite claim is made.
-- Regenerated 19 merged-release fixture captures in temporary `/tmp/linear-context-proof-438yiswb/`; inspected the 220-column Thread, 100-column Person, and 80-column Case renders. Installed-artifact verification remains pending deployment, not substituted by these source renders.
+- Regenerated 19 merged-release fixture captures in temporary `/tmp/linear-context-proof-438yiswb/`; inspected the 220-column Thread, 100-column Person, and 80-column Case renders. These source renders preceded the installed-artifact verification recorded below.
+
+## Deployment receipt — 2026-10-15
+
+- Under Jeremy's "ship it", release `38e196e8bc07d24c22543f0b150ca0427f47d04c` was published to `main`/`dev` and deployed to the existing Workbox uv-tool package/service. All **19 packaged Python/SQL source files** match that release.
+- The earlier noninteractive sudo check required authentication. After Jeremy completed real sudo authentication, a normal package reinstall and existing service restart completed. `universal-inbox.service` is active/running; `/run/universal-inbox/inbox.sock` remains **0600** and the live database remains **schema 11**. `deploy/install.sh` was not run.
+- Live private-socket checks: `POST /linear` with `{}` returned **503** (`Linear is not connected`); an explicit `{"emails":null}` returned **400** through safe array validation.
+- Linear remains unconnected: its credential drop-in is absent. No Linear key creation/installation, account/team permission change, private Linear workspace query, or Linear issue/task/comment write occurred. Exact key/workspace/required-team authorization and live identity, access, Customer Request, match, link, cache, and health verification remain Phase 5 gates.
+- Installed-package UI proof imported `Console` from the installed uv-tool package, with provenance asserted. Generated 19 synthetic fixture captures in temporary `/tmp/linear-context-proof-p3swqg_6/`; opened and inspected Thread 220, Person 100, Organization 160, Case 80, and 220-column loading/empty/error renders. The inherited narrow-Thread properties-collapse limitation remains. This establishes installed fixture rendering; real-provider matches, live links, and human acceptance remain unverified.
 
 ## Sources
 

@@ -157,7 +157,7 @@ Text-first, like a terminal mail client with Gmail's habits. No images in the co
 
 ### Context sources
 
-Thread, Person, Organization, and Case pages show separate details-column sections in this order: Attio, Tana, Linear. Linear is built locally, not connected or deployed; existing pages and keyboard bindings stay unchanged.
+Thread, Person, Organization, and Case pages show separate details-column sections in this order: Attio, Tana, Linear. Linear capability is published and deployed under Jeremy's "ship it"; provider connection remains gated on exact key/workspace/required-team authorization. Installed UI evidence uses synthetic fixtures; real-provider matches and human acceptance remain separate. Existing pages and keyboard bindings stay unchanged.
 
 - **Linear**: compact cards for every matching issue except **Done, Completed, Canceled, or Archived**, including backlog, triage, and other nonterminal states: identifier, title, state, priority, assignee, project, and updated time, with why-matched evidence, relevant Customer Request excerpts inspected only within matched Customer/issue candidates, and an **Open in Linear** link. No global search over unassociated Requests, issue comments, or closed-history feed.
 - **Inherited context**: preserve existing Person/Organization context inheritance on all four page types. Cases inherit Linear context through their People and Organizations; no direct Case-to-issue field or copied issue data. Inbox Status stays unchanged.
