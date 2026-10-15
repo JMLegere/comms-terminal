@@ -385,9 +385,11 @@ HELP = [  # (group, [(keys, what it does)]) — the full key map; Gmail-style wh
 ("m", "ignore: it stays out of Todo (m again un-ignores)"),
                 ("l", "add to a case"), ("s", "change status: needs a response, investigating"),
                 ("p", "open the person"), ("o", "open in Gmail, Fastmail, or Slack"), ("z", "undo the last change"),
+                ("y", "copy the thread, its people, and Attio/Tana context as Markdown for an agent"),
                 ("; / :", "expand / collapse every message (click a message or ••• to toggle one)"),
                 ("ctrl+shift+click", "open a link in your browser (shift lets Ghostty take the click)")]),
     ("Drafts", [("n", "start a blank draft"), ("enter", "edit the selected draft"), ("x", "delete the selected draft (z undoes)"),
+                ("y", "copy the draft and its recipients' threads as Markdown for an agent"),
                 ("ctrl+s", "save exact fields and body"), ("esc", "save and return to the list"),
                 ("Connection", "choose email or SMS; sending unavailable")]),
     ("Case", [("n", "Cases views: start a case (a goal) with no threads yet"),
@@ -530,6 +532,16 @@ class ThreadActions:
             elif choice:
                 self._act(inbox.SetCase(case_id=int(choice)), "Added to case.")
         self.app.push_screen(Pick("Case", opts), chosen)
+
+    def action_copy(self):
+        tid = self.current_thread_id()
+        if tid is None:
+            return
+        pane = next((tv for tv in self.app.main.query(ThreadView)
+                     if tv.thread_id == tid and getattr(tv, "view", None)), None)
+        v = pane.view if pane else inbox.thread_view(self.app.db, tid)
+        context = {s.source: s.answer for s in (pane or self).query(ContextSection)}
+        copy_for_agent(self.app, thread_text(v, self.app.raw, context), "the thread")
 
     def action_person(self):
         tid = self.current_thread_id()
@@ -702,7 +714,7 @@ THREAD_KEYS = [  # Thread actions, Gmail-style (decision #93); shared by the Thr
     Binding("r", "reply('sender')", "reply"), Binding("a", "reply('all')", "reply all"),
     Binding("e", "done", "done"), Binding("b", "pause", "snooze"),
     Binding("m", "ignore", "ignore"), Binding("l", "case", "case"), Binding("s", "status", "status"),
-    Binding("p", "person", show=False), Binding("o", "link", show=False),
+    Binding("p", "person", show=False), Binding("o", "link", show=False), Binding("y", "copy", "copy for agent"),
 ]
 
 
@@ -1656,6 +1668,63 @@ class ThreadView(Horizontal):
         tl.scroll_page_down() if direction > 0 else tl.scroll_page_up()
 
 
+# --- y: a page as Markdown on the clipboard, to paste into a terminal agent ----
+
+def agent_text(markup: str) -> str:
+    """Rich markup -> plain text that keeps each link's URL."""
+    def url(m):
+        label = render.plain(m[2]).strip()
+        return m[1] if not label or label.startswith("↗") else f"{label} <{m[1]}>"
+    return render.plain(re.sub(r"\[link='([^']*)'\](.*?)\[/link\]", url, markup, flags=re.S)).strip()
+
+
+def thread_text(v, raw=None, context=None) -> str:
+    """One Thread as Markdown: properties, every message in full (Trimmed content too), and the Context
+    sources' answers (`context`: source -> (answer, error)) as JSON."""
+    t, ch = v["thread"], v["channel"]
+    slack = PLATFORMS[ch["platform"]].format == "slack"
+    people = [f"{p['name']} ({', '.join(i['value'] for i in p['identities'])})" for p in v.get("people") or []]
+    end = t.follow_up_at or t.snoozed_until
+    lines = [f"# {t.title}", "",
+             f"- Thread: {t.id} · {PLATFORMS[ch['platform']].title} · {v['where']}" + (f" · {v['link']}" if v["link"] else ""),
+             f"- Status: {t.status} / {t.status_detail}" + (f" until {end}" if t.status == "SNOOZED" and end else ""),
+             f"- Case: {v['case'] or 'none'}",
+             f"- People: {'; '.join(people + (v.get('others') or [])) or 'none'}",
+             f"- Organizations: {', '.join(v.get('organizations') or []) or 'none'}", "", "## Messages"]
+    for m in v["messages"]:
+        lines += ["", f"### {m['who']} · {m['at']}" + (" · edited" if m["edited"] else "")]
+        lines += [f"{k}: {', '.join(m[k]) if isinstance(m[k], list) else m[k]}" for k in ("from", "to", "cc") if m[k]]
+        if m["deleted"]:
+            lines.append("(message deleted)")
+            continue
+        body = message_body(m, raw, slack)
+        lines += ["", agent_text(body.text)]
+        if body.trimmed:
+            lines += ["", "Trimmed content:", agent_text(body.trimmed)]
+        lines += [f"Attachment: {a[0]} ({a[1]}, {a[2]} bytes)" for a in body.attachments]
+    for source, (answer, error) in (context or {}).items():
+        if answer is not None or error:
+            lines += ["", f"## {CONTEXT_SOURCES[source][0]}", "",
+                      error or f"```json\n{json.dumps(answer, indent=1, ensure_ascii=False, default=str)}\n```"]
+    return "\n".join(lines) + "\n"
+
+
+def draft_text(values, connection_label, history, raw=None) -> str:
+    """A Draft as Markdown: its envelope and body, then each captured-history Thread in full."""
+    lines = [f"# Draft: {values['subject'] or 'no subject'}", "", f"- Connection: {connection_label}",
+             f"- From: {values['sender'] or 'not selected'}", f"- To: {values['to'] or 'not selected'}"]
+    lines += [f"- Cc: {values['cc']}"] if values["cc"] else []
+    lines += ["", "## Body", "", values["body"] or "(empty)"]
+    if history:
+        lines += ["", "## Captured history with these recipients", ""] + [thread_text(v, raw) for v in history]
+    return "\n".join(lines) + "\n"
+
+
+def copy_for_agent(app, text: str, what: str):
+    app.copy_to_clipboard(text)  # OSC 52: reaches the local clipboard over SSH (tmux needs set-clipboard on)
+    app.notify(f"Copied {what} for an agent · {len(text):,} characters.")
+
+
 # --- unsent drafts: independent envelopes, never recorded Threads ------------
 
 DRAFT_FIELDS = ("connection_id", "kind", "sender", "to", "cc", "subject", "body")
@@ -1707,6 +1776,7 @@ class DraftView(Horizontal):
     # The Drafts list keys work here too; text fields consume printable keys before these fire.
     BINDINGS = [Binding("j", "page('down')", "move", key_display="j/k"), Binding("k", "page('up')", show=False),
                 Binding("n", "page('new')", "new draft"), Binding("x", "page('delete')", "delete draft"),
+                Binding("y", "page('copy')", "copy for agent"),
                 Binding("ctrl+s", "save", "save draft"),
                 Binding("escape", "close", "save / close"),
                 Binding("ctrl+enter", "send", "send", key_display="ctrl+enter"),
@@ -2055,6 +2125,7 @@ class DraftsPage(Page):
     SIDE = f"{ICON['edited']} draft"
     BINDINGS = [Binding("j", "down", "move", key_display="j/k"), Binding("k", "up", show=False),
                 Binding("n", "new", "new draft"), Binding("x", "delete", "delete draft"),
+                Binding("y", "copy", "copy for agent"),
                 Binding("ctrl+s", "save", "save draft"), Binding("ctrl+enter", "send", show=False),
                 Binding("ctrl+r", "reload", show=False)]
 
@@ -2194,6 +2265,15 @@ class DraftsPage(Page):
         view = self.app.main.draft_view
         if view and view.check_action("reload", ()):
             view.action_reload()
+
+    def action_copy(self):
+        """The shown Draft as its editor holds it now, saved or not."""
+        view = self.app.main.draft_view
+        if view is None:
+            return
+        connection = view.connection()
+        label = f"{PLATFORMS[connection['platform']].title} · {conn_name(connection)}" if connection else "none"
+        copy_for_agent(self.app, draft_text(view.values(), label, view.history_views, self.app.raw), "the draft")
 
     def action_delete(self):
         selected = self.selected()

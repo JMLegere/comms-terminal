@@ -161,6 +161,7 @@ Text-first, like a terminal mail client with Gmail's habits. No images in the co
 
 - Move: `←`/`→` focus the previous/next pane without opening an item or changing contents; `↑`/`↓` or `j`/`k` move in the main page. In the rail, `↑`/`↓` highlight and `enter` opens; in the thread pane, `↑`/`↓` scroll. `space`/`pgdn`/`pgup` scroll the thread, `u` or `esc` back, `1`–`5` Status views, `6`–`9` People, Organizations, Cases, Channels.
 - Thread (main list, focused thread pane, or selected Case card): `r` reply to the sender, `a` reply all (FR-3b's reply-all stays one key away), `e` Done (Gmail archive), `b` snooze (Gmail snooze), `m` Ignore (Gmail mute), `l` Case (Gmail label), `z` undo (Gmail undo), `s` change status, `p` Person, `o` open in Gmail or Slack, `ctrl+enter` send (#100).
+- Copy for an agent: `y` on a Thread (or its Case card) or a Draft copies it to the clipboard (OSC 52) as Markdown to paste into a terminal agent. A Thread gives its properties, every message in full with link URLs and Trimmed content, and the Attio and Tana answers as JSON. A Draft gives its envelope and current unsaved body, then each Thread in its Captured history.
 - General: `?` all keys, `q` quit.
 - The footer lists every action for the page as plain text: key in blue, description in grey, no icons or blocks (#94).
 
