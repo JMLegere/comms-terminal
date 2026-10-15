@@ -21,7 +21,7 @@ from typing import Protocol
 
 from . import platforms
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 WAIT = timedelta(days=4)  # Waiting for them ends after this with no reply: back to Todo to follow up (#116)
 MIGRATIONS = {  # version -> statement that upgrades an existing database to it
     2: "ALTER TABLE cases ADD COLUMN description TEXT NOT NULL DEFAULT ''",
@@ -146,6 +146,37 @@ INSERT INTO composition_drafts_new SELECT id, revision, connection_id, kind, sen
 DROP TABLE composition_drafts;
 ALTER TABLE composition_drafts_new RENAME TO composition_drafts;
 PRAGMA legacy_alter_table = OFF;""",
+    # Attachments: received files copied on arrival, and files staged on a Draft or reply.
+    12: """CREATE TABLE attachments (
+  id INTEGER PRIMARY KEY,
+  activity_id INTEGER NOT NULL REFERENCES activities (id),
+  position INTEGER NOT NULL CHECK (position >= 0),
+  name TEXT NOT NULL,
+  type TEXT NOT NULL,
+  size INTEGER NOT NULL CHECK (size >= 0),
+  inline INTEGER NOT NULL DEFAULT 0 CHECK (inline IN (0, 1)),
+  content_id TEXT,
+  source TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(source)),
+  sha TEXT,
+  state TEXT NOT NULL CHECK (state IN ('pending', 'stored', 'failed', 'expired')),
+  tries INTEGER NOT NULL DEFAULT 0,
+  UNIQUE (activity_id, position),
+  CHECK ((state = 'stored') = (sha IS NOT NULL))
+) STRICT;
+CREATE INDEX attachments_sha ON attachments (sha);
+CREATE INDEX attachments_pending ON attachments (state) WHERE state = 'pending';
+
+CREATE TABLE staged_attachments (
+  id INTEGER PRIMARY KEY,
+  draft_id INTEGER REFERENCES composition_drafts (id) ON DELETE CASCADE,
+  thread_id INTEGER REFERENCES threads (id),
+  sha TEXT NOT NULL,
+  name TEXT NOT NULL,
+  type TEXT NOT NULL,
+  size INTEGER NOT NULL CHECK (size >= 0),
+  added_at TEXT NOT NULL,
+  CHECK ((draft_id IS NULL) <> (thread_id IS NULL))
+) STRICT;""",
 }
 
 # ponytail: fixed list; extend when a free-mail sender forms an Organization by mistake.
@@ -991,6 +1022,110 @@ def store_raw(db, raw: bytes) -> str | None:
         with os.fdopen(fd, "wb") as f:
             f.write(raw)
     return sha
+
+
+# --- attachments (.agents/prd/2026-10-15-attachments.md) -------------------
+
+ATTACHMENT_TRIES = 5  # downloads given up after this many failures
+
+
+def files_dir(db) -> Path | None:
+    """Where Attachment bytes are kept: `files/` beside the database; None in memory."""
+    f = db.execute("PRAGMA database_list").fetchone()[2]
+    return Path(f).parent / "files" if f else None
+
+
+def store_file(db, data: bytes) -> str | None:
+    """Keep one file's bytes, content-addressed and 0600; returns the sha256 name (unchanged once written)."""
+    d = files_dir(db)
+    if d is None:
+        return None
+    sha = hashlib.sha256(data).hexdigest()
+    d.mkdir(mode=0o700, exist_ok=True)
+    path = d / sha
+    if not path.exists():
+        try:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:  # another process wrote the same bytes first
+            return sha
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+    return sha
+
+
+def attachment_path(db, sha: str) -> Path | None:
+    d = files_dir(db)
+    return d / sha if d is not None and re.fullmatch(r"[0-9a-f]{64}", sha or "") else None
+
+
+def add_attachments(db, activity_id: int, items: list[dict]) -> list[int]:
+    """Record a message's Attachments in order. Each item: name, type, size, and optional inline, content_id,
+    source (dict), sha. An item with a sha is stored; one without waits for a download."""
+    with db:
+        return [db.execute(
+            "INSERT INTO attachments (activity_id, position, name, type, size, inline, content_id, source, sha, state)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (activity_id, k, it["name"], it["type"], it["size"], int(bool(it.get("inline"))), it.get("content_id"),
+             json.dumps(it.get("source") or {}), it.get("sha"), "stored" if it.get("sha") else "pending")).lastrowid
+            for k, it in enumerate(items)]
+
+
+def attachments(db, activity_id: int) -> list[dict]:
+    return [dict(r) for r in db.execute(
+        "SELECT * FROM attachments WHERE activity_id = ? ORDER BY position", (activity_id,))]
+
+
+def pending_attachments(db, limit: int = 50) -> list[dict]:
+    return [dict(r) for r in db.execute(
+        "SELECT * FROM attachments WHERE state = 'pending' ORDER BY id LIMIT ?", (limit,))]
+
+
+def mark_stored(db, attachment_id: int, sha: str) -> None:
+    with db:
+        db.execute("UPDATE attachments SET sha = ?, state = 'stored' WHERE id = ?", (sha, attachment_id))
+
+
+def mark_failed(db, attachment_id: int) -> None:
+    """Count one failed download; after ATTACHMENT_TRIES the Attachment stays failed (its chip keeps the Platform link)."""
+    with db:
+        db.execute("UPDATE attachments SET tries = tries + 1,"
+                   " state = CASE WHEN tries + 1 >= ? THEN 'failed' ELSE 'pending' END WHERE id = ?",
+                   (ATTACHMENT_TRIES, attachment_id))
+
+
+def _owner(draft_id, thread_id) -> tuple[str, int]:
+    if (draft_id is None) == (thread_id is None):
+        raise ValueError("stage on exactly one of draft_id or thread_id")
+    return ("draft_id", draft_id) if draft_id is not None else ("thread_id", thread_id)
+
+
+def stage(db, *, sha: str, name: str, type: str, size: int,
+          draft_id: int | None = None, thread_id: int | None = None) -> int:
+    """Attach a stored file to an unsent Draft or to one Thread's open reply."""
+    column, owner = _owner(draft_id, thread_id)
+    path = attachment_path(db, sha)
+    if files_dir(db) is not None and (path is None or not path.is_file()):
+        raise ValueError("stage needs the sha256 of a stored file")
+    with db:
+        return db.execute(f"INSERT INTO staged_attachments ({column}, sha, name, type, size, added_at)"
+                          " VALUES (?, ?, ?, ?, ?, ?)", (owner, sha, name, type, size, _iso(_now()))).lastrowid
+
+
+def staged(db, *, draft_id: int | None = None, thread_id: int | None = None) -> list[dict]:
+    column, owner = _owner(draft_id, thread_id)
+    return [dict(r) for r in db.execute(
+        f"SELECT * FROM staged_attachments WHERE {column} = ? ORDER BY id", (owner,))]
+
+
+def unstage(db, staged_id: int) -> None:
+    with db:
+        db.execute("DELETE FROM staged_attachments WHERE id = ?", (staged_id,))
+
+
+def clear_staged(db, *, draft_id: int | None = None, thread_id: int | None = None) -> None:
+    column, owner = _owner(draft_id, thread_id)
+    with db:
+        db.execute(f"DELETE FROM staged_attachments WHERE {column} = ?", (owner,))
 
 
 EMAIL_ATOM = r"[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+"

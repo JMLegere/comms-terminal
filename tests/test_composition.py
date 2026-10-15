@@ -198,7 +198,8 @@ def test_v8_draft_migration_matches_fresh_preserves_old_rows_aliases_guards_and_
         assert old.execute("PRAGMA user_version").fetchone()[0] == inbox.SCHEMA_VERSION
         assert shape(old) == shape(fresh)
         assert {k: v for k, v in shape(old).items() if k in old_shape} == old_shape
-        assert old_rows(old) == before and inbox.get_thread(old, two.id).id == one.id
+        assert {k: v for k, v in old_rows(old).items() if k in before} == before  # later migrations may add tables
+        assert inbox.get_thread(old, two.id).id == one.id
         assert old.execute("PRAGMA foreign_keys").fetchone()[0] == 1
         assert old.execute("PRAGMA foreign_key_check").fetchall() == []
         assert [tuple(r) for r in old.execute("PRAGMA foreign_key_list(composition_drafts)")] == [
@@ -207,7 +208,7 @@ def test_v8_draft_migration_matches_fresh_preserves_old_rows_aliases_guards_and_
                     f"UPDATE threads SET merged_into = {two.id} WHERE id = {one.id}"):
             with pytest.raises(sqlite3.DatabaseError), old:
                 old.execute(sql)
-        assert old_rows(old) == before
+        assert {k: v for k, v in old_rows(old).items() if k in before} == before  # later migrations may add tables
         with old:
             old.execute("INSERT INTO connections (id, platform, external_id, self_id, label, connected_at)"
                         " VALUES (5, 'gmail', 'draft@example.test', 'draft@example.test', 'Draft mail', ?)",

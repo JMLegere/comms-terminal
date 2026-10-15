@@ -178,3 +178,37 @@ CREATE TABLE composition_drafts (
   CHECK ((kind = 'email' AND subject IS NOT NULL)
          OR (kind IN ('sms', 'slack') AND subject IS NULL AND cc = ''))
 ) STRICT;
+
+-- Attachments (.agents/prd/2026-10-15-attachments.md): files copied on arrival, content-addressed in files/
+-- beside the database. Their own table, since activities.data never changes after ingest.
+CREATE TABLE attachments (
+  id INTEGER PRIMARY KEY,
+  activity_id INTEGER NOT NULL REFERENCES activities (id),
+  position INTEGER NOT NULL CHECK (position >= 0),
+  name TEXT NOT NULL,
+  type TEXT NOT NULL,
+  size INTEGER NOT NULL CHECK (size >= 0),
+  inline INTEGER NOT NULL DEFAULT 0 CHECK (inline IN (0, 1)),
+  content_id TEXT,
+  source TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(source)),
+  sha TEXT,
+  state TEXT NOT NULL CHECK (state IN ('pending', 'stored', 'failed', 'expired')),
+  tries INTEGER NOT NULL DEFAULT 0,
+  UNIQUE (activity_id, position),
+  CHECK ((state = 'stored') = (sha IS NOT NULL))
+) STRICT;
+CREATE INDEX attachments_sha ON attachments (sha);
+CREATE INDEX attachments_pending ON attachments (state) WHERE state = 'pending';
+
+-- Files attached to an unsent Draft or to the open reply of one Thread.
+CREATE TABLE staged_attachments (
+  id INTEGER PRIMARY KEY,
+  draft_id INTEGER REFERENCES composition_drafts (id) ON DELETE CASCADE,
+  thread_id INTEGER REFERENCES threads (id),
+  sha TEXT NOT NULL,
+  name TEXT NOT NULL,
+  type TEXT NOT NULL,
+  size INTEGER NOT NULL CHECK (size >= 0),
+  added_at TEXT NOT NULL,
+  CHECK ((draft_id IS NULL) <> (thread_id IS NULL))
+) STRICT;
