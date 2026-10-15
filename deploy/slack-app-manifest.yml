@@ -31,6 +31,8 @@ oauth_config:
       - chat:write
       - users:read
       - users:read.email
+      - files:read  # download received Attachments (.agents/prd/2026-10-15-attachments.md)
+      - files:write  # send Attachments as Jeremy
 settings:
   event_subscriptions:
     request_url: https://hooks.agentmaple.com/hooks/slack

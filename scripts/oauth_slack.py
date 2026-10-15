@@ -15,11 +15,12 @@ import os
 import urllib.parse
 import urllib.request
 
-# Bot: read selected channels. User: Jeremy's DMs and group DMs, channel names, profiles, replies as him.
+# Bot: read selected channels. User: Jeremy's DMs and group DMs, channel names, profiles, replies as him,
+# and Attachments: download received files and upload sent ones (.agents/prd/2026-10-15-attachments.md).
 BOT_SCOPES = ["channels:history", "groups:history", "channels:read", "groups:read",
               "users:read", "users:read.email"]
 USER_SCOPES = ["channels:history", "groups:history", "im:history", "mpim:history", "im:read", "mpim:read", "channels:read", "groups:read",
-               "chat:write", "users:read", "users:read.email"]
+               "chat:write", "users:read", "users:read.email", "files:read", "files:write"]
 
 
 def authorize_url(client_id: str, redirect_uri: str) -> str:
