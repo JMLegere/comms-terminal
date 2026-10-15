@@ -296,6 +296,7 @@ class Staged:
     name: str
     type: str
     size: int
+    sha: str = ""
 
 
 class Sender(Protocol):
@@ -561,6 +562,8 @@ def send_draft(db, draft_id: int, revision: int, sender: Sender, *, again: bool 
                                title=title, data={"channel": to[0], "ts": native_id.split(":", 1)[1], "kind": kind},
                                channel_name=label)
             thread_id = _ingest(db, inc).id
+            _add_sent(db, db.execute("SELECT id FROM activities WHERE kind = 'MESSAGE' AND native_id = ?",
+                                     (native_id,)).fetchone()["id"], files)
         else:
             mailbox = db.execute("SELECT native_id FROM channels WHERE connection_id = ? AND kind = 'mailbox'",
                                  (connection["id"],)).fetchone()
@@ -574,8 +577,10 @@ def send_draft(db, draft_id: int, revision: int, sender: Sender, *, again: bool 
                 " status_changed_at, created_at, follow_up_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (channel_id, native_id, title, *status, _iso(now), _iso(now), _follow_up(status[1], now))).lastrowid
             data = {"from": connection["self_id"], "to": to, "cc": cc, "subject": d["subject"]}
-            db.execute("INSERT INTO activities (thread_id, kind, occurred_at, native_id, content, data)"
-                       " VALUES (?, 'MESSAGE', ?, ?, ?, ?)", (thread_id, _iso(now), native_id, d["body"], json.dumps(data)))
+            activity_id = db.execute(
+                "INSERT INTO activities (thread_id, kind, occurred_at, native_id, content, data)"
+                " VALUES (?, 'MESSAGE', ?, ?, ?, ?)", (thread_id, _iso(now), native_id, d["body"], json.dumps(data))).lastrowid
+            _add_sent(db, activity_id, files)
         db.execute("DELETE FROM composition_drafts WHERE id = ?", (draft_id,))
     return get_thread(db, thread_id)
 
@@ -1167,6 +1172,12 @@ def _add_attachments(db, activity_id: int, items: list[dict]) -> list[int]:
         for k, it in enumerate(items)]
 
 
+def _add_sent(db, activity_id: int, files: Sequence[Staged]) -> None:
+    """Jeremy's sent message keeps the files it carried, stored, in send order (its echo is a duplicate)."""
+    _add_attachments(db, activity_id, [{"name": f.name, "type": f.type, "size": f.size, "sha": f.sha,
+                                        "source": {"sent": True}} for f in files])
+
+
 def _downloads(data: dict) -> list[dict]:
     """A new message's files to fetch: Slack's carry {id, url} as a 4th element (FR-A3), Quo's are its media
     URLs (FR-A4). Slack data from before has no source and stays link-only."""
@@ -1253,7 +1264,7 @@ def staged_files(db, *, draft_id: int | None = None, thread_id: int | None = Non
         path = attachment_path(db, s["sha"])
         if path is None or not path.is_file():
             raise ValueError(f"Attachment {s['name']} is missing from the file store; remove it and attach it again")
-        out.append(Staged(path, s["name"], s["type"], s["size"]))
+        out.append(Staged(path, s["name"], s["type"], s["size"], s["sha"]))
     return out
 
 
@@ -1602,18 +1613,19 @@ def reply(db, thread_id: int, text: str, sender: Sender,
         set_connection_error(db, connection_id, str(e))
         raise
     set_connection_error(db, connection_id, None)
-    if files:
-        clear_staged(db, thread_id=staged_on)
     now = _now()
     with db:
         if not db.in_transaction:
             db.execute("BEGIN IMMEDIATE")
         t = get_thread(db, thread_id)  # reconciliation may have happened while the Sender was in flight
         thread_id = t.id
-        db.execute(
+        cur = db.execute(
             "INSERT OR IGNORE INTO activities (thread_id, kind, occurred_at, native_id, content, data)"
             " VALUES (?, 'MESSAGE', ?, ?, ?, ?)",
             (thread_id, _iso(now), native_id, text, json.dumps({"to": list(to), "cc": list(cc)})))
+        if cur.rowcount:
+            _add_sent(db, cur.lastrowid, files)
+        db.execute("DELETE FROM staged_attachments WHERE thread_id = ?", (staged_on,))
         nxt = _after_activity(t.status, t.status_detail, True, "MESSAGE")
         if nxt:
             _set_status(db, thread_id, *nxt, now)

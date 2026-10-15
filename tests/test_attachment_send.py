@@ -211,3 +211,33 @@ def test_missing_stored_file_refuses_the_send(db):
     inbox.attachment_path(db, pdf(db)).unlink()
     with pytest.raises(ValueError, match="contract.pdf is missing"):
         inbox.send_draft(db, d["id"], d["revision"], FakeSender())
+
+
+# --- the sent message keeps its files ------------------------------------------
+
+def sent_files(db, native_id):
+    a = db.execute("SELECT id FROM activities WHERE native_id = ?", (native_id,)).fetchone()
+    return [(r["sha"], r["name"], r["type"], r["size"], r["position"], r["inline"], r["state"], json.loads(r["source"]))
+            for r in inbox.attachments(db, a["id"])] if a else None
+
+
+def test_sent_reply_and_slack_draft_record_their_files_as_stored_attachments(db):
+    want = [(pdf(db), "contract.pdf", "application/pdf", len(PDF), 0, 0, "stored", {"sent": True})]
+    t = gmail_thread(db)
+    with pytest.raises(inbox.SendFailed):
+        inbox.reply(db, t.id, "Here", FakeSender(inbox.SendFailed("HTTP 422")))
+    assert db.execute("SELECT COUNT(*) FROM attachments").fetchone()[0] == 0
+    inbox.reply(db, t.id, "Here", FakeSender("<r1@example.test>"))
+    assert sent_files(db, "<r1@example.test>") == want
+
+    class SlackDraftSender(FakeSender):
+        def conversation(self, channel):
+            return "channel", "eng"
+
+    d = inbox.save_draft(db, envelope("slack", connection_id=4, sender="USELF", to="#eng <C1>", body="Notes"))
+    inbox.stage(db, sha=pdf(db), name="contract.pdf", type="application/pdf", size=len(PDF), draft_id=d["id"])
+    with pytest.raises(inbox.SendFailed):
+        inbox.send_draft(db, d["id"], d["revision"], SlackDraftSender(inbox.SendFailed("not_in_channel")))
+    assert db.execute("SELECT COUNT(*) FROM attachments").fetchone()[0] == 1
+    inbox.send_draft(db, d["id"], d["revision"], SlackDraftSender("C1:9.0"))
+    assert sent_files(db, "C1:9.0") == want
