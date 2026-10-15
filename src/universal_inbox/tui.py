@@ -659,13 +659,19 @@ class Rail(OptionList):
             state = {"ok": f"[#6c782e]{ICON['ok']}[/]", "checking": "[#928374]…[/]"}.get(st, f"[#c14a4a]{ICON['broken']}[/]")
             label = title if st in ("ok", "checking") else f"[#c14a4a]{title}[/]"
             opts.append(Option(f" [#654735]{ICON[icon]}[/] {label}{' ' * (22 - len(title))}{state}", id=f"context:{key}"))
-        self.clear_options()
-        self.add_options(opts)
+        shown = [(o.prompt, o.id, o.disabled) for o in opts]
+        if shown != getattr(self, "shown", None):  # unchanged rows: no rebuild, so no redraw (the 60 s flash)
+            self.shown = shown
+            self.clear_options()
+            self.add_options(opts)
         self.highlighted = self.get_option_index(main.section) if self.has_focus else None
 
     def on_focus(self):
         if self.option_count:
             self.highlighted = self.get_option_index(self.app.main.section)
+
+    def on_blur(self):  # as refresh_rail does; left set, the next chrome refresh cleared it with a redraw
+        self.highlighted = None
 
     def on_option_list_option_selected(self, event):
         if event.option.id.startswith("context:"):  # no page of its own; its context shows on each page
@@ -3236,7 +3242,10 @@ class StatusLine(Static):
             groups = [g for g in groups if g]
             keys = gap.join("   ".join(g) for g in groups)
         pad = max(1, room + 2 - Text.from_markup(keys).cell_len)
-        self.update(left + keys + " " * pad + right)
+        line = left + keys + " " * pad + right
+        if line != getattr(self, "shown", None):  # same text: no redraw
+            self.shown = line
+            self.update(line)
 
     def on_resize(self, _):
         self.refresh_line()

@@ -555,3 +555,27 @@ def test_snoozed_status_counts_down_on_case_cards_and_thread_header(tmp_path):
     run(app, ["2", head, wait, head, open_case, card, wait, card])
     for a, b in (seen["head"], seen["card"]):
         assert a != b and re.search(r"· (\d+[dhm])*\d+s", b)
+
+
+def test_chrome_refresh_with_no_change_does_not_redraw(tmp_path):
+    """The 60 s chrome refresh repainted the rail and status line every minute even when nothing changed,
+    which read as a screen flash (.agents/discovery/2026-10-15-tui-redraw-smoothness.md)."""
+    from universal_inbox.tui import StatusLine
+    path, _ = seeded(tmp_path)
+    app, calls = Console(path), []
+
+    async def spy(app, pilot):
+        rail, line = app.main.rail, app.main.query_one(StatusLine)
+        rail.clear_options = lambda f=rail.clear_options: (calls.append("rail"), f())[1]
+        line.update = lambda text, f=line.update: (calls.append("line"), f(text))[1]
+
+    async def idle_tick(app, pilot):
+        app.main.refresh_chrome()
+        assert calls == []
+
+    async def real_change(app, pilot):
+        inbox.act(app.db, page(app).current_thread_id(), inbox.Done())
+        app.main.refresh_chrome()
+        assert calls == ["rail", "line"]  # counts moved: both repaint once
+
+    run(app, [spy, idle_tick, real_change])
