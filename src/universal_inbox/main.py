@@ -3,11 +3,19 @@
 
 import argparse
 import os
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 
 TRUECOLOR_TERMS = ("ghostty", "kitty", "wezterm", "alacritty", "foot", "truecolor", "direct")
+LOCAL_TZ = "America/Halifax"  # Jeremy's time; Workbox runs in UTC. TZ in the environment overrides it.
+
+
+def use_local_time() -> None:
+    """Shown times (headers, reply quotes, forwards, invites) read in Jeremy's zone, not the host's UTC."""
+    os.environ.setdefault("TZ", LOCAL_TZ)
+    time.tzset()
 
 
 def default_db() -> str:
@@ -27,6 +35,7 @@ def default_socket() -> str:
 
 
 def main(argv=None) -> None:
+    use_local_time()
     p = argparse.ArgumentParser(prog="universal-inbox")
     p.add_argument("--db", default=default_db())
     p.add_argument("--socket", default=default_socket())
