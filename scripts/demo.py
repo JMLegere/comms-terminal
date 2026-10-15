@@ -152,15 +152,15 @@ def run(demo: Demo, fakes: FakeEndpoints, step):
                t6 is not None and (t6.status, t6.status_detail) == ("DONE", "IGNORED")
                and t6.id in [r["id"] for r in inbox.queue(demo.db, "Ignored")])
 
-    pause("AS-13 Logan DMs, again 30 minutes later, then again 3 hours after that.")
-    demo.slack_message("D0LOGAN", "U0LOGAN", "staging looks good", now - timedelta(hours=4))
-    demo.slack_message("D0LOGAN", "U0LOGAN", "any blockers on your side?", now - timedelta(hours=3, minutes=30))
+    pause("AS-13 Logan DMs, again 30 minutes later, then again 25 hours after that.")
+    demo.slack_message("D0LOGAN", "U0LOGAN", "staging looks good", now - timedelta(hours=26))
+    demo.slack_message("D0LOGAN", "U0LOGAN", "any blockers on your side?", now - timedelta(hours=25, minutes=30))
     first = demo.db.execute("SELECT count(*) FROM threads t JOIN channels c ON c.id = t.channel_id"
                             " WHERE c.native_id = 'D0LOGAN'").fetchone()[0]
     demo.slack_message("D0LOGAN", "U0LOGAN", "deploying now", now - timedelta(minutes=30))
     second = demo.db.execute("SELECT count(*) FROM threads t JOIN channels c ON c.id = t.channel_id"
                              " WHERE c.native_id = 'D0LOGAN'").fetchone()[0]
-    demo.check("AS-13", "30 minutes apart: one Thread; 3 hours later: a new Thread", (first, second) == (1, 2))
+    demo.check("AS-13", "30 minutes apart: one Thread; 25 hours later: a new Thread", (first, second) == (1, 2))
 
     pause("AS-17 Jeremy replies to Logan's latest Slack Thread from the console.")
     latest = demo.db.execute("SELECT t.id FROM threads t JOIN channels c ON c.id = t.channel_id"

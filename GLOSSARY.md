@@ -5,7 +5,7 @@ A single-user console that tracks who owes whom what across Jeremy's professiona
 ## Communication
 
 **Thread**:
-The unit of work, as in Plain: an email thread; in a Slack channel, the top-level messages until the channel has been quiet for an hour, or the replies to one top-level message; or, in a Slack DM or group DM, a time-based group of messages (same sender within 2 hours, different senders within 1 hour).
+The unit of work, as in Plain: an email thread; in a Slack channel, the top-level messages until the channel has been quiet for 24 hours, or the replies to one top-level message; in a Slack DM or group DM, the messages until it has been quiet for 24 hours; or, in an SMS conversation, the messages until it has been quiet for 7 days. Messages Jeremy sends, from the console or elsewhere, group by the same rules.
 _Avoid_: Conversation, Ticket, Loop
 
 **Thread alias**:
@@ -13,7 +13,7 @@ A retired Thread ID that resolves to the surviving Thread after exact-reference 
 _Avoid_: Deleted thread, Duplicate activity
 
 **Draft**:
-An unsent email or SMS composition with its own Connection, recipients, subject and body; it sends as the Connection's own address or number. It is neither a Thread nor an Activity. Sending it turns it into a new Thread and removes it.
+An unsent email, SMS, or Slack composition with its own Connection, recipients, subject and body; it sends as the Connection's own address, number, or Slack user. A Slack Draft has no subject and goes to one existing Slack Channel (a channel, DM, or group DM Jeremy is in) instead of recipients. It is neither a Thread nor an Activity. Sending it removes it and records the message: an email Draft starts a new Thread; an SMS or Slack Draft joins its Channel's Thread by the ordinary Thread rules, starting a new one only when the Channel has been quiet long enough.
 
 **Send outcome unknown**:
 A Draft whose send was started but never confirmed or refused, so the message may or may not have gone out. It stays locked until Jeremy marks it sent, which removes it without making a Thread, or explicitly sends it again.

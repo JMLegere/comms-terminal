@@ -148,6 +148,22 @@ def handle_send_draft(db, body: bytes, senders: Senders) -> tuple[int, dict]:
     return 200, {"thread_id": t.id}
 
 
+def handle_slack_conversations(db, body: bytes, senders: Senders) -> tuple[int, dict]:
+    """POST /slack-conversations: {"connection_id"} -> {"conversations": [{id, kind, label}]} for the Slack Draft picker."""
+    try:
+        connection_id = int(json.loads(body)["connection_id"])
+    except (ValueError, KeyError, TypeError):
+        return 400, {"error": "expected connection_id"}
+    r = db.execute("SELECT * FROM connections WHERE id = ? AND platform = 'slack'", (connection_id,)).fetchone()
+    sender = senders.get(r) if r else None
+    if sender is None:
+        return 503, {"error": "Slack is not connected"}
+    try:
+        return 200, {"conversations": sender.conversations()}
+    except (RuntimeError, OSError, ValueError) as e:
+        return 502, {"error": str(e)}
+
+
 class _Handler(BaseHTTPRequestHandler):
     routes: dict = {}  # path -> callable(headers, body) -> (status, content_type, bytes)
 
@@ -180,7 +196,7 @@ class UnixHTTPServer(socketserver.ThreadingUnixStreamServer):
 
 
 def reply_server(db_path: str, socket_path: str, senders: Senders, contexts: dict | None = None) -> UnixHTTPServer:
-    """The local socket: POST /reply, POST /send-draft, and POST /<source> for each Context source in `contexts` ({"tana": …})."""
+    """The local socket: POST /reply, POST /send-draft, POST /slack-conversations, and POST /<source> for each Context source in `contexts` ({"tana": …})."""
     contexts = contexts or {}
     def reply(headers, body):
         db = inbox.connect(db_path)
@@ -194,6 +210,14 @@ def reply_server(db_path: str, socket_path: str, senders: Senders, contexts: dic
         db = inbox.connect(db_path)
         try:
             status, out = handle_send_draft(db, body, senders)
+        finally:
+            db.close()
+        return status, "application/json", json.dumps(out).encode()
+
+    def slack_conversations(headers, body):
+        db = inbox.connect(db_path)
+        try:
+            status, out = handle_slack_conversations(db, body, senders)
         finally:
             db.close()
         return status, "application/json", json.dumps(out).encode()
@@ -212,7 +236,8 @@ def reply_server(db_path: str, socket_path: str, senders: Senders, contexts: dic
         os.unlink(socket_path)
     old = os.umask(0o177)  # socket created 0600 (NFR-4)
     try:
-        return UnixHTTPServer(socket_path, _handler({"/reply": reply, "/send-draft": send_draft, "/attio-people": attio_people, "/tana": context_route("tana"), "/attio": context_route("attio")}))
+        return UnixHTTPServer(socket_path, _handler({"/reply": reply, "/send-draft": send_draft,
+                                                         "/slack-conversations": slack_conversations, "/attio-people": attio_people, "/tana": context_route("tana"), "/attio": context_route("attio")}))
     finally:
         os.umask(old)
 

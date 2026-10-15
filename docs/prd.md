@@ -110,8 +110,9 @@ Status key in brackets:
   - Unselected channels are not ingested (Plain's "disabled").
 - **FR-4a** [D]: **Slack DMs and group DMs** arrive as events on Jeremy's behalf (his user token), following the same Thread rules. Reason: DMs carry most of Jeremy's Slack comms, and a Plain bot cannot read them.
 - **FR-4b** [PL + D]: **Slack grouping is time-based** (Plain's default ingestion mode):
-  - [D] In a channel or private channel, a new top-level message joins the channel's latest top-level Thread unless the channel has had no message for 1 hour; then it starts a new Thread (decision #124).
-  - In a DM or group DM, a new top-level message joins the conversation's latest Thread when it is from the same user within 2 hours, or from a different user within 1 hour, of that Thread's last message. Otherwise it starts a new Thread.
+  - [D] In a channel or private channel, a new top-level message joins the channel's latest top-level Thread unless the channel has had no message for 24 hours; then it starts a new Thread (decisions #124, #126).
+  - [D] In a DM or group DM, a new top-level message joins the conversation's latest Thread when its last message was within 24 hours, whoever sent it. Otherwise it starts a new Thread (decision #126).
+  - [D] SMS groups the same way with a 7-day window (decision #126). Messages Jeremy sends, including sent Drafts, group by these same rules.
   - [D] The first reply to a top-level message starts its own Thread; later replies in that Slack reply-thread join it (decision #124).
   - [D] A top-level message Jeremy posts starts a Thread in Snoozed / Waiting for them. Reason: it shows he is waiting on an answer (decision #61); replaces the Plain-inferred rule that his own post makes no Thread until someone else posts.
 - **FR-4c** [PL]: **Slack sending.** A reply written in the console posts to the Thread's conversation from Jeremy's Slack profile, "as if you typed it there". [D] In a channel the reply always goes inside a Slack reply-thread, never top-level: a Thread made of replies gets it in that reply-thread, and a Thread of top-level messages gets it under its latest top-level message. In a DM or group DM it goes top-level unless the Thread is made of replies (decision #124).
@@ -209,7 +210,7 @@ Executable form: `features/<domain>.feature` (Gherkin via pytest-bdd), each scen
 - **AS-10**: Removed (decision #66: no reconciliation).
 - **AS-11**: An out-of-office reply arrives with `Auto-Submitted: auto-replied` on a Waiting Thread. → It is filtered and not stored; the Thread stays Snoozed / Waiting for them.
 - **AS-12** [approved in review]: An email from `ana@acme.com`. → Person and Organization "acme.com" are formed. An email from `bob@gmail.com` forms no Organization.
-- **AS-13**: In a DM, Logan sends a message, then another 30 minutes later. → One Thread (same user within 2 hours). Logan writes again 3 hours later → a new Thread.
+- **AS-13**: In a DM, Logan sends a message, then another 30 minutes later. → One Thread (within 24 hours). Logan writes again 25 hours later → a new Thread.
 - **AS-14**: Jeremy posts top-level in a selected channel. → A Thread in Snoozed / Waiting for them. Someone replies 40 minutes later → Todo / Needs next response.
 - **AS-15**: A message in an unselected channel. → Not ingested; no Thread.
 - **AS-16**: Z with "indefinitely", then the other side writes. → Todo / Needs next response.
@@ -895,6 +896,11 @@ All entries are dated 2026-10-10; exact times are unproven unless noted. Full de
   - Request / decision: Slack channels group top-level messages by time again, replacing #115's one Thread per top-level message: a top-level message joins the channel's latest top-level Thread until the channel has been quiet for 1 hour (any message, replies included, counts as activity). The first reply to a top-level message starts its own Thread, and later replies in that Slack reply-thread join it. A console reply always goes inside a Slack reply-thread, never top-level ("replies should never be a top-level message"): the Thread's reply-thread when it is made of replies, otherwise under its latest top-level message. DMs and group DMs answer top-level unless the Thread is made of replies ("dms stay top-level"). DMs keep FR-4b's sender windows. Found live: #dev talks top-level, so each message became its own Thread, and console replies went into a Slack reply-thread under the first message.
   - Source: Jeremy, "my console should reply in the replies of any top-level message, replies should never be a top-level message", "the slack threads are not combining and my replies are not replying to the thread. can you only start a new slack thread once 1h has been passed in the channel with no activity? also start a new thread when someone replies to a top-level comment." (2026-10-14)
   - Status: Built (2026-10-14): `inbox._thread_for_message`, `slack.stored_member`, `SlackSender.send`. Threads stored before stay as they are.
+
+- **126**
+  - Request / decision: Slack Drafts and one grouping rule. A Draft may be Slack: plain text posted as Jeremy into one existing conversation he is in (channel, private channel, DM, or group DM; no new DMs, so no new OAuth scope), picked from his live Slack conversations. Grouping windows change for every message: Slack DMs, group DMs, and channels group until quiet for 24 hours, SMS until quiet for 7 days, one window whoever sent last. A sent SMS or Slack Draft groups like any other message Jeremy sends (replacing always-new-Thread for SMS Drafts); email Drafts still start a new Thread. Existing Threads are not regrouped.
+  - Source: Jeremy, "i want to add slack as a connection type for drafts", "channel or existing dm", "i think we should not start a new thread and just use the existing timing behaviour", "sms should be 7 days with no activity to start a new thread, slack should be 24h", and "go ahead once we have agreement" (2026-10-15). Plan: `.agents/prd/2026-10-15-slack-drafts.md`.
+  - Status: Built (2026-10-15): schema 11, `inbox.send_draft` through `_ingest`, `SLACK_QUIET` / `SMS_QUIET`, `SlackSender.start` / `conversations`, `POST /slack-conversations`, the console's Slack Draft picker.
 
 ## 8. Work log
 

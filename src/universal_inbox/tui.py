@@ -222,6 +222,16 @@ def socket_send_draft(socket_path):
     return send
 
 
+def socket_slack_conversations(socket_path):
+    """Jeremy's Slack conversations, [{id, kind, label}], from POST /slack-conversations (Slack Draft picker)."""
+    def fetch(connection_id):
+        status, body = _post(socket_path, "/slack-conversations", {"connection_id": connection_id}, timeout=120)
+        if status != 200:
+            raise ReplyError(body.get("error", f"HTTP {status}"))
+        return body["conversations"]
+    return fetch
+
+
 def socket_reply(socket_path):
     """Reply function that calls POST /reply on the service's local socket."""
     def reply(thread_id, text, to, cc):
@@ -942,6 +952,25 @@ def local_addresses(db, kind):
     return sorted({address for value in values for address in address_values(value, kind)}, key=str.casefold)
 
 
+def slack_completion(value, conversations):
+    """Ghost text and accepted value for a Slack Draft's one conversation: "#eng <C0123>"."""
+    if not conversations or re.search(r"<[A-Z0-9]+>", value):
+        return None
+    prefix = value.strip().lstrip("#").casefold()
+    if not prefix:
+        return None
+    starts = [lambda bare: 0 if bare.casefold().startswith(prefix) else None,  # the whole name first
+              lambda bare: next((m.start() for m in re.finditer(r"[^\s,-]+", bare)  # then any word in it
+                                 if bare[m.start():].casefold().startswith(prefix)), None)]
+    for start_of in starts:
+        for c in conversations:
+            bare = c["label"].lstrip("#")
+            start = start_of(bare)
+            if start is not None:
+                return value + bare[start + len(prefix):] + f" <{c['id']}>", f"{c['label']} <{c['id']}>"
+    return None
+
+
 class LocalAddressSuggester(Suggester):
     def __init__(self, field):
         super().__init__(use_cache=False, case_sensitive=True)
@@ -957,6 +986,8 @@ class LocalAddressSuggester(Suggester):
             return None
         try:
             kind = self.field.address_kind()
+            if kind == "slack":
+                return slack_completion(value, self.field.conversations())
             if comma and kind == "sms":
                 return None
             candidates = local_addresses(self.field.app.db, kind)
@@ -1002,8 +1033,8 @@ class AddressInput(Input):
     """Native inline ghost text; Tab accepts only a current, unselected end completion."""
     BINDINGS = [Binding("tab", "accept_completion", show=False)]
 
-    def __init__(self, kind, **kwargs):
-        self.address_kind = kind
+    def __init__(self, kind, conversations=lambda: None, **kwargs):
+        self.address_kind, self.conversations = kind, conversations
         super().__init__(suggester=LocalAddressSuggester(self), **kwargs)
 
     def refresh_suggestion(self):
@@ -1730,6 +1761,8 @@ def copy_for_agent(app, text: str, what: str):
 DRAFT_FIELDS = ("connection_id", "kind", "sender", "to", "cc", "subject", "body")
 SENDING_UNAVAILABLE = "Sending unavailable · drafts only."
 DRAFT_HINT = "ctrl+enter send · ctrl+s save · esc close"
+NEW_TITLE = {"email": "New email", "sms": "New SMS", "slack": "New Slack message"}
+KIND_NAME_DRAFT = {"email": "email", "sms": "SMS", "slack": "Slack"}
 SEND_UNKNOWN = "Send outcome unknown · it may have gone out. Check Sent, then ctrl+enter."
 
 
@@ -1765,8 +1798,8 @@ class DraftEditor(Vertical):
                     if name == "subject":
                         yield Input(**kwargs)
                     else:
-                        yield AddressInput(lambda: next(a for a in self.ancestors if isinstance(a, DraftView)).kind,
-                                           **kwargs)
+                        view = lambda: next(a for a in self.ancestors if isinstance(a, DraftView))  # noqa: E731
+                        yield AddressInput(lambda: view().kind, lambda: view().conversations, **kwargs)
         yield TextArea(self.draft["body"], show_line_numbers=False, classes="body-editor")
         yield Static(DRAFT_HINT, classes="replyhint")
 
@@ -1786,7 +1819,8 @@ class DraftView(Horizontal):
         super().__init__(classes="draftview")
         self.draft = dict(draft)
         self.draft_id, self.connection_id, self.kind = draft["id"], draft["connection_id"], draft["kind"]
-        self.from_address = draft["sender"]  # the Connection's own address or number; not editable
+        self.from_address = draft["sender"]  # the Connection's own address, number, or Slack user; not editable
+        self.conversations = None  # a Slack Draft's picker list, fetched from the service once per editor
         self.notice, self.save_error = "", False
         self.history_key, self.history_views, self.history_note = None, [], "Choose an exact recipient."
 
@@ -1806,6 +1840,29 @@ class DraftView(Horizontal):
     def on_mount(self):
         self.paint()
         self.refresh_history()
+        self.load_conversations()
+
+    def load_conversations(self):
+        if self.kind == "slack" and self.conversations is None and self.connection_id and self.app.slack_conversations:
+            self.fetch_conversations(self.connection_id)
+
+    @work(thread=True, exclusive=True, group="conversations")
+    def fetch_conversations(self, connection_id):
+        try:
+            found, error = self.app.slack_conversations(connection_id), None
+        except ReplyError as e:
+            found, error = None, str(e)
+        self.app.call_from_thread(self.conversations_loaded, found, error)
+
+    def conversations_loaded(self, found, error):
+        if not self.is_attached:
+            return
+        if error:
+            self.app.notify(f"Slack conversations unavailable · edits kept. {error}", severity="error")
+            return
+        self.conversations = found
+        for field in self.query(AddressInput):
+            field.refresh_suggestion()
 
     def values(self):
         if len(self.query(".toinput, .ccinput, .subjectinput")) != 3 or not self.query(TextArea):
@@ -1839,11 +1896,12 @@ class DraftView(Horizontal):
         self.query_one(DraftConnection).update(escape(label))
         for row in self.query(".field.cc, .field.subject"):
             row.display = self.kind == "email"
+        self.query_one(".toinput", Input).placeholder = "channel or DM · tab completes" if self.kind == "slack" else "exact destination"
         state = "Unsaved" if self.dirty else "Saved"
-        title = (values["subject"] or ("New SMS" if self.kind == "sms" else "New email")).replace("\r", "↵").replace("\n", "↵")
+        title = (values["subject"] or NEW_TITLE[self.kind]).replace("\r", "↵").replace("\n", "↵")
         head = f"[b #45707a]{escape(title)}[/]   [#928374]{ICON['edited']} {state}[/]"
         if self.has_class("narrow"):
-            envelope = ["To " + (values["to"] or "not selected")]
+            envelope = ["To " + (self.recipient_label(values) or "not selected")]
             if values["cc"]:
                 envelope.append("Cc " + values["cc"])
             head += "\n[#928374]" + escape("\n".join(envelope)) + "[/]"
@@ -1865,12 +1923,20 @@ class DraftView(Horizontal):
         self.query_one(".historynotice").display = self.has_class("narrow") or self.history_note.startswith("Captured history unavailable")
         self.query_one(".detailtext").update(
             f"[#928374]{ICON['status']} status[/]\n{state}\n\n"
-            f"[#928374]{ICON['person']} from[/]\n{escape(values['sender'] or 'not selected')}\n\n"
-            f"[#928374]{ICON['person']} recipient[/]\n{escape(values['to'] or 'not selected')}\n\n"
-            f"[#928374]{ICON['channel']} channel[/]\n{'SMS' if self.kind == 'sms' else 'email'}\n\n"
+            f"[#928374]{ICON['person']} from[/]\n{escape(self.sender_label(values, connection) or 'not selected')}\n\n"
+            f"[#928374]{ICON['person']} recipient[/]\n{escape(self.recipient_label(values) or 'not selected')}\n\n"
+            f"[#928374]{ICON['channel']} channel[/]\n{KIND_NAME_DRAFT[self.kind]}\n\n"
             f"[#928374]{ICON['connection']} connection[/]\n{escape(label)}\n\n"
             f"[#928374]{ICON['person']} other threads[/]\n{history}\n\n"
             "[#928374]External history unavailable[/]")
+
+    def recipient_label(self, values):
+        """A Slack Draft names its conversation without the ID it posts to."""
+        return inbox.recipient_names(self.app.db, values["to"], "slack") if self.kind == "slack" else values["to"]
+
+    def sender_label(self, values, connection):
+        """Slack Drafts send as Jeremy's Slack user; show the workspace rather than its user ID."""
+        return conn_name(connection) if self.kind == "slack" and connection else values["sender"]
 
     def on_resize(self, event):
         self.set_class(event.size.width < 84, "narrow")
@@ -1909,7 +1975,10 @@ class DraftView(Horizontal):
         if not force and key == self.history_key:
             return
         self.history_key, self.history_views = key, []
-        if self.kind == "email":
+        if self.kind == "slack":
+            addresses, kind = inbox._destinations(destination, "slack"), "slack"
+            exact = len(addresses) == 1
+        elif self.kind == "email":
             addresses = [a.lower() for _, a in getaddresses([destination])]
             exact = bool(addresses) and all(re.fullmatch(r"[^@\s,;<>]+@[^@\s,;<>]+", a) for a in addresses)
             kind = "email"
@@ -1919,7 +1988,9 @@ class DraftView(Horizontal):
         self.history_note = "Choose an exact recipient."
         if exact:
             try:
-                threads = {t.id: t for a in addresses for t in inbox.recipient_threads(self.app.db, kind, a)}
+                threads = {t.id: t for a in addresses for t in (
+                    inbox.channel_threads(self.app.db, self.connection_id, a) if kind == "slack"
+                    else inbox.recipient_threads(self.app.db, kind, a))}
                 self.history_views = [inbox.thread_view(self.app.db, t.id) for t in threads.values()]
                 self.history_note = "No captured match · prior contact unknown." if not threads else "Captured local history"
             except Exception:
@@ -1944,7 +2015,7 @@ class DraftView(Horizontal):
     def choose_connection(self):
         try:
             connections = {str(c["id"]): c for c in inbox.connections(self.app.db)
-                           if PLATFORMS[c["platform"]].format in ("email", "sms")}
+                           if PLATFORMS[c["platform"]].format in ("email", "sms", "slack")}
         except Exception:
             self.app.notify("Connections unavailable · edits kept.", severity="error")
             return
@@ -1958,10 +2029,11 @@ class DraftView(Horizontal):
             connection = connections.get(choice)
             kind = PLATFORMS[connection["platform"]].format if connection else "email"
             values = self.values()
-            if kind == "sms" and (values["cc"] or values["subject"]):
-                self.app.push_screen(Pick("Switch to SMS", [("clear", "Clear Cc and subject · use SMS"),
-                                                           ("cancel", "Keep email")],
-                                          "SMS has no Cc or subject. Current email fields will be cleared."),
+            if kind in ("sms", "slack") and (values["cc"] or values["subject"]):
+                name = KIND_NAME_DRAFT[kind]
+                self.app.push_screen(Pick(f"Switch to {name}", [("clear", f"Clear Cc and subject · use {name}"),
+                                                               ("cancel", "Keep email")],
+                                          f"{name} has no Cc or subject. Current email fields will be cleared."),
                                      lambda answer: self.apply_connection(connection) if answer == "clear" and self.is_attached else None)
             else:
                 self.apply_connection(connection)
@@ -1972,7 +2044,9 @@ class DraftView(Horizontal):
         self.from_address = (connection["self_id"] or "") if connection else ""
         self.connection_id = connection["id"] if connection else None
         self.kind = PLATFORMS[connection["platform"]].format if connection else "email"
-        if self.kind == "sms":
+        self.conversations = None
+        self.load_conversations()
+        if self.kind in ("sms", "slack"):
             self.query_one(".ccinput", Input).value = ""
             self.query_one(".subjectinput", Input).value = ""
         for field in self.query(AddressInput):
@@ -2060,7 +2134,7 @@ class DraftView(Horizontal):
             return
         v, connection = self.values(), self.connection()
         lines = [("Connection", f"{PLATFORMS[connection['platform']].title} · {conn_name(connection)}" if connection else ""),
-                 ("From", v["sender"]), ("To", v["to"])] + (
+                 ("From", self.sender_label(v, connection)), ("To", v["to"])] + (
                 [("Cc", v["cc"]), ("Subject", v["subject"])] if self.kind == "email" else [])
         body = "\n".join(f"[#928374]{k:<11}[/]{escape(val)}" for k, val in lines if val)
         self.app.push_screen(Pick("Send", [("send", "Send"), ("keep", "Keep editing")], body),
@@ -2176,7 +2250,7 @@ class DraftsPage(Page):
         state = "unsaved" if view and view.draft_id == draft["id"] and view.dirty else "saved"
         status = f"[#928374]{state:7}[/]"
         return (status, escape(cut(title, room))) if len(self.columns) == 2 else (
-            f"[#928374]{ICON['sms'] if draft['kind'] == 'sms' else ICON['email']}[/]",
+            f"[#928374]{ICON[draft['kind']]}[/]",
             f"[b]{escape(cut(inbox.recipient_names(self.app.db, draft['to'], draft['kind']) or 'No recipient', 18))}[/]", escape(cut(title, room)), status)
 
     def neighbor(self, draft_id):
@@ -3311,10 +3385,10 @@ class Console(App):
     TITLE = "Universal Inbox"
     ENABLE_COMMAND_PALETTE = False
 
-    def __init__(self, db_path: str, reply=None, sources=None, send_draft=None):
+    def __init__(self, db_path: str, reply=None, sources=None, send_draft=None, slack_conversations=None):
         super().__init__()
         self.db_path, self.send_reply, self.drafts, self.view, self.cursor = db_path, reply, {}, 0, {}
-        self.send_draft = send_draft
+        self.send_draft, self.slack_conversations = send_draft, slack_conversations
         self.selected_draft = None
         # Context sources (FR-13a, FR-13b), {"tana": fetch, "attio": fetch}; each state is None (not connected),
         # "checking", "ok", or the error

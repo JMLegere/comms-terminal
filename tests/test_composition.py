@@ -118,13 +118,15 @@ def test_failed_draft_save_rolls_back_without_losing_previous_row_or_edits(db, o
 
 
 @pytest.mark.parametrize("changes", [
-    {"kind": None}, {"kind": []}, {"kind": "slack"}, {"sender": None}, {"to": []},
+    {"kind": None}, {"kind": []}, {"kind": "fax"}, {"sender": None}, {"to": []},
     {"cc": None}, {"body": 1}, {"subject": None}, {"subject": False},
     {"connection_id": True}, {"connection_id": "1"}, {"connection_id": 0}, {"connection_id": -1},
     {"connection_id": 999}, {"connection_id": 3}, {"connection_id": 4},
     {"kind": "sms", "subject": ""}, {"kind": "sms", "subject": None, "cc": "someone"},
     {"kind": "sms", "subject": None, "connection_id": 1},
     {"kind": "sms", "subject": None, "connection_id": 4}, {"unknown": "value"},
+    {"kind": "slack", "subject": ""}, {"kind": "slack", "subject": None, "cc": "#eng <C1>"},
+    {"kind": "slack", "subject": None, "connection_id": 3},
 ])
 def test_draft_strict_validation_preserves_saved_row(db, changes):
     original = inbox.save_draft(db, envelope(body="saved text"))
@@ -304,13 +306,13 @@ def test_recipient_history_sms_detached_inbound_outgoing_peer_and_reply_channel(
     identity = db.execute("SELECT id FROM identities WHERE value = ?", (PEER,)).fetchone()[0]
     inbox.remove_identity(db, identity)
     outbound = inbox.ingest(db, replace(sms, native_id="sms-out", sender=None,
-                                        occurred_at=AT + timedelta(days=1)))
+                                        occurred_at=AT + timedelta(days=8)))  # past the 7-day SMS window
     unlinked = "+15550001003"
     peer_only = inbox.ingest(db, replace(sms, native_id="sms-peer", sender=None,
                                          channel=unlinked, data={"peer": unlinked}))
     channel_only = inbox.ingest(db, replace(sms, native_id="sms-reply", sender=None,
                                             channel=unlinked, data={"to": [], "cc": []},
-                                            occurred_at=AT + timedelta(days=2)))
+                                            occurred_at=AT + timedelta(days=16)))
     inbox.ingest(db, incoming("DFAKE:1", connection_id=4, channel=PEER, channel_kind="im",
                              sender=None, data={"peer": PEER}))
     before = old_rows(db)
@@ -342,3 +344,14 @@ def test_recipient_names_show_people_and_keep_unknown_addresses(db):
     assert inbox.recipient_names(db, "506-435-4343", "sms") == "Nick Doe"
     assert inbox.recipient_names(db, "ANN@example.test, Bo <bo@x.test>, c@x.test", "email") == "Ann Roe, Bo, c@x.test"
     assert inbox.recipient_names(db, "", "email") == ""
+
+
+def test_slack_draft_saves_one_conversation_and_names_it(db):
+    d = inbox.save_draft(db, envelope("slack", connection_id=4, sender="USELF", to="#eng <C0123>", body="Deploy is out"))
+    assert d["kind"] == "slack" and d["subject"] is None and d["cc"] == ""
+    assert inbox.draft_problem(d) is None
+    assert inbox.recipient_names(db, d["to"], "slack") == "#eng"
+    assert inbox._destinations(d["to"], "slack") == ["C0123"]
+    assert inbox.draft_problem(d | {"to": "#eng"}) == "Choose one conversation"
+    assert inbox.draft_problem(d | {"to": "#eng <C0123>, Sam <D0456>"}) == "Choose one conversation"
+    assert inbox.draft_problem(d | {"body": " "}) == "Write a message"

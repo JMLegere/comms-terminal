@@ -166,7 +166,7 @@ CREATE TABLE composition_drafts (
   id INTEGER PRIMARY KEY,
   revision INTEGER NOT NULL CHECK (revision > 0),
   connection_id INTEGER REFERENCES connections (id),
-  kind TEXT NOT NULL CHECK (kind IN ('email', 'sms')),
+  kind TEXT NOT NULL CHECK (kind IN ('email', 'sms', 'slack')),
   sender TEXT NOT NULL,
   "to" TEXT NOT NULL,
   cc TEXT NOT NULL,
@@ -176,5 +176,5 @@ CREATE TABLE composition_drafts (
   updated_at TEXT NOT NULL,
   sending_at TEXT,
   CHECK ((kind = 'email' AND subject IS NOT NULL)
-         OR (kind = 'sms' AND subject IS NULL AND cc = ''))
+         OR (kind IN ('sms', 'slack') AND subject IS NULL AND cc = ''))
 ) STRICT;

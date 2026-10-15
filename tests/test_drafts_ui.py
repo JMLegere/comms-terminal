@@ -11,7 +11,7 @@ from test_console import run, seeded
 from test_pane_arrows import check_editor_arrows
 from universal_inbox import inbox
 from universal_inbox.tui import (DRAFT_FIELDS, Console, DraftConnection, DraftSendError, DraftsPage,
-                                 Pick, ReplyBox, ThreadsPage, VIEW_NAMES)
+                                 Pick, ReplyBox, ReplyError, ThreadsPage, VIEW_NAMES)
 
 
 async def choose(app, pilot, oid):
@@ -143,7 +143,7 @@ def test_full_envelope_save_restart_and_explicit_format_switch(tmp_path):
         await pilot.press("enter")
         await pilot.pause()
         menu = app.screen.query_one(OptionList)
-        assert "2" not in [menu.get_option_at_index(i).id for i in range(menu.option_count)]
+        assert "2" in [menu.get_option_at_index(i).id for i in range(menu.option_count)]  # Slack Drafts
         await choose(app, pilot, "1")
         assert view.values()["sender"] == "jeremy@agentmaple.com"
         values = dict(connection_id=1, kind="email", sender="jeremy@agentmaple.com", to="  ANA@acme.com  ",
@@ -697,3 +697,88 @@ def test_send_confirms_envelope_then_removes_draft_or_locks_on_unknown(tmp_path)
         assert inbox.list_drafts(app.db) == [] and app.main.draft_view is None
 
     run(app, [scenario], size=(187, 40))
+
+
+SLACK_CONVERSATIONS = [{"id": "C0EXTACME", "kind": "channel", "label": "#ext-acme"},
+                       {"id": "D0LOGAN", "kind": "im", "label": "Logan Carr"},
+                       {"id": "C0RANDOM", "kind": "channel", "label": "#random"}]
+
+
+@pytest.mark.parametrize("columns", [187, 80])
+def test_slack_draft_picks_a_conversation_by_tab_and_saves_it(tmp_path, columns):
+    path, ids = seeded(tmp_path)
+    asked = []
+
+    def conversations(connection_id):
+        asked.append(connection_id)
+        return SLACK_CONVERSATIONS
+
+    async def scenario(app, pilot):
+        await pilot.press("5", "n")
+        await pilot.pause()
+        view = app.main.draft_view
+        view.query_one(".subjectinput", Input).value = "Old subject"
+        view.query_one(DraftConnection).focus()
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        await choose(app, pilot, "2")
+        assert isinstance(app.screen, Pick)  # email fields would be lost
+        await choose(app, pilot, "clear")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert view.kind == "slack" and asked == [2] and view.conversations == SLACK_CONVERSATIONS
+        assert not view.query_one(".field.cc").display and not view.query_one(".field.subject").display
+        to = view.query_one(".toinput", Input)
+        await type_address(to, pilot, "ext")
+        assert to._suggestion == "ext-acme <C0EXTACME>"
+        await pilot.press("tab")
+        await pilot.pause()
+        assert to.value == "#ext-acme <C0EXTACME>"
+        await type_address(to, pilot, "carr")
+        await pilot.press("tab")
+        await pilot.pause()
+        assert to.value == "Logan Carr <D0LOGAN>"
+        await type_address(to, pilot, "#ext")
+        await pilot.press("tab")
+        await pilot.pause()
+        view.query_one(TextArea).text = "Spec is in"
+        view.query_one(TextArea).focus()
+        await pilot.pause()
+        mia = app.db.execute("SELECT t.id FROM threads t JOIN channels ch ON ch.id = t.channel_id"
+                             " WHERE ch.native_id = 'C0EXTACME'").fetchone()[0]
+        assert mia in [v["thread"].id for v in view.history_views]  # the channel's stored Threads
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        row = inbox.get_draft(app.db, view.draft_id)
+        assert (row["kind"], row["connection_id"], row["to"], row["cc"], row["subject"]) == (
+            "slack", 2, "#ext-acme <C0EXTACME>", "", None)
+        assert inbox.draft_problem(row) is None
+        assert "Slack" in view.query_one(".detailtext").render().plain
+
+    run(Console(path, slack_conversations=conversations), [scenario], size=(columns, 40))
+
+
+def test_slack_conversation_fetch_failure_keeps_the_draft_editable(tmp_path):
+    path, _ = seeded(tmp_path)
+
+    def broken(connection_id):
+        raise ReplyError("Slack is not connected")
+
+    async def scenario(app, pilot):
+        await pilot.press("5", "n")
+        await pilot.pause()
+        view = app.main.draft_view
+        view.query_one(DraftConnection).focus()
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        await choose(app, pilot, "2")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert view.kind == "slack" and view.conversations is None
+        to = view.query_one(".toinput", Input)
+        await type_address(to, pilot, "ext")
+        assert to.value == "ext" and not to.disabled
+
+    run(Console(path, slack_conversations=broken), [scenario])

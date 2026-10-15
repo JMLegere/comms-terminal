@@ -21,7 +21,7 @@ from typing import Protocol
 
 from . import platforms
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 WAIT = timedelta(days=4)  # Waiting for them ends after this with no reply: back to Todo to follow up (#116)
 MIGRATIONS = {  # version -> statement that upgrades an existing database to it
     2: "ALTER TABLE cases ADD COLUMN description TEXT NOT NULL DEFAULT ''",
@@ -123,6 +123,29 @@ DELETE FROM organizations WHERE org_key(domain) != domain;""",
          OR (kind = 'sms' AND subject IS NULL AND cc = ''))
 ) STRICT;""",
     10: "ALTER TABLE composition_drafts ADD COLUMN sending_at TEXT;",
+    # Slack Drafts: a third kind, posted into one existing Slack conversation (no subject, no Cc).
+    11: """PRAGMA legacy_alter_table = ON;
+CREATE TABLE composition_drafts_new (
+  id INTEGER PRIMARY KEY,
+  revision INTEGER NOT NULL CHECK (revision > 0),
+  connection_id INTEGER REFERENCES connections (id),
+  kind TEXT NOT NULL CHECK (kind IN ('email', 'sms', 'slack')),
+  sender TEXT NOT NULL,
+  "to" TEXT NOT NULL,
+  cc TEXT NOT NULL,
+  subject TEXT,
+  body TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  sending_at TEXT,
+  CHECK ((kind = 'email' AND subject IS NOT NULL)
+         OR (kind IN ('sms', 'slack') AND subject IS NULL AND cc = ''))
+) STRICT;
+INSERT INTO composition_drafts_new SELECT id, revision, connection_id, kind, sender, "to", cc, subject, body,
+  created_at, updated_at, sending_at FROM composition_drafts;
+DROP TABLE composition_drafts;
+ALTER TABLE composition_drafts_new RENAME TO composition_drafts;
+PRAGMA legacy_alter_table = OFF;""",
 }
 
 # ponytail: fixed list; extend when a free-mail sender forms an Organization by mistake.
@@ -133,9 +156,9 @@ FREE_MAIL = frozenset({
     "fastmail.com", "hey.com",
 })
 
-SAME_SENDER_WINDOW = timedelta(hours=2)
-OTHER_SENDER_WINDOW = timedelta(hours=1)
-CHANNEL_QUIET = timedelta(hours=1)  # a Slack channel's top-level messages group until it is quiet this long
+# A conversation's messages group into one Thread until it has been quiet this long, whoever sent them (FR-38).
+SLACK_QUIET = timedelta(hours=24)
+SMS_QUIET = timedelta(days=7)
 
 
 class SendFailed(Exception):
@@ -318,15 +341,15 @@ def save_draft(db, values: dict, *, draft_id: int | None = None,
     if not isinstance(values, dict) or set(values) != {
             "connection_id", "kind", "sender", "to", "cc", "subject", "body"}:
         raise ValueError("draft values must contain exactly connection_id, kind, sender, to, cc, subject, body")
-    if type(values["kind"]) is not str or values["kind"] not in ("email", "sms"):
-        raise ValueError("draft kind must be email or sms")
+    if type(values["kind"]) is not str or values["kind"] not in ("email", "sms", "slack"):
+        raise ValueError("draft kind must be email, sms, or slack")
     if any(type(values[k]) is not str for k in ("sender", "to", "cc", "body")):
         raise ValueError("draft sender, to, cc, and body must be strings")
     if values["kind"] == "email":
         if type(values["subject"]) is not str:
             raise ValueError("email draft subject must be a string")
     elif values["subject"] is not None or values["cc"] != "":
-        raise ValueError("SMS draft subject must be None and cc must be empty")
+        raise ValueError("SMS and Slack draft subject must be None and cc must be empty")
     connection_id = values["connection_id"]
     if connection_id is not None and (type(connection_id) is not int or connection_id <= 0):
         raise ValueError("draft connection_id must be a positive integer or None")
@@ -389,7 +412,9 @@ def list_drafts(db) -> list[dict]:
 
 
 def recipient_names(db, to: str, kind: str) -> str:
-    """Draft recipients as People names; addresses no Person owns stay as typed."""
+    """Draft recipients as People names; addresses no Person owns stay as typed. Slack: the conversation's name."""
+    if kind == "slack":
+        return re.sub(r"\s*<[A-Z0-9]+>", "", to).strip()
     names = []
     for typed, value in ([(n, n) for n in _destinations(to, "sms")] if kind == "sms"
                          else [(person_name(n) or a, a.lower()) for n, a in getaddresses([to]) if a]):
@@ -403,6 +428,8 @@ def draft_problem(values: dict) -> str | None:
     """What a Draft still needs before it can send; None when complete. Providers judge the addresses."""
     if values["connection_id"] is None:
         return "Choose a Connection"
+    if values["kind"] == "slack" and len(_destinations(values["to"], "slack")) != 1:
+        return "Choose one conversation"
     if not values["to"].strip():
         return "Add a recipient"
     if values["kind"] == "sms" and len(_destinations(values["to"], "sms")) != 1:
@@ -415,6 +442,8 @@ def draft_problem(values: dict) -> str | None:
 
 
 def _destinations(text: str, kind: str) -> list[str]:
+    if kind == "slack":  # "#eng <C0123>": the label is for people, the ID is where it posts
+        return re.findall(r"<([A-Z0-9]+)>", text)
     if kind == "sms":
         return [_e164(n) for n in re.split(r"[,;]+", text) if n.strip()]
     return [a for _, a in getaddresses([text]) if a]
@@ -434,7 +463,9 @@ def _e164(number: str) -> str:
 
 
 def send_draft(db, draft_id: int, revision: int, sender: Sender, *, again: bool = False) -> Thread:
-    """Send one saved Draft revision as a new Thread, then remove the Draft.
+    """Send one saved Draft revision, record it, then remove the Draft. An email starts a new Thread; an SMS or
+    Slack message is recorded like any message Jeremy sends there, so it joins the conversation's Thread unless
+    the conversation has been quiet long enough (FR-33).
 
     `sending_at` is set before the provider call and cleared only on a refusal, so a send whose outcome is
     unknown leaves the Draft locked; `again` is Jeremy's explicit choice to send it once more anyway.
@@ -471,23 +502,32 @@ def send_draft(db, draft_id: int, revision: int, sender: Sender, *, again: bool 
             db.execute("BEGIN IMMEDIATE")
         echo = db.execute("SELECT thread_id FROM activities WHERE kind = 'MESSAGE' AND native_id = ?",
                           (native_id,)).fetchone()
-        if echo:  # the provider's own copy arrived first (Fastmail Sent poll, Quo webhook)
+        if echo:  # the provider's own copy arrived first (Fastmail Sent poll, Quo webhook, Slack event)
             thread_id = get_thread(db, echo["thread_id"]).id
+        elif d["kind"] in ("sms", "slack"):
+            title = next((ln.strip() for ln in d["body"].splitlines() if ln.strip()), "Text")[:80]
+            if sms:
+                inc = Incoming(connection["id"], to[0], "im", "MESSAGE", native_id, None, now, d["body"],
+                               title=title, data={"peer": to[0]}, channel_name=to[0])
+            else:
+                kind, label = sender.conversation(to[0])
+                inc = Incoming(connection["id"], to[0], kind, "MESSAGE", native_id, None, now, d["body"],
+                               title=title, data={"channel": to[0], "ts": native_id.split(":", 1)[1], "kind": kind},
+                               channel_name=label)
+            thread_id = _ingest(db, inc).id
         else:
             mailbox = db.execute("SELECT native_id FROM channels WHERE connection_id = ? AND kind = 'mailbox'",
                                  (connection["id"],)).fetchone()
-            channel = to[0] if sms else mailbox["native_id"] if mailbox else connection["self_id"]
-            channel_id = _channel_id(db, Incoming(connection["id"], channel, "im" if sms else "mailbox", "MESSAGE",
-                                                  native_id, None, now, d["body"], channel_name=to[0] if sms else None))
-            title = (next((ln.strip() for ln in d["body"].splitlines() if ln.strip()), "Text") if sms
-                     else d["subject"].strip())[:80]
+            channel = mailbox["native_id"] if mailbox else connection["self_id"]
+            channel_id = _channel_id(db, Incoming(connection["id"], channel, "mailbox", "MESSAGE",
+                                                  native_id, None, now, d["body"]))
+            title = d["subject"].strip()[:80]
             status = _initial_status(None)
             thread_id = db.execute(
                 "INSERT INTO threads (channel_id, native_thread_id, title, status, status_detail,"
                 " status_changed_at, created_at, follow_up_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (channel_id, native_id, title, *status, _iso(now), _iso(now), _follow_up(status[1], now))).lastrowid
-            data = {"peer": to[0]} if sms else {"from": connection["self_id"], "to": to, "cc": cc,
-                                                "subject": d["subject"]}
+            data = {"from": connection["self_id"], "to": to, "cc": cc, "subject": d["subject"]}
             db.execute("INSERT INTO activities (thread_id, kind, occurred_at, native_id, content, data)"
                        " VALUES (?, 'MESSAGE', ?, ?, ?, ?)", (thread_id, _iso(now), native_id, d["body"], json.dumps(data)))
         db.execute("DELETE FROM composition_drafts WHERE id = ?", (draft_id,))
@@ -882,10 +922,10 @@ def _thread_for_message(db, channel_id, inc: Incoming, identity_id):
         return None  # the first reply to a top-level Slack message starts its own Thread (FR-4b)
     if inc.channel_kind in ("channel", "private"):
         # A top-level message joins the channel's latest top-level conversation unless the channel has been
-        # quiet for an hour (FR-4b).
+        # quiet for a day (FR-4b, FR-38).
         last = db.execute("SELECT max(a.occurred_at) FROM thread_activities a JOIN threads t ON t.id = a.thread_id"
                           " WHERE t.channel_id = ? AND a.kind = 'MESSAGE'", (channel_id,)).fetchone()[0]
-        if last is None or inc.occurred_at - datetime.fromisoformat(last) > CHANNEL_QUIET:
+        if last is None or inc.occurred_at - datetime.fromisoformat(last) > SLACK_QUIET:
             return None
         r = db.execute(
             "SELECT a.thread_id FROM thread_activities a JOIN threads t ON t.id = a.thread_id"
@@ -901,7 +941,8 @@ def _thread_for_message(db, channel_id, inc: Incoming, identity_id):
     if last is None:
         return None
     gap = inc.occurred_at - datetime.fromisoformat(last["occurred_at"])
-    window = SAME_SENDER_WINDOW if last["identity_id"] == identity_id else OTHER_SENDER_WINDOW
+    platform = db.execute("SELECT platform FROM connections WHERE id = ?", (inc.connection_id,)).fetchone()
+    window = SMS_QUIET if platform and platforms.PLATFORMS[platform[0]].format == "sms" else SLACK_QUIET
     return last["thread_id"] if timedelta(0) <= gap <= window else None
 
 
@@ -1132,74 +1173,79 @@ def ingest(db, inc: Incoming) -> Thread | None:
     """Store one message, edit, or deletion; returns its Thread, or None for a
     duplicate or an edit/deletion of a message that was never stored."""
     with db:
-        duplicate = db.execute(
-            "SELECT a.id, t.channel_id FROM activities a JOIN threads t ON t.id = a.thread_id"
-            " WHERE a.kind = ? AND a.native_id = ?", (inc.kind, inc.native_id)).fetchone()
-        if duplicate:
-            if inc.kind == "MESSAGE" and inc.channel_kind == "mailbox":
-                ch = db.execute("SELECT id FROM channels WHERE connection_id = ? AND native_id = ?"
-                                " AND kind = 'mailbox'", (inc.connection_id, inc.channel)).fetchone()
-                if ch and ch["id"] == duplicate["channel_id"]:
-                    added = db.executemany(
-                        "INSERT OR IGNORE INTO email_refs (activity_id, native_id) VALUES (?, ?)",
-                        [(duplicate["id"], n) for n in sorted(_email_ids(inc.thread_ref))]).rowcount
-                    if added:
-                        _reconcile_email_threads(db, True, ch["id"])
-            return None
-        channel_id = _channel_id(db, inc)
-        sender = inc.sender
-        if sender and sender.kind == "email" and db.execute(  # Jeremy's own address on any Connection (#117)
-                f"SELECT 1 FROM connections WHERE platform IN ({','.join('?' * len(platforms.EMAIL))})"
-                " AND lower(self_id) = ?",
-                (*platforms.EMAIL, sender.value.lower())).fetchone():
-            sender = None
-        identity = _identity_for(db, sender) if sender else None
-        identity_id = identity["id"] if identity else None
-        at = inc.occurred_at
+        return _ingest(db, inc)
 
-        target_id = None
-        if inc.kind == "MESSAGE":
-            thread_id = _thread_for_message(db, channel_id, inc, identity_id)
-        else:
-            target_native = inc.native_id if inc.kind == "DELETE" else inc.native_id.rsplit(":", 1)[0]
-            target = db.execute("SELECT a.id, a.thread_id FROM thread_activities a"
-                                " JOIN threads t ON t.id = a.thread_id WHERE t.channel_id = ?"
-                                " AND a.kind = 'MESSAGE' AND a.native_id = ?",
-                                (channel_id, target_native)).fetchone()
-            if target is None:
-                return None
-            target_id, thread_id = target["id"], target["thread_id"]
 
-        created = thread_id is None
-        if thread_id is None:
-            status = _initial_status(identity)
-            title = inc.title or (inc.content or "").strip()[:80] or "(no subject)"
-            until = _follow_up(status[1], at)
-            thread_id = db.execute(
-                "INSERT INTO threads (channel_id, native_thread_id, title, status, status_detail,"
-                " status_changed_at, created_at, follow_up_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (channel_id, inc.native_id, title, *status, _iso(at), _iso(at), until)).lastrowid
-        elif inc.kind == "MESSAGE" and identity is None and _echo_of_sent(db, thread_id, inc):
-            return None
-
-        activity_id = db.execute(
-            "INSERT INTO activities (thread_id, kind, occurred_at, identity_id, native_id,"
-            " target_id, content, data) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (thread_id, inc.kind, _iso(at), identity_id, inc.native_id, target_id,
-             None if inc.kind == "DELETE" else inc.content, json.dumps(inc.data))).lastrowid
+def _ingest(db, inc: Incoming) -> Thread | None:
+    """`ingest` inside the caller's transaction."""
+    duplicate = db.execute(
+        "SELECT a.id, t.channel_id FROM activities a JOIN threads t ON t.id = a.thread_id"
+        " WHERE a.kind = ? AND a.native_id = ?", (inc.kind, inc.native_id)).fetchone()
+    if duplicate:
         if inc.kind == "MESSAGE" and inc.channel_kind == "mailbox":
-            db.executemany("INSERT OR IGNORE INTO email_refs (activity_id, native_id) VALUES (?, ?)",
-                           [(activity_id, n) for n in sorted(_email_ids(inc.thread_ref))])
-            _reconcile_email_threads(db, True, channel_id)
-        t = get_thread(db, thread_id)
-        if not created or t.id != thread_id:
-            nxt = _after_activity(t.status, t.status_detail, identity is None, inc.kind)
-            if nxt:
-                _set_status(db, t.id, *nxt, at)
-        if inc.kind == "DELETE":  # FR-2a
-            db.execute("UPDATE activities SET content = NULL WHERE id = ?"
-                       " OR (kind = 'EDIT' AND target_id = ?)", (target_id, target_id))
-        return get_thread(db, thread_id)
+            ch = db.execute("SELECT id FROM channels WHERE connection_id = ? AND native_id = ?"
+                            " AND kind = 'mailbox'", (inc.connection_id, inc.channel)).fetchone()
+            if ch and ch["id"] == duplicate["channel_id"]:
+                added = db.executemany(
+                    "INSERT OR IGNORE INTO email_refs (activity_id, native_id) VALUES (?, ?)",
+                    [(duplicate["id"], n) for n in sorted(_email_ids(inc.thread_ref))]).rowcount
+                if added:
+                    _reconcile_email_threads(db, True, ch["id"])
+        return None
+    channel_id = _channel_id(db, inc)
+    sender = inc.sender
+    if sender and sender.kind == "email" and db.execute(  # Jeremy's own address on any Connection (#117)
+            f"SELECT 1 FROM connections WHERE platform IN ({','.join('?' * len(platforms.EMAIL))})"
+            " AND lower(self_id) = ?",
+            (*platforms.EMAIL, sender.value.lower())).fetchone():
+        sender = None
+    identity = _identity_for(db, sender) if sender else None
+    identity_id = identity["id"] if identity else None
+    at = inc.occurred_at
+
+    target_id = None
+    if inc.kind == "MESSAGE":
+        thread_id = _thread_for_message(db, channel_id, inc, identity_id)
+    else:
+        target_native = inc.native_id if inc.kind == "DELETE" else inc.native_id.rsplit(":", 1)[0]
+        target = db.execute("SELECT a.id, a.thread_id FROM thread_activities a"
+                            " JOIN threads t ON t.id = a.thread_id WHERE t.channel_id = ?"
+                            " AND a.kind = 'MESSAGE' AND a.native_id = ?",
+                            (channel_id, target_native)).fetchone()
+        if target is None:
+            return None
+        target_id, thread_id = target["id"], target["thread_id"]
+
+    created = thread_id is None
+    if thread_id is None:
+        status = _initial_status(identity)
+        title = inc.title or (inc.content or "").strip()[:80] or "(no subject)"
+        until = _follow_up(status[1], at)
+        thread_id = db.execute(
+            "INSERT INTO threads (channel_id, native_thread_id, title, status, status_detail,"
+            " status_changed_at, created_at, follow_up_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (channel_id, inc.native_id, title, *status, _iso(at), _iso(at), until)).lastrowid
+    elif inc.kind == "MESSAGE" and identity is None and _echo_of_sent(db, thread_id, inc):
+        return None
+
+    activity_id = db.execute(
+        "INSERT INTO activities (thread_id, kind, occurred_at, identity_id, native_id,"
+        " target_id, content, data) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (thread_id, inc.kind, _iso(at), identity_id, inc.native_id, target_id,
+         None if inc.kind == "DELETE" else inc.content, json.dumps(inc.data))).lastrowid
+    if inc.kind == "MESSAGE" and inc.channel_kind == "mailbox":
+        db.executemany("INSERT OR IGNORE INTO email_refs (activity_id, native_id) VALUES (?, ?)",
+                       [(activity_id, n) for n in sorted(_email_ids(inc.thread_ref))])
+        _reconcile_email_threads(db, True, channel_id)
+    t = get_thread(db, thread_id)
+    if not created or t.id != thread_id:
+        nxt = _after_activity(t.status, t.status_detail, identity is None, inc.kind)
+        if nxt:
+            _set_status(db, t.id, *nxt, at)
+    if inc.kind == "DELETE":  # FR-2a
+        db.execute("UPDATE activities SET content = NULL WHERE id = ?"
+                   " OR (kind = 'EDIT' AND target_id = ?)", (target_id, target_id))
+    return get_thread(db, thread_id)
 
 
 # --- act, reply, wake ------------------------------------------------------
@@ -1323,6 +1369,14 @@ def person_threads(db, person_id: int) -> list[Thread]:
             "SELECT DISTINCT a.thread_id FROM thread_activities a JOIN identities i ON i.id = a.identity_id"
             " WHERE i.person_id = ? ORDER BY a.thread_id", (person_id,))]
         return [get_thread(db, i) for i in ids]
+
+
+def channel_threads(db, connection_id: int, native_id: str) -> list[Thread]:
+    """Stored Threads of one Channel, newest first: a Slack Draft's captured history."""
+    return [get_thread(db, r[0]) for r in db.execute(
+        "SELECT t.id FROM threads t JOIN channels ch ON ch.id = t.channel_id"
+        " WHERE ch.connection_id = ? AND ch.native_id = ? AND t.merged_into IS NULL ORDER BY t.created_at DESC",
+        (connection_id, native_id))]
 
 
 def recipient_threads(db, kind: str, value: str) -> list[Thread]:

@@ -5,7 +5,9 @@ import urllib.error
 
 import pytest
 
-from universal_inbox import email, inbox, quo, serve
+from datetime import timedelta
+
+from universal_inbox import email, inbox, quo, serve, slack
 from test_composition import AT, PEER, PHONE, SELF, db, envelope, incoming  # noqa: F401  (db is a fixture)
 
 
@@ -77,23 +79,23 @@ def test_incomplete_or_stale_draft_makes_zero_provider_calls(db, changes, proble
     assert sender.calls == [] and inbox.get_draft(db, d["id"])["sending_at"] is None
 
 
-def test_sms_draft_starts_its_own_thread_even_inside_the_grouping_window(db):
-    inbox.ingest(db, inbox.Incoming(3, PEER, "im", "MESSAGE", "quo-1", inbox.Identity("phone", PEER), AT,
-                                    "earlier text", data={"peer": PEER}))
+def test_sms_draft_joins_the_conversation_inside_the_grouping_window(db):
+    first = inbox.ingest(db, inbox.Incoming(3, PEER, "im", "MESSAGE", "quo-1", inbox.Identity("phone", PEER), AT,
+                                            "earlier text", data={"peer": PEER}))
     two = inbox.save_draft(db, envelope("sms", connection_id=3, sender=PHONE, to=f"{PEER}, +15550001003", body="x"))
     with pytest.raises(ValueError, match="one number"):
         inbox.send_draft(db, two["id"], two["revision"], FakeSender())
     d = inbox.save_draft(db, envelope("sms", connection_id=3, sender=PHONE, to=PEER, body="New topic\nmore"))
     t = inbox.send_draft(db, d["id"], d["revision"], FakeSender("quo-2"))
-    assert t.title == "New topic" and t.status_detail == "WAITING_FOR_CUSTOMER"
-    assert db.execute("SELECT count(*) FROM threads").fetchone()[0] == 2
+    assert t.id == first.id and t.status_detail == "WAITING_FOR_CUSTOMER"  # FR-33: same rule as a text from Quo
+    assert db.execute("SELECT count(*) FROM threads").fetchone()[0] == 1
     bare = inbox.save_draft(db, envelope("sms", connection_id=3, sender=PHONE, to="1 (555) 000-1002", body="y"))
     sender = FakeSender("quo-3")
     inbox.send_draft(db, bare["id"], bare["revision"], sender)
     assert sender.calls[0][0] == [PEER]
     reply = inbox.Incoming(3, PEER, "im", "MESSAGE", "quo-4", inbox.Identity("phone", PEER), AT, "Thanks",
                            data={"peer": PEER})
-    assert inbox.ingest(db, reply).title == "y"  # the reply joins the sent Thread
+    assert inbox.ingest(db, reply).id == first.id  # the reply joins the same Thread
     # Quo's webhook echo of the sent text is a duplicate, not a second Activity
     echo = inbox.Incoming(3, PEER, "im", "MESSAGE", "quo-2", None, AT, "New topic\nmore", data={"peer": PEER})
     assert inbox.ingest(db, echo) is None
@@ -151,3 +153,82 @@ def test_send_draft_route_maps_outcomes(db):
     status, out = serve.handle_send_draft(db, again, senders)
     assert status == 200 and inbox.get_thread(db, out["thread_id"]).title == "Checklist"
     assert serve.handle_send_draft(db, again, senders)[0] == 404
+
+
+class FakeSlackSender(FakeSender):
+    def conversation(self, channel):
+        return ("im" if channel.startswith("D") else "channel"), "Sam" if channel.startswith("D") else "eng"
+
+
+def slack_draft(db, to, body="Deploy is out\nnotes"):
+    return inbox.save_draft(db, envelope("slack", connection_id=4, sender="USELF", to=to, body=body))
+
+
+def sam(native_id, at, **data):
+    return inbox.Incoming(4, "D1", "im", "MESSAGE", native_id, inbox.Identity("slack_user", "USAM"), at, "hi",
+                          data={"channel": "D1", "ts": native_id.split(":")[1], "kind": "im", **data})
+
+
+def test_slack_draft_joins_a_dm_inside_24_hours_and_starts_one_after(db, monkeypatch):
+    earlier = inbox.ingest(db, sam("D1:1.0", AT - timedelta(hours=10)))
+    d = slack_draft(db, "Sam <D1>")
+    t = inbox.send_draft(db, d["id"], d["revision"], FakeSlackSender("D1:2.0"))
+    assert t.id == earlier.id and t.status_detail == "WAITING_FOR_CUSTOMER"
+    later = AT + timedelta(hours=25)
+    monkeypatch.setattr(inbox, "_now", lambda: later)
+    d = slack_draft(db, "Sam <D1>", body="New topic")
+    t = inbox.send_draft(db, d["id"], d["revision"], FakeSlackSender("D1:3.0"))
+    assert t.id != earlier.id and t.title == "New topic" and t.status_detail == "WAITING_FOR_CUSTOMER"
+    a = db.execute("SELECT data FROM activities WHERE native_id = 'D1:3.0'").fetchone()
+    assert json.loads(a["data"]) == {"channel": "D1", "ts": "3.0", "kind": "im"}
+    assert inbox.ingest(db, inbox.Incoming(4, "D1", "im", "MESSAGE", "D1:3.0", None, later, "New topic",
+                                           data={"channel": "D1", "ts": "3.0"})) is None  # Slack's echo
+    assert inbox.list_drafts(db) == []
+
+
+def test_slack_draft_in_a_channel_follows_ordinary_channel_rules(db):
+    d = slack_draft(db, "#eng <C1>")
+    t = inbox.send_draft(db, d["id"], d["revision"], FakeSlackSender("C1:5.0"))
+    assert t.title == "Deploy is out"
+    reply = inbox.Incoming(4, "C1", "channel", "MESSAGE", "C1:6.0", inbox.Identity("slack_user", "USAM"), AT, "nice",
+                           data={"channel": "C1", "ts": "6.0", "thread_ts": "5.0", "kind": "channel"})
+    assert inbox.ingest(db, reply).id != t.id  # FR-4b: a reply-thread is its own Thread
+    top = inbox.Incoming(4, "C1", "channel", "MESSAGE", "C1:7.0", inbox.Identity("slack_user", "USAM"),
+                         AT + timedelta(hours=20), "also", data={"channel": "C1", "ts": "7.0", "kind": "channel"})
+    assert inbox.ingest(db, top).id == t.id  # top-level within 24h joins
+
+
+def test_slack_start_posts_top_level_and_tells_refusal_from_unknown():
+    posts = []
+    sender = slack.SlackSender("t", lambda url, token, payload: posts.append(payload) or {"ok": True, "ts": "9.1"})
+    assert sender.start(["C1"], [], None, "Hi", "k1") == "C1:9.1"
+    assert posts == [{"channel": "C1", "text": "Hi"}]
+    with pytest.raises(inbox.SendFailed, match="not_in_channel"):
+        slack.SlackSender("t", lambda *a: {"ok": False, "error": "not_in_channel"}).start(["C1"], [], None, "Hi", "k")
+
+    def lost(*a):
+        raise urllib.error.URLError("timed out")
+    with pytest.raises(inbox.SendUnknown):
+        slack.SlackSender("t", lost).start(["C1"], [], None, "Hi", "k")
+
+
+class FakeClient(slack.SlackClient):
+    def __init__(self, responses):
+        super().__init__("t", get=lambda url, token, params: responses[url.rsplit("/", 1)[1]])
+
+
+def test_slack_conversations_lists_channels_dms_and_group_dms_by_name(db):
+    client = FakeClient({
+        "users.conversations": {"ok": True, "channels": [
+            {"id": "C1", "name": "eng"}, {"id": "G1", "name": "ops", "is_private": True},
+            {"id": "D1", "is_im": True, "user": "USAM"}, {"id": "D2", "is_im": True, "user": "UX", "is_user_deleted": True},
+            {"id": "G2", "name": "mpdm-ana--bo--jeremy-1", "is_mpim": True, "is_private": True}]},
+        "users.list": {"ok": True, "members": [{"id": "USAM", "profile": {"display_name": "Sam"}}]}})
+    sender = slack.SlackSender("t", client=client)
+    assert sender.conversations() == [
+        {"id": "G2", "kind": "mpim", "label": "ana, bo, jeremy"}, {"id": "C1", "kind": "channel", "label": "#eng"},
+        {"id": "G1", "kind": "private", "label": "#ops"}, {"id": "D1", "kind": "im", "label": "Sam"}]
+    assert sender.conversation("D1") == ("im", "Sam")
+    senders = serve.Senders(made={4: sender})
+    assert serve.handle_slack_conversations(db, b'{"connection_id": 4}', senders)[1]["conversations"][0]["id"] == "G2"
+    assert serve.handle_slack_conversations(db, b'{"connection_id": 3}', senders)[0] == 503

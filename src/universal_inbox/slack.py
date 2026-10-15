@@ -279,7 +279,7 @@ def import_recent(db, connection, client, days: int) -> int:
 
 def make_sender(connection, credential, shared):
     token = credential("slack-user-token")
-    return SlackSender(token.decode()) if token else None
+    return SlackSender(token.decode(), client=SlackClient(token.decode())) if token else None
 
 
 def probe(connection, credential, shared, get=_get) -> str | None:
@@ -295,10 +295,55 @@ def probe(connection, credential, shared, get=_get) -> str | None:
 
 
 class SlackSender:
-    """Posts replies with Jeremy's user token, so they appear under his name (FR-4c)."""
+    """Posts replies and Slack Drafts with Jeremy's user token, so they appear under his name (FR-4c)."""
 
-    def __init__(self, token: str, post=_post):
-        self.token, self.post = token, post
+    def __init__(self, token: str, post=_post, client=None):
+        self.token, self.post, self.client = token, post, client
+
+    def start(self, to, cc, subject, body, key) -> str:
+        """A Slack Draft: one top-level message in an existing conversation. Slack has no idempotency key."""
+        channel = to[0]
+        try:
+            r = self.post("https://slack.com/api/chat.postMessage", self.token, {"channel": channel, "text": body})
+        except urllib.error.HTTPError as e:
+            error = inbox.SendUnknown if e.code >= 500 else inbox.SendFailed
+            raise error(f"slack send: HTTP {e.code}") from e
+        except (urllib.error.URLError, OSError, ValueError) as e:
+            raise inbox.SendUnknown(f"slack send outcome unknown: {e}") from e
+        if not r.get("ok"):
+            raise inbox.SendFailed(f"slack send failed: {r.get('error', 'unknown')}")
+        return f"{channel}:{r['ts']}"
+
+    def conversation(self, channel: str) -> tuple[str, str | None]:
+        """(Channel kind, friendly name) for a conversation a Draft was sent to."""
+        info = self.client._info(channel)
+        kind = CHANNEL_KINDS[next((k for flag, k in KIND_OF.items() if info.get(flag)),
+                                  "im" if channel.startswith("D") else "channel")]
+        return kind, self.client.conversation_label(channel, kind)
+
+    def conversations(self) -> list[dict]:
+        """Every conversation Jeremy is in, as {id, kind, label}, for the Slack Draft picker."""
+        found = conversations(self.client)
+        if any(c.get("is_im") and c.get("user") not in self.client._users for c in found):
+            cursor = ""  # one users.list pass names every DM partner, instead of a users.info call each
+            while True:
+                r = self.client.get("https://slack.com/api/users.list", self.token,
+                                    {"limit": 200, **({"cursor": cursor} if cursor else {})})
+                if not r.get("ok"):
+                    break
+                self.client._users.update((u["id"], u) for u in r.get("members", []))
+                cursor = r.get("response_metadata", {}).get("next_cursor")
+                if not cursor:
+                    break
+        out = []
+        for c in found:
+            if c.get("is_user_deleted"):
+                continue
+            kind = CHANNEL_KINDS[next((k for flag, k in KIND_OF.items() if c.get(flag)), "channel")]
+            self.client._names.setdefault(c["id"], c)
+            label = self.client.conversation_label(c["id"], kind) or c["id"]
+            out.append({"id": c["id"], "kind": kind, "label": f"#{label}" if kind in ("channel", "private") else label})
+        return sorted(out, key=lambda c: c["label"].lstrip("#").casefold())
 
     def send(self, thread, text, to, cc, history) -> str:
         channel = next((h["data"]["channel"] for h in history if "channel" in h["data"]), None)
