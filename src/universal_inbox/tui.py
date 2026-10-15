@@ -179,6 +179,44 @@ ContextSection { height: auto; margin: 1 0 0 0; padding: 0 1; border: round #d5c
 """
 
 
+class _PageOverlap:
+    """Keep one visible row when paging app-owned text widgets."""
+
+    @property
+    def _page_stride(self) -> int:
+        return max(1, self.scrollable_content_region.height - 1)
+
+    def scroll_page_down(self, **kwargs) -> None:
+        self.scroll_to(y=self.scroll_y + self._page_stride, **kwargs)
+
+    def scroll_page_up(self, **kwargs) -> None:
+        self.scroll_to(y=self.scroll_y - self._page_stride, **kwargs)
+
+
+class TextScroll(_PageOverlap, VerticalScroll):
+    """A native vertical text pane with one-row page overlap."""
+
+
+class PagedTextArea(_PageOverlap, TextArea):
+    """A native editor that pages its cursor by rendered rows with overlap."""
+
+    def _cursor_page(self, direction: int) -> None:
+        if not self.show_cursor:
+            self.scroll_page_down() if direction > 0 else self.scroll_page_up()
+            return
+        offset = direction * self._page_stride
+        _, cursor_location = self.selection
+        target = self.navigator.get_location_at_y_offset(cursor_location, offset)
+        self.scroll_relative(y=offset, animate=False)
+        self.move_cursor(target)
+
+    def action_cursor_page_down(self) -> None:
+        self._cursor_page(1)
+
+    def action_cursor_page_up(self) -> None:
+        self._cursor_page(-1)
+
+
 class ReplyError(Exception):
     pass
 
@@ -440,7 +478,7 @@ class Help(ModalScreen):
             lines += [f"  [b #4f3829]{k:<8}[/] {escape(what)}" for k, what in keys]
             lines.append("")
         lines.append("[#928374]Status: " + "  ".join(f"[{c}]{g}[/] {label.lower()}" for g, c, label in GLYPH.values()) + "[/]")
-        box = VerticalScroll(classes="box help")
+        box = TextScroll(classes="box help")
         box.border_title = pill("? keys", "red")
         box.border_subtitle = "[#928374]esc close[/]"
         with box:
@@ -1229,7 +1267,7 @@ class StagedList(OptionList):
             self.refresh_staged()
 
 
-class ComposeArea(TextArea):
+class ComposeArea(PagedTextArea):
     """A reply or Draft body. Pasting one path to an image file, which is what Herdr's Ctrl+V sends, stages a
     copy of the image instead of inserting the path (FR-A10)."""
 
@@ -1928,11 +1966,11 @@ class ThreadView(Horizontal):
 
     def compose(self) -> ComposeResult:
         with Vertical(classes="convo"):
-            with VerticalScroll(classes="timeline", can_focus=True):
+            with TextScroll(classes="timeline", can_focus=True):
                 yield Static(classes="thead")
                 yield Vertical(classes="msgs")
             yield ReplyBox(self.thread_id)
-        with VerticalScroll(classes="props", can_focus=False):
+        with TextScroll(classes="props", can_focus=False):
             yield Static(classes="detailtext")
             yield from context_sections()
 
@@ -2162,7 +2200,7 @@ class DraftView(Horizontal):
 
     def compose(self):
         with Vertical(classes="convo"):
-            with VerticalScroll(classes="timeline", can_focus=True):
+            with TextScroll(classes="timeline", can_focus=True):
                 yield Static(classes="thead drafthead")
                 if self.app.send_draft is None:
                     yield Static(SENDING_UNAVAILABLE, classes="draftnotice")
@@ -2170,7 +2208,7 @@ class DraftView(Horizontal):
                 yield Static(classes="draftnotice historynotice")
                 yield Vertical(classes="history")
             yield DraftEditor(self.draft)
-        with VerticalScroll(classes="props", can_focus=False):
+        with TextScroll(classes="props", can_focus=False):
             yield Static(classes="detailtext")
 
     def on_mount(self):
@@ -2980,7 +3018,7 @@ class PersonPage(Page):
         self.person_id, self.TITLE = person_id, f"{ICON['person']} person"
 
     def compose(self) -> ComposeResult:
-        with VerticalScroll():
+        with TextScroll():
             yield Static(id="pname")
             yield DataTable(id="ids", cursor_type="row", show_header=False)
             yield Static(id="prest")
@@ -3307,7 +3345,7 @@ class DescriptionBox(Vertical):
 
     def compose(self) -> ComposeResult:
         yield Static(classes="idle")
-        yield TextArea(classes="desctext")
+        yield PagedTextArea(classes="desctext")
         yield Static("[#928374]ctrl+enter save · esc cancel[/]", classes="replyhint")
 
     def show(self, text):
@@ -3369,13 +3407,13 @@ class CasePage(Page, ThreadActions):
 
     def compose(self) -> ComposeResult:
         with Horizontal(classes="caseview"):
-            with VerticalScroll(classes="activity", can_focus=False):
+            with TextScroll(classes="activity", can_focus=False):
                 yield Static(classes="casehead")
                 yield Static("[b]Description[/]", classes="sectionhead")
                 yield DescriptionBox()
                 yield Static(classes="activityhead")
                 yield Vertical(classes="cards")
-            with VerticalScroll(classes="props", can_focus=False):
+            with TextScroll(classes="props", can_focus=False):
                 yield Static(classes="caseprops")
                 yield from context_sections()
 
@@ -3685,7 +3723,7 @@ class MainScreen(Screen):
             pane = self.query_one("#thread")
             pane.remove_children()
             self.side_text = Static(markup, classes="sidetext")
-            pane.mount(VerticalScroll(self.side_text, *context_sections(), classes="sidescroll", can_focus=False))
+            pane.mount(TextScroll(self.side_text, *context_sections(), classes="sidescroll", can_focus=False))
         self.side_text.update(markup)
         if tana is not None:
             self.call_after_refresh(lambda: load_context(self.query_one("#thread"), *tana))
