@@ -1060,14 +1060,32 @@ def attachment_path(db, sha: str) -> Path | None:
 
 def add_attachments(db, activity_id: int, items: list[dict]) -> list[int]:
     """Record a message's Attachments in order. Each item: name, type, size, and optional inline, content_id,
-    source (dict), sha. An item with a sha is stored; one without waits for a download."""
+    source (dict), sha, and position (default: its place in items). An item with a sha is stored; one without
+    waits for a download."""
     with db:
-        return [db.execute(
-            "INSERT INTO attachments (activity_id, position, name, type, size, inline, content_id, source, sha, state)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (activity_id, k, it["name"], it["type"], it["size"], int(bool(it.get("inline"))), it.get("content_id"),
-             json.dumps(it.get("source") or {}), it.get("sha"), "stored" if it.get("sha") else "pending")).lastrowid
-            for k, it in enumerate(items)]
+        return _add_attachments(db, activity_id, items)
+
+
+def _add_attachments(db, activity_id: int, items: list[dict]) -> list[int]:
+    return [db.execute(
+        "INSERT INTO attachments (activity_id, position, name, type, size, inline, content_id, source, sha, state)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (activity_id, it.get("position", k), it["name"], it["type"], it["size"], int(bool(it.get("inline"))),
+         it.get("content_id"), json.dumps(it.get("source") or {}), it.get("sha"),
+         "stored" if it.get("sha") else "pending")).lastrowid
+        for k, it in enumerate(items)]
+
+
+def _downloads(data: dict) -> list[dict]:
+    """A new message's files to fetch: Slack's carry {id, url} as a 4th element (FR-A3), Quo's are its media
+    URLs (FR-A4). Slack data from before has no source and stays link-only."""
+    media = data.get("media") or []
+    out = []
+    for k, a in enumerate(data.get("attachments") or []):
+        source = a[3] if len(a) > 3 else {"url": media[k][1]} if k < len(media) else None
+        if source and source.get("url"):
+            out.append({"position": k, "name": a[0], "type": a[1], "size": a[2], "source": source})
+    return out
 
 
 def attachments(db, activity_id: int) -> list[dict]:
@@ -1076,13 +1094,33 @@ def attachments(db, activity_id: int) -> list[dict]:
 
 
 def pending_attachments(db, limit: int = 50) -> list[dict]:
+    """Attachments waiting for a download, with the Platform to fetch each from."""
     return [dict(r) for r in db.execute(
-        "SELECT * FROM attachments WHERE state = 'pending' ORDER BY id LIMIT ?", (limit,))]
+        "SELECT a.*, c.platform FROM attachments a JOIN activities v ON v.id = a.activity_id"
+        " JOIN threads t ON t.id = v.thread_id JOIN channels ch ON ch.id = t.channel_id"
+        " JOIN connections c ON c.id = ch.connection_id WHERE a.state = 'pending' ORDER BY a.id LIMIT ?", (limit,))]
 
 
-def mark_stored(db, attachment_id: int, sha: str) -> None:
+def mark_stored(db, attachment_id: int, sha: str, size: int | None = None) -> None:
+    """A downloaded file is in the store; `size` replaces an unknown one (Quo media arrive without one)."""
     with db:
-        db.execute("UPDATE attachments SET sha = ?, state = 'stored' WHERE id = ?", (sha, attachment_id))
+        db.execute("UPDATE attachments SET sha = ?, state = 'stored', size = coalesce(?, size) WHERE id = ?",
+                   (sha, size, attachment_id))
+
+
+def expire_attachments(db, now: datetime) -> int:
+    """NFR-A6: delete a stored file once every Attachment using it is on an Activity over 365 days old and no
+    staged Attachment uses it; those rows become expired (chips fall back to the Platform link). Returns files deleted."""
+    with db:
+        shas = [r[0] for r in db.execute(
+            "SELECT a.sha FROM attachments a JOIN activities v ON v.id = a.activity_id WHERE a.sha IS NOT NULL"
+            " AND a.sha NOT IN (SELECT sha FROM staged_attachments) GROUP BY a.sha HAVING max(v.occurred_at) < ?",
+            (_iso(now - timedelta(days=365)),))]
+        db.executemany("UPDATE attachments SET state = 'expired', sha = NULL WHERE sha = ?", [(s,) for s in shas])
+    for sha in shas:
+        if (path := attachment_path(db, sha)) is not None:
+            path.unlink(missing_ok=True)
+    return len(shas)
 
 
 def mark_failed(db, attachment_id: int) -> None:
@@ -1370,6 +1408,8 @@ def _ingest(db, inc: Incoming) -> Thread | None:
         " target_id, content, data) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         (thread_id, inc.kind, _iso(at), identity_id, inc.native_id, target_id,
          None if inc.kind == "DELETE" else inc.content, json.dumps(inc.data))).lastrowid
+    if inc.kind == "MESSAGE":
+        _add_attachments(db, activity_id, _downloads(inc.data))
     if inc.kind == "MESSAGE" and inc.channel_kind == "mailbox":
         db.executemany("INSERT OR IGNORE INTO email_refs (activity_id, native_id) VALUES (?, ?)",
                        [(activity_id, n) for n in sorted(_email_ids(inc.thread_ref))])

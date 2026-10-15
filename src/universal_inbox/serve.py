@@ -13,10 +13,13 @@ import re
 import socketserver
 import threading
 import time
+import urllib.error
+import urllib.request
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from . import attio, email, fastmail, inbox, linear, mcp, platforms, quo, slack, tana
 
@@ -302,8 +305,11 @@ def reply_server(db_path: str, socket_path: str, senders: Senders, contexts: dic
         os.umask(old)
 
 
-def hooks_server(db_path: str, host: str, port: int, client=None) -> ThreadingHTTPServer:
-    """`client` (Slack lookups) is swappable for the 6.3 demo; the service uses the real API."""
+def hooks_server(db_path: str, host: str, port: int, client=None,
+                 kick: threading.Event | None = None) -> ThreadingHTTPServer:
+    """`client` (Slack lookups) is swappable for the 6.3 demo; the service uses the real API. A Slack or Quo hook
+    sets `kick` so the wake loop downloads its files."""
+    kick = kick or threading.Event()
     email_secret, slack_secret = credential("email-hook-secret"), credential("slack-signing-secret")
     quo_secret = credential("quo-webhook-secret")
     token = credential("slack-user-token")
@@ -331,6 +337,7 @@ def hooks_server(db_path: str, host: str, port: int, client=None) -> ThreadingHT
                                              datetime.now(timezone.utc), client)
         finally:
             db.close()
+        kick.set()
         return status, "text/plain", text.encode()
 
     def quo_hook(headers, body):
@@ -341,17 +348,79 @@ def hooks_server(db_path: str, host: str, port: int, client=None) -> ThreadingHT
             status = quo.handle_hook(db, connection_id(db, "quo"), headers, body, quo_secret, datetime.now(timezone.utc))
         finally:
             db.close()
+        kick.set()
         return status, "text/plain", b""
 
     return ThreadingHTTPServer((host, port), _handler({"/hooks/email": email_hook, "/hooks/slack": slack_hook,
                                                        "/hooks/quo": quo_hook}))
 
 
-def wake_loop(db_path: str, stop: threading.Event, every: float = 60) -> None:
-    while not stop.wait(every):
+MAX_FILE = 100 * 1024 * 1024  # larger Attachments are not copied and keep their Platform link
+
+
+def download(url: str, headers: dict | None = None) -> tuple[int, str, bytes]:
+    """GET one file -> (status, content type, at most MAX_FILE + 1 bytes)."""
+    req = urllib.request.Request(url, headers={"User-Agent": slack.USER_AGENT, **(headers or {})})
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            return r.status, r.headers.get_content_type(), r.read(MAX_FILE + 1)
+    except urllib.error.HTTPError as e:
+        return e.code, "", b""
+
+
+def getters(slack_token: bytes | None) -> dict:
+    """Attachment downloads by Platform: Slack files with Jeremy's user token (files:read), sent to Slack hosts
+    only; Quo media URLs are signed and need none."""
+    def slack_get(url):
+        if not (urlsplit(url).hostname or "").endswith(".slack.com"):
+            return 0, "", b""
+        return download(url, {"Authorization": f"Bearer {slack_token.decode()}"})
+    return {"quo": download, **({"slack": slack_get} if slack_token else {})}
+
+
+def fetch_pending(db, getters: dict) -> int:
+    """Copy pending Slack and Quo Attachments into the file store (FR-A3, FR-A4); returns how many were stored.
+    A non-2xx answer, an HTML page in place of a file (Slack's sign-in page when the token is refused), or a file
+    over MAX_FILE counts one failed try; a Platform with no getter waits."""
+    stored = 0
+    for a in inbox.pending_attachments(db):
+        if (get := getters.get(a["platform"])) is None:
+            continue
+        try:
+            status, ctype, data = get(json.loads(a["source"])["url"]) if a["size"] <= MAX_FILE else (0, "", b"")
+        except (OSError, ValueError, KeyError):  # URLError is an OSError
+            status, ctype, data = 0, "", b""
+        page = not a["type"].startswith("text/html") and (
+            ctype == "text/html" or data[:64].lstrip().lower().startswith((b"<!doctype html", b"<html")))
+        if 200 <= status < 300 and not page and len(data) <= MAX_FILE:
+            inbox.mark_stored(db, a["id"], inbox.store_file(db, data), len(data))
+            stored += 1
+        else:
+            inbox.mark_failed(db, a["id"])
+    return stored
+
+
+def wake_loop(db_path: str, stop: threading.Event, every: float = 60, kick: threading.Event | None = None,
+              get: dict | None = None) -> None:
+    """wake() each minute. Pending Attachments download then too, and at once when a hook sets `kick` (after it
+    has answered, NFR-A5); old files expire once a day (NFR-A6)."""
+    import logging
+    kick, expired = kick or threading.Event(), None
+    while True:
+        kick.wait(every)
+        if stop.is_set():
+            return
+        kick.clear()
         db = inbox.connect(db_path)
         try:
-            inbox.wake(db, datetime.now(timezone.utc))
+            now = datetime.now(timezone.utc)
+            inbox.wake(db, now)
+            fetch_pending(db, get or {})
+            if expired is None or now - expired >= timedelta(days=1):
+                expired = now
+                inbox.expire_attachments(db, now)
+        except Exception as e:  # noqa: BLE001 - one failed pass must not stop the loop
+            logging.getLogger("universal_inbox.wake").info("wake pass failed: %s", e)
         finally:
             db.close()
 
@@ -393,10 +462,11 @@ def run(db_path: str, socket_path: str, host: str, port: int) -> None:
     senders = Senders({"fastmail": fm} if fm is not None else {})
     contexts = {"tana": tana_context(db), "attio": attio_context(db), "linear": linear_context(db)}
     db.close()
-    stop = threading.Event()
-    servers = [hooks_server(db_path, host, port), reply_server(db_path, socket_path, senders, contexts)]
+    stop, kick = threading.Event(), threading.Event()
+    servers = [hooks_server(db_path, host, port, kick=kick), reply_server(db_path, socket_path, senders, contexts)]
     threads = [threading.Thread(target=s.serve_forever, daemon=True) for s in servers]
-    threads.append(threading.Thread(target=wake_loop, args=(db_path, stop), daemon=True))
+    threads.append(threading.Thread(target=wake_loop, args=(db_path, stop, 60, kick,
+                                                      getters(credential("slack-user-token"))), daemon=True))
     threads.append(threading.Thread(target=probe_loop, args=(db_path, senders.shared, stop), daemon=True))
     if fm is not None:
         threads.append(threading.Thread(target=fastmail.poll_loop, args=(db_path, fm, stop), daemon=True))
@@ -418,5 +488,6 @@ def run(db_path: str, socket_path: str, host: str, port: int) -> None:
             time.sleep(3600)
     except KeyboardInterrupt:
         stop.set()
+        kick.set()
         for s in servers:
             s.shutdown()

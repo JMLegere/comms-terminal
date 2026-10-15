@@ -47,6 +47,7 @@ def main(argv=None) -> None:
     f.add_argument("--days", type=int, default=30)
     ai = sub.add_parser("attio-import", help="add Attio People touched recently; merge and rename to match Attio")
     ai.add_argument("--days", type=int, default=89)
+    sub.add_parser("attachments-backfill", help="one-time copy of stored Gmail messages' Attachments into files/")
     from . import agent
     agent.add_parsers(sub)
     a = p.parse_args(argv)
@@ -101,6 +102,12 @@ def main(argv=None) -> None:
         report = inbox.import_people(db, body["people"])
         report["same name"] = inbox.merge_duplicates(db)
         print(json.dumps({"attio people": len(body["people"]), **report}, indent=1, ensure_ascii=False))
+    elif a.cmd == "attachments-backfill":
+        from . import email, inbox
+        db = inbox.connect(a.db)
+        inbox.migrate(db)
+        read, stored = email.backfill_parts(db)
+        print(f"Gmail: read {read} messages without Attachments, stored {stored} Attachments")
     elif a.cmd == "fastmail-import":
         from . import fastmail, inbox
         db = inbox.connect(a.db)

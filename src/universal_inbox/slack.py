@@ -74,7 +74,8 @@ def parse(event: dict, connection, rules, client, thread_member=lambda channel, 
     elif subtype in MESSAGE_SUBTYPES:
         user, ts, thread_ts = event.get("user"), event["ts"], event.get("thread_ts")
         native_id, kind_, content = f"{channel}:{ts}", "MESSAGE", event.get("text")
-        files = [[f.get("name") or f.get("title") or "file", f.get("mimetype") or "", f.get("size") or 0]
+        files = [[f.get("name") or f.get("title") or "file", f.get("mimetype") or "", f.get("size") or 0,
+                  {"id": f.get("id"), "url": f.get("url_private_download") or f.get("url_private")}]
                  for f in event.get("files") or []]
     else:
         return None

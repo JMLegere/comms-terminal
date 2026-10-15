@@ -234,6 +234,35 @@ class EmailSender:
 log = logging.getLogger("universal_inbox.email")
 
 
+def store_parts(db, activity_id: int, raw: bytes, raw_sha: str | None) -> int:
+    """Copy a Gmail message's file parts into the file store as its Attachments (FR-A2); returns how many.
+    A message that already has Attachments, or a database in memory, gets none."""
+    if inbox.files_dir(db) is None or inbox.attachments(db, activity_id):
+        return 0
+    items = [{"name": p.name, "type": p.type, "size": len(p.data), "inline": p.inline, "content_id": p.content_id,
+              "source": {"raw": raw_sha, "part": k}, "sha": inbox.store_file(db, p.data)}
+             for k, p in enumerate(render.parts(raw))]
+    inbox.add_attachments(db, activity_id, items)
+    return len(items)
+
+
+def backfill_parts(db) -> tuple[int, int]:
+    """Store the parts of every Gmail message kept in raw/ that has no Attachments yet (FR-A2); idempotent.
+    Returns (messages read, Attachments stored)."""
+    rows = db.execute(
+        "SELECT a.id, json_extract(a.data, '$.raw') AS raw FROM activities a JOIN threads t ON t.id = a.thread_id"
+        " JOIN channels ch ON ch.id = t.channel_id JOIN connections c ON c.id = ch.connection_id"
+        " WHERE c.platform = 'gmail' AND a.kind = 'MESSAGE' AND json_extract(a.data, '$.raw') IS NOT NULL"
+        " AND NOT EXISTS (SELECT 1 FROM attachments x WHERE x.activity_id = a.id)").fetchall()
+    read = stored = 0
+    for r in rows:
+        path = inbox.raw_dir(db) / f"{r['raw']}.eml"
+        if path.is_file():
+            read += 1
+            stored += store_parts(db, r["id"], path.read_bytes(), r["raw"])
+    return read, stored
+
+
 def handle_hook(db, connection_id: int, headers, body: bytes, secret: bytes, now: datetime) -> int:
     """POST /hooks/email -> HTTP status. 401 records a Last Error (AS-19); a valid request clears it.
 
@@ -257,6 +286,10 @@ def handle_hook(db, connection_id: int, headers, body: bytes, secret: bytes, now
         incoming.data["raw"] = inbox.store_raw(db, body)  # rendered by the console (decision #106)
         stored = inbox.ingest(db, incoming) is not None
         outcome = "stored" if stored else "duplicate (already stored, or an echo of a sent reply)"
+        if stored and connection["platform"] == "gmail":
+            activity = db.execute("SELECT id FROM activities WHERE kind = 'MESSAGE' AND native_id = ?",
+                                  (incoming.native_id,)).fetchone()
+            store_parts(db, activity["id"], body, incoming.data["raw"])
     log.info("email %s %s", outcome, mid)
     inbox.set_connection_error(db, connection_id, None)
     return 204

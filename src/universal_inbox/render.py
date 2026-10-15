@@ -409,8 +409,23 @@ def from_raw(raw: bytes) -> Body:
         shown, trimmed = text_body(text_part.get_content(), forward)
     else:
         shown, trimmed = "", ""
+    files, ev = _files(msg, html)
+    return Body(shown, trimmed, [(p.name, p.type, len(p.data)) for p in files if not p.inline], ev)
+
+
+@dataclass(frozen=True)
+class Part:
+    name: str
+    type: str
+    data: bytes
+    inline: bool  # referenced by cid: in the HTML
+    content_id: str | None
+
+
+def _files(msg, html) -> tuple[list[Part], dict | None]:
+    """A message's named file parts and its first readable invite; .ics files stay with the invite."""
     cids = set(re.findall(r'cid:([^"\'\s>)]+)', html.get_content() if html is not None else ""))
-    attachments, ev = [], None
+    files, ev = [], None
     for part in msg.walk():
         if part.is_multipart():
             continue
@@ -423,10 +438,16 @@ def from_raw(raw: bytes) -> Body:
             continue
         name = part.get_filename()
         cid = (part.get("Content-ID") or "").strip("<> ")
-        if not name or (cid and cid in cids) or ctype == "application/ics":
+        if not name or ctype == "application/ics":
             continue
-        attachments.append((name, ctype, len(part.get_payload(decode=True) or b"")))
-    return Body(shown, trimmed, attachments, ev)
+        files.append(Part(name, ctype, part.get_payload(decode=True) or b"", bool(cid and cid in cids), cid or None))
+    return files, ev
+
+
+def parts(raw: bytes) -> list[Part]:
+    """Every file part of a raw message, as stored Attachments (FR-A2); cid-referenced images are inline."""
+    msg = message_from_bytes(raw, policy=policy.default)
+    return _files(msg, msg.get_body(preferencelist=("html",)))[0]
 
 
 SLACK_TOKEN = re.compile(r"<([^<>\n]+)>|```(.+?)```|`([^`\n]+)`", re.S)
