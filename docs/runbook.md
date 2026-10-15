@@ -87,6 +87,38 @@ Attio is a read-only Context source (FR-13b, decision #123): the same pages show
 3. **You:** `sudo bash deploy/install.sh`: it stores `attio-token`, adds `universal-inbox.service.d/attio.conf`, and restarts the service.
 4. Check: the rail's context section lists Attio with a check, and a Thread with someone in Attio shows an Attio section above Tana's.
 
+## 3e. Connect Linear (context, later authorization)
+
+Linear is a read-only Context source (FR-13c, decision #125), after Attio and Tana on Thread, Person, Organization, and Case pages. The service holds the key and queries Linear's GraphQL API; the console sends only email/domain arrays to the private Unix socket (`POST /linear`). The service derives unique full Person names and Organization names from the local database for each request. Names shared by local records, address/domain placeholders, and partial Person names fall back to exact email/domain evidence.
+
+**Separately authorized later step:** local implementation approval covers source and synthetic checks only. Obtain Jeremy's approval for the exact workspace, required teams, key creation, credential installation, and deployment before performing these steps. Workspace policy, effective restricted-key Customer Request access, and expiration behavior still require live verification.
+
+1. **You**, in the approved Linear workspace: create a Jeremy-owned personal API key named "Universal Inbox", with **Read** as its only permission and access restricted to the approved required teams ([Linear key permissions](https://linear.app/docs/api-and-webhooks)). Stop if workspace policy prevents that scope.
+2. Stage the key on Workbox with the hidden prompt below. The value stays out of command arguments, shell history, and logs; use an interactive terminal and leave shell tracing disabled.
+   ```bash
+   python3 - <<'PY'
+   import getpass
+   import os
+   import warnings
+   from pathlib import Path
+
+   warnings.simplefilter("error", getpass.GetPassWarning)
+   token = getpass.getpass("Linear read-only API key: ").strip()
+   if not token:
+       raise SystemExit("Key file left unchanged")
+   path = Path.home() / ".config/universal-inbox/linear-token"
+   path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+   fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+   os.fchmod(fd, 0o600)
+   with os.fdopen(fd, "w") as staged:
+       staged.write(token)
+   PY
+   ```
+3. Install the approved build using §1, then **You:** `sudo bash deploy/install.sh`. The installer encrypts `linear-token`, shreds its staged copy, adds `universal-inbox.service.d/linear.conf`, and restarts the service. Review other staged credentials first: this installer also processes them.
+4. Verify workspace identity and effective Read/team scope with the authorized key, including Customer Request coverage. Open representative Thread, Person, Organization, and Case pages: Linear follows Tana, shows every matching nonterminal issue (including backlog and triage), match reasons, relevant Request excerpts, and working **Open in Linear** links. Check separate rail/footer Linear health; test five-minute cache freshness.
+
+The local route defaults omitted arrays to `[]`; explicit `null`, non-array values, and non-string entries return 400. An unconnected source returns 503, connected empty keys return `{"issues":[]}` without a provider call, and adapter failures return a safe 502 error. Linear reads leave Connections, Threads, Activities, and Inbox Status unchanged. The socket remains private; public hook routes are unchanged.
+
 ## 3. Connect Slack
 
 1. **You:** https://api.slack.com/apps → Create New App → From a manifest → paste `deploy/slack-app-manifest.yml`. Save the signing secret (Basic Information) as `~/.config/universal-inbox/slack-signing-secret`.

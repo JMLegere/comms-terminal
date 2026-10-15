@@ -3,20 +3,22 @@ and a health check of every Connection each 30 minutes.
 
 Credentials come from systemd's $CREDENTIALS_DIRECTORY (LoadCredentialEncrypted=):
 email-hook-secret, slack-signing-secret, slack-user-token, resend-api-key, fastmail-oauth, quo-webhook-secret,
-quo-api-key, tana-oauth, attio-token.
+quo-api-key, tana-oauth, attio-token, linear-token.
 """
 
 import importlib
 import json
 import os
+import re
 import socketserver
 import threading
 import time
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from . import attio, email, fastmail, inbox, mcp, platforms, quo, slack, tana
+from . import attio, email, fastmail, inbox, linear, mcp, platforms, quo, slack, tana
 
 
 def credential(name: str) -> bytes | None:
@@ -47,6 +49,56 @@ def tana_context(db) -> tana.Context | None:
 def attio_context(db) -> tana.Context | None:
     token = credential("attio-token")
     return attio.Context(attio.Client(token.decode())) if token else None
+
+
+def linear_context(db) -> tana.Context | None:
+    token = credential("linear-token")
+    return linear.Context(linear.Client(token.decode())) if token else None
+
+
+def _linear_names(db, emails: list[str], domains: list[str]) -> tuple[list[str], list[str]]:
+    """Only unambiguous local full names, selected by this page's exact email/domain keys."""
+    emails, domains = set(emails), set(domains)
+    with inbox._read_snapshot(db):
+        people = [(r["id"], " ".join(r["display_name"].split()))
+                  for r in db.execute("SELECT id, display_name FROM persons ORDER BY id")]
+        organizations = [(r["domain"].strip().casefold(), " ".join(r["name"].split()))
+                         for r in db.execute("SELECT domain, name FROM organizations ORDER BY id")]
+        person_ids = {r["person_id"] for r in db.execute("SELECT person_id, value FROM identities WHERE kind = 'email'")
+                      if r["value"].strip().casefold() in emails}
+    counts = Counter(name.casefold() for _, name in people + organizations)
+
+    def eligible(name):
+        return (bool(name) and counts[name.casefold()] == 1 and "@" not in name and "://" not in name
+                and any(c.isalpha() for c in name) and not re.fullmatch(r"[\w-]+(?:\.[\w-]+)+\.?", name))
+
+    return ([name for pid, name in people if pid in person_ids and len(name.split()) >= 2 and eligible(name)],
+            [name for domain, name in organizations if domain in domains and eligible(name)])
+
+
+def handle_linear(db, body: bytes, context) -> tuple[int, dict]:
+    """POST /linear: email/domain arrays only; unique local names are resolved afresh, without writes."""
+    try:
+        req = json.loads(body)
+        if not isinstance(req, dict):
+            raise ValueError
+        emails, domains = req.get("emails", []), req.get("domains", [])
+        if any(not isinstance(values, list) or any(not isinstance(v, str) for v in values)
+               for values in (emails, domains)):
+            raise ValueError
+    except (ValueError, TypeError):
+        return 400, {"error": "expected emails and domains arrays of strings"}
+    if context is None:
+        return 503, {"error": "Linear is not connected"}
+    emails = sorted({value.strip().casefold() for value in emails if value.strip()})
+    domains = sorted({value.strip().casefold() for value in domains if value.strip()})
+    if not emails and not domains:
+        return 200, {"issues": []}
+    try:
+        person_names, organization_names = _linear_names(db, emails, domains)
+        return 200, context.get(emails, domains, person_names, organization_names)
+    except (linear.LinearError, OSError, ValueError, KeyError, IndexError, TypeError):
+        return 502, {"error": "Linear context could not be loaded"}
 
 
 def handle_context(body: bytes, context: tana.Context | None, name: str = "Tana") -> tuple[int, dict]:
@@ -226,6 +278,14 @@ def reply_server(db_path: str, socket_path: str, senders: Senders, contexts: dic
         status, out = handle_attio_people(body, contexts.get("attio"))
         return status, "application/json", json.dumps(out).encode()
 
+    def linear_route(headers, body):
+        db = inbox.connect(db_path)
+        try:
+            status, out = handle_linear(db, body, contexts.get("linear"))
+        finally:
+            db.close()
+        return status, "application/json", json.dumps(out).encode()
+
     def context_route(name):
         def route(headers, body):
             status, out = handle_context(body, contexts.get(name), name.title())
@@ -237,7 +297,7 @@ def reply_server(db_path: str, socket_path: str, senders: Senders, contexts: dic
     old = os.umask(0o177)  # socket created 0600 (NFR-4)
     try:
         return UnixHTTPServer(socket_path, _handler({"/reply": reply, "/send-draft": send_draft,
-                                                         "/slack-conversations": slack_conversations, "/attio-people": attio_people, "/tana": context_route("tana"), "/attio": context_route("attio")}))
+                                                         "/slack-conversations": slack_conversations, "/attio-people": attio_people, "/tana": context_route("tana"), "/attio": context_route("attio"), "/linear": linear_route}))
     finally:
         os.umask(old)
 
@@ -331,7 +391,7 @@ def run(db_path: str, socket_path: str, host: str, port: int) -> None:
     inbox.migrate(db)
     fm = fastmail_client(db)
     senders = Senders({"fastmail": fm} if fm is not None else {})
-    contexts = {"tana": tana_context(db), "attio": attio_context(db)}
+    contexts = {"tana": tana_context(db), "attio": attio_context(db), "linear": linear_context(db)}
     db.close()
     stop = threading.Event()
     servers = [hooks_server(db_path, host, port), reply_server(db_path, socket_path, senders, contexts)]

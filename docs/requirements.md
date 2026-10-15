@@ -1,6 +1,6 @@
 # Universal Inbox — Requirements
 
-Status: MVP confirmed 2026-10-10; revised 2026-10-12 to follow Plain's status model and integration architecture and to add replying from the console. Behavior follows Plain unless a deviation is stated with its reason. The detailed, traceable version is `docs/prd.md`. Builds on `.agents/discovery/2026-10-10-universal-inbox.md`, `GLOSSARY.md`, ADR 0001, and ADR 0002.
+Status: MVP confirmed 2026-10-10; revised 2026-10-12 to follow Plain's status model and integration architecture and to add replying from the console; revised 2026-10-15 for the read-only Linear Context design and authorized local implementation. Linear connection and deployment remain separately gated; verification results are in `docs/design/linear-context.md`. Behavior follows Plain unless a deviation is stated with its reason. The detailed, traceable version is `docs/prd.md`. Builds on `.agents/discovery/2026-10-10-universal-inbox.md`, `GLOSSARY.md`, ADR 0001, and ADR 0002.
 
 ## MVP
 
@@ -38,6 +38,7 @@ Status: MVP confirmed 2026-10-10; revised 2026-10-12 to follow Plain's status mo
   - Organizations are auto-created from email domains; free-mail domains never form one.
 - **Cases**: one goal driven through Threads; a Thread is in at most one Case; a Case's Status is the earliest of its Threads' Statuses (Todo, Snoozed, Done, Ignored), Todo when it has none (#120).
 - **Records**: Person and Organization records list Threads (with Status) and Cases.
+- **Context sources**: read-only Attio, Tana, and Linear context beside Threads and Person, Organization, and Case records. Cases inherit context through their People and Organizations. Linear context is built locally, not connected or deployed; Linear task management remains out of scope.
 - **Replying**: plain-text replies from the console on both channels. The console never edits, deletes, archives, or marks read anything in Gmail or Slack.
 - **Sync health** (Plain): a Connection shows broken when Slack revokes the token or uninstalls the app, a reply fails to send, or an inbound email request is rejected. No polling or reconciliation; completeness relies on event delivery.
 - **Console**: a dark terminal app (Textual) run over SSH on Workbox; replies are sent by the service, which holds the credentials.
@@ -59,5 +60,4 @@ Authorized local expansion: Drafts replaces All under Threads, with ordinary pag
 - Rules by domain, category, or content.
 - Sending new conversations, attachments, rich text, undo-send, signatures. Persistent unsent Drafts are included in the Drafts-first expansion above.
 - Cmd+K command palette.
-- Linear context on records. (Tana and Attio context are built: FR-13a and FR-13b, decisions #122 and #123.)
 - Plain's "Close the loop" status detail and auto-resolution.

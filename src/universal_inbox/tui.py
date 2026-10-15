@@ -1559,13 +1559,50 @@ def attio_markup(ctx: dict | None, error: str | None = None, width: int = 26) ->
     return "\n".join(lines).strip("\n") or "[#928374]nothing in Attio[/]"
 
 
+def linear_markup(ctx: dict | None, error: str | None = None, width: int = 26) -> str:
+    """Matching open Linear issues, their match evidence, and Customer Request excerpts."""
+    if error:
+        return "\n".join(wrapped(f"{ICON['broken']} Linear unavailable: {error}", width, style="#c14a4a"))
+    if ctx is None:
+        return "[#928374]loading…[/]"
+    lines = []
+    for issue in ctx["issues"]:
+        # Only literal, markup-safe Linear URLs become terminal links.
+        url = issue["url"] if re.fullmatch(r"https://linear\.app/[A-Za-z0-9._~:/?#@!$&()*+,;=%-]+", issue["url"]) else None
+        lines += ([""] if lines else []) + wrapped(
+            " · ".join(x for x in (issue["identifier"], issue["title"]) if x) or "untitled",
+            width, style="b", url=url)
+        try:
+            updated = when(issue["updated"])
+        except ValueError:
+            updated = issue["updated"]
+        for label, value in (("state", issue["state"]), ("priority", issue["priority"]),
+                             ("assignee", issue["assignee"]), ("project", issue["project"]), ("updated", updated)):
+            if value:
+                lines += wrapped(f"{label} · {value}", width, 2, "#928374")
+        if issue["reasons"]:
+            lines.append(box_head("", "why matched"))
+            for reason in issue["reasons"]:
+                lines += wrapped(reason, width, 2, "#928374")
+        if issue["requests"]:
+            lines.append(box_head("", "customer requests"))
+            for request in issue["requests"]:
+                if request["customer"]:
+                    lines += wrapped(f"customer · {request['customer']}", width, 2, "#928374")
+                lines += wrapped(request["text"], width, 2)
+        if url:
+            lines += wrapped("Open in Linear", width, url=url)
+    return "\n".join(lines) or "[#928374]no matching open issues in Linear[/]"
+
+
 # Context sources the console shows (FR-13a, FR-13b): key -> (title, icon, markup), in page order
-CONTEXT_SOURCES = {"attio": ("Attio", "attio", attio_markup), "tana": ("Tana", "tana", tana_markup)}
+CONTEXT_SOURCES = {"attio": ("Attio", "attio", attio_markup), "tana": ("Tana", "tana", tana_markup),
+                   "linear": ("Linear", "task", linear_markup)}
 
 
 class ContextSection(Static):
-    """One Context source's answer for a page (FR-13a, FR-13b), fetched through the service when the page's
-    addresses change. Hidden when the console has no service or that source is not connected."""
+    """One Context source's answer for a page (FR-13a, FR-13b), fetched when the page's addresses or Linear's
+    local name inputs change. Hidden when the console has no service or that source is not connected."""
 
     def __init__(self, source: str, **kwargs):
         super().__init__("", **kwargs)
@@ -1576,6 +1613,9 @@ class ContextSection(Static):
 
     def load(self, emails, domains):
         key = (tuple(sorted({e.lower() for e in emails})), tuple(sorted({d.lower() for d in domains})))
+        if self.source == "linear":
+            # ponytail: any DB write; narrow to name edits if local socket refetches become costly.
+            key += ((self.app.db.total_changes, self.app.db.execute("PRAGMA data_version").fetchone()[0]),)
         if key == self.key:
             return
         self.key = key

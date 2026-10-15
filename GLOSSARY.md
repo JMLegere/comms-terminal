@@ -101,8 +101,8 @@ One connected account on a Platform, such as one forwarded Gmail address, one Sl
 _Avoid_: Source, Account, Integration
 
 **Context source**:
-An outside tool that Universal Inbox reads to show context beside Threads, Persons, Organizations, and Cases, such as Tana or Attio. It holds no Threads and is not a Platform.
-_Avoid_: Integration, Connection, Platform (for Tana or Attio)
+An outside tool that Universal Inbox reads to show context beside Threads, Persons, Organizations, and Cases, such as Tana, Attio, or Linear. It holds no Threads and is not a Platform.
+_Avoid_: Integration, Connection, Platform (for Tana, Attio, or Linear)
 
 **Meeting**:
 A calendar event read from a Context source, with its summary and linked documents. It is context for the Persons and Organizations among its attendees. It is never a Thread or an Activity.
