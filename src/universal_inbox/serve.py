@@ -10,11 +10,14 @@ import importlib
 import json
 import os
 import re
+import shutil
+import sqlite3
 import socketserver
 import threading
 import time
 import urllib.error
 import urllib.request
+import urllib.parse
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -400,6 +403,128 @@ def fetch_pending(db, getters: dict) -> int:
     return stored
 
 
+UPLOAD_MAX = 100 * 1024 * 1024  # one upload request, all files together
+# Types a browser would run as a page: served sandboxed, so a received file cannot script the file server's origin.
+ACTIVE_TYPES = {"text/html", "application/xhtml+xml", "image/svg+xml", "text/xml", "application/xml"}
+
+UPLOAD_PAGE = b"""<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width">
+<title>Attach files</title>
+<style>body{font:16px system-ui;margin:2em auto;max-width:36em;padding:0 1em}
+#drop{border:2px dashed #888;border-radius:8px;padding:3em 1em;text-align:center}#drop.over{background:#8882}</style>
+<h1>Attach files</h1><p>They appear on the reply or Draft in the inbox.</p>
+<div id=drop>Drop files here, or <input type=file multiple id=pick></div><ul id=done></ul>
+<script>
+const drop=document.getElementById('drop'),done=document.getElementById('done');
+async function send(files){if(!files.length)return;const f=new FormData();for(const x of files)f.append('file',x,x.name);
+const r=await fetch(location.pathname,{method:'POST',body:f});
+if(!r.ok){done.insertAdjacentHTML('beforeend','<li>Upload failed ('+r.status+')</li>');return}
+for(const x of await r.json()){const li=document.createElement('li');li.textContent=x.name+' attached';done.append(li)}}
+document.getElementById('pick').onchange=e=>send(e.target.files);
+drop.ondragover=e=>{e.preventDefault();drop.classList.add('over')};drop.ondragleave=()=>drop.classList.remove('over');
+drop.ondrop=e=>{e.preventDefault();drop.classList.remove('over');send(e.dataTransfer.files)};
+</script>
+"""
+
+
+def handle_upload(db, owner: tuple[str, int], content_type: str, body: bytes) -> tuple[int, list | dict]:
+    """POST /up/<token>: multipart/form-data -> each file stored and staged on the token's owner (FR-A9)."""
+    from email import policy
+    from email.parser import BytesParser
+    import mimetypes
+    msg = BytesParser(policy=policy.HTTP).parsebytes(b"Content-Type: " + content_type.encode("latin-1") + b"\r\n\r\n" + body)
+    if not msg.is_multipart():
+        return 400, {"error": "expected multipart/form-data"}
+    out = []
+    for part in msg.iter_parts():
+        name = os.path.basename((part.get_filename() or "").replace("\\", "/"))
+        if not name:  # a form field, or the empty part a browser sends when no file was chosen
+            continue
+        data = part.get_payload(decode=True) or b""
+        ctype = part.get_content_type()
+        if ctype == "application/octet-stream":
+            ctype = mimetypes.guess_type(name)[0] or ctype
+        try:
+            staged_id = inbox.stage(db, sha=inbox.store_file(db, data), name=name, type=ctype, size=len(data),
+                                    **{f"{owner[0]}_id": owner[1]})
+        except sqlite3.IntegrityError:  # the Draft or Thread is gone
+            return 404, {"error": "unknown owner"}
+        out.append({"id": staged_id, "name": name, "type": ctype, "size": len(data)})
+    return 200, out
+
+
+class _FilesHandler(_Handler):
+    db_path, secret = "", b""
+
+    def _send(self, status, ctype, out, headers=()):
+        self.send_response(status)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(out)))
+        for k, v in headers:
+            self.send_header(k, v)
+        self.end_headers()
+        self.wfile.write(out)
+
+    def do_GET(self):
+        parts = self.path.split("?")[0].split("/")
+        if len(parts) == 3 and parts[1] == "up" and inbox.upload_owner(self.secret, parts[2]):
+            return self._send(200, "text/html; charset=utf-8", UPLOAD_PAGE, [("X-Content-Type-Options", "nosniff")])
+        sha = inbox.cap_sha(self.secret, parts[2]) if len(parts) == 4 and parts[1] == "f" else None
+        db = inbox.connect(self.db_path)
+        try:
+            ctype = sha and inbox.file_type(db, sha)
+            path = ctype and inbox.attachment_path(db, sha)
+        finally:
+            db.close()
+        if not path or not path.is_file():
+            return self.send_error(404)
+        name = urllib.parse.unquote(parts[3]) or sha
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(path.stat().st_size))
+        self.send_header("Content-Disposition", f"inline; filename*=UTF-8''{urllib.parse.quote(name, safe='')}")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        if ctype in ACTIVE_TYPES or ctype.endswith("+xml"):
+            self.send_header("Content-Security-Policy", "sandbox")
+        self.end_headers()
+        with path.open("rb") as f:
+            shutil.copyfileobj(f, self.wfile)
+
+    def do_POST(self):
+        parts = self.path.split("?")[0].split("/")
+        owner = inbox.upload_owner(self.secret, parts[2]) if len(parts) == 3 and parts[1] == "up" else None
+        if owner is None:
+            return self.send_error(404)
+        try:
+            length = int(self.headers["Content-Length"])
+            if length < 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            return self.send_error(411)
+        if length > UPLOAD_MAX:
+            self.close_connection = True
+            return self.send_error(413)
+        body = self.rfile.read(length)
+        db = inbox.connect(self.db_path)
+        try:
+            status, out = handle_upload(db, owner, self.headers.get("Content-Type", ""), body)
+        finally:
+            db.close()
+        self._send(status, "application/json", json.dumps(out).encode())
+
+
+def files_server(db_path: str, host: str, port: int) -> ThreadingHTTPServer:
+    """The LAN file server (NFR-A2): GET /f/<cap>/<name> serves a stored file; GET and POST /up/<token> take
+    uploads onto a Draft or reply. Anything else, a bad capability, or an expired token is 404 (AS-A11)."""
+    db = inbox.connect(db_path)
+    try:
+        secret = inbox.files_secret(db)
+    finally:
+        db.close()
+    # ponytail: whole file in memory per upload (<=100 MB); stream to disk if uploads grow
+    return ThreadingHTTPServer((host, port), type("FilesHandler", (_FilesHandler,),
+                                                  {"db_path": db_path, "secret": secret}))
+
+
 def wake_loop(db_path: str, stop: threading.Event, every: float = 60, kick: threading.Event | None = None,
               get: dict | None = None) -> None:
     """wake() each minute. Pending Attachments download then too, and at once when a hook sets `kick` (after it
@@ -453,7 +578,8 @@ def probe_loop(db_path: str, shared: dict, stop: threading.Event, every: float =
             return
 
 
-def run(db_path: str, socket_path: str, host: str, port: int) -> None:
+def run(db_path: str, socket_path: str, host: str, port: int, files_host: str | None = None,
+        files_port: int = 8789) -> None:
     import logging
     logging.basicConfig(level=logging.INFO, format="%(message)s")  # journald adds the time
     db = inbox.connect(db_path)
@@ -464,6 +590,8 @@ def run(db_path: str, socket_path: str, host: str, port: int) -> None:
     db.close()
     stop, kick = threading.Event(), threading.Event()
     servers = [hooks_server(db_path, host, port, kick=kick), reply_server(db_path, socket_path, senders, contexts)]
+    if files_host:  # LAN address only (NFR-A2); without it, chips keep their Platform links
+        servers.append(files_server(db_path, files_host, files_port))
     threads = [threading.Thread(target=s.serve_forever, daemon=True) for s in servers]
     threads.append(threading.Thread(target=wake_loop, args=(db_path, stop, 60, kick,
                                                       getters(credential("slack-user-token"))), daemon=True))

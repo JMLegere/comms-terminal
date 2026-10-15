@@ -11,7 +11,7 @@ Type=simple
 User=jerry
 Group=jerry
 Environment=UNIVERSAL_INBOX_DB=/home/jerry/.local/share/universal-inbox/inbox.db
-ExecStart=/home/jerry/.local/bin/universal-inbox --socket /run/universal-inbox/inbox.sock serve --host 127.0.0.1 --port 8787
+ExecStart=/home/jerry/.local/bin/universal-inbox --socket /run/universal-inbox/inbox.sock serve --host 127.0.0.1 --port 8787 --files-host 192.168.0.107
 Restart=on-failure
 RestartSec=5
 

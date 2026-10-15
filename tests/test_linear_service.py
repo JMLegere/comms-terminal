@@ -231,7 +231,7 @@ def test_run_composes_linear_context(database, monkeypatch):
     monkeypatch.setattr(serve, "fastmail_client", lambda db: None)
     for name in ("attio", "tana", "linear"):
         monkeypatch.setattr(serve, f"{name}_context", lambda db, name=name: name)
-    monkeypatch.setattr(serve, "hooks_server", lambda *args: server)
+    monkeypatch.setattr(serve, "hooks_server", lambda *args, **kwargs: server)
 
     def reply_server(db_path, socket_path, senders, contexts):
         seen.update(contexts)

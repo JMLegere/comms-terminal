@@ -5,11 +5,13 @@ Design: docs/design/api-and-database.md.
 """
 
 import hashlib
+import hmac
 import json
 import os
 import re
 from collections import Counter
 import sqlite3
+import urllib.parse
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -1056,6 +1058,82 @@ def store_file(db, data: bytes) -> str | None:
 def attachment_path(db, sha: str) -> Path | None:
     d = files_dir(db)
     return d / sha if d is not None and re.fullmatch(r"[0-9a-f]{64}", sha or "") else None
+
+
+UPLOAD_TTL = 3600  # upload links expire after 1 hour (D-A2)
+
+
+def files_secret(db) -> bytes:
+    """The link secret (NFR-A3): 32 random bytes in `files-secret` beside the database, 0600, made on first use
+    (written aside, then linked in, so a reader never sees it half-written). In memory: one per process."""
+    d = files_dir(db)
+    if d is None:
+        return _MEMORY_SECRET
+    path = d.parent / "files-secret"
+    if not path.exists():
+        tmp = path.with_name(f".files-secret.{os.getpid()}")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "wb") as f:
+            f.write(os.urandom(32))
+        try:
+            os.link(tmp, path)
+        except FileExistsError:  # another process made it first
+            pass
+        finally:
+            os.unlink(tmp)
+    return path.read_bytes()
+
+
+_MEMORY_SECRET = os.urandom(32)
+
+
+def _mac(secret: bytes, message: str) -> str:
+    return hmac.new(secret, message.encode(), hashlib.sha256).hexdigest()[:32]  # 128 bits
+
+
+def file_cap(secret: bytes, sha: str) -> str:
+    """A file link's capability segment: `<sha>.<HMAC(secret, sha)>`, so the server checks it without a lookup."""
+    return f"{sha}.{_mac(secret, sha)}"
+
+
+def cap_sha(secret: bytes, cap: str) -> str | None:
+    sha, _, mac = cap.partition(".")
+    return sha if re.fullmatch(r"[0-9a-f]{64}", sha) and hmac.compare_digest(mac, _mac(secret, sha)) else None
+
+
+def file_url(db, sha: str, name: str, host: str, port: int) -> str:
+    """A permanent LAN link to a stored file (FR-A5, D-A2)."""
+    return f"http://{host}:{port}/f/{file_cap(files_secret(db), sha)}/{urllib.parse.quote(name, safe='')}"
+
+
+def upload_token(secret: bytes, owner: tuple[str, int], expires: float | None = None) -> str:
+    """An upload link's token for ("draft", id) or ("thread", id), valid until `expires` (default 1 hour)."""
+    kind, owner_id = owner
+    if kind not in ("draft", "thread"):
+        raise ValueError("owner is a draft or a thread")
+    expires = int(expires if expires is not None else _now().timestamp() + UPLOAD_TTL)
+    body = f"{kind}.{int(owner_id)}.{expires}"
+    return f"{body}.{_mac(secret, 'up:' + body)}"
+
+
+def upload_owner(secret: bytes, token: str, now: float | None = None) -> tuple[str, int] | None:
+    """The token's owner, or None when it is forged, malformed, or expired."""
+    m = re.fullmatch(r"(draft|thread)\.(\d+)\.(\d+)\.([0-9a-f]{32})", token)
+    if not m or not hmac.compare_digest(m[4], _mac(secret, f"up:{m[1]}.{m[2]}.{m[3]}")):
+        return None
+    return (m[1], int(m[2])) if int(m[3]) > (now if now is not None else _now().timestamp()) else None
+
+
+def upload_url(db, owner: tuple[str, int], host: str, port: int) -> str:
+    """A 1-hour LAN upload page whose files are staged on `owner` (FR-A9)."""
+    return f"http://{host}:{port}/up/{upload_token(files_secret(db), owner)}"
+
+
+def file_type(db, sha: str) -> str | None:
+    """A served file's type, or None unless a stored Attachment or a staged file holds that sha (I-A4)."""
+    r = db.execute("SELECT type FROM attachments WHERE sha = ? AND state = 'stored'"
+                   " UNION ALL SELECT type FROM staged_attachments WHERE sha = ? LIMIT 1", (sha, sha)).fetchone()
+    return r and r["type"]
 
 
 def add_attachments(db, activity_id: int, items: list[dict]) -> list[int]:

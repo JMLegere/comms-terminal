@@ -34,6 +34,8 @@ def main(argv=None) -> None:
     s = sub.add_parser("serve", help="run the hooks server, reply socket, and wake timer")
     s.add_argument("--host", default="127.0.0.1")
     s.add_argument("--port", type=int, default=8787)
+    s.add_argument("--files-host", help="LAN address for the file server (Attachments); off when omitted")
+    s.add_argument("--files-port", type=int, default=8789)
     i = sub.add_parser("init", help="create Connections, one per Platform (platforms.py)")
     i.add_argument("--gmail", "--email", dest="gmail", help="Jeremy's forwarded Gmail address, e.g. jeremy@agentmaple.com")
     i.add_argument("--slack-team", help="Slack team ID")
@@ -60,7 +62,7 @@ def main(argv=None) -> None:
         agent.run(a, db)
     elif a.cmd == "serve":
         from . import serve
-        serve.run(a.db, a.socket, a.host, a.port)
+        serve.run(a.db, a.socket, a.host, a.port, a.files_host, a.files_port)
     elif a.cmd == "init":
         from . import inbox
         from .platforms import PLATFORMS
