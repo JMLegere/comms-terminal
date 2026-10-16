@@ -13,7 +13,7 @@ A retired Thread ID that resolves to the surviving Thread after exact-reference 
 _Avoid_: Deleted thread, Duplicate activity
 
 **Draft**:
-An unsent email, SMS, or Slack composition with its own Connection, recipients, subject and body; it sends as the Connection's own address, number, or Slack user. A Slack Draft has no subject and goes to one existing Slack Channel (a channel, DM, or group DM Jeremy is in) instead of recipients. It is neither a Thread nor an Activity. Sending it removes it and records the message: an email Draft starts a new Thread; an SMS or Slack Draft joins its Channel's Thread by the ordinary Thread rules, starting a new one only when the Channel has been quiet long enough.
+An unsent email, SMS, or Slack composition with its own Connection, recipients, subject and body; it sends as the Connection's own address, number, or Slack user. A Slack Draft has no subject and goes to one existing Slack Channel (a channel, DM, or group DM Jeremy is in) instead of recipients. A reply Draft belongs to one Thread, at most one per Thread, and sends as a reply in it. A Draft is neither a Thread nor an Activity. Sending it removes it and records the message: an email Draft starts a new Thread unless it is a reply Draft; an SMS or Slack Draft joins its Channel's Thread by the ordinary Thread rules, starting a new one only when the Channel has been quiet long enough.
 
 **Send outcome unknown**:
 A Draft whose send was started but never confirmed or refused, so the message may or may not have gone out. It stays locked until Jeremy marks it sent, which removes it without making a Thread, or explicitly sends it again.
@@ -81,7 +81,7 @@ _Avoid_: Inbox zero, Processing
 
 **Person**:
 An individual Jeremy exchanges messages with: a set of Identities: email addresses, Slack users, and phone numbers.
-_Avoid_: Contact, Customer, User
+_Avoid_: Contact, Customer, User, Lead, Prospect
 
 
 **Identity**:
@@ -91,6 +91,32 @@ _Avoid_: Address (when it may be a Slack user), Account, Handle
 **Organization**:
 A company or group that Persons belong to.
 _Avoid_: Account, Company, Tenant
+
+## Outreach
+
+**Sequence**:
+An ordered set of Steps, each due a number of business days after the previous Step is done, that Jeremy runs for one Person at a time.
+_Avoid_: Campaign, Cadence, Workflow
+
+**Step**:
+One touch in a Sequence, of one kind (email, call, LinkedIn, or letter), holding everything needed to do it. A Step is the to-do item itself; an email Step is done when its Draft is sent, and other Steps are marked done.
+_Avoid_: Task, Touch, Action
+
+**Enrollment**:
+One Person's run through one Sequence. It is Active, Paused, or Finished. Anything inbound from the Person, or a connected call, pauses it for Jeremy to resume or finish.
+_Avoid_: Lead, Prospect, Membership
+
+**Finished**:
+An Enrollment that has ended, as Completed (its last Step is done), Opted out, or Other.
+_Avoid_: Exited, Unenrolled, Done
+
+**Opted out**:
+A Person who asked not to be contacted; they cannot be enrolled again.
+_Avoid_: Unsubscribed, Suppressed
+
+**Due Step**:
+A Step whose day has come in an Enrollment and which is not yet done.
+_Avoid_: Task, Overdue item
 
 ## Sources
 
