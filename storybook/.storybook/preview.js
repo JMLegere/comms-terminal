@@ -12,7 +12,7 @@ export default {
           'Changed views',
           ['Threads', 'People'],
           'Sequencing',
-          ['Steps', 'Sequences', 'People'],
+          ['Tasks', 'Sequences', 'People'],
         ],
       },
     },

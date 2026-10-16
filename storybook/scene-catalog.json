@@ -1422,10 +1422,10 @@
     }
   },
   {
-    "file": "sequencing-steps.stories.js",
-    "exportName": "StepsEmailDue",
-    "title": "Sequencing/Steps",
-    "id": "sequencing-steps--steps-email-due",
+    "file": "sequencing-tasks.stories.js",
+    "exportName": "TasksEmailDue",
+    "title": "Sequencing/Tasks",
+    "id": "sequencing-tasks--tasks-email-due",
     "parameters": {
       "prd": {
         "requirements": [
@@ -1442,16 +1442,16 @@
       },
       "docs": {
         "description": {
-          "story": "Steps page grouped Overdue, Today, Later today. The selected day-1 email Step opens its real Draft in the Step pane, with Step and Enrollment properties above the Draft's own and Attio and Tana context below. ctrl+enter sends; sending completes the Step and the next Step becomes due by its gap."
+          "story": "Tasks page grouped Overdue, Today, Later today. The selected day-1 email Task opens its real Draft in the Task pane, with Task and Enrollment properties above the Draft's own and Attio and Tana context below. ctrl+enter sends; sending completes the Task and the next Step's Task becomes due by its gap."
         }
       }
     }
   },
   {
-    "file": "sequencing-steps.stories.js",
-    "exportName": "StepsCallBlock",
-    "title": "Sequencing/Steps",
-    "id": "sequencing-steps--steps-call-block",
+    "file": "sequencing-tasks.stories.js",
+    "exportName": "TasksCallBlock",
+    "title": "Sequencing/Tasks",
+    "id": "sequencing-tasks--tasks-call-block",
     "parameters": {
       "prd": {
         "requirements": [
@@ -1466,16 +1466,16 @@
       },
       "docs": {
         "description": {
-          "story": "Kind filter on Call (f). An overdue call Step shows its age; the Step pane carries the number, the two-dial rule, the script and voicemail text. Jeremy dials in the Quo app; e marks it done and moves to the next row."
+          "story": "Kind filter on Call (f). An overdue call Task shows its age; the Task pane carries the number, the two-dial rule, the script and voicemail text. Jeremy dials in the Quo app; e marks it done and moves to the next row."
         }
       }
     }
   },
   {
-    "file": "sequencing-steps.stories.js",
-    "exportName": "StepsMissingFillIn",
-    "title": "Sequencing/Steps",
-    "id": "sequencing-steps--steps-missing-fill-in",
+    "file": "sequencing-tasks.stories.js",
+    "exportName": "TasksMissingFillIn",
+    "title": "Sequencing/Tasks",
+    "id": "sequencing-tasks--tasks-missing-fill-in",
     "parameters": {
       "prd": {
         "requirements": [
@@ -1489,16 +1489,16 @@
       },
       "docs": {
         "description": {
-          "story": "Priya Shah has no Organization, so {company} stays in the Draft as a marker. The row is flagged and the Step pane states that sending is refused until the marker is replaced."
+          "story": "Priya Shah has no Organization, so {company} stays in the Draft as a marker. The row is flagged and the Task pane states that sending is refused until the marker is replaced."
         }
       }
     }
   },
   {
-    "file": "sequencing-steps.stories.js",
-    "exportName": "StepsReplyTargetSkipped",
-    "title": "Sequencing/Steps",
-    "id": "sequencing-steps--steps-reply-target-skipped",
+    "file": "sequencing-tasks.stories.js",
+    "exportName": "TasksReplyTargetSkipped",
+    "title": "Sequencing/Tasks",
+    "id": "sequencing-tasks--tasks-reply-target-skipped",
     "parameters": {
       "prd": {
         "requirements": [
@@ -1512,16 +1512,16 @@
       },
       "docs": {
         "description": {
-          "story": "Day 9 replies in the day-1 Thread, but day 1 was skipped. The Step stays due with a warning and no Draft until Jeremy chooses: n start a new Thread, or x skip."
+          "story": "Day 9 replies in the day-1 Thread, but day 1 was skipped. The Task stays due with a warning and no Draft until Jeremy chooses: n start a new Thread, or x skip."
         }
       }
     }
   },
   {
-    "file": "sequencing-steps.stories.js",
-    "exportName": "StepsLinkedIn",
-    "title": "Sequencing/Steps",
-    "id": "sequencing-steps--steps-linked-in",
+    "file": "sequencing-tasks.stories.js",
+    "exportName": "TasksLinkedIn",
+    "title": "Sequencing/Tasks",
+    "id": "sequencing-tasks--tasks-linked-in",
     "parameters": {
       "prd": {
         "requirements": [
@@ -1535,16 +1535,16 @@
       },
       "docs": {
         "description": {
-          "story": "LinkedIn Step: the action and the note text with fill-ins applied, ready to paste. Done is manual (e); LinkedIn replies are invisible to Inbox, so a reply there means pausing by hand on the Person page."
+          "story": "LinkedIn Task: the action and the note text with fill-ins applied, ready to paste. Done is manual (e); LinkedIn replies are invisible to Inbox, so a reply there means pausing by hand on the Person page."
         }
       }
     }
   },
   {
-    "file": "sequencing-steps.stories.js",
-    "exportName": "StepsPausedToast",
-    "title": "Sequencing/Steps",
-    "id": "sequencing-steps--steps-paused-toast",
+    "file": "sequencing-tasks.stories.js",
+    "exportName": "TasksPausedToast",
+    "title": "Sequencing/Tasks",
+    "id": "sequencing-tasks--tasks-paused-toast",
     "parameters": {
       "prd": {
         "requirements": [
@@ -1559,16 +1559,16 @@
       },
       "docs": {
         "description": {
-          "story": "Dana Roy replied, so her Enrollment paused: her overdue call Step left the list and the toast states the consequence and the way back."
+          "story": "Dana Roy replied, so her Enrollment paused: her overdue call Task left the list and the toast states the consequence and the way back."
         }
       }
     }
   },
   {
-    "file": "sequencing-steps.stories.js",
-    "exportName": "StepsEmpty",
-    "title": "Sequencing/Steps",
-    "id": "sequencing-steps--steps-empty",
+    "file": "sequencing-tasks.stories.js",
+    "exportName": "TasksEmpty",
+    "title": "Sequencing/Tasks",
+    "id": "sequencing-tasks--tasks-empty",
     "parameters": {
       "prd": {
         "requirements": [
@@ -1581,7 +1581,7 @@
       },
       "docs": {
         "description": {
-          "story": "No Due Steps: the empty state says what empty means and where Steps come from."
+          "story": "No Due Tasks: the empty state says what empty means and where Tasks come from."
         }
       }
     }
@@ -1607,7 +1607,7 @@
       },
       "docs": {
         "description": {
-          "story": "A Sequence is an ordered collection of Step rows. The selected day-9 email Step replies to Step 1; its detail pane edits kind, gap, time, reply-to and body, previews the text for Sam Lee, and states that edits apply to Steps not yet due."
+          "story": "A Sequence is an ordered collection of Step rows. The selected day-9 email Step replies to Step 1; its detail pane edits kind, gap, time, reply-to and body, previews the text for Sam Lee, and states that edits apply to Tasks not yet due."
         }
       }
     }
@@ -1700,7 +1700,7 @@
       },
       "docs": {
         "description": {
-          "story": "The Person page's Sequence section: state Paused (Dana replied), current day, next Step, and the Steps timeline. r resumes (the next Step is due immediately); f finishes as Completed, Unsubscribed or Canceled."
+          "story": "The Person page's Sequence section: state Paused (Dana replied), current day, next Task, and the Tasks timeline. r resumes (the next Task is due immediately); f finishes as Completed, Unsubscribed or Canceled."
         }
       }
     }
@@ -1723,7 +1723,7 @@
       },
       "docs": {
         "description": {
-          "story": "Enroll one Person at a time from a People row (s): pick a Sequence; the first Step is due today."
+          "story": "Enroll one Person at a time from a People row (s): pick a Sequence; the first Task is due today."
         }
       }
     }

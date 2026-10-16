@@ -95,28 +95,32 @@ _Avoid_: Account, Company, Tenant
 ## Outreach
 
 **Sequence**:
-An ordered set of Steps, each due a number of business days after the previous Step is done, that Jeremy runs for one Person at a time.
+An ordered set of Steps, each due a number of business days after the previous one is done, that Jeremy runs for one Person at a time.
 _Avoid_: Campaign, Cadence, Workflow
 
 **Step**:
-One touch in a Sequence, of one kind (email, call, LinkedIn, or letter), holding everything needed to do it. A Step is the to-do item itself; an email Step is done when its Draft is sent, and other Steps are marked done.
-_Avoid_: Task, Touch, Action
+One touch in a Sequence, of one kind (email, call, LinkedIn, or letter), holding everything needed to do it. A Step is the template; each Enrollment works it as a Task.
+_Avoid_: Touch, Action, Task (for one Person's copy)
 
 **Enrollment**:
 One Person's run through one Sequence. It is Active, Paused, or Finished. Anything inbound from the Person, or a connected call, pauses it for Jeremy to resume or finish.
 _Avoid_: Lead, Prospect, Membership
 
 **Finished**:
-An Enrollment that has ended, as Completed (its last Step is done), Unsubscribed, or Canceled (Jeremy stopped it).
+An Enrollment that has ended, as Completed (its last Task is done), Unsubscribed, or Canceled (Jeremy stopped it).
 _Avoid_: Exited, Unenrolled, Done, Other
 
 **Unsubscribed**:
 A Person who asked not to be contacted; they cannot be enrolled in any Sequence again.
 _Avoid_: Opted out, Suppressed
 
-**Due Step**:
-A Step whose day has come in an Enrollment and which is not yet done.
-_Avoid_: Task, Overdue item
+**Task**:
+One Step for one Enrollment: the to-do item itself. It is Upcoming, Due, Done, or Skipped. An email Task is done when its Draft is sent, and other Tasks are marked done. Attio and Tana tasks shown as context are separate items.
+_Avoid_: Step (for one Person's copy), Step instance, To-do
+
+**Due Task**:
+A Task whose day has come and which is not yet done.
+_Avoid_: Due Step, Overdue item
 
 ## Sources
 

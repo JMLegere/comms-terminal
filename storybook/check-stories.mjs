@@ -22,7 +22,7 @@ const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const slug = value => value.replace(/([a-z0-9])([A-Z])/g, '$1-$2').replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase();
 const catalog = JSON.parse(await text('./scene-catalog.json'));
 // Sequencing P0 mocks (.agents/prd/2026-10-16-sequencing.md) live beside the 56 composition states.
-const sequencingFiles = { 'sequencing-steps': 'Sequencing/Steps', 'sequencing-sequences': 'Sequencing/Sequences', 'sequencing-people': 'Sequencing/People' };
+const sequencingFiles = { 'sequencing-tasks': 'Sequencing/Tasks', 'sequencing-sequences': 'Sequencing/Sequences', 'sequencing-people': 'Sequencing/People' };
 const sequencing = catalog.filter(scene => scene.file.startsWith('sequencing-'));
 const composition = catalog.filter(scene => !scene.file.startsWith('sequencing-'));
 assert.equal(composition.length, 56, 'Expected 56 preserved mock states');
@@ -228,14 +228,14 @@ for filename in sys.argv[2:]:
         cases = [(i, m.start()) for i, row in enumerate(rail_rows) for m in re.finditer(r'\bcases\b', row, re.I)]
         outreach = [i for i, row in enumerate(rail_rows) if re.search(r'\boutreach\b', row)]
         assert len(outreach) == 1 and drafts and drafts[0][0] < outreach[0] < cases[0][0], f'{filename}: outreach section must sit after Drafts, before Cases'
-        assert re.search(r'\bSteps\b', rail_rows[outreach[0] + 1]) and re.search(r'\bSequences\b', rail_rows[outreach[0] + 2]), f'{filename}: Steps/Sequences rail rows missing'
+        assert re.search(r'\bTasks\b', rail_rows[outreach[0] + 1]) and re.search(r'\bSequences\b', rail_rows[outreach[0] + 2]), f'{filename}: Tasks/Sequences rail rows missing'
         page = capture['id'].split('--')[0].removeprefix('sequencing-')
-        title = {'steps': r'\bsteps\b', 'sequences': r'\bsequences\b', 'people': r'\bpe(?:ople|rson)\b'}[page]
+        title = {'tasks': r'\btasks\b', 'sequences': r'\bsequences\b', 'people': r'\bpe(?:ople|rson)\b'}[page]
         assert re.search(title, ''.join(rows[0]), re.I), f'{filename}: page title missing'
         everything = plain([''.join(row) for row in rows])
-        for state, marker in {'StepsPausedToast': 'Enrollment paused', 'SequenceStepDeleted': 'moved to the next', 'EnrollRefusedUnsubscribed': 'unsubscribed',
-                              'SequenceArchive': 'Archive Secret Sequence', 'EnrollFromPeople': 'Enroll Dana Roy', 'StepsEmpty': 'All caught up',
-                              'StepsMissingFillIn': 'Sending is refused', 'StepsReplyTargetSkipped': 'Reply target skipped'}.items():
+        for state, marker in {'TasksPausedToast': 'Enrollment paused', 'SequenceStepDeleted': 'moved to the next', 'EnrollRefusedUnsubscribed': 'unsubscribed',
+                              'SequenceArchive': 'Archive Secret Sequence', 'EnrollFromPeople': 'Enroll Dana Roy', 'TasksEmpty': 'All caught up',
+                              'TasksMissingFillIn': 'Sending is refused', 'TasksReplyTargetSkipped': 'Reply target skipped'}.items():
             if capture['state'] == state and columns == 187:  # at 80 the markers wrap across interleaved panes
                 assert marker in everything, f'{filename}: {state} lost its marker {marker!r}'
         continue
