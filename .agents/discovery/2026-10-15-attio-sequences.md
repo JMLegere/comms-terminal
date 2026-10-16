@@ -385,7 +385,7 @@ Jeremy confirmed this shared understanding after a grilling session. Terms are i
 - **Other Steps** are marked done by Jeremy, including call Steps; Quo calls show on the Thread.
 - **Skip**: any Step can be skipped; deleting a Step's Draft skips it, and `z` undoes. A skip counts as done for the gap rule.
 - **Missing fill-in**: the Step is still due and flagged. Sending is refused while any `{…}` marker remains. A call Step with no number shows "no phone".
-- **Enrollment**: Jeremy enrolls a Person from the console or the agent command. A Person has at most one Active or Paused Enrollment per Sequence; running it again after it is Finished creates a new Enrollment. Opted out Persons are refused. There is no warm-conversation check. The first Step is due on the enroll day, or the next weekday; Halifax time.
+- **Enrollment**: Jeremy enrolls a Person from the console or the agent command. A Person has at most one Active or Paused Enrollment per Sequence; running it again after it is Finished creates a new Enrollment. Unsubscribed Persons are refused. There is no warm-conversation check. The first Step is due on the enroll day, or the next weekday; Halifax time.
 - **Pause**: any inbound message or call from the Person, or a connected outbound call, pauses the Enrollment and puts the Thread in Todo. Sending a paused Enrollment's existing Drafts is refused. On resume, the next Step is due immediately.
 - **Finish**: Completed (set automatically when the last Step is done), Unsubscribed (blocks every Sequence), or Canceled. (Renamed from Opted out / Other at the PRD gates, 2026-10-16.) Finishing deletes the Enrollment's unsent Step Drafts; `z` undoes.
 - **Steps page**: a rail entry showing the count of Due Steps.
