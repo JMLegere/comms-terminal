@@ -1,0 +1,1754 @@
+[
+  {
+    "file": "admission.stories.js",
+    "exportName": "ConsentMissing",
+    "title": "New thread/Admission",
+    "id": "new-thread-admission--consent-missing",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-18",
+          "FR-20",
+          "FR-21",
+          "FR-28"
+        ],
+        "scenarios": [
+          "AS-22",
+          "AS-30"
+        ],
+        "change": "new"
+      },
+      "docs": {
+        "description": {
+          "story": "Confirmed: existing contact alone proves neither SMS consent nor permission. Synthetic Work-number draft is recoverable with zero sends. No click-to-waive consent, automatic enrollment or contact substitution is offered. Service-owned admission contract remains proposed; local UI cannot grant authorization."
+        }
+      }
+    }
+  },
+  {
+    "file": "admission.stories.js",
+    "exportName": "CredentialsUnavailable",
+    "title": "New thread/Admission",
+    "id": "new-thread-admission--credentials-unavailable",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-20",
+          "FR-21",
+          "FR-28"
+        ],
+        "scenarios": [
+          "AS-22",
+          "AS-30"
+        ],
+        "change": "new"
+      },
+      "docs": {
+        "description": {
+          "story": "Confirmed credential boundary: keys remain in the existing service and are never displayed/requested by the composer. Safe unavailable state makes zero sends while exact draft is recoverable. Mock Save/Close/Resume need no credentials. This story neither checks credentials nor changes account access."
+        }
+      }
+    }
+  },
+  {
+    "file": "admission.stories.js",
+    "exportName": "InvalidEmailHeader",
+    "title": "New thread/Admission",
+    "id": "new-thread-admission--invalid-email-header",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-18",
+          "FR-20",
+          "FR-21"
+        ],
+        "scenarios": [
+          "AS-22",
+          "AS-24",
+          "AS-30"
+        ],
+        "change": "new"
+      },
+      "docs": {
+        "description": {
+          "story": "Proposed strict header-validation boundary (also NFR-9): corrupt synthetic Subject visibly contains a second injected header line. A multiline field is used only to expose this invalid stored fixture; normal Subject stays single-line. Save may retain invalid/partial draft work, but no send can occur. Fixing text does not bypass real service-owned admission."
+        }
+      }
+    }
+  },
+  {
+    "file": "admission.stories.js",
+    "exportName": "InvalidSmsRecipient",
+    "title": "New thread/Admission",
+    "id": "new-thread-admission--invalid-sms-recipient",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-18",
+          "FR-20",
+          "FR-21",
+          "FR-29"
+        ],
+        "scenarios": [
+          "AS-22",
+          "AS-24",
+          "AS-30",
+          "AS-31"
+        ],
+        "change": "new"
+      },
+      "docs": {
+        "description": {
+          "story": "Proposed cardinality/format validation rejects multiple SMS destinations before dispatch. No Cc or Subject fields and no group-SMS fan-out. Exact invalid recipient/body stay recoverable as draft work. Editing to one phone still requires independent consent, market clearance and service-owned admission; Send remains blocked here."
+        }
+      }
+    }
+  },
+  {
+    "file": "admission.stories.js",
+    "exportName": "MarketNotCleared",
+    "title": "New thread/Admission",
+    "id": "new-thread-admission--market-not-cleared",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-20",
+          "FR-21",
+          "FR-28"
+        ],
+        "scenarios": [
+          "AS-22",
+          "AS-30"
+        ],
+        "change": "new"
+      },
+      "docs": {
+        "description": {
+          "story": "Distinct from missing consent: market/route clearance remains unproven even if a synthetic consent record exists. Draft retained and zero requests. This is not a legal or provider-clearance assertion; exact Work-number, market and versioned provider contract require owner evidence."
+        }
+      }
+    }
+  },
+  {
+    "file": "admission.stories.js",
+    "exportName": "SenderNotSelected",
+    "title": "New thread/Admission",
+    "id": "new-thread-admission--sender-not-selected",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-18",
+          "FR-20",
+          "FR-21",
+          "FR-28"
+        ],
+        "scenarios": [
+          "AS-22",
+          "AS-24",
+          "AS-30"
+        ],
+        "change": "new"
+      },
+      "docs": {
+        "description": {
+          "story": "No default/implicit sender is admitted. Typed destination, Subject and body remain recoverable; Save/Close/Resume are local mocks. Choosing the synthetic From option does not authorize a real route and never enables Send in this denial fixture. Sender, account-policy and cost selection remain owner decisions."
+        }
+      }
+    }
+  },
+  {
+    "file": "admission.stories.js",
+    "exportName": "ServiceUnavailable",
+    "title": "New thread/Admission",
+    "id": "new-thread-admission--service-unavailable",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-20",
+          "FR-21",
+          "FR-25",
+          "FR-28"
+        ],
+        "scenarios": [
+          "AS-22",
+          "AS-26",
+          "AS-30"
+        ],
+        "change": "new"
+      },
+      "docs": {
+        "description": {
+          "story": "Pre-submission service unavailability is a proven zero-dispatch denial, not an unknown outcome after submission. No Thread/Waiting/sent Activity is shown. Draft fields, local mock save and close/resume remain usable; no connection check or external request is made."
+        }
+      }
+    }
+  },
+  {
+    "file": "admission.stories.js",
+    "exportName": "StaleSendRevision",
+    "title": "New thread/Admission",
+    "id": "new-thread-admission--stale-send-revision",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-18",
+          "FR-20",
+          "FR-21",
+          "FR-25"
+        ],
+        "scenarios": [
+          "AS-22",
+          "AS-24",
+          "AS-26",
+          "AS-30"
+        ],
+        "change": "new"
+      },
+      "docs": {
+        "description": {
+          "story": "Proposed expected-revision admission rejects old reviewed revision 5 when stored revision 6 exists. No provider request and no silent envelope/body replacement. Stale Save also refuses overwrite; Compare/Reload stored revision are explicit local choices. Real route remains unresolved, so reload never grants Send permission in this denial fixture."
+        }
+      }
+    }
+  },
+  {
+    "file": "admission.stories.js",
+    "exportName": "UnsupportedConnection",
+    "title": "New thread/Admission",
+    "id": "new-thread-admission--unsupported-connection",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-18",
+          "FR-21",
+          "FR-28",
+          "FR-29"
+        ],
+        "scenarios": [
+          "AS-24",
+          "AS-30",
+          "AS-31"
+        ],
+        "change": "new"
+      },
+      "docs": {
+        "description": {
+          "story": "A reply-capable existing Connection is not presumed initiation-capable. Incompatible selected Slack demo Connection fails before any provider request; envelope/body stay editable for draft work. No Slack composer mode, new Slack initiation, provider call or silent fallback exists. Connection-specific initiation eligibility is proposed service behavior."
+        }
+      }
+    }
+  },
+  {
+    "file": "compose.stories.js",
+    "exportName": "BlankEmail",
+    "title": "New thread/Compose",
+    "id": "new-thread-compose--blank-email",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-17",
+          "FR-18",
+          "FR-22",
+          "FR-29"
+        ],
+        "scenarios": [
+          "AS-21",
+          "AS-31"
+        ],
+        "change": "new"
+      },
+      "docs": {
+        "description": {
+          "story": "Confirmed: New Thread opens independently of any selected Thread. From, exact To, optional Cc, editable Subject and plain body start blank; no Re:, reply references or quoted history. To/Cc cardinality and layout are proposed. Partial Save/Close/Resume are local mocks, not persistence proof. Real sender and cost remain unresolved; Send stays disabled."
+        }
+      }
+    }
+  },
+  {
+    "file": "compose.stories.js",
+    "exportName": "BlankSms",
+    "title": "New thread/Compose",
+    "id": "new-thread-compose--blank-sms",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-17",
+          "FR-18",
+          "FR-21",
+          "FR-23",
+          "FR-29"
+        ],
+        "scenarios": [
+          "AS-21",
+          "AS-30",
+          "AS-31"
+        ],
+        "change": "new"
+      },
+      "docs": {
+        "description": {
+          "story": "Blank independent SMS intent. Proposed format: one exact international phone destination, no Cc or Subject. Existing contact alone proves neither consent nor market clearance. SMS Send remains disabled; partial draft save/close/resume operate only in this preview."
+        }
+      }
+    }
+  },
+  {
+    "file": "compose.stories.js",
+    "exportName": "EditedAfterReview",
+    "title": "New thread/Compose",
+    "id": "new-thread-compose--edited-after-review",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-18",
+          "FR-20",
+          "FR-21"
+        ],
+        "scenarios": [
+          "AS-22",
+          "AS-24"
+        ],
+        "change": "new"
+      },
+      "docs": {
+        "description": {
+          "story": "Confirmed: exact reviewed sender, recipient and content cannot silently change. Proposed revision 4 is edited after review of revision 3; Send and Review initially disabled. Save current draft, Review revision, then Send (mock) gives only local visible review confirmation. Any later field edit invalidates that review again."
+        }
+      }
+    }
+  },
+  {
+    "file": "compose.stories.js",
+    "exportName": "EmailReady",
+    "title": "New thread/Compose",
+    "id": "new-thread-compose--email-ready",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-18",
+          "FR-21",
+          "FR-22",
+          "FR-29"
+        ],
+        "scenarios": [
+          "AS-21",
+          "AS-23",
+          "AS-24"
+        ],
+        "change": "new"
+      },
+      "docs": {
+        "description": {
+          "story": "Demo-only ready email with a single reviewed envelope, not campaign fan-out. Confirmed: explicit initiation is standalone even for an existing recipient. Proposed: saved-revision review gate and optional Cc. Send (mock) changes only a visible mock-review notice; it does not simulate acceptance, create a Thread, or select a real supplier. Editing invalidates review."
+        }
+      }
+    }
+  },
+  {
+    "file": "compose.stories.js",
+    "exportName": "EmailWithoutSubject",
+    "title": "New thread/Compose",
+    "id": "new-thread-compose--email-without-subject",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-18",
+          "FR-21",
+          "FR-22"
+        ],
+        "scenarios": [
+          "AS-24",
+          "AS-25"
+        ],
+        "change": "new"
+      },
+      "docs": {
+        "description": {
+          "story": "The proposed private-start contract explicitly accepts an empty string Subject; it does not inherit an old subject, insert Re:, or omit the field. Review revision enables Send (mock) only for this exact saved demo envelope. Editing any field invalidates review. Send changes only local mock-review confirmation, not provider acceptance or the AS-25 accepted Thread/Activity result; real sender eligibility and cost remain unresolved."
+        }
+      }
+    }
+  },
+  {
+    "file": "compose.stories.js",
+    "exportName": "PartialDraft",
+    "title": "New thread/Compose",
+    "id": "new-thread-compose--partial-draft",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-18",
+          "FR-20",
+          "FR-21"
+        ],
+        "scenarios": [
+          "AS-22",
+          "AS-24"
+        ],
+        "change": "new"
+      },
+      "docs": {
+        "description": {
+          "story": "Confirmed: incomplete composition is recoverable without sending. Save draft (mock), Close composer and Resume draft (mock) retain exact local fields, including the unfinished body. This demonstrates proposed UI behavior, not durable restart-safe storage; Send stays blocked until a valid saved and reviewed admitted revision exists."
+        }
+      }
+    }
+  },
+  {
+    "file": "compose.stories.js",
+    "exportName": "SmsReady",
+    "title": "New thread/Compose",
+    "id": "new-thread-compose--sms-ready",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-18",
+          "FR-21",
+          "FR-23",
+          "FR-29"
+        ],
+        "scenarios": [
+          "AS-21",
+          "AS-23",
+          "AS-24",
+          "AS-30"
+        ],
+        "change": "new"
+      },
+      "docs": {
+        "description": {
+          "story": "Synthetic eligibility fixture only; contact membership is not consent. Proposed one-phone SMS envelope has no Cc or Subject. Confirmed accepted initiation would create new Inbox work in the existing peer Channel without closing older Threads; this story stops at local review confirmation and does not claim acceptance or implement grouping."
+        }
+      }
+    }
+  },
+  {
+    "file": "drafts.stories.js",
+    "exportName": "EmptyDrafts",
+    "title": "New thread/Drafts",
+    "id": "new-thread-drafts--empty-drafts",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-17",
+          "FR-20"
+        ],
+        "scenarios": [
+          "AS-21",
+          "AS-22"
+        ],
+        "change": "new"
+      },
+      "docs": {
+        "description": {
+          "story": "Proposed saved-draft entry with an empty synthetic list. New email opens a blank local composer independent of Thread selection. Saved drafts are unsent work, not sent Activities. This preview makes no claim about actual stored drafts."
+        }
+      }
+    }
+  },
+  {
+    "file": "drafts.stories.js",
+    "exportName": "ResumeAfterRestart",
+    "title": "New thread/Drafts",
+    "id": "new-thread-drafts--resume-after-restart",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-18",
+          "FR-20",
+          "FR-28"
+        ],
+        "scenarios": [
+          "AS-22"
+        ],
+        "change": "new"
+      },
+      "docs": {
+        "description": {
+          "story": "Confirmed restart-resume contract shown using a synthetic saved snapshot. From, To, Cc, changed Subject and edited body are restored exactly; Save/Close/Resume work locally. No actual restart, disk persistence, provider permission or durable write is asserted. Composer remains available with unresolved real sending."
+        }
+      }
+    }
+  },
+  {
+    "file": "drafts.stories.js",
+    "exportName": "SaveFailed",
+    "title": "New thread/Drafts",
+    "id": "new-thread-drafts--save-failed",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-20",
+          "FR-21",
+          "FR-28"
+        ],
+        "scenarios": [
+          "AS-22",
+          "AS-24"
+        ],
+        "change": "new"
+      },
+      "docs": {
+        "description": {
+          "story": "Confirmed visible save failure retains latest unsaved edits without claiming persistence. Retry save deterministically fails until Simulate save recovery is chosen; recovery itself does not save. Explicit Save then updates only this preview. Close/Resume retains the current unsaved text in this open preview, not across an actual restart. Send stays blocked by unresolved real admission."
+        }
+      }
+    }
+  },
+  {
+    "file": "drafts.stories.js",
+    "exportName": "SavedAndUnresolvedDrafts",
+    "title": "New thread/Drafts",
+    "id": "new-thread-drafts--saved-and-unresolved-drafts",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-17",
+          "FR-20",
+          "FR-25",
+          "FR-26"
+        ],
+        "scenarios": [
+          "AS-22",
+          "AS-26",
+          "AS-27"
+        ],
+        "change": "new"
+      },
+      "docs": {
+        "description": {
+          "story": "Confirmed: editable saved drafts and unresolved send evidence must survive. Proposed list separates editable email/partial SMS snapshots from frozen unknown and accepted-but-unrecorded receipts. Resume opens exact synthetic fields; receipt actions open read-only original revisions with no Send. Unknown is not labelled Not sent, and accepted-pending is not locally complete. List/receipt placement remains a proposed UI choice."
+        }
+      }
+    }
+  },
+  {
+    "file": "drafts.stories.js",
+    "exportName": "SavingDraft",
+    "title": "New thread/Drafts",
+    "id": "new-thread-drafts--saving-draft",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-20",
+          "FR-21"
+        ],
+        "scenarios": [
+          "AS-22",
+          "AS-24"
+        ],
+        "change": "new"
+      },
+      "docs": {
+        "description": {
+          "story": "Proposed atomic-save progress UI. Inputs, Save, Review, Send and Close are disabled while the save result is pending. No timer silently resolves it and no interactions can submit during this state. This is a fixed local progress fixture, not actual persistence."
+        }
+      }
+    }
+  },
+  {
+    "file": "drafts.stories.js",
+    "exportName": "StaleDraftRevision",
+    "title": "New thread/Drafts",
+    "id": "new-thread-drafts--stale-draft-revision",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-20",
+          "FR-21"
+        ],
+        "scenarios": [
+          "AS-22",
+          "AS-24"
+        ],
+        "change": "new"
+      },
+      "docs": {
+        "description": {
+          "story": "Proposed expected-revision conflict handling: stale Save cannot overwrite synthetic stored revision 5. Current typed revision 4 remains visible and Send unavailable. Compare stored revision expands exact newer fields; Reload stored revision is an explicit local choice, not a silent merge or overwrite. No real concurrent storage is touched."
+        }
+      }
+    }
+  },
+  {
+    "file": "people.stories.js",
+    "exportName": "MixedIncomingOutgoingHistory",
+    "title": "Changed views/People",
+    "id": "changed-views-people--mixed-incoming-outgoing-history",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-19",
+          "FR-27",
+          "FR-29"
+        ],
+        "scenarios": [
+          "AS-29",
+          "AS-31"
+        ],
+        "change": "changed"
+      },
+      "docs": {
+        "description": {
+          "story": "Proposed local recipient association joins existing incoming and new outgoing work while retaining real incoming actors and outgoing You. Three canonical Threads: Todo one, Snoozed two. Alias T-077 points to T-081 and is counted once, not a duplicate row or extra Activity. Existing alias/identity mappings remain unchanged; external source coverage explicitly unavailable."
+        }
+      }
+    }
+  },
+  {
+    "file": "people.stories.js",
+    "exportName": "OutgoingOnlyPersonHistory",
+    "title": "Changed views/People",
+    "id": "changed-views-people--outgoing-only-person-history",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-19",
+          "FR-24",
+          "FR-27"
+        ],
+        "scenarios": [
+          "AS-29"
+        ],
+        "change": "changed"
+      },
+      "docs": {
+        "description": {
+          "story": "Proposed FR-27 recipient association exposes known Person’s outgoing-only email/SMS Threads and counts in local captured history. Both outgoing actors remain You / NULL identity. Two canonical Threads, zero Todo, two Snoozed; no recipient-as-actor rewrite, CRM lookup or Person creation."
+        }
+      }
+    }
+  },
+  {
+    "file": "people.stories.js",
+    "exportName": "UnlinkedRecipientHistory",
+    "title": "Changed views/People",
+    "id": "changed-views-people--unlinked-recipient-history",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-19",
+          "FR-27",
+          "FR-28"
+        ],
+        "scenarios": [
+          "AS-29",
+          "AS-30"
+        ],
+        "change": "changed"
+      },
+      "docs": {
+        "description": {
+          "story": "Exact normalized raw email or detached phone destination still finds captured inbound/outbound history without linked Person. Local destination selector changes synthetic coverage only; raw destination stays raw, outgoing actor stays You. External history unavailable is not no prior contact; no auto-create, identity merge/substitution or CRM operation. Recipient query/read model remains proposed."
+        }
+      }
+    }
+  },
+  {
+    "file": "recipients.stories.js",
+    "exportName": "AmbiguousRecipient",
+    "title": "New thread/Recipient context",
+    "id": "new-thread-recipient-context--ambiguous-recipient",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-18",
+          "FR-19",
+          "FR-21"
+        ],
+        "scenarios": [
+          "AS-21",
+          "AS-24",
+          "AS-29"
+        ],
+        "change": "new"
+      },
+      "docs": {
+        "description": {
+          "story": "Confirmed: several name matches require explicit exact identity choice, never display-name substitution or silent merge. Each Use button names its email verbatim and fills only that chosen To field. Captured lookup then uses exact synthetic identity; choosing the second address shows no captured match. Send stays blocked. Candidate presentation and normalization are proposed UI/query choices."
+        }
+      }
+    }
+  },
+  {
+    "file": "recipients.stories.js",
+    "exportName": "ContextUnavailable",
+    "title": "New thread/Recipient context",
+    "id": "new-thread-recipient-context--context-unavailable",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-19",
+          "FR-28"
+        ],
+        "scenarios": [
+          "AS-29",
+          "AS-30"
+        ],
+        "change": "new"
+      },
+      "docs": {
+        "description": {
+          "story": "Captured local read unavailable and external Attio coverage unavailable are named separately. Neither is shown as a successful empty lookup or no prior contact. Typed envelope and body remain usable for local draft save; lookup reruns only this fixed synthetic unavailable state."
+        }
+      }
+    }
+  },
+  {
+    "file": "recipients.stories.js",
+    "exportName": "DetachedIdentityWithHistory",
+    "title": "New thread/Recipient context",
+    "id": "new-thread-recipient-context--detached-identity-with-history",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-19",
+          "FR-27"
+        ],
+        "scenarios": [
+          "AS-29"
+        ],
+        "change": "new"
+      },
+      "docs": {
+        "description": {
+          "story": "Confirmed: detached Identity mapping does not erase captured history for the exact destination. Read-only existing inbound/outbound Threads remain visible; Person and CRM are untouched. Story uses a synthetic detached identity and proposed exact-destination query, not proof of implemented database behavior."
+        }
+      }
+    }
+  },
+  {
+    "file": "recipients.stories.js",
+    "exportName": "LookupFailedPreservesDraft",
+    "title": "New thread/Recipient context",
+    "id": "new-thread-recipient-context--lookup-failed-preserves-draft",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-19",
+          "FR-20",
+          "FR-28"
+        ],
+        "scenarios": [
+          "AS-22",
+          "AS-29",
+          "AS-30"
+        ],
+        "change": "new"
+      },
+      "docs": {
+        "description": {
+          "story": "Visible lookup failure does not clear or replace exact To, Subject or typed body. Look up captured history deterministically repeats the failure; Simulate lookup recovery changes only the synthetic context pane. Save remains available. This models failure/recovery UX, not an Attio integration or successful external read."
+        }
+      }
+    }
+  },
+  {
+    "file": "recipients.stories.js",
+    "exportName": "NoCapturedMatch",
+    "title": "New thread/Recipient context",
+    "id": "new-thread-recipient-context--no-captured-match",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-19",
+          "FR-27"
+        ],
+        "scenarios": [
+          "AS-29"
+        ],
+        "change": "new"
+      },
+      "docs": {
+        "description": {
+          "story": "Successful synthetic local lookup returns no captured match for the exact raw email. This is not a claim of no prior contact: external/Attio coverage remains unavailable. Raw address stays explicit; no automatic Person creation, CRM write or replacement destination."
+        }
+      }
+    }
+  },
+  {
+    "file": "recipients.stories.js",
+    "exportName": "RawPhoneWithHistory",
+    "title": "New thread/Recipient context",
+    "id": "new-thread-recipient-context--raw-phone-with-history",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-18",
+          "FR-19",
+          "FR-23",
+          "FR-27"
+        ],
+        "scenarios": [
+          "AS-21",
+          "AS-23",
+          "AS-29",
+          "AS-30"
+        ],
+        "change": "new"
+      },
+      "docs": {
+        "description": {
+          "story": "Exact raw international phone finds synthetic captured SMS Threads without Person linkage. SMS composer has one To, no Cc or Subject; actor on outgoing history remains You. Context does not select Reply or change existing grouping. Contact/history does not prove SMS consent, so Send stays blocked."
+        }
+      }
+    }
+  },
+  {
+    "file": "recipients.stories.js",
+    "exportName": "UnlinkedEmailWithHistory",
+    "title": "New thread/Recipient context",
+    "id": "new-thread-recipient-context--unlinked-email-with-history",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-19",
+          "FR-27"
+        ],
+        "scenarios": [
+          "AS-24",
+          "AS-29"
+        ],
+        "change": "new"
+      },
+      "docs": {
+        "description": {
+          "story": "Confirmed: raw unlinked email still finds captured incoming/outgoing history. Proposed outgoing-recipient query finds T-217 while its actor remains You, not the recipient. Expand existing Threads locally without changing compose intent or status. No Person/CRM creation; unavailable Attio coverage is explicit."
+        }
+      }
+    }
+  },
+  {
+    "file": "recovery.stories.js",
+    "exportName": "EarlyEchoPending",
+    "title": "New thread/Recovery",
+    "id": "new-thread-recovery--early-echo-pending",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-18",
+          "FR-24",
+          "FR-25",
+          "FR-26"
+        ],
+        "scenarios": [
+          "AS-26",
+          "AS-27"
+        ],
+        "change": "new"
+      },
+      "docs": {
+        "description": {
+          "story": "Own echo arrives before send response. It is held pending definitive attempt correlation, not appended to an older Thread, and body/time matching alone does not resolve it. Check outcome introduces definitive synthetic correlation and records exactly one intended new Thread/You Activity without resend; no production correlation proof."
+        }
+      }
+    }
+  },
+  {
+    "file": "recovery.stories.js",
+    "exportName": "InterruptedSubmission",
+    "title": "New thread/Recovery",
+    "id": "new-thread-recovery--interrupted-submission",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-18",
+          "FR-24",
+          "FR-25",
+          "FR-26"
+        ],
+        "scenarios": [
+          "AS-26",
+          "AS-27"
+        ],
+        "change": "new"
+      },
+      "docs": {
+        "description": {
+          "story": "Restart found interrupted claimed revision 4. Unknown attempt preserves exact sender/destination/subject/body and refuses fresh dispatch. Check outcome uses definitive local synthetic rejection evidence to restore the retained draft, never dispatching again. Recovery UI and provider mechanism are proposed."
+        }
+      }
+    }
+  },
+  {
+    "file": "recovery.stories.js",
+    "exportName": "RecoveredAccepted",
+    "title": "New thread/Recovery",
+    "id": "new-thread-recovery--recovered-accepted",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-18",
+          "FR-24",
+          "FR-25",
+          "FR-26"
+        ],
+        "scenarios": [
+          "AS-26",
+          "AS-27"
+        ],
+        "change": "new"
+      },
+      "docs": {
+        "description": {
+          "story": "Definitive synthetic acceptance evidence resolves original revision 4 and records intended new Thread T-104 once, with one outgoing You Activity, Waiting for them and five-day follow-up. Exact envelope stays frozen. This is accepted recovery, not resend and not delivery/read confirmation. Mechanism remains proposed."
+        }
+      }
+    }
+  },
+  {
+    "file": "recovery.stories.js",
+    "exportName": "RecoveredRejected",
+    "title": "New thread/Recovery",
+    "id": "new-thread-recovery--recovered-rejected",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-18",
+          "FR-24",
+          "FR-25",
+          "FR-26"
+        ],
+        "scenarios": [
+          "AS-26",
+          "AS-27"
+        ],
+        "change": "new"
+      },
+      "docs": {
+        "description": {
+          "story": "Definitively correlated evidence resolves original attempt as rejected. No accepted Thread/Activity or Waiting state. Exact original envelope resumes as editable retained draft; saving a changed revision remains local and preserves the original attempt reference. Sending stays disabled pending separate eligible-route review. Production correlation/recovery mechanism remains proposed."
+        }
+      }
+    }
+  },
+  {
+    "file": "recovery.stories.js",
+    "exportName": "StillUnknown",
+    "title": "New thread/Recovery",
+    "id": "new-thread-recovery--still-unknown",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-18",
+          "FR-24",
+          "FR-25",
+          "FR-26"
+        ],
+        "scenarios": [
+          "AS-26",
+          "AS-27"
+        ],
+        "change": "new"
+      },
+      "docs": {
+        "description": {
+          "story": "Unsupported correlation or body/time resemblance keeps original attempt unknown. Check outcome remains unknown and visibly explains insufficient evidence. Frozen destination/revision/body, retained attempt, no blind resend or automatic replay. Provider query/correlation support remains unresolved."
+        }
+      }
+    }
+  },
+  {
+    "file": "send.stories.js",
+    "exportName": "AcceptedEmail",
+    "title": "New thread/Send outcomes",
+    "id": "new-thread-send-outcomes--accepted-email",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-22",
+          "FR-24",
+          "FR-25"
+        ],
+        "scenarios": [
+          "AS-23",
+          "AS-25"
+        ],
+        "change": "new"
+      },
+      "docs": {
+        "description": {
+          "story": "Confirmed product outcome: stable email acceptance records one outgoing You Activity in distinct new Thread T-104, Snoozed / Waiting for them with five-day follow-up. Same-recipient older work stays unchanged; acceptance is not delivery/read. Receipt layout is proposed, email provider remains unselected."
+        }
+      }
+    }
+  },
+  {
+    "file": "send.stories.js",
+    "exportName": "AcceptedRecordingPending",
+    "title": "New thread/Send outcomes",
+    "id": "new-thread-send-outcomes--accepted-recording-pending",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-24",
+          "FR-25",
+          "FR-26"
+        ],
+        "scenarios": [
+          "AS-27"
+        ],
+        "change": "new"
+      },
+      "docs": {
+        "description": {
+          "story": "Acceptance is confirmed but local Inbox recording is incomplete: no completed new Thread/Activity claim yet. Frozen envelope stays recoverable. Check outcome uses definitive synthetic evidence to record the intended Thread exactly once, without another dispatch. Recovery contract remains unresolved in production."
+        }
+      }
+    }
+  },
+  {
+    "file": "send.stories.js",
+    "exportName": "AcceptedSms",
+    "title": "New thread/Send outcomes",
+    "id": "new-thread-send-outcomes--accepted-sms",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-23",
+          "FR-24",
+          "FR-25"
+        ],
+        "scenarios": [
+          "AS-23",
+          "AS-25",
+          "AS-28"
+        ],
+        "change": "new"
+      },
+      "docs": {
+        "description": {
+          "story": "Confirmed product outcome: stable 1:1 SMS acceptance creates new Inbox Thread T-105 in existing peer Channel C-17, one outgoing You Activity, Waiting for them and five-day follow-up. Older Thread stays Investigating; no duplicate Channel. Synthetic acceptance proves no live recipient eligibility."
+        }
+      }
+    }
+  },
+  {
+    "file": "send.stories.js",
+    "exportName": "DeliveryCoverageUnavailable",
+    "title": "New thread/Send outcomes",
+    "id": "new-thread-send-outcomes--delivery-coverage-unavailable",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-24",
+          "FR-28"
+        ],
+        "scenarios": [
+          "AS-32"
+        ],
+        "change": "new"
+      },
+      "docs": {
+        "description": {
+          "story": "Unsupported delivery-failure signal is explicitly unavailable coverage, not delivery success. Original accepted Thread/Activity and ordinary follow-up rule remain. Mock does not invent provider polling, delivered status or read confirmation."
+        }
+      }
+    }
+  },
+  {
+    "file": "send.stories.js",
+    "exportName": "DeliveryFailedReceipt",
+    "title": "New thread/Send outcomes",
+    "id": "new-thread-send-outcomes--delivery-failed-receipt",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-24",
+          "FR-25",
+          "FR-26"
+        ],
+        "scenarios": [
+          "AS-25",
+          "AS-32"
+        ],
+        "change": "new"
+      },
+      "docs": {
+        "description": {
+          "story": "A definitive correlated failure arrives after acceptance. Receipt keeps original acceptance, outgoing Activity and Waiting for them, with separate delivery-failed evidence. No rollback, resend or automatic status transition. Failure-signal support and conservative triage layout remain proposed."
+        }
+      }
+    }
+  },
+  {
+    "file": "send.stories.js",
+    "exportName": "DuplicateAcceptedReceipt",
+    "title": "New thread/Send outcomes",
+    "id": "new-thread-send-outcomes--duplicate-accepted-receipt",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-22",
+          "FR-24",
+          "FR-25",
+          "FR-26"
+        ],
+        "scenarios": [
+          "AS-23",
+          "AS-25",
+          "AS-27"
+        ],
+        "change": "new"
+      },
+      "docs": {
+        "description": {
+          "story": "Duplicate accepted submission points to existing new Thread T-104 and its one outgoing Activity. Returns original receipt, never creates a second Thread or dispatches again. Product invariant confirmed; receipt/idempotency mechanism proposed."
+        }
+      }
+    }
+  },
+  {
+    "file": "send.stories.js",
+    "exportName": "DuplicateSubmissionBlocked",
+    "title": "New thread/Send outcomes",
+    "id": "new-thread-send-outcomes--duplicate-submission-blocked",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-21",
+          "FR-25",
+          "FR-26"
+        ],
+        "scenarios": [
+          "AS-25",
+          "AS-27"
+        ],
+        "change": "new"
+      },
+      "docs": {
+        "description": {
+          "story": "Proposed duplicate-claim protection: same in-flight saved revision refuses a second dispatch. Original reviewed envelope stays frozen. Resolve original mock attempt records its single result; no duplicate send or speculative Activity."
+        }
+      }
+    }
+  },
+  {
+    "file": "send.stories.js",
+    "exportName": "ProviderRejected",
+    "title": "New thread/Send outcomes",
+    "id": "new-thread-send-outcomes--provider-rejected",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-20",
+          "FR-25",
+          "FR-28"
+        ],
+        "scenarios": [
+          "AS-22",
+          "AS-26"
+        ],
+        "change": "new"
+      },
+      "docs": {
+        "description": {
+          "story": "Proven rejection retains editable draft and original rejected-attempt evidence. Zero sent Activities and no new accepted Thread. Save draft is local only; another send requires new revision review and service-owned eligibility, so Send remains disabled."
+        }
+      }
+    }
+  },
+  {
+    "file": "send.stories.js",
+    "exportName": "Submitting",
+    "title": "New thread/Send outcomes",
+    "id": "new-thread-send-outcomes--submitting",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-18",
+          "FR-21",
+          "FR-25",
+          "FR-26"
+        ],
+        "scenarios": [
+          "AS-24",
+          "AS-27"
+        ],
+        "change": "new"
+      },
+      "docs": {
+        "description": {
+          "story": "Proposed claimed-submission view: exact saved revision, sender, destination and body freeze while awaiting evidence. Send is locked. Resolve mock acceptance changes only local synthetic UI; provider contract remains unresolved."
+        }
+      }
+    }
+  },
+  {
+    "file": "send.stories.js",
+    "exportName": "UnknownResponseLoss",
+    "title": "New thread/Send outcomes",
+    "id": "new-thread-send-outcomes--unknown-response-loss",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-18",
+          "FR-25",
+          "FR-26"
+        ],
+        "scenarios": [
+          "AS-26",
+          "AS-27"
+        ],
+        "change": "new"
+      },
+      "docs": {
+        "description": {
+          "story": "Response loss is unknown, never Not sent. Exact reviewed envelope and attempt stay frozen. Check outcome deterministically finds insufficient evidence and stays unknown; it makes no request and grants no resend. Correlation/recovery mechanism remains proposed."
+        }
+      }
+    }
+  },
+  {
+    "file": "threads.stories.js",
+    "exportName": "DeliveryFailedThread",
+    "title": "Changed views/Threads",
+    "id": "changed-views-threads--delivery-failed-thread",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-24",
+          "FR-26"
+        ],
+        "scenarios": [
+          "AS-25",
+          "AS-32"
+        ],
+        "change": "changed"
+      },
+      "docs": {
+        "description": {
+          "story": "Changed Thread view shows correlated delayed delivery failure as separate receipt/banner, not a fake Activity. Original accepted You message remains sole Activity, with Waiting for them unchanged. No resend/rollback/automatic triage. Provider signal coverage and conservative triage detail proposed."
+        }
+      }
+    }
+  },
+  {
+    "file": "threads.stories.js",
+    "exportName": "ExistingReplyComparison",
+    "title": "Changed views/Threads",
+    "id": "changed-views-threads--existing-reply-comparison",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-17",
+          "FR-22",
+          "FR-29"
+        ],
+        "scenarios": [
+          "AS-21",
+          "AS-23",
+          "AS-31"
+        ],
+        "change": "changed"
+      },
+      "docs": {
+        "description": {
+          "story": "Unchanged Reply regression reference, not new initiation: history-derived To/Cc, original Re: subject, original Thread and reply context/references. Reply / Reply all locally refills synthetic recipient fields; close keeps local legacy inline draft. Real sends disabled. Existing inline drafts are not silently made persistent."
+        }
+      }
+    }
+  },
+  {
+    "file": "threads.stories.js",
+    "exportName": "FiveDayFollowUp",
+    "title": "Changed views/Threads",
+    "id": "changed-views-threads--five-day-follow-up",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-24",
+          "FR-29"
+        ],
+        "scenarios": [
+          "AS-28",
+          "AS-31"
+        ],
+        "change": "changed"
+      },
+      "docs": {
+        "description": {
+          "story": "Unchanged five-day wake rule, applied to new accepted work: expiry returns Thread to Todo / Needs next response. Original accepted Activity remains; timer adds no message and performs no resend. Labelled regression reference, not a new scheduler implementation."
+        }
+      }
+    }
+  },
+  {
+    "file": "threads.stories.js",
+    "exportName": "IgnoredThreadReply",
+    "title": "Changed views/Threads",
+    "id": "changed-views-threads--ignored-thread-reply",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-23",
+          "FR-24",
+          "FR-29"
+        ],
+        "scenarios": [
+          "AS-28",
+          "AS-31"
+        ],
+        "change": "changed"
+      },
+      "docs": {
+        "description": {
+          "story": "Unchanged regression reference: reply attributed to Ignored Thread stays Ignored. Existing captured Activity can appear without automatic unignore. Preview labels this reference, not new feature implementation."
+        }
+      }
+    }
+  },
+  {
+    "file": "threads.stories.js",
+    "exportName": "IncomingReplyTodo",
+    "title": "Changed views/Threads",
+    "id": "changed-views-threads--incoming-reply-todo",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-23",
+          "FR-24"
+        ],
+        "scenarios": [
+          "AS-28"
+        ],
+        "change": "changed"
+      },
+      "docs": {
+        "description": {
+          "story": "Attributed incoming SMS uses existing latest-activity/time-window grouping and wakes correct non-Ignored new outbound Thread to Needs next response. No exact grouping duration, topic guarantee or manual attribution workflow invented. Older work stays unchanged."
+        }
+      }
+    }
+  },
+  {
+    "file": "threads.stories.js",
+    "exportName": "NewEmailThread",
+    "title": "Changed views/Threads",
+    "id": "changed-views-threads--new-email-thread",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-22",
+          "FR-24"
+        ],
+        "scenarios": [
+          "AS-23",
+          "AS-25"
+        ],
+        "change": "changed"
+      },
+      "docs": {
+        "description": {
+          "story": "Accepted explicit new email uses same recipient and subject but distinct T-104, one outgoing You Activity and Waiting for them. Older T-081 stays Investigating. New initiation inherits neither Re: nor reply references/quoted history. Product boundary confirmed; receipt and browser projection proposed."
+        }
+      }
+    }
+  },
+  {
+    "file": "threads.stories.js",
+    "exportName": "NewSmsThreadExistingChannel",
+    "title": "Changed views/Threads",
+    "id": "changed-views-threads--new-sms-thread-existing-channel",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-23",
+          "FR-24"
+        ],
+        "scenarios": [
+          "AS-23",
+          "AS-25",
+          "AS-28"
+        ],
+        "change": "changed"
+      },
+      "docs": {
+        "description": {
+          "story": "Accepted explicit SMS creates new Inbox Thread T-105 in existing peer Channel C-17. Older T-082 and status remain untouched. Same Channel is not same work identity; no duplicate Channel. Existing incoming grouping remains unchanged."
+        }
+      }
+    }
+  },
+  {
+    "file": "threads.stories.js",
+    "exportName": "SmsReplyOutsideWindow",
+    "title": "Changed views/Threads",
+    "id": "changed-views-threads--sms-reply-outside-window",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-23",
+          "FR-24",
+          "FR-29"
+        ],
+        "scenarios": [
+          "AS-28",
+          "AS-31"
+        ],
+        "change": "changed"
+      },
+      "docs": {
+        "description": {
+          "story": "Regression application to new work: incoming SMS outside current grouping window starts distinct incoming Thread T-106 / Needs first response in same C-17. Earlier accepted T-105 remains Waiting for them. No new time-window duration or always-latest-initiated rule."
+        }
+      }
+    }
+  },
+  {
+    "file": "threads.stories.js",
+    "exportName": "SnoozedQueueNewThread",
+    "title": "Changed views/Threads",
+    "id": "changed-views-threads--snoozed-queue-new-thread",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-22",
+          "FR-24",
+          "FR-29"
+        ],
+        "scenarios": [
+          "AS-25",
+          "AS-28",
+          "AS-31"
+        ],
+        "change": "changed"
+      },
+      "docs": {
+        "description": {
+          "story": "New accepted outbound work appears in existing Snoozed queue as Waiting for them with five-day follow-up. Other waiting work remains unchanged. Selecting rows changes only local synthetic Thread pane; status/Case semantics are preserved, not reimplemented."
+        }
+      }
+    }
+  },
+  {
+    "file": "sequencing-steps.stories.js",
+    "exportName": "StepsEmailDue",
+    "title": "Sequencing/Steps",
+    "id": "sequencing-steps--steps-email-due",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-SEQ-8",
+          "FR-SEQ-15",
+          "FR-SEQ-16",
+          "FR-SEQ-17"
+        ],
+        "scenarios": [
+          "AS-SEQ-1",
+          "AS-SEQ-2"
+        ],
+        "change": "new"
+      },
+      "docs": {
+        "description": {
+          "story": "Steps page grouped Overdue, Today, Later today. The selected day-1 email Step opens its real Draft in the Step pane, with Step and Enrollment properties above the Draft's own and Attio and Tana context below. ctrl+enter sends; sending completes the Step and the next Step becomes due by its gap."
+        }
+      }
+    }
+  },
+  {
+    "file": "sequencing-steps.stories.js",
+    "exportName": "StepsCallBlock",
+    "title": "Sequencing/Steps",
+    "id": "sequencing-steps--steps-call-block",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-SEQ-15",
+          "FR-SEQ-16",
+          "FR-SEQ-17"
+        ],
+        "scenarios": [
+          "AS-SEQ-3"
+        ],
+        "change": "new"
+      },
+      "docs": {
+        "description": {
+          "story": "Kind filter on Call (f). An overdue call Step shows its age; the Step pane carries the number, the two-dial rule, the script and voicemail text. Jeremy dials in the Quo app; e marks it done and moves to the next row."
+        }
+      }
+    }
+  },
+  {
+    "file": "sequencing-steps.stories.js",
+    "exportName": "StepsMissingFillIn",
+    "title": "Sequencing/Steps",
+    "id": "sequencing-steps--steps-missing-fill-in",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-SEQ-10",
+          "FR-SEQ-16"
+        ],
+        "scenarios": [
+          "AS-SEQ-7"
+        ],
+        "change": "new"
+      },
+      "docs": {
+        "description": {
+          "story": "Priya Shah has no Organization, so {company} stays in the Draft as a marker. The row is flagged and the Step pane states that sending is refused until the marker is replaced."
+        }
+      }
+    }
+  },
+  {
+    "file": "sequencing-steps.stories.js",
+    "exportName": "StepsReplyTargetSkipped",
+    "title": "Sequencing/Steps",
+    "id": "sequencing-steps--steps-reply-target-skipped",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-SEQ-8",
+          "FR-SEQ-16"
+        ],
+        "scenarios": [
+          "AS-SEQ-11"
+        ],
+        "change": "new"
+      },
+      "docs": {
+        "description": {
+          "story": "Day 9 replies in the day-1 Thread, but day 1 was skipped. The Step stays due with a warning and no Draft until Jeremy chooses: n start a new Thread, or x skip."
+        }
+      }
+    }
+  },
+  {
+    "file": "sequencing-steps.stories.js",
+    "exportName": "StepsLinkedIn",
+    "title": "Sequencing/Steps",
+    "id": "sequencing-steps--steps-linked-in",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-SEQ-16",
+          "FR-SEQ-17"
+        ],
+        "scenarios": [
+          "AS-SEQ-1"
+        ],
+        "change": "new"
+      },
+      "docs": {
+        "description": {
+          "story": "LinkedIn Step: the action and the note text with fill-ins applied, ready to paste. Done is manual (e); LinkedIn replies are invisible to Inbox, so a reply there means pausing by hand on the Person page."
+        }
+      }
+    }
+  },
+  {
+    "file": "sequencing-steps.stories.js",
+    "exportName": "StepsPausedToast",
+    "title": "Sequencing/Steps",
+    "id": "sequencing-steps--steps-paused-toast",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-SEQ-12",
+          "FR-SEQ-13",
+          "FR-SEQ-20"
+        ],
+        "scenarios": [
+          "AS-SEQ-4"
+        ],
+        "change": "new"
+      },
+      "docs": {
+        "description": {
+          "story": "Dana Roy replied, so her Enrollment paused: her overdue call Step left the list and the toast states the consequence and the way back."
+        }
+      }
+    }
+  },
+  {
+    "file": "sequencing-steps.stories.js",
+    "exportName": "StepsEmpty",
+    "title": "Sequencing/Steps",
+    "id": "sequencing-steps--steps-empty",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-SEQ-15"
+        ],
+        "scenarios": [
+          "AS-SEQ-1"
+        ],
+        "change": "new"
+      },
+      "docs": {
+        "description": {
+          "story": "No Due Steps: the empty state says what empty means and where Steps come from."
+        }
+      }
+    }
+  },
+  {
+    "file": "sequencing-sequences.stories.js",
+    "exportName": "SequenceEditor",
+    "title": "Sequencing/Sequences",
+    "id": "sequencing-sequences--sequence-editor",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-SEQ-1",
+          "FR-SEQ-2",
+          "FR-SEQ-3",
+          "FR-SEQ-5",
+          "FR-SEQ-18"
+        ],
+        "scenarios": [
+          "AS-SEQ-10"
+        ],
+        "change": "new"
+      },
+      "docs": {
+        "description": {
+          "story": "A Sequence is an ordered collection of Step rows. The selected day-9 email Step replies to Step 1; its detail pane edits kind, gap, time, reply-to and body, previews the text for Sam Lee, and states that edits apply to Steps not yet due."
+        }
+      }
+    }
+  },
+  {
+    "file": "sequencing-sequences.stories.js",
+    "exportName": "SequenceEditorWarnings",
+    "title": "Sequencing/Sequences",
+    "id": "sequencing-sequences--sequence-editor-warnings",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-SEQ-4",
+          "FR-SEQ-18"
+        ],
+        "scenarios": [
+          "AS-SEQ-10"
+        ],
+        "change": "new"
+      },
+      "docs": {
+        "description": {
+          "story": "Validator warnings: an unknown {title} fill-in and a first Step set to reply. Both rows are flagged and the detail pane names each problem and its fix."
+        }
+      }
+    }
+  },
+  {
+    "file": "sequencing-sequences.stories.js",
+    "exportName": "SequenceArchive",
+    "title": "Sequencing/Sequences",
+    "id": "sequencing-sequences--sequence-archive",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-SEQ-23"
+        ],
+        "scenarios": [
+          "AS-SEQ-15"
+        ],
+        "change": "new"
+      },
+      "docs": {
+        "description": {
+          "story": "A used Sequence can only be archived. The archive menu asks whether to cancel the live Enrollments (Finished: Canceled) or let them finish; archived Sequences take no new Enrollments and can be restored."
+        }
+      }
+    }
+  },
+  {
+    "file": "sequencing-sequences.stories.js",
+    "exportName": "SequenceStepDeleted",
+    "title": "Sequencing/Sequences",
+    "id": "sequencing-sequences--sequence-step-deleted",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-SEQ-24"
+        ],
+        "scenarios": [
+          "AS-SEQ-16"
+        ],
+        "change": "new"
+      },
+      "docs": {
+        "description": {
+          "story": "Deleting a Step is live: the toast says how many Enrollments moved on and how to undo."
+        }
+      }
+    }
+  },
+  {
+    "file": "sequencing-people.stories.js",
+    "exportName": "PersonSequencePaused",
+    "title": "Sequencing/People",
+    "id": "sequencing-people--person-sequence-paused",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-SEQ-13",
+          "FR-SEQ-14",
+          "FR-SEQ-19"
+        ],
+        "scenarios": [
+          "AS-SEQ-4",
+          "AS-SEQ-5",
+          "AS-SEQ-9"
+        ],
+        "change": "new"
+      },
+      "docs": {
+        "description": {
+          "story": "The Person page's Sequence section: state Paused (Dana replied), current day, next Step, and the Steps timeline. r resumes (the next Step is due immediately); f finishes as Completed, Unsubscribed or Canceled."
+        }
+      }
+    }
+  },
+  {
+    "file": "sequencing-people.stories.js",
+    "exportName": "EnrollFromPeople",
+    "title": "Sequencing/People",
+    "id": "sequencing-people--enroll-from-people",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-SEQ-6",
+          "FR-SEQ-7"
+        ],
+        "scenarios": [
+          "AS-SEQ-1"
+        ],
+        "change": "new"
+      },
+      "docs": {
+        "description": {
+          "story": "Enroll one Person at a time from a People row (s): pick a Sequence; the first Step is due today."
+        }
+      }
+    }
+  },
+  {
+    "file": "sequencing-people.stories.js",
+    "exportName": "EnrollRefusedUnsubscribed",
+    "title": "Sequencing/People",
+    "id": "sequencing-people--enroll-refused-unsubscribed",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-SEQ-6",
+          "FR-SEQ-14"
+        ],
+        "scenarios": [
+          "AS-SEQ-8"
+        ],
+        "change": "new"
+      },
+      "docs": {
+        "description": {
+          "story": "Enrolling an Unsubscribed Person is refused, and the toast names the reason."
+        }
+      }
+    }
+  }
+]

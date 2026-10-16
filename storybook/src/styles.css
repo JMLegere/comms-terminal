@@ -1,0 +1,37 @@
+@font-face {
+  font-family: 'VictorMono Nerd Font';
+  src: url('/fonts/VictorMonoNerdFont-Regular.ttf') format('truetype');
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+}
+@font-face {
+  font-family: 'VictorMono Nerd Font';
+  src: url('/fonts/VictorMonoNerdFont-Bold.ttf') format('truetype');
+  font-style: normal;
+  font-weight: 700;
+  font-display: block;
+}
+@font-face {
+  font-family: 'VictorMono Nerd Font';
+  src: url('/fonts/VictorMonoNerdFont-Italic.ttf') format('truetype');
+  font-style: italic;
+  font-weight: 400;
+  font-display: block;
+}
+
+body { margin: 0; }
+.native-viewer { margin: 0; padding: 12px; color: #292929; background: #f5f5f5; font: 13px/1.5 system-ui, sans-serif; }
+.native-toolbar { display: flex; flex-wrap: wrap; gap: 16px; }
+.native-toolbar select { font: inherit; }
+.native-status, .native-viewer figcaption { margin: 8px 0; }
+.native-viewer[data-state='error'] .native-status { color: #a11919; }
+.native-viewport { overflow: auto; }
+.native-viewport:focus-visible, .native-toolbar select:focus-visible { outline: 2px solid #45707a; outline-offset: 2px; }
+.native-viewport[data-size='fit'] > svg { display: block; max-width: 100%; height: auto; }
+.native-viewport[data-size='actual'] > svg { display: block; max-width: none; }
+.native-svg { pointer-events: none; user-select: none; }
+.native-svg text, .native-svg tspan {
+  font-family: 'VictorMono Nerd Font', monospace !important;
+  font-feature-settings: 'calt' 1, 'liga' 1;
+}

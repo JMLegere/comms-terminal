@@ -1,3 +1,6 @@
 .venv/
 __pycache__/
 .pytest_cache/
+storybook/node_modules/
+storybook/storybook-static/
+storybook/public/native/
