@@ -186,6 +186,28 @@ def test_send_failure_keeps_text_and_shows_error(tmp_path):
     assert detail(path, ids["logan"]) == "NEW_REPLY"
 
 
+def test_reply_with_unknown_outcome_keeps_text_and_says_to_check_the_thread(tmp_path):
+    path, ids = seeded(tmp_path)
+
+    def reply(*_):
+        raise ReplyError("no response from the service: timed out", 504)
+
+    app, seen = Console(path, reply=reply), {}
+
+    async def open_logan(app, pilot):
+        app.main.open_thread(ids["logan"])
+
+    async def inspect(app, pilot):
+        box = app.main.thread_view
+        seen["text"] = box.query_one(".reply").text
+        seen["hint"] = str(box.query_one(".replyhint").render())
+
+    run(app, [open_logan, "r", *"deploying", "ctrl+enter", inspect])
+    assert seen["text"] == "deploying"
+    assert "Send outcome unknown: check the Thread before sending again." in seen["hint"]
+    assert "Not sent" not in seen["hint"]
+
+
 def test_person_page_toggles_block(tmp_path):
     path, _ = seeded(tmp_path)
     db = inbox.connect(path)

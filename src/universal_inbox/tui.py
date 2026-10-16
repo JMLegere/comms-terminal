@@ -218,8 +218,16 @@ class PagedTextArea(_PageOverlap, TextArea):
         self._cursor_page(-1)
 
 
+REPLY_UNKNOWN = "Send outcome unknown: check the Thread before sending again."
+
+
 class ReplyError(Exception):
-    pass
+    """A service call that did not succeed. `status`: the service's HTTP status, 503 when the service was not
+    reachable (nothing sent), 504 when the response was lost (a send may have gone out)."""
+
+    def __init__(self, message, status=None):
+        super().__init__(message)
+        self.status = status
 
 
 class _UnixConnection(http.client.HTTPConnection):
@@ -234,14 +242,18 @@ class _UnixConnection(http.client.HTTPConnection):
 
 
 def _post(socket_path, path, payload, timeout=30) -> tuple[int, dict]:
+    conn = _UnixConnection(socket_path)
+    conn.timeout = timeout
     try:
-        conn = _UnixConnection(socket_path)
-        conn.timeout = timeout
+        conn.connect()
+    except OSError as e:
+        raise ReplyError(f"service not reachable: {e}", 503) from e
+    try:
         conn.request("POST", path, json.dumps(payload), {"Content-Type": "application/json"})
         r = conn.getresponse()
         raw = r.read()
-    except OSError as e:
-        raise ReplyError(f"service not reachable: {e}") from e
+    except OSError as e:  # the request may have reached the service
+        raise ReplyError(f"no response from the service: {e}", 504) from e
     try:
         return r.status, json.loads(raw or b"{}")
     except ValueError:  # an error page, not JSON (an older service has no such route)
@@ -249,9 +261,7 @@ def _post(socket_path, path, payload, timeout=30) -> tuple[int, dict]:
 
 
 class DraftSendError(ReplyError):
-    def __init__(self, message, status):
-        super().__init__(message)
-        self.status = status
+    pass
 
 
 def socket_send_draft(socket_path):
@@ -261,7 +271,7 @@ def socket_send_draft(socket_path):
             status, body = _post(socket_path, "/send-draft", {"draft_id": draft_id, "revision": revision,
                                                               "again": again}, timeout=90)
         except ReplyError as e:
-            raise DraftSendError(str(e), 503 if "not reachable" in str(e) else 504) from e
+            raise DraftSendError(str(e), e.status) from e
         if status != 200:
             raise DraftSendError(body.get("error", f"HTTP {status}"), status)
         return body
@@ -279,11 +289,12 @@ def socket_slack_conversations(socket_path):
 
 
 def socket_reply(socket_path):
-    """Reply function that calls POST /reply on the service's local socket."""
+    """Reply function that calls POST /reply on the service's local socket; a lost response means the outcome
+    is unknown (504)."""
     def reply(thread_id, text, to, cc):
         status, body = _post(socket_path, "/reply", {"thread_id": thread_id, "text": text, "to": to, "cc": cc})
         if status != 200:
-            raise ReplyError(body.get("error", f"HTTP {status}"))
+            raise ReplyError(body.get("error", f"HTTP {status}"), status)
         return body
     return reply
 
@@ -1468,8 +1479,8 @@ class ReplyBox(Vertical):
         worker = get_current_worker()
         try:
             self.app.send_reply(self.draft_key, text, to, cc)
-        except ReplyError as e:
-            self.app.call_from_thread(self.send_result, worker, str(e))
+        except ReplyError as e:  # the text and staged files stay either way
+            self.app.call_from_thread(self.send_result, worker, REPLY_UNKNOWN if e.status == 504 else str(e))
             return
         self.app.call_from_thread(self.send_result, worker, None)
 
@@ -1477,7 +1488,9 @@ class ReplyBox(Vertical):
         # Cancellation cannot undo provider sends; only this pre-dispatch error is safe to discard.
         if worker.is_cancelled and error == inbox.EMAIL_CONFIRMATION_PENDING:
             return
-        if error is not None:
+        if error == REPLY_UNKNOWN:
+            self.hint(error, True)
+        elif error is not None:
             self.hint(f"Send error: {error}", True, error == inbox.EMAIL_CONFIRMATION_PENDING)
         else:
             self.sent()

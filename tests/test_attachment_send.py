@@ -213,6 +213,14 @@ def test_reply_sends_staged_files_and_clears_them_only_on_success(db):
     assert inbox.staged(db, thread_id=t.id) == []
 
 
+def test_reply_with_unknown_outcome_keeps_its_files_and_records_nothing(db):
+    t = gmail_thread(db)
+    with pytest.raises(inbox.SendUnknown):
+        inbox.reply(db, t.id, "Here", FakeSender(TimeoutError("read timed out")))
+    assert len(inbox.staged(db, thread_id=t.id)) == 1
+    assert db.execute("SELECT count(*) FROM activities WHERE thread_id = ?", (t.id,)).fetchone()[0] == 1
+
+
 def test_draft_keeps_files_when_refused_or_unknown_and_drops_them_when_sent(db):
     d = email_draft(db)
     with pytest.raises(inbox.SendFailed):

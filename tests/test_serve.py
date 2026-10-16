@@ -14,7 +14,9 @@ from types import SimpleNamespace
 import pytest
 
 from universal_inbox import inbox, serve
-from universal_inbox.tui import ReplyError, socket_reply
+import pytest
+
+from universal_inbox.tui import ReplyError, _post, socket_reply
 
 
 class Sender:
@@ -47,6 +49,40 @@ def test_handle_reply_statuses(tmp_path):
     status, body = serve.handle_reply(db, json.dumps({"thread_id": tid, "text": "x"}).encode(),
                                       serve.Senders(made={2: Sender(True)}))
     assert status == 502 and "invalid_auth" in body["error"]
+    assert db.execute("SELECT last_error FROM connections WHERE id = 2").fetchone()[0] == "slack send failed: invalid_auth"
+
+
+def test_reply_timeout_is_unknown_records_nothing_and_a_sent_reply_clears_last_error(tmp_path):
+    path, tid = setup(tmp_path)
+    db = inbox.connect(path)
+
+    class Lost:
+        def send(self, thread, text, to, cc, history, files=()):
+            raise TimeoutError("read timed out")
+
+    body = json.dumps({"thread_id": tid, "text": "x"}).encode()
+    status, out = serve.handle_reply(db, body, serve.Senders(made={2: Lost()}))
+    assert status == 504 and "outcome unknown" in out["error"]
+    assert db.execute("SELECT count(*) FROM activities").fetchone()[0] == 1  # only the inbound message
+    assert db.execute("SELECT last_error FROM connections WHERE id = 2").fetchone()[0].startswith("Send outcome unknown")
+    assert serve.handle_reply(db, body, serve.Senders(made={2: Sender()}))[0] == 200
+    assert db.execute("SELECT last_error FROM connections WHERE id = 2").fetchone()[0] is None
+
+
+def test_lost_response_is_504_and_an_unreachable_service_is_503(tmp_path):
+    import socket
+    sock = str(tmp_path / "mute.sock")
+    mute = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    mute.bind(sock)
+    mute.listen()  # accepts the request, never answers
+    try:
+        with pytest.raises(ReplyError) as lost:
+            _post(sock, "/reply", {}, timeout=0.2)
+        with pytest.raises(ReplyError) as down:
+            _post(sock + ".missing", "/reply", {})
+    finally:
+        mute.close()
+    assert (lost.value.status, down.value.status) == (504, 503)
 
 
 def test_reply_over_unix_socket(tmp_path):

@@ -155,8 +155,8 @@ class Senders:
 
 
 def handle_reply(db, body: bytes, senders: Senders) -> tuple[int, dict]:
-    """POST /reply: {"thread_id", "text", "to", "cc"} -> (status, JSON body). The Thread's staged Attachments
-    go with it."""
+    """POST /reply: {"thread_id", "text", "to", "cc"} -> (status, JSON body); 502 refused, 504 outcome unknown
+    (nothing recorded either way). The Thread's staged Attachments go with it."""
     try:
         req = json.loads(body)
         thread_id, text = int(req["thread_id"]), str(req["text"])

@@ -55,6 +55,16 @@ def test_refused_send_keeps_draft_editable_and_makes_nothing(db):
     assert db.execute("SELECT count(*) FROM threads").fetchone()[0] == 0
 
 
+def test_draft_refusal_is_the_connections_last_error_until_a_send_goes_through(db):
+    d = email_draft(db)
+    last_error = lambda: db.execute("SELECT last_error FROM connections WHERE id = 1").fetchone()[0]  # noqa: E731
+    with pytest.raises(inbox.SendFailed):
+        inbox.send_draft(db, d["id"], d["revision"], FakeSender(inbox.SendFailed("HTTP 422 bad address")))
+    assert last_error() == "HTTP 422 bad address"
+    inbox.send_draft(db, d["id"], d["revision"], FakeSender())
+    assert last_error() is None
+
+
 def test_unknown_outcome_locks_draft_until_sent_again_explicitly(db):
     d = email_draft(db)
     with pytest.raises(inbox.SendUnknown):
@@ -280,6 +290,22 @@ def test_authenticated_sent_payload_does_not_acknowledge_storage_failure(db, mon
     body = json.dumps({"type": "email.sent", "data": {"email_id": RESEND_ID, "message_id": "<x@test>"}}).encode()
     with pytest.raises(sqlite3.OperationalError):
         email.handle_resend_hook(db, 1, body)
+
+
+@pytest.mark.parametrize("outcome,error", [
+    ((422, {"message": "Invalid `to` field"}), inbox.SendFailed),
+    ((503, {}), inbox.SendUnknown),
+    (urllib.error.URLError("Connection refused"), inbox.SendUnknown),  # urllib also wraps mid-request failures
+    (TimeoutError("read timed out"), inbox.SendUnknown),  # Resend may have it
+])
+def test_resend_reply_tells_refusal_from_unknown(outcome, error):
+    def post(*a):
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+    with pytest.raises(error) as e:
+        email.EmailSender("k", SELF, post=post).send(SimpleNamespace(title="Checklist"), "b", ["a@b.c"], [], [])
+    assert type(e.value) is error
 
 
 def test_quo_start_sends_to_the_one_number():

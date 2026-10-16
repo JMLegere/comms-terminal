@@ -199,9 +199,12 @@ class QuoSender:
         try:
             r = self.post(SEND_URL, self.key, {"content": text, "from": self.number, "to": [peer]})
         except urllib.error.HTTPError as e:
-            raise inbox.SendFailed(f"quo send failed: HTTP {e.code} {e.read()[:200].decode(errors='replace')}") from e
-        except (urllib.error.URLError, OSError, ValueError) as e:
+            error = inbox.SendUnknown if e.code >= 500 else inbox.SendFailed
+            raise error(f"quo send failed: HTTP {e.code} {e.read()[:200].decode(errors='replace')}") from e
+        except urllib.error.URLError as e:  # urllib wraps failures before the request is out (connect, DNS)
             raise inbox.SendFailed(f"quo send failed: {e}") from e
+        except (OSError, ValueError) as e:  # the response was lost or unreadable: it may have gone out
+            raise inbox.SendUnknown(f"quo send outcome unknown: {e}") from e
         return r["data"]["id"]
 
     def start(self, to, cc, subject, body, key, files=()) -> str:

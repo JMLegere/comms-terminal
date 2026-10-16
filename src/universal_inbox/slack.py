@@ -373,8 +373,13 @@ class SlackSender:
         payload = {"channel": channel, "text": text, **({"thread_ts": thread_ts} if thread_ts else {})}
         try:
             r = self.post("https://slack.com/api/chat.postMessage", self.token, payload)
-        except (urllib.error.URLError, OSError, ValueError) as e:
+        except urllib.error.HTTPError as e:
+            error = inbox.SendUnknown if e.code >= 500 else inbox.SendFailed
+            raise error(f"slack send: HTTP {e.code}") from e
+        except urllib.error.URLError as e:  # urllib wraps failures before the request is out (connect, DNS)
             raise inbox.SendFailed(f"slack send failed: {e}") from e
+        except (OSError, ValueError) as e:  # the response was lost or unreadable: it may have gone out
+            raise inbox.SendUnknown(f"slack send outcome unknown: {e}") from e
         if not r.get("ok"):
             raise inbox.SendFailed(f"slack send failed: {r.get('error', 'unknown')}")
         return f"{channel}:{r['ts']}"

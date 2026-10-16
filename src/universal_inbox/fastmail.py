@@ -12,6 +12,7 @@ the one-time import reads Inbox and Sent as text.
 
 import logging
 import threading
+import urllib.error
 from datetime import datetime, timedelta, timezone
 
 from . import inbox
@@ -175,10 +176,17 @@ class FastmailSender:
             args["cc"] = [{"email": a} for a in cc]
         try:
             sent = self.client.tool("send_email", **args)
-            e = self.client.tool("read_email", id=sent["emailId"])
-        except (McpError, OSError, KeyError, ValueError) as err:
+        except McpError as err:  # a 5xx may come after Fastmail sent it
+            raise (inbox.SendUnknown if "MCP HTTP 5" in str(err) else inbox.SendFailed)(f"Fastmail send failed: {err}") from err
+        except urllib.error.URLError as err:  # urllib wraps failures before the request is out (connect, DNS)
             raise inbox.SendFailed(f"Fastmail send failed: {err}") from err
-        return native_id(e.get("messageId")) if e.get("messageId") else f"<fastmail-{sent['emailId']}@inbox>"
+        except (OSError, ValueError) as err:  # the response was lost or unreadable: it may have gone out
+            raise inbox.SendUnknown(f"Fastmail send outcome unknown: {err}") from err
+        try:  # it went out; the Message-ID only helps the Sent poll match it
+            e = self.client.tool("read_email", id=sent["emailId"])
+        except (McpError, OSError, KeyError, ValueError):
+            e = {}
+        return native_id(e["messageId"]) if e.get("messageId") else f"<fastmail-{sent.get('emailId')}@inbox>"
 
     def start(self, to, cc, subject, body, key, files=()) -> str:
         """A new email via send_email with no reply mode; the Sent poll then sees it as already stored."""

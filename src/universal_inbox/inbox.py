@@ -325,12 +325,15 @@ class Sender(Protocol):
     def send(self, thread: Thread, text: str, to: list[str], cc: list[str],
              history: list[dict], files: Sequence[Staged] = ()) -> str:
         """Send a reply with `files` attached; return its native_id. history: the Thread's messages, oldest
-        first, as {"native_id", "data"}. Raise SendFailed on failure."""
+        first, as {"native_id", "data"}. Raise SendFailed when the provider refused it, SendUnknown when it may
+        have gone out."""
 
     def start(self, to: list[str], cc: list[str], subject: str | None, body: str, key: str,
               files: Sequence[Staged] = ()) -> str:
         """Send a new message (no Thread); return its native_id. `key` is unique per send attempt.
         Raise SendFailed when the provider refused it, SendUnknown when it may have gone out."""
+
+    # Slack's Sender also has conversation(channel) -> (Channel kind, name), which send_draft asks for a Slack Draft.
 
 
 # --- storage ---------------------------------------------------------------
@@ -594,6 +597,43 @@ def _preserve_send_changes(db, thread_id, changes):
     return True
 
 
+def _send(db, connection_id: int, fmt: str, files: Sequence[Staged], call, record, *, settle=None,
+          draft_id: int | None = None, thread_id: int | None = None) -> Thread:
+    """The send sequence a reply and a Draft share: check the files against the format's size limit
+    (ValueError, nothing sent), make the provider call, then record what went out and clear the staged files
+    (`draft_id=` or `thread_id=`). `call()` returns the native_id; `record(native_id, now)` runs inside the
+    recording transaction and returns (the new MESSAGE Activity's id, or None when it is already stored; its
+    Thread's id). `settle(thread_id)`, when given, runs last in that transaction (after the Attachments are
+    stored) and returns the Thread's id after any reconciliation.
+
+    SendFailed: refused, nothing recorded. SendUnknown: it may have gone out, nothing recorded (decision #59);
+    any other exception once the call has started counts as SendUnknown. Either sets the Connection's Last
+    Error, since a timeout is as much a sign of trouble as a refusal; a send that goes through clears it."""
+    rules = platforms.FORMATS[fmt]
+    if rules.size_problem and (problem := rules.size_problem(files)):
+        raise ValueError(problem)
+    try:
+        native_id = call()
+    except SendFailed as e:
+        set_connection_error(db, connection_id, str(e))
+        raise
+    except Exception as e:
+        set_connection_error(db, connection_id, f"Send outcome unknown: {e}")
+        raise SendUnknown(f"Send outcome unknown: {e}") from e
+    set_connection_error(db, connection_id, None)
+    column, owner = _owner(draft_id, thread_id)
+    with db:
+        if not db.in_transaction:
+            db.execute("BEGIN IMMEDIATE")
+        activity_id, sent_in = record(native_id, _now())
+        if activity_id:
+            _add_sent(db, activity_id, files)
+        db.execute(f"DELETE FROM staged_attachments WHERE {column} = ?", (owner,))
+        if settle:
+            sent_in = settle(sent_in)
+    return get_thread(db, sent_in)
+
+
 def send_draft(db, draft_id: int, revision: int, sender: Sender, *, again: bool = False) -> Thread:
     """Send one saved Draft revision, record it, then remove the Draft. An email starts a new Thread; an SMS or
     Slack message is recorded like any message Jeremy sends there, so it joins the conversation's Thread unless
@@ -611,37 +651,29 @@ def send_draft(db, draft_id: int, revision: int, sender: Sender, *, again: bool 
         if d["sending_at"] and not again:
             raise SendUnknown("Send outcome unknown; check before sending again.")
         files = staged_files(db, draft_id=draft_id)
-        problem = draft_problem(d, files)
+        problem = draft_problem(d, files)  # includes the size check, so _send's cannot fail after the claim
         if problem:
             raise ValueError(problem)
         connection = db.execute("SELECT * FROM connections WHERE id = ?", (d["connection_id"],)).fetchone()
-        now = _now()
-        at = _iso(now)
-        checkpoint = _send_checkpoint(db, connection["id"]) if connection["platform"] == "gmail" else None
+        started = _now()
+        at = _iso(started)
+        gmail = connection["platform"] == "gmail"
+        checkpoint = _send_checkpoint(db, connection["id"]) if gmail else None
         db.execute("UPDATE composition_drafts SET sending_at = ? WHERE id = ?", (at, draft_id))
     sms = d["kind"] == "sms"
     to, cc = _destinations(d["to"], d["kind"]), _destinations(d["cc"], d["kind"])
-    try:
-        native_id = sender.start(to, cc, d["subject"], d["body"], f"draft-{draft_id}-{revision}-{at}", files=files)
-    except SendUnknown:
-        raise
-    except SendFailed:
-        with db:
-            db.execute("UPDATE composition_drafts SET sending_at = NULL WHERE id = ?", (draft_id,))
-        raise
-    except Exception as e:  # anything unexpected after the claim may have reached the provider
-        raise SendUnknown(f"Send outcome unknown: {e}") from e
-    if connection["platform"] != "gmail":
-        now = _now()
-    with db:
-        if not db.in_transaction:
-            db.execute("BEGIN IMMEDIATE")
-        changes = _send_changes(db, connection["id"], checkpoint) if checkpoint is not None else {}
+    changes = {}
+
+    def record(native_id, now):
+        if gmail:
+            now = started
+            changes.update(_send_changes(db, connection["id"], checkpoint))
+        db.execute("DELETE FROM composition_drafts WHERE id = ?", (draft_id,))
         echo = db.execute("SELECT thread_id FROM activities WHERE kind = 'MESSAGE' AND native_id = ?",
                           (native_id,)).fetchone()
         if echo:  # the provider's own copy arrived first (Fastmail Sent poll, Quo webhook, Slack event)
-            thread_id = get_thread(db, echo["thread_id"]).id
-        elif d["kind"] in ("sms", "slack"):
+            return None, get_thread(db, echo["thread_id"]).id
+        if d["kind"] in ("sms", "slack"):
             title = next((ln.strip() for ln in d["body"].splitlines() if ln.strip()), "Text")[:80]
             if sms:
                 inc = Incoming(connection["id"], to[0], "im", "MESSAGE", native_id, None, now, d["body"],
@@ -652,29 +684,38 @@ def send_draft(db, draft_id: int, revision: int, sender: Sender, *, again: bool 
                                title=title, data={"channel": to[0], "ts": native_id.split(":", 1)[1], "kind": kind},
                                channel_name=label)
             thread_id = _ingest(db, inc).id
-            _add_sent(db, db.execute("SELECT id FROM activities WHERE kind = 'MESSAGE' AND native_id = ?",
-                                     (native_id,)).fetchone()["id"], files)
-        else:
-            mailbox = db.execute("SELECT native_id FROM channels WHERE connection_id = ? AND kind = 'mailbox'",
-                                 (connection["id"],)).fetchone()
-            channel = mailbox["native_id"] if mailbox else connection["self_id"]
-            channel_id = _channel_id(db, Incoming(connection["id"], channel, "mailbox", "MESSAGE",
-                                                  native_id, None, now, d["body"]))
-            thread_id = _new_thread(db, channel_id, native_id, d["subject"].strip()[:80],
-                                    transition(None, Arrived(from_jeremy=True)), now)
-            data = {"from": connection["self_id"], "to": to, "cc": cc, "subject": d["subject"]}
-            if checkpoint is not None:
-                data["seen_through_activity_id"] = checkpoint[0]
-            activity_id = db.execute(
-                "INSERT INTO activities (thread_id, kind, occurred_at, native_id, content, data)"
-                " VALUES (?, 'MESSAGE', ?, ?, ?, ?)", (thread_id, _iso(now), native_id, d["body"], json.dumps(data))).lastrowid
-            _add_sent(db, activity_id, files)
-        if connection["platform"] == "gmail":
-            _reconcile_email_threads(db, True, get_thread(db, thread_id).channel_id)
-            thread_id = get_thread(db, thread_id).id
-            _preserve_send_changes(db, thread_id, changes)
-        db.execute("DELETE FROM composition_drafts WHERE id = ?", (draft_id,))
-    return get_thread(db, thread_id)
+            return db.execute("SELECT id FROM activities WHERE kind = 'MESSAGE' AND native_id = ?",
+                              (native_id,)).fetchone()["id"], thread_id
+        mailbox = db.execute("SELECT native_id FROM channels WHERE connection_id = ? AND kind = 'mailbox'",
+                             (connection["id"],)).fetchone()
+        channel = mailbox["native_id"] if mailbox else connection["self_id"]
+        channel_id = _channel_id(db, Incoming(connection["id"], channel, "mailbox", "MESSAGE",
+                                              native_id, None, now, d["body"]))
+        thread_id = _new_thread(db, channel_id, native_id, d["subject"].strip()[:80],
+                                transition(None, Arrived(from_jeremy=True)), now)
+        data = {"from": connection["self_id"], "to": to, "cc": cc, "subject": d["subject"]}
+        if checkpoint is not None:
+            data["seen_through_activity_id"] = checkpoint[0]
+        return db.execute(
+            "INSERT INTO activities (thread_id, kind, occurred_at, native_id, content, data)"
+            " VALUES (?, 'MESSAGE', ?, ?, ?, ?)", (thread_id, _iso(now), native_id, d["body"], json.dumps(data))).lastrowid, thread_id
+
+    def settle(thread_id):
+        _reconcile_email_threads(db, True, get_thread(db, thread_id).channel_id)
+        thread_id = get_thread(db, thread_id).id
+        _preserve_send_changes(db, thread_id, changes)
+        return thread_id
+
+    try:
+        return _send(db, connection["id"], d["kind"], files,
+                     lambda: sender.start(to, cc, d["subject"], d["body"], f"draft-{draft_id}-{revision}-{at}", files=files),
+                     record, settle=settle if gmail else None, draft_id=draft_id)
+    except SendUnknown:
+        raise
+    except SendFailed:
+        with db:
+            db.execute("UPDATE composition_drafts SET sending_at = NULL WHERE id = ?", (draft_id,))
+        raise
 
 
 def _new_thread(db, channel_id, native_id, title, status, at) -> int:
@@ -1763,8 +1804,8 @@ def act(db, thread_id: int, action: Action | Reopen) -> Thread:
 def reply(db, thread_id: int, text: str, sender: Sender,
           to: list[str] = (), cc: list[str] = ()) -> Thread:
     """Send first, with the reply's staged Attachments; store the outbound Activity and clear them only on
-    success (decision #59). SendFailed propagates, nothing is stored, and they stay staged. ValueError: an
-    Attachment problem found before sending (FR-A15)."""
+    success (decision #59). SendFailed (refused) or SendUnknown (it may have gone out) propagates, nothing is
+    stored, and they stay staged. ValueError: an Attachment problem found before sending (FR-A15)."""
     staged_on = thread_id
     with _read_snapshot(db):
         t = get_thread(db, thread_id)
@@ -1785,42 +1826,36 @@ def reply(db, thread_id: int, text: str, sender: Sender,
                 message["wire_id"] = message["native_id"]
             if history and history[-1]["native_id"] is None:
                 raise ValueError(EMAIL_CONFIRMATION_PENDING)
-    rules = platforms.FORMATS[platforms.PLATFORMS[platform].format]
-    if rules.size_problem and (problem := rules.size_problem(files)):
-        raise ValueError(problem)
-    now = _now()
-    try:
-        native_id = sender.send(t, text, list(to), list(cc), history, files=files)
-    except SendFailed as e:
-        set_connection_error(db, connection_id, str(e))
-        raise
-    set_connection_error(db, connection_id, None)
-    if platform != "gmail":
-        now = _now()
-    with db:
-        if not db.in_transaction:
-            db.execute("BEGIN IMMEDIATE")
+    started = _now()
+    changes, recorded_at = {}, []
+
+    def record(native_id, now):
+        if platform == "gmail":
+            now = started
+        recorded_at.append(now)
         t = get_thread(db, thread_id)  # reconciliation may have happened while the Sender was in flight
-        thread_id = t.id
-        changes = _send_changes(db, connection_id, checkpoint)
+        changes.update(_send_changes(db, connection_id, checkpoint))
         data = {"to": list(to), "cc": list(cc)}
         if platform == "gmail":
             data["seen_through_activity_id"] = checkpoint[0]
         cur = db.execute(
             "INSERT OR IGNORE INTO activities (thread_id, kind, occurred_at, native_id, content, data)"
-            " VALUES (?, 'MESSAGE', ?, ?, ?, ?)",
-            (thread_id, _iso(now), native_id, text, json.dumps(data)))
-        if cur.rowcount:
-            _add_sent(db, cur.lastrowid, files)
-        db.execute("DELETE FROM staged_attachments WHERE thread_id = ?", (staged_on,))
+            " VALUES (?, 'MESSAGE', ?, ?, ?, ?)", (t.id, _iso(now), native_id, text, json.dumps(data)))
+        return cur.lastrowid if cur.rowcount else None, t.id
+
+    def settle(tid):
+        t = get_thread(db, tid)
         if platform == "gmail":
             _reconcile_email_threads(db, True, t.channel_id)
-            t = get_thread(db, thread_id)
-            thread_id = t.id
-        if not _preserve_send_changes(db, thread_id, changes):
+            t = get_thread(db, tid)
+        if not _preserve_send_changes(db, t.id, changes):
             if nxt := transition((t.status, t.status_detail), Arrived(from_jeremy=True)):
-                _set_status(db, thread_id, now, *nxt)
-    return get_thread(db, thread_id)
+                _set_status(db, t.id, recorded_at[0], *nxt)
+        return t.id
+
+    return _send(db, connection_id, platforms.PLATFORMS[platform].format, files,
+                 lambda: sender.send(t, text, list(to), list(cc), history, files=files), record, settle=settle,
+                 thread_id=staged_on)
 
 
 def wake(db, now: datetime) -> int:

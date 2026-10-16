@@ -16,7 +16,7 @@ _Avoid_: Deleted thread, Duplicate activity
 An unsent email, SMS, or Slack composition with its own Connection, recipients, subject and body; it sends as the Connection's own address, number, or Slack user. A Slack Draft has no subject and goes to one existing Slack Channel (a channel, DM, or group DM Jeremy is in) instead of recipients. A reply Draft belongs to one Thread, at most one per Thread, and sends as a reply in it. A Draft is neither a Thread nor an Activity. Sending it removes it and records the message: an email Draft starts a new Thread unless it is a reply Draft; an SMS or Slack Draft joins its Channel's Thread by the ordinary Thread rules, starting a new one only when the Channel has been quiet long enough.
 
 **Send outcome unknown**:
-A Draft whose send was started but never confirmed or refused, so the message may or may not have gone out. It stays locked until Jeremy marks it sent, which removes it without making a Thread, or explicitly sends it again.
+A send that was started but never confirmed or refused, so the message may or may not have gone out. A Draft stays locked until Jeremy marks it sent, which removes it without making a Thread, or explicitly sends it again. A reply has no lock: nothing is recorded, its text and staged files stay, and Jeremy checks the Thread before sending again.
 _Avoid_: Failed send, Pending
 
 **Draft revision**:
