@@ -1,6 +1,6 @@
 # Universal Inbox — Requirements
 
-Status: MVP confirmed 2026-10-10; revised 2026-10-12 to follow Plain's status model and integration architecture and to add replying from the console; revised 2026-10-15 for the read-only Linear Context design and implementation. Under Jeremy's "ship it", release `38e196e` is published to `main`/`dev` and deployed to the existing Workbox package/service. Linear remains unconnected pending exact key/workspace/required-team authorization; verification results, limitations, and deployment receipt are in `docs/design/linear-context.md`. Behavior follows Plain unless a deviation is stated with its reason. The detailed, traceable version is `docs/prd.md`. Builds on `.agents/discovery/2026-10-10-universal-inbox.md`, `GLOSSARY.md`, ADR 0001, and ADR 0002.
+Status: MVP confirmed 2026-10-10; revised 2026-10-12 to follow Plain's status model and integration architecture and to add replying from the console; revised 2026-10-15 for the read-only Linear Context design and implementation. Under Jeremy's "ship it", release `38e196e` is published to `main`/`dev` and deployed to the existing Workbox package/service. Linear was connected on 2026-10-16 with a Read-only key covering both workspace teams; verification results, limitations, and deployment receipt are in `docs/design/linear-context.md`. Behavior follows Plain unless a deviation is stated with its reason. The detailed, traceable version is `docs/prd.md`. Builds on `.agents/discovery/2026-10-10-universal-inbox.md`, `GLOSSARY.md`, ADR 0001, and ADR 0002.
 
 ## MVP
 
@@ -38,7 +38,7 @@ Status: MVP confirmed 2026-10-10; revised 2026-10-12 to follow Plain's status mo
   - Organizations are auto-created from email domains; free-mail domains never form one.
 - **Cases**: one goal driven through Threads; a Thread is in at most one Case; a Case's Status is the earliest of its Threads' Statuses (Todo, Snoozed, Done, Ignored), Todo when it has none (#120).
 - **Records**: Person and Organization records list Threads (with Status) and Cases.
-- **Context sources**: read-only Attio, Tana, and Linear context beside Threads and Person, Organization, and Case records. Cases inherit context through their People and Organizations. Linear capability is published and deployed; provider connection remains separately gated and UI evidence uses synthetic fixtures. Linear task management remains out of scope.
+- **Context sources**: read-only Attio, Tana, and Linear context beside Threads and Person, Organization, and Case records. Cases inherit context through their People and Organizations. Linear is published, deployed, and connected (2026-10-16); live console rendering awaits human acceptance. Linear task management remains out of scope.
 - **Replying**: plain-text replies from the console on both channels. The console never edits, deletes, archives, or marks read anything in Gmail or Slack.
 - **Sync health** (Plain): a Connection shows broken when Slack revokes the token or uninstalls the app, a reply fails to send, or an inbound email request is rejected. No polling or reconciliation; completeness relies on event delivery.
 - **Console**: a dark terminal app (Textual) run over SSH on Workbox; replies are sent by the service, which holds the credentials.

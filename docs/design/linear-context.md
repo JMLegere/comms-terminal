@@ -1,6 +1,6 @@
 # Linear context
 
-Status: Phases 1–4 implemented and checked after Jeremy's "execute the plan". Verification results and regression-suite limitations are below. Under his subsequent "ship it", release `38e196e` is published to `main`/`dev` and deployed to the existing Workbox package/service. Linear remains unconnected; exact key, workspace, and required-team authorization remain separately gated. Installed UI evidence uses synthetic fixtures; human acceptance remains separate.
+Status: Phases 1–4 implemented and checked after Jeremy's "execute the plan". Verification results and regression-suite limitations are below. Under his subsequent "ship it", release `38e196e` is published to `main`/`dev` and deployed to the existing Workbox package/service. Under his 2026-10-16 instruction to set up the connection, Linear is connected with a Read-only key covering both workspace teams; see the connection receipt below. Live console rendering, source health, cache freshness, and human acceptance remain unverified.
 
 This document covers only the Linear addition. Product requirement and decision record: [FR-13c and decision 125](../prd.md).
 
@@ -109,9 +109,9 @@ Jeremy authorized local Phases 1–4 with "execute the plan", then code publicat
   - Cover exact matches, ambiguous names, bounded Customer Request text, pagination, Done/Completed/Canceled/Archived exclusions, backlog/triage inclusion, inherited context/match provenance, cache expiry, provider errors, and page changes.
   - Run complete affected test modules and the regression suite.
   - Inspect rendered narrow/wide, loading, empty, and failure states; present the implemented UI on Mani for human review.
-- **Phase 5 — Connection — planned**
+- **Phase 5 — Connection — done 2026-10-16**
   - Obtain separate authorization for the exact key creation/connection, workspace, and required-team scope before creating or connecting the Jeremy-owned personal API key restricted to **Read**.
-  - Reviewed package deployment is complete under Jeremy's subsequent "ship it" authorization; see the deployment receipt below. Provider connection remains separately gated.
+  - Reviewed package deployment is complete under Jeremy's subsequent "ship it" authorization; see the deployment receipt below. Provider connection is complete; see the connection receipt below.
   - Install a credential only after separate authorization for the exact key, workspace, and team scope. Then verify live workspace identity, effective access, representative matches, cache behavior, and source health.
 
 ## Local implementation evidence — 2026-10-15
@@ -137,6 +137,14 @@ Jeremy authorized local Phases 1–4 with "execute the plan", then code publicat
 - Live private-socket checks: `POST /linear` with `{}` returned **503** (`Linear is not connected`); an explicit `{"emails":null}` returned **400** through safe array validation.
 - Linear remains unconnected: its credential drop-in is absent. No Linear key creation/installation, account/team permission change, private Linear workspace query, or Linear issue/task/comment write occurred. Exact key/workspace/required-team authorization and live identity, access, Customer Request, match, link, cache, and health verification remain Phase 5 gates.
 - Installed-package UI proof imported `Console` from the installed uv-tool package, with provenance asserted. Generated 19 synthetic fixture captures in temporary `/tmp/linear-context-proof-p3swqg_6/`; opened and inspected Thread 220, Person 100, Organization 160, Case 80, and 220-column loading/empty/error renders. The inherited narrow-Thread properties-collapse limitation remains. This establishes installed fixture rendering; real-provider matches, live links, and human acceptance remain unverified.
+
+## Connection receipt — 2026-10-16
+
+- Jeremy asked Claude to take control of his Chrome and set up the Linear connection. Claude created the personal API key "Universal Inbox" in the `agentmaple` workspace with **Read** as its only permission and **All teams you have access to**, which is both teams (Engineering `DEV`, Business `BIZ`). Claude copied the key with Linear's copy button and never read or displayed its value.
+- Jeremy pasted the key into a hidden prompt and ran a Linear-only staging script with sudo: `systemd-creds encrypt --name=linear-token` into the service credential store, `shred` of the staged copy, the `linear.conf` drop-in from `main`, `daemon-reload`, and a service restart. `deploy/install.sh` was not run, because the repository's `universal-inbox.service` differed from the installed unit and the installer would have overwritten it.
+- `universal-inbox.service` is active with the `linear.conf` drop-in. Linear's key list shows "Universal Inbox" with 1 permission, 2 teams, and last use on 2026-10-16.
+- Live private-socket checks: `POST /linear` with `{}` returned **200** `{"issues":[]}`. A request for an active customer's domain returned 12 nonterminal issues across Now, Triage, In Review, Dev Deployed, and Prod Deployed states, each with match reasons and an Open in Linear link. Two of those issues matched through the Linear Customer and its Customer Requests, which confirms Customer Request access with this key. A request for a customer whose linked issues are all completed, canceled, or duplicates returned no issues, as the exclusion rule requires.
+- No Linear write occurred. Live console rendering on real pages, Linear source health in the rail and bottom bar, five-minute cache freshness, key expiration behavior, and human acceptance remain unverified.
 
 ## Sources
 
