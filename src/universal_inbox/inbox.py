@@ -196,11 +196,6 @@ FREE_MAIL = frozenset({
     "fastmail.com", "hey.com",
 })
 
-# A conversation's messages group into one Thread until it has been quiet this long, whoever sent them (FR-38).
-SLACK_QUIET = timedelta(hours=24)
-SMS_QUIET = timedelta(days=7)
-
-
 class SendFailed(Exception):
     """Raised by a Sender when a reply could not be sent."""
 
@@ -506,9 +501,8 @@ def recipient_names(db, to: str, kind: str) -> str:
 
 def draft_problem(values: dict, files: Sequence[Staged] = ()) -> str | None:
     """What a Draft still needs before it can send; None when complete. Providers judge the addresses."""
-    if values["kind"] == "email" and (problem := email_size_problem(files)):
-        return problem
-    if values["kind"] == "slack" and (problem := slack_size_problem(files)):
+    rules = platforms.FORMATS[values["kind"]]
+    if rules.size_problem and (problem := rules.size_problem(files)):
         return problem
     if values["connection_id"] is None:
         return "Choose a Connection"
@@ -518,7 +512,7 @@ def draft_problem(values: dict, files: Sequence[Staged] = ()) -> str | None:
         return "Add a recipient"
     if values["kind"] == "sms" and len(_destinations(values["to"], "sms")) != 1:
         return "SMS needs one number"
-    if values["kind"] == "email" and not values["subject"].strip():
+    if rules.cc_subject and not values["subject"].strip():
         return "Add a subject"
     if not values["body"].strip():
         return "Write a message"
@@ -1062,7 +1056,7 @@ def _thread_for_message(db, channel_id, inc: Incoming, identity_id):
         # quiet for a day (FR-4b, FR-38).
         last = db.execute("SELECT max(a.occurred_at) FROM thread_activities a JOIN threads t ON t.id = a.thread_id"
                           " WHERE t.channel_id = ? AND a.kind = 'MESSAGE'", (channel_id,)).fetchone()[0]
-        if last is None or inc.occurred_at - datetime.fromisoformat(last) > SLACK_QUIET:
+        if last is None or inc.occurred_at - datetime.fromisoformat(last) > platforms.FORMATS["slack"].quiet:
             return None
         r = db.execute(
             "SELECT a.thread_id FROM thread_activities a JOIN threads t ON t.id = a.thread_id"
@@ -1079,7 +1073,8 @@ def _thread_for_message(db, channel_id, inc: Incoming, identity_id):
         return None
     gap = inc.occurred_at - datetime.fromisoformat(last["occurred_at"])
     platform = db.execute("SELECT platform FROM connections WHERE id = ?", (inc.connection_id,)).fetchone()
-    window = SMS_QUIET if platform and platforms.PLATFORMS[platform[0]].format == "sms" else SLACK_QUIET
+    window = (platform and platforms.FORMATS[platforms.PLATFORMS[platform[0]].format].quiet
+              or platforms.FORMATS["slack"].quiet)  # a Channel whose Connection is gone groups like Slack
     return last["thread_id"] if timedelta(0) <= gap <= window else None
 
 
@@ -1352,30 +1347,6 @@ def staged_files(db, *, draft_id: int | None = None, thread_id: int | None = Non
             raise ValueError(f"Attachment {s['name']} is missing from the file store; remove it and attach it again")
         out.append(Staged(path, s["name"], s["type"], s["size"], s["sha"]))
     return out
-
-
-EMAIL_ATTACHMENTS_LIMIT = 25 * 2**20  # D-A5: Resend takes 40 MB after Base64
-
-
-def email_size_problem(files: Sequence[Staged]) -> str | None:
-    """FR-A15: an email whose staged Attachments total more than 25 MB is refused before any send."""
-    total = sum(f.size for f in files)
-    if total <= EMAIL_ATTACHMENTS_LIMIT:
-        return None
-    mb = -(-total * 10 // 2**20) / 10  # rounded up to 0.1 MB, so a total just over 25 never reads as 25
-    return f"Email Attachments total {mb:g} MB; the limit is 25 MB"
-
-
-SLACK_FILE_LIMIT = 2**30  # https://slack.com/help/articles/201330736-Add-files-to-Slack: files up to 1 GB
-
-
-def slack_size_problem(files: Sequence[Staged]) -> str | None:
-    """A Slack message with any staged file over 1 GB is refused before any Slack call."""
-    big = next((f for f in files if f.size > SLACK_FILE_LIMIT), None)
-    if big is None:
-        return None
-    gb = -(-big.size * 10 // 2**30) / 10  # rounded up, so a file just over 1 GB never reads as 1 GB
-    return f"Slack files can be at most 1 GB; {big.name} is {gb:g} GB"
 
 
 def unstage(db, staged_id: int) -> None:
@@ -1799,9 +1770,8 @@ def reply(db, thread_id: int, text: str, sender: Sender,
                 message["wire_id"] = message["native_id"]
             if history and history[-1]["native_id"] is None:
                 raise ValueError(EMAIL_CONFIRMATION_PENDING)
-    if platform in platforms.EMAIL and (problem := email_size_problem(files)):
-        raise ValueError(problem)
-    if platform == "slack" and (problem := slack_size_problem(files)):
+    rules = platforms.FORMATS[platforms.PLATFORMS[platform].format]
+    if rules.size_problem and (problem := rules.size_problem(files)):
         raise ValueError(problem)
     now = _now()
     try:
@@ -1905,7 +1875,7 @@ def recipient_threads(db, kind: str, value: str) -> list[Thread]:
         if len(addresses) != 1 or "@" not in addresses[0]:
             return []
         value = addresses[0]
-    elif re.fullmatch(r"\+[1-9][0-9]{1,14}", value) is None:
+    elif platforms.E164.fullmatch(value) is None:
         return []
     formats = platforms.EMAIL if kind == "email" else tuple(
         n for n, p in platforms.PLATFORMS.items() if p.format == "sms")

@@ -37,7 +37,7 @@ from textual.worker import get_current_worker
 from . import inbox, render
 from .health import problem
 from .icons import ICON
-from .platforms import PLATFORMS
+from .platforms import E164, FORMATS, PLATFORMS
 
 DETAIL_STYLE = {  # Status detail -> (color, label); the glyph comes from icons.ICON
     "CREATED": ("#45707a", "Needs first response"),
@@ -992,7 +992,7 @@ def address_values(value, kind):
         if not isinstance(text, str) or not text.isprintable():
             continue
         if kind == "sms":
-            if re.fullmatch(r"\+[1-9][0-9]{1,14}", text):
+            if E164.fullmatch(text):
                 yield text
         elif kind == "email":
             for _, address in getaddresses([text]):
@@ -1170,7 +1170,7 @@ class ReplyMode(Static):
 
 def attachable(platform: str | None) -> bool:
     """FR-A16: SMS and Fastmail send no files; a Draft with no Connection yet is email."""
-    return platform is None or (PLATFORMS[platform].format != "sms" and platform != "fastmail")
+    return platform is None or PLATFORMS[platform].sends_files
 
 
 def staged_files(db, owner) -> list[dict]:
@@ -2106,7 +2106,7 @@ def draft_history(db, kind, connection_id, destination, files=None) -> list | No
         exact = bool(addresses) and all(re.fullmatch(r"[^@\s,;<>]+@[^@\s,;<>]+", a) for a in addresses)
     else:
         addresses, lookup = [destination.strip()], "phone"
-        exact = bool(re.fullmatch(r"\+[1-9]\d{6,14}", addresses[0]))
+        exact = bool(E164.fullmatch(addresses[0]))
     if not exact:
         return None
     threads = {t.id: t for a in addresses for t in (
@@ -2162,8 +2162,6 @@ DRAFT_FIELDS = ("connection_id", "kind", "sender", "to", "cc", "subject", "body"
 SENDING_UNAVAILABLE = "Sending unavailable · drafts only."
 FILE_SERVER = ("192.168.0.107", 8789)  # serve --files-host/--files-port in production (deploy/universal-inbox.service)
 DRAFT_HINT = "ctrl+enter send · ctrl+s save · ctrl+o attach · esc close"
-NEW_TITLE = {"email": "New email", "sms": "New SMS", "slack": "New Slack message"}
-KIND_NAME_DRAFT = {"email": "email", "sms": "SMS", "slack": "Slack"}
 SEND_UNKNOWN = "Send outcome unknown · it may have gone out. Check Sent, then ctrl+enter."
 
 
@@ -2278,8 +2276,8 @@ class DraftView(Horizontal):
         return dict(connection_id=self.connection_id, kind=self.kind,
                     sender=self.from_address,
                     to=self.query_one(".toinput", Input).value,
-                    cc=self.query_one(".ccinput", Input).value if self.kind == "email" else "",
-                    subject=self.query_one(".subjectinput", Input).value if self.kind == "email" else None,
+                    cc=self.query_one(".ccinput", Input).value if FORMATS[self.kind].cc_subject else "",
+                    subject=self.query_one(".subjectinput", Input).value if FORMATS[self.kind].cc_subject else None,
                     body=body)
 
     @property
@@ -2300,10 +2298,10 @@ class DraftView(Horizontal):
             "Connection unavailable" if self.connection_id is not None else "Choose Connection")
         self.query_one(DraftConnection).update(escape(label))
         for row in self.query(".field.cc, .field.subject"):
-            row.display = self.kind == "email"
+            row.display = FORMATS[self.kind].cc_subject
         self.query_one(".toinput", Input).placeholder = "channel or DM · tab completes" if self.kind == "slack" else "exact destination"
         state = "Unsaved" if self.dirty else "Saved"
-        title = (values["subject"] or NEW_TITLE[self.kind]).replace("\r", "↵").replace("\n", "↵")
+        title = (values["subject"] or FORMATS[self.kind].new_title).replace("\r", "↵").replace("\n", "↵")
         head = f"[b #45707a]{escape(title)}[/]   [#928374]{ICON['edited']} {state}[/]"
         if self.has_class("narrow"):
             envelope = ["To " + (self.recipient_label(values) or "not selected")]
@@ -2331,7 +2329,7 @@ class DraftView(Horizontal):
             f"[#928374]{ICON['status']} status[/]\n{state}\n\n"
             f"[#928374]{ICON['person']} from[/]\n{escape(self.sender_label(values, connection) or 'not selected')}\n\n"
             f"[#928374]{ICON['person']} recipient[/]\n{escape(self.recipient_label(values) or 'not selected')}\n\n"
-            f"[#928374]{ICON['channel']} channel[/]\n{KIND_NAME_DRAFT[self.kind]}\n\n"
+            f"[#928374]{ICON['channel']} channel[/]\n{FORMATS[self.kind].label}\n\n"
             f"[#928374]{ICON['connection']} connection[/]\n{escape(label)}\n\n"
             f"[#928374]{ICON['person']} other threads[/]\n{history}\n\n"
             "[#928374]External history unavailable[/]")
@@ -2409,7 +2407,7 @@ class DraftView(Horizontal):
     def choose_connection(self):
         try:
             connections = {str(c["id"]): c for c in inbox.connections(self.app.db)
-                           if PLATFORMS[c["platform"]].format in ("email", "sms", "slack")}
+                           if PLATFORMS[c["platform"]].format in FORMATS}
         except Exception:
             self.app.notify("Connections unavailable · edits kept.", severity="error")
             return
@@ -2423,8 +2421,8 @@ class DraftView(Horizontal):
             connection = connections.get(choice)
             kind = PLATFORMS[connection["platform"]].format if connection else "email"
             values = self.values()
-            if kind in ("sms", "slack") and (values["cc"] or values["subject"]):
-                name = KIND_NAME_DRAFT[kind]
+            if not FORMATS[kind].cc_subject and (values["cc"] or values["subject"]):
+                name = FORMATS[kind].label
                 self.app.push_screen(Pick(f"Switch to {name}", [("clear", f"Clear Cc and subject · use {name}"),
                                                                ("cancel", "Keep email")],
                                           f"{name} has no Cc or subject. Current email fields will be cleared."),
@@ -2440,7 +2438,7 @@ class DraftView(Horizontal):
         self.kind = PLATFORMS[connection["platform"]].format if connection else "email"
         self.conversations = None
         self.load_conversations()
-        if self.kind in ("sms", "slack"):
+        if not FORMATS[self.kind].cc_subject:
             self.query_one(".ccinput", Input).value = ""
             self.query_one(".subjectinput", Input).value = ""
         for field in self.query(AddressInput):
@@ -2539,7 +2537,7 @@ class DraftView(Horizontal):
         v, connection = self.values(), self.connection()
         lines = [("Connection", f"{PLATFORMS[connection['platform']].title} · {conn_name(connection)}" if connection else ""),
                  ("From", self.sender_label(v, connection)), ("To", v["to"])] + (
-                [("Cc", v["cc"]), ("Subject", v["subject"])] if self.kind == "email" else [])
+                [("Cc", v["cc"]), ("Subject", v["subject"])] if FORMATS[self.kind].cc_subject else [])
         body = "\n".join(f"[#928374]{k:<11}[/]{escape(val)}" for k, val in lines if val)
         self.app.push_screen(Pick("Send", [("send", "Send"), ("keep", "Keep editing")], body),
                              lambda choice: self.dispatch_send() if choice == "send" and self.is_attached else None)

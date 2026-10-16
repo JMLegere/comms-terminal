@@ -6,7 +6,7 @@ import urllib.error
 
 import pytest
 
-from universal_inbox import email, fastmail, inbox, quo, serve, slack
+from universal_inbox import email, fastmail, inbox, platforms, quo, serve, slack
 from test_composition import AT, SELF, db, envelope, incoming  # noqa: F401  (db is a fixture)
 
 PDF = b"%PDF-1.4 contract"
@@ -167,9 +167,9 @@ def test_email_draft_over_25_mb_is_refused_before_resend(db):
     with pytest.raises(ValueError, match=r"^Email Attachments total 30 MB; the limit is 25 MB$"):
         inbox.send_draft(db, d["id"], d["revision"], sender)
     assert sender.files is None and inbox.get_draft(db, d["id"])["sending_at"] is None
-    assert inbox.email_size_problem([inbox.Staged(None, "a", "", 25 * MB + 1)]) == \
+    assert platforms.email_size_problem([inbox.Staged(None, "a", "", 25 * MB + 1)]) == \
         "Email Attachments total 25.1 MB; the limit is 25 MB"
-    assert inbox.email_size_problem([inbox.Staged(None, "a", "", 25 * MB)]) is None
+    assert platforms.email_size_problem([inbox.Staged(None, "a", "", 25 * MB)]) is None
 
 
 def test_email_reply_over_25_mb_is_refused_before_the_sender(db):
@@ -196,8 +196,8 @@ def test_slack_draft_or_reply_with_a_file_over_1_gb_is_refused_before_slack(db):
                                      serve.Senders(made={4: sender}))
     assert (status, out) == (400, {"error": "Slack files can be at most 1 GB; big.mov is 1.2 GB"})
     assert sender.files is None and len(inbox.staged(db, thread_id=t.id)) == 1
-    assert inbox.slack_size_problem([inbox.Staged(None, "a", "", 2**30)]) is None
-    assert inbox.slack_size_problem([inbox.Staged(None, "a", "", 2**30 + 1)]) == \
+    assert platforms.slack_size_problem([inbox.Staged(None, "a", "", 2**30)]) is None
+    assert platforms.slack_size_problem([inbox.Staged(None, "a", "", 2**30 + 1)]) == \
         "Slack files can be at most 1 GB; a is 1.1 GB"
 
 
