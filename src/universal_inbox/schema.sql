@@ -181,9 +181,11 @@ CREATE TABLE composition_drafts (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   sending_at TEXT,
+  thread_id INTEGER REFERENCES threads (id),  -- a reply Draft: its Thread's reply box text (FR-SEQ-11)
   CHECK ((kind = 'email' AND subject IS NOT NULL)
          OR (kind IN ('sms', 'slack') AND subject IS NULL AND cc = ''))
 ) STRICT;
+CREATE UNIQUE INDEX composition_drafts_thread ON composition_drafts (thread_id) WHERE thread_id IS NOT NULL;
 
 -- Attachments (.agents/prd/2026-10-15-attachments.md): files copied on arrival, content-addressed in files/
 -- beside the database. Their own table, since activities.data never changes after ingest.

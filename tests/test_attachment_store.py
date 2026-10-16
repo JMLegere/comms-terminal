@@ -24,10 +24,11 @@ def setup(tmp_path):
 
 def test_a_v11_database_gains_the_tables_and_keeps_its_rows(tmp_path):
     db, thread_id, activity = setup(tmp_path)
-    db.executescript("DROP TABLE resend_receipts; DROP TABLE staged_attachments;"
+    db.executescript("DROP INDEX composition_drafts_thread; ALTER TABLE composition_drafts DROP COLUMN thread_id;"
+                    " DROP TABLE resend_receipts; DROP TABLE staged_attachments;"
                     " DROP TABLE attachments; PRAGMA user_version = 11;")
     inbox.migrate(db)
-    assert db.execute("PRAGMA user_version").fetchone()[0] == inbox.SCHEMA_VERSION == 13
+    assert db.execute("PRAGMA user_version").fetchone()[0] == inbox.SCHEMA_VERSION == 14
     assert db.execute("SELECT count(*) FROM activities").fetchone()[0] == 1
     assert inbox.attachments(db, activity) == []
 

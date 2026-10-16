@@ -13,6 +13,7 @@ import sqlite3
 import textwrap
 import unicodedata
 from collections import Counter
+from collections.abc import MutableMapping
 from datetime import datetime, timedelta, timezone
 from email.errors import HeaderParseError
 from email.headerregistry import Address
@@ -2673,9 +2674,11 @@ class DraftsPage(Page):
         view = self.app.main.draft_view
         state = "unsaved" if view and view.draft_id == draft["id"] and view.dirty else "saved"
         status = f"[#928374]{state:7}[/]"
-        return (status, escape(cut(title, room))) if len(self.columns) == 2 else (
+        shown = cut(("reply · " if draft["thread_id"] else "") + title, room)
+        shown = f"[#45707a]{shown[:5]}[/]{escape(shown[5:])}" if draft["thread_id"] else escape(shown)
+        return (status, shown) if len(self.columns) == 2 else (
             f"[#928374]{ICON[draft['kind']]}[/]",
-            f"[b]{escape(cut(inbox.recipient_names(self.app.db, draft['to'], draft['kind']) or 'No recipient', 18))}[/]", escape(cut(title, room)), status)
+            f"[b]{escape(cut(inbox.recipient_names(self.app.db, draft['to'], draft['kind']) or 'No recipient', 18))}[/]", shown, status)
 
     def neighbor(self, draft_id):
         """The Draft to select once this one leaves the list."""
@@ -2726,6 +2729,12 @@ class DraftsPage(Page):
         self.app.main.showing = showing
         pane = self.app.main.query_one("#thread")
         pane.remove_children()
+        if selected and selected["thread_id"]:  # a reply Draft is edited and sent in its Thread's reply box
+            title = inbox.get_thread(self.app.db, selected["thread_id"]).title
+            pane.mount(Static(f"[#45707a]{ICON['reply']} reply[/] · [b]{escape(title)}[/]\n\n{escape(selected['body'])}\n\n"
+                              "[#928374]enter opens the Thread's reply box to edit and send it · x deletes it[/]",
+                              classes="threadempty"))
+            return
         pane.mount(DraftView(selected) if selected else
                    Static("[#928374]No draft selected. Press n for a blank draft.[/]", classes="threadempty"))
 
@@ -2736,7 +2745,21 @@ class DraftsPage(Page):
 
     def on_data_table_row_selected(self, event):
         event.stop()
-        self.focus_editor()
+        selected = self.selected()
+        if selected and selected["thread_id"]:
+            self.open_reply(selected["thread_id"])
+        else:
+            self.focus_editor()
+
+    def open_reply(self, thread_id):
+        """The reply Draft's Thread, selected, with its reply box open on the Draft."""
+        main = self.app.main
+        main.open_thread(thread_id)
+
+        def reply():
+            if isinstance(main.current, ThreadsPage):
+                main.current.action_reply("all")
+        self.app.call_after_refresh(lambda: self.app.call_after_refresh(reply))
 
     def focus_editor(self):
         view = self.app.main.draft_view
@@ -3808,6 +3831,40 @@ class MainScreen(Screen):
             self.current.refresh_data()
 
 
+class ReplyDrafts(MutableMapping):
+    """Reply box texts by the Thread id each was saved under, kept as reply Drafts (inbox.save_reply_draft) so
+    they survive a restart and show on the Drafts page. Empty text deletes the Draft."""
+
+    def __init__(self, app):
+        self.app, self.own = app, None
+
+    @property
+    def db(self):
+        if getattr(self.app, "db", None) is not None:
+            return self.app.db
+        if self.own is None:  # before the console mounts (tests fill drafts first)
+            self.own = inbox.connect(self.app.db_path)
+            inbox.migrate(self.own)
+        return self.own
+
+    def __getitem__(self, thread_id):
+        return inbox.reply_drafts(self.db)[thread_id]
+
+    def __setitem__(self, thread_id, text):
+        inbox.save_reply_draft(self.db, thread_id, text)
+
+    def __delitem__(self, thread_id):
+        if thread_id not in inbox.reply_drafts(self.db):
+            raise KeyError(thread_id)
+        inbox.save_reply_draft(self.db, thread_id, "")
+
+    def __iter__(self):
+        return iter(inbox.reply_drafts(self.db))
+
+    def __len__(self):
+        return len(inbox.reply_drafts(self.db))
+
+
 class Console(App):
     CSS = CSS
     TITLE = "Universal Inbox"
@@ -3816,7 +3873,8 @@ class Console(App):
     def __init__(self, db_path: str, reply=None, sources=None, send_draft=None, slack_conversations=None,
                  files=FILE_SERVER):
         super().__init__()
-        self.db_path, self.send_reply, self.drafts, self.view, self.cursor = db_path, reply, {}, 0, {}
+        self.db_path, self.send_reply, self.view, self.cursor = db_path, reply, 0, {}
+        self.drafts = ReplyDrafts(self)
         self.files = files  # the service's LAN file server (host, port): Attachment links and upload pages
         self.send_draft, self.slack_conversations = send_draft, slack_conversations
         self.selected_draft = None

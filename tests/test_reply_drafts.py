@@ -1,0 +1,126 @@
+"""Reply Drafts (.agents/prd/2026-10-16-sequencing.md P1, FR-SEQ-11): a reply box's text is its Thread's Draft."""
+
+import sqlite3
+
+import pytest
+
+from test_console import seed_demo  # puts scripts/ on the path
+from universal_inbox import inbox
+from test_attachment_send import FakeSender
+
+
+@pytest.fixture
+def seeded(tmp_path):
+    path = str(tmp_path / "inbox.db")
+    return path, seed_demo.seed(inbox.connect(path))
+
+
+def test_reply_draft_saves_replaces_survives_a_restart_and_empty_text_deletes_it(seeded):
+    path, ids = seeded
+    db = inbox.connect(path)
+    first = inbox.save_reply_draft(db, ids["ana"], "Hi Ana,")
+    assert (first["thread_id"], first["kind"], first["subject"], first["revision"]) == (
+        ids["ana"], "email", "Re: Pricing for 40 seats?", 1)
+    assert "ana@acme.com" in first["to"] and "ops@acme.com" in first["cc"] and first["connection_id"] == 1
+    again = inbox.save_reply_draft(db, ids["ana"], "Hi Ana, yes.")
+    assert (again["id"], again["revision"], again["body"]) == (first["id"], 2, "Hi Ana, yes.")
+    db.close()
+    db = inbox.connect(path)  # a console restart reads the same text
+    assert inbox.reply_drafts(db) == {ids["ana"]: "Hi Ana, yes."}
+    assert [d["id"] for d in inbox.list_drafts(db)] == [first["id"]]
+    assert inbox.save_reply_draft(db, ids["ana"], "  \n") is None
+    assert inbox.reply_drafts(db) == {} and inbox.list_drafts(db) == []
+
+
+def test_slack_reply_draft_has_no_subject_and_names_the_conversation(seeded):
+    path, ids = seeded
+    db = inbox.connect(path)
+    d = inbox.save_reply_draft(db, ids["logan"], "no blockers")
+    assert (d["kind"], d["subject"], d["cc"], d["connection_id"]) == ("slack", None, "", 2)
+    assert d["to"] == inbox.thread_view(db, ids["logan"])["where"]
+
+
+def test_one_reply_draft_per_thread(seeded):
+    path, ids = seeded
+    db = inbox.connect(path)
+    d = inbox.save_reply_draft(db, ids["ana"], "one")
+    values = {k: d[k] for k in ("connection_id", "kind", "sender", "to", "cc", "subject", "body")}
+    with pytest.raises(sqlite3.IntegrityError):
+        inbox.save_draft(db, values, thread_id=ids["ana"])
+
+
+def test_a_reply_draft_sends_from_its_thread_not_as_a_new_thread(seeded):
+    path, ids = seeded
+    db = inbox.connect(path)
+    d = inbox.save_reply_draft(db, ids["ana"], "Hi Ana,")
+    with pytest.raises(ValueError, match="reply box"):
+        inbox.send_draft(db, d["id"], d["revision"], FakeSender())
+    assert inbox.reply_drafts(db) == {ids["ana"]: "Hi Ana,"}
+
+
+def test_reply_removes_its_draft_only_when_the_send_goes_through(seeded):
+    path, ids = seeded
+    db = inbox.connect(path)
+    inbox.save_reply_draft(db, ids["ana"], "Hi Ana,")
+    inbox.save_reply_draft(db, ids["spec"], "other Thread")
+    with pytest.raises(inbox.SendFailed):
+        inbox.reply(db, ids["ana"], "Hi Ana,", FakeSender(inbox.SendFailed("HTTP 422")), ["ana@acme.com"])
+    assert ids["ana"] in inbox.reply_drafts(db)
+    inbox.reply(db, ids["ana"], "Hi Ana,", FakeSender("<r1@example.test>"), ["ana@acme.com"])
+    assert inbox.reply_drafts(db) == {ids["spec"]: "other Thread"}
+
+
+def test_deleted_reply_draft_restores_under_its_thread(seeded):
+    path, ids = seeded
+    db = inbox.connect(path)
+    d = inbox.save_reply_draft(db, ids["ana"], "Hi Ana,")
+    inbox.restore_draft(db, inbox.delete_draft(db, d["id"]))
+    assert inbox.reply_drafts(db) == {ids["ana"]: "Hi Ana,"}
+
+
+def test_reply_text_survives_a_console_restart_and_shows_on_the_drafts_page(seeded):
+    from textual.widgets import DataTable, TextArea
+    from test_console import run
+    from universal_inbox.tui import Console, DraftsPage, ReplyBox
+    path, ids = seeded
+    seen = {}
+
+    async def write(app, pilot):
+        app.main.open_thread(ids["ana"])
+        await pilot.pause()
+        await pilot.press("r")
+        await pilot.pause()
+        app.main.thread_view.query_one(ReplyBox).query_one(TextArea).text = "Hi Ana, Tuesday works."
+        await pilot.press("escape")
+        await pilot.pause()
+
+    run(Console(path), [write], size=(187, 40))
+
+    async def reopen(app, pilot):  # a new console process: the text comes back from the database
+        app.main.go("drafts")
+        await pilot.pause()
+        page = app.main.current
+        assert isinstance(page, DraftsPage) and [d["thread_id"] for d in page.items] == [ids["ana"]]
+        row = "".join(str(c) for c in page.query_one(DataTable).get_row_at(0))
+        seen["row"] = row
+        seen["pane"] = str(app.main.query_one("#thread .threadempty").content)
+        await pilot.press("enter")
+        for _ in range(4):
+            await pilot.pause()
+        box = app.main.thread_view.query_one(ReplyBox)
+        seen["open"] = (box.has_class("open"), box.draft_key, box.query_one(TextArea).text)
+
+    run(Console(path), [reopen], size=(187, 40))
+    assert "reply[/] · Re: Pricing" in seen["row"]
+    assert "Hi Ana, Tuesday works." in seen["pane"] and "enter opens the Thread" in seen["pane"]
+    assert seen["open"] == (True, ids["ana"], "Hi Ana, Tuesday works.")
+
+
+def test_agent_drafts_list_labels_reply_drafts(seeded, capsys):
+    from types import SimpleNamespace
+    from universal_inbox import agent
+    path, ids = seeded
+    db = inbox.connect(path)
+    d = inbox.save_reply_draft(db, ids["ana"], "Hi Ana,")
+    agent.run(SimpleNamespace(cmd="drafts"), db)
+    assert f"{d['id']}\temail reply · Thread {ids['ana']}\t" in capsys.readouterr().out

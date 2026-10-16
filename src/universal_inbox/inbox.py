@@ -1,6 +1,6 @@
 """The inbox module: Threads, Status, Activities, Persons, Organizations, Blocks, Cases, and Drafts.
 
-Interface: ingest, act, reply, wake, reopen_imported, reconcile_email_threads; people operations block, add_identity, remove_identity; save_draft, get_draft, delete_draft, restore_draft, list_drafts, recipient_names, recipient_threads.
+Interface: ingest, act, reply, wake, reopen_imported, reconcile_email_threads; people operations block, add_identity, remove_identity; save_draft, save_reply_draft, reply_drafts, get_draft, delete_draft, restore_draft, list_drafts, recipient_names, recipient_threads.
 Design: docs/design/api-and-database.md.
 """
 
@@ -23,7 +23,7 @@ from typing import Protocol, Sequence
 
 from . import files, platforms
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 WAIT = timedelta(days=4)  # Waiting for them ends after this with no reply: back to Todo to follow up (#116)
 EMAIL_CONFIRMATION_PENDING = "Email confirmation pending; wait for its sent receipt before replying."
 MIGRATIONS = {  # version -> statement that upgrades an existing database to it
@@ -185,6 +185,9 @@ CREATE TABLE staged_attachments (
   connection_id INTEGER NOT NULL REFERENCES connections (id),
   message_id TEXT NOT NULL
 ) STRICT;""",
+    # Reply Drafts (.agents/prd/2026-10-16-sequencing.md P1): a reply box's text is a Draft of its Thread.
+    14: """ALTER TABLE composition_drafts ADD COLUMN thread_id INTEGER REFERENCES threads (id);
+CREATE UNIQUE INDEX composition_drafts_thread ON composition_drafts (thread_id) WHERE thread_id IS NOT NULL;""",
 }
 
 # ponytail: fixed list; extend when a free-mail sender forms an Organization by mistake.
@@ -429,8 +432,9 @@ def get_thread(db, thread_id: int) -> Thread:
 # --- unsent composition ------------------------------------------------------
 
 def save_draft(db, values: dict, *, draft_id: int | None = None,
-               expected_revision: int | None = None) -> dict:
-    """Persist the complete edited envelope, including incomplete text; never send or create work."""
+               expected_revision: int | None = None, thread_id: int | None = None) -> dict:
+    """Persist the complete edited envelope, including incomplete text; never send or create work.
+    `thread_id` makes a new Draft that Thread's reply Draft (save_reply_draft); an edit keeps it."""
     if not isinstance(values, dict) or set(values) != {
             "connection_id", "kind", "sender", "to", "cc", "subject", "body"}:
         raise ValueError("draft values must contain exactly connection_id, kind, sender, to, cc, subject, body")
@@ -463,8 +467,8 @@ def save_draft(db, values: dict, *, draft_id: int | None = None,
         if draft_id is None:
             draft_id = db.execute(
                 'INSERT INTO composition_drafts (connection_id, kind, sender, "to", cc, subject, body,'
-                " revision, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
-                (*envelope, at, at)).lastrowid
+                " revision, created_at, updated_at, thread_id) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)",
+                (*envelope, at, at, thread_id)).lastrowid
         else:
             saved = db.execute(
                 'UPDATE composition_drafts SET connection_id = ?, kind = ?, sender = ?, "to" = ?,'
@@ -474,6 +478,39 @@ def save_draft(db, values: dict, *, draft_id: int | None = None,
                 get_draft(db, draft_id)  # a missing row is distinct from a stale writer
                 raise DraftConflict("Draft changed since this revision; reload before saving.")
         return get_draft(db, draft_id)
+
+
+def save_reply_draft(db, thread_id: int, body: str) -> dict | None:
+    """The reply Draft kept under one Thread id (the one its reply box opened on, so an alias keeps its own):
+    text replaces it, empty text deletes it. The envelope comes from the Thread as the reply box shows it; the
+    box still sends its own To and Cc. ponytail: last writer wins here; revisions guard the agent's edits."""
+    with db:
+        if not db.in_transaction:
+            db.execute("BEGIN IMMEDIATE")
+        row = db.execute("SELECT id, revision FROM composition_drafts WHERE thread_id = ?", (thread_id,)).fetchone()
+        if not body.strip():
+            if row:
+                db.execute("DELETE FROM composition_drafts WHERE id = ?", (row["id"],))
+            return None
+        v = thread_view(db, thread_id)
+        ch, title = v["channel"], v["thread"].title
+        kind = platforms.PLATFORMS[ch["platform"]].format
+        values = dict(connection_id=ch["connection_id"], kind=kind, sender=ch["external_id"], cc="", subject=None,
+                      to=v["where"], body=body)
+        if kind == "email":
+            from .email import reply_all
+            to, cc = reply_all([{"native_id": m["native_id"], "data": m["data"]} for m in v["messages"]],
+                               ch["external_id"])
+            values |= dict(to=", ".join(to), cc=", ".join(cc), subject=title if title.lower().startswith("re:")
+                           else f"Re: {title}")
+        if row:
+            return save_draft(db, values, draft_id=row["id"], expected_revision=row["revision"])
+        return save_draft(db, values, thread_id=thread_id)
+
+
+def reply_drafts(db) -> dict[int, str]:
+    """Every reply Draft's text, by the Thread id it was saved under."""
+    return {r[0]: r[1] for r in db.execute("SELECT thread_id, body FROM composition_drafts WHERE thread_id IS NOT NULL")}
 
 
 def get_draft(db, draft_id: int) -> dict:
@@ -645,6 +682,8 @@ def send_draft(db, draft_id: int, revision: int, sender: Sender, *, again: bool 
         if not db.in_transaction:
             db.execute("BEGIN IMMEDIATE")
         d = get_draft(db, draft_id)
+        if d["thread_id"] is not None:
+            raise ValueError("A reply Draft sends from its Thread's reply box.")
         if d["revision"] != revision:
             raise DraftConflict("Draft changed since this revision; reload before sending.")
         if d["sending_at"] and not again:
@@ -1715,6 +1754,7 @@ def reply(db, thread_id: int, text: str, sender: Sender,
         cur = db.execute(
             "INSERT OR IGNORE INTO activities (thread_id, kind, occurred_at, native_id, content, data)"
             " VALUES (?, 'MESSAGE', ?, ?, ?, ?)", (t.id, _iso(now), native_id, text, json.dumps(data)))
+        db.execute("DELETE FROM composition_drafts WHERE thread_id = ?", (staged_on,))  # the reply Draft went out
         return cur.lastrowid if cur.rowcount else None, t.id
 
     def settle(tid):

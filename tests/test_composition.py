@@ -203,7 +203,8 @@ def test_v8_draft_migration_matches_fresh_preserves_old_rows_aliases_guards_and_
         assert old.execute("PRAGMA foreign_keys").fetchone()[0] == 1
         assert old.execute("PRAGMA foreign_key_check").fetchall() == []
         assert [tuple(r) for r in old.execute("PRAGMA foreign_key_list(composition_drafts)")] == [
-            (0, 0, "connections", "connection_id", "id", "NO ACTION", "NO ACTION", "NONE")]
+            (0, 0, "threads", "thread_id", "id", "NO ACTION", "NO ACTION", "NONE"),  # 14: reply Drafts
+            (1, 0, "connections", "connection_id", "id", "NO ACTION", "NO ACTION", "NONE")]
         for sql in ("DELETE FROM activities", "UPDATE activities SET content = 'changed'",
                     f"UPDATE threads SET merged_into = {two.id} WHERE id = {one.id}"):
             with pytest.raises(sqlite3.DatabaseError), old:

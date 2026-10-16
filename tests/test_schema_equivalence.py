@@ -27,17 +27,22 @@ def test_migrated_schema_matches_a_fresh_one(tmp_path):
     assert {k: v for k, v in got.items() if want[k] != v} == {}
 
 
-def test_version_12_upgrade_matches_fresh_schema():
+def test_version_12_upgrade_matches_fresh_schema(monkeypatch):
     fresh, old = inbox.connect(), inbox.connect()
     try:
         inbox.migrate(fresh)
-        inbox.migrate(old)
-        old.executescript("DROP TABLE resend_receipts; PRAGMA user_version = 12;")
+        old.executescript(SCHEMA3)
+        with monkeypatch.context() as m:
+            m.setattr(inbox, "SCHEMA_VERSION", 12)
+            inbox.migrate(old)
         before = shape(old)
         inbox.migrate(old)
         assert shape(old) == shape(fresh)
-        assert {key: value for key, value in shape(old).items()
-                if key[1] not in ("resend_receipts", "sqlite_autoindex_resend_receipts_1")} == before
+        added = {"resend_receipts", "sqlite_autoindex_resend_receipts_1", "composition_drafts_thread",
+                 "composition_drafts"}  # 13: resend_receipts; 14: composition_drafts.thread_id and its index
+        assert {key: value for key, value in shape(old).items() if key[1] not in added} == \
+            {key: value for key, value in before.items() if key[1] not in added}
+        assert "thread_id integer references threads(id)" in shape(old)[("table", "composition_drafts")]
     finally:
         fresh.close()
         old.close()

@@ -68,10 +68,11 @@ The authorized Drafts-first expansion persists unsent compositions independently
 
 - **Save Draft** (`inbox.save_draft(db, values, *, draft_id=None, expected_revision=None)`): save the complete explicit `connection_id`, `kind`, `sender`, `to`, `cc`, `subject`, and `body` fields. Creation uses no ID/revision; replacement requires the exact positive Draft ID and expected Draft revision. **Draft Conflict** (`inbox.DraftConflict`) rejects a stale save without overwriting stored work.
 - **Get Draft** (`inbox.get_draft(db, draft_id)`): read one Draft, or raise `KeyError` if absent.
+- **Save Reply Draft** (`inbox.save_reply_draft(db, thread_id, body)`): a reply box's text is its Thread's **Reply Draft** (schema 14: `composition_drafts.thread_id`, at most one per Thread id). Text replaces the Draft, and empty text deletes it. The envelope is filled from the Thread as the reply box shows it (email: reply-all To/Cc and `Re:` subject). **Reply Drafts** (`inbox.reply_drafts(db)`) maps Thread id to text. `send_draft` refuses a Reply Draft, since it sends from the reply box; a reply that goes through deletes it in the same transaction (`.agents/prd/2026-10-16-sequencing.md` P1).
 - **List Drafts** (`inbox.list_drafts(db)`): read Drafts newest updated first.
 - **Recipient History** (`inbox.recipient_threads(db, kind, value)`): read canonical, deduplicated captured Threads for an exact normalized `email` or `phone` destination, without creating or merging a Person.
 
-Draft reads return a dictionary containing integer `id` and `revision`, the complete fields above, and UTC `created_at`/`updated_at`. Incomplete fields are allowed. Connection is optional until selected; a selected Connection must support the Draft's message format. Email subject is an explicit string, including empty; SMS subject is `None` and Cc is empty. Saving creates no Thread or Activity. The additive Draft table has no Thread relation or send attempts. Existing rows and append-only invariants remain.
+Draft reads return a dictionary containing integer `id` and `revision`, the complete fields above, and UTC `created_at`/`updated_at`. Incomplete fields are allowed. Connection is optional until selected; a selected Connection must support the Draft's message format. Email subject is an explicit string, including empty; SMS subject is `None` and Cc is empty. Saving creates no Thread or Activity. New-Thread Drafts have no Thread; a Reply Draft names one. The table holds no send attempts. Existing rows and append-only invariants remain.
 
 
 ### Exact-reference reconciliation

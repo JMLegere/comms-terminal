@@ -491,7 +491,9 @@ def test_existing_email_reply_recipients_accept_ghost_without_sending(tmp_path, 
         await pilot.press("escape")
         await pilot.pause()
         assert not box.has_class("open") and app.drafts[ids["ana"]] == "unsent reply"
-        assert inbox.list_drafts(app.db) == [] and sent == []
+        # The kept text is the Thread's reply Draft (FR-SEQ-11), not a new-Thread Draft.
+        assert [(d["thread_id"], d["body"]) for d in inbox.list_drafts(app.db)] == [(ids["ana"], "unsent reply")]
+        assert sent == []
         assert counts == tuple(app.db.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
                                for table in ("threads", "activities"))
 
