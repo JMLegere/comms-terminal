@@ -182,7 +182,7 @@ def test_send_failure_keeps_text_and_shows_error(tmp_path):
 
     run(app, [open_logan, "r", *"deploying", "ctrl+enter", inspect])
     assert seen["page"] is ThreadsPage and seen["text"] == "deploying"
-    assert "Not sent" in seen["hint"]
+    assert "Send error" in seen["hint"]
     assert detail(path, ids["logan"]) == "NEW_REPLY"
 
 

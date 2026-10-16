@@ -5,14 +5,17 @@ import io
 import json
 from datetime import datetime, timezone
 from email.message import EmailMessage
+from types import SimpleNamespace
 
 import textual_image.widget  # noqa: F401 - as main.py does before the app starts
 from PIL import Image
 from test_console import page, run, seeded
 from textual import events
+from textual.widgets import OptionList, TextArea
+from test_reconcile_console import bridge_console, seed_console
 
 from universal_inbox import agent, inbox
-from universal_inbox.tui import Console, DraftsPage, PickFile, StagedList, thread_text
+from universal_inbox.tui import Console, DraftsPage, Pick, PickFile, ReplyBox, StagedList, thread_text
 
 
 def png() -> bytes:
@@ -232,3 +235,62 @@ def test_f_forwards_the_newest_message_as_an_email_draft_with_its_files(tmp_path
     assert "---------- Forwarded message ---------\nFrom: ana@acme.com\nDate: " in d["body"]
     assert "Hi Jeremy, can we talk pricing" in d["body"]
     assert [r["name"] for r in inbox.staged(db, draft_id=d["id"])] == ["deck.pdf", "shot.png"]
+
+
+def test_selected_alias_reply_attaches_and_sends_only_its_original_files_and_text(tmp_path):
+    path = str(tmp_path / "inbox.db")
+    ids = seed_console(path)
+    bridge_console(path)
+    db = inbox.connect(path)
+    for owner, name, content in ((ids["keep"], "unchosen.txt", b"private other draft"),
+                                 (ids["old"], "selected.txt", b"chosen file")):
+        inbox.stage(db, sha=inbox.store_file(db, content), name=name, type="text/plain",
+                    size=len(content), thread_id=owner)
+    shot = tmp_path / "chosen-shot.png"
+    shot.write_bytes(png())
+    requests, sent = [], []
+
+    def send(thread, text, to, cc, history, files=()):
+        sent.append((thread.id, text, [(f.name, f.path.read_bytes()) for f in files]))
+        return "<selected-ui@example.test>"
+
+    def reply(tid, text, to, cc):
+        requests.append(tid)
+        service = inbox.connect(path)
+        try:
+            return inbox.reply(service, tid, text, SimpleNamespace(send=send), to, cc).__dict__
+        finally:
+            service.close()
+
+    app = Console(path, reply=reply)
+    app.drafts.update({ids["keep"]: "Unchosen text", ids["old"]: "Selected text"})
+
+    async def go(app, pilot):
+        app.action_open_thread(ids["old"])
+        await pilot.pause()
+        await pilot.press("r")
+        assert isinstance(app.screen, Pick)
+        menu = app.screen.query_one(OptionList)
+        menu.highlighted = menu.get_option_index(str(ids["old"]))
+        await pilot.press("enter")
+        await pilot.pause()
+        box = app.main.thread_view.query_one(ReplyBox)
+        assert box.thread_id == ids["keep"] and box.draft_key == ids["old"]
+        assert box.attach_owner() == ("thread", ids["old"])
+        assert box.query_one(StagedList).option_count == 1 and box.query_one(TextArea).text == "Selected text"
+        app.post_message(events.Paste(str(shot)))
+        await pilot.pause()
+        assert box.query_one(TextArea).text == "Selected text"
+        assert [r["name"] for r in inbox.staged(db, thread_id=ids["old"])] == ["selected.txt", shot.name]
+        await pilot.press("ctrl+enter")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert app.drafts == {ids["keep"]: "Unchosen text"}
+        assert inbox.staged(db, thread_id=ids["old"]) == []
+        assert [r["name"] for r in inbox.staged(db, thread_id=ids["keep"])] == ["unchosen.txt"]
+
+    run(app, [go])
+    assert requests == [ids["old"]]
+    assert sent == [(ids["keep"], "Selected text", [("selected.txt", b"chosen file"), (shot.name, png())])]
+    activity = db.execute("SELECT id FROM activities WHERE native_id = '<selected-ui@example.test>'").fetchone()[0]
+    assert [r["name"] for r in inbox.attachments(db, activity)] == ["selected.txt", shot.name]

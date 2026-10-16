@@ -12,6 +12,7 @@ import re
 from collections import Counter
 import sqlite3
 import urllib.parse
+import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -23,8 +24,9 @@ from typing import Protocol, Sequence
 
 from . import platforms
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 WAIT = timedelta(days=4)  # Waiting for them ends after this with no reply: back to Todo to follow up (#116)
+EMAIL_CONFIRMATION_PENDING = "Email confirmation pending; wait for its sent receipt before replying."
 MIGRATIONS = {  # version -> statement that upgrades an existing database to it
     2: "ALTER TABLE cases ADD COLUMN description TEXT NOT NULL DEFAULT ''",
     3: "ALTER TABLE threads ADD COLUMN follow_up_at TEXT;"
@@ -179,6 +181,11 @@ CREATE TABLE staged_attachments (
   added_at TEXT NOT NULL,
   CHECK ((draft_id IS NULL) <> (thread_id IS NULL))
 ) STRICT;""",
+    13: """CREATE TABLE resend_receipts (
+  email_id TEXT PRIMARY KEY,
+  connection_id INTEGER NOT NULL REFERENCES connections (id),
+  message_id TEXT NOT NULL
+) STRICT;""",
 }
 
 # ponytail: fixed list; extend when a free-mail sender forms an Organization by mistake.
@@ -200,6 +207,10 @@ class SendFailed(Exception):
 
 class SendUnknown(SendFailed):
     """The provider may or may not have sent the message (timeout, lost response, crash before recording)."""
+
+
+class ResendReceiptConflict(ValueError):
+    """A provider email UUID already has a different authoritative receipt."""
 
 
 class IdentityTaken(Exception):
@@ -332,6 +343,31 @@ def _read_snapshot(db):
         yield
     finally:
         db.execute("RELEASE inbox_read_snapshot")
+
+
+@contextmanager
+def _write_snapshot(db):
+    """Atomic writes; an existing caller transaction retains ownership of its commit."""
+    outer = db.in_transaction
+    if not outer:
+        db.execute("BEGIN IMMEDIATE")
+    db.execute("SAVEPOINT inbox_write_snapshot")
+    try:
+        yield
+    except BaseException:
+        db.execute("ROLLBACK TO inbox_write_snapshot")
+        db.execute("RELEASE inbox_write_snapshot")
+        if not outer:
+            db.rollback()
+        raise
+    else:
+        db.execute("RELEASE inbox_write_snapshot")
+        if not outer:
+            try:
+                db.commit()
+            except BaseException:
+                db.rollback()
+                raise
 
 
 def migrate(db: sqlite3.Connection) -> None:
@@ -510,6 +546,44 @@ def _e164(number: str) -> str:
     return number.strip()
 
 
+def _send_checkpoint(db, connection_id):
+    high_water = db.execute("SELECT coalesce(max(id), 0) FROM activities").fetchone()[0]
+    states = {r["id"]: tuple(r)[1:] for r in db.execute(
+        "SELECT t.id, t.status, t.status_detail, t.status_changed_at, t.snoozed_until,"
+        " t.detail_before_snooze, t.follow_up_at, t.case_id FROM threads t"
+        " JOIN channels ch ON ch.id = t.channel_id"
+        " WHERE ch.connection_id = ? AND t.merged_into IS NULL", (connection_id,))}
+    return high_water, states
+
+
+def _send_changes(db, connection_id, checkpoint):
+    """Triage or incoming work observed during the provider call, including unchanged Todo detail."""
+    high_water, before = checkpoint
+    _, states = _send_checkpoint(db, connection_id)
+    incoming = {r[0] for r in db.execute(
+        "SELECT DISTINCT thread_id FROM thread_activities WHERE id > ? AND identity_id IS NOT NULL",
+        (high_water,))}
+    previous = {}
+    for old, state in before.items():
+        previous.setdefault(get_thread(db, old).id, set()).add(state)
+    changes = {}
+    for tid, state in states.items():
+        if tid in incoming or state not in previous.get(tid, set()):
+            changes[tid] = state
+    return changes
+
+
+def _preserve_send_changes(db, thread_id, changes):
+    candidates = [(tid, state) for tid, state in changes.items() if get_thread(db, tid).id == thread_id]
+    if not candidates:
+        return False
+    _, state = max(candidates, key=lambda item: (datetime.fromisoformat(item[1][2]), -item[0]))
+    db.execute(
+        "UPDATE threads SET status = ?, status_detail = ?, status_changed_at = ?, snoozed_until = ?,"
+        " detail_before_snooze = ?, follow_up_at = ? WHERE id = ?", (*state[:6], thread_id))
+    return True
+
+
 def send_draft(db, draft_id: int, revision: int, sender: Sender, *, again: bool = False) -> Thread:
     """Send one saved Draft revision, record it, then remove the Draft. An email starts a new Thread; an SMS or
     Slack message is recorded like any message Jeremy sends there, so it joins the conversation's Thread unless
@@ -531,7 +605,9 @@ def send_draft(db, draft_id: int, revision: int, sender: Sender, *, again: bool 
         if problem:
             raise ValueError(problem)
         connection = db.execute("SELECT * FROM connections WHERE id = ?", (d["connection_id"],)).fetchone()
-        at = _iso(_now())
+        now = _now()
+        at = _iso(now)
+        checkpoint = _send_checkpoint(db, connection["id"]) if connection["platform"] == "gmail" else None
         db.execute("UPDATE composition_drafts SET sending_at = ? WHERE id = ?", (at, draft_id))
     sms = d["kind"] == "sms"
     to, cc = _destinations(d["to"], d["kind"]), _destinations(d["cc"], d["kind"])
@@ -545,10 +621,12 @@ def send_draft(db, draft_id: int, revision: int, sender: Sender, *, again: bool 
         raise
     except Exception as e:  # anything unexpected after the claim may have reached the provider
         raise SendUnknown(f"Send outcome unknown: {e}") from e
-    now = _now()
+    if connection["platform"] != "gmail":
+        now = _now()
     with db:
         if not db.in_transaction:
             db.execute("BEGIN IMMEDIATE")
+        changes = _send_changes(db, connection["id"], checkpoint) if checkpoint is not None else {}
         echo = db.execute("SELECT thread_id FROM activities WHERE kind = 'MESSAGE' AND native_id = ?",
                           (native_id,)).fetchone()
         if echo:  # the provider's own copy arrived first (Fastmail Sent poll, Quo webhook, Slack event)
@@ -579,10 +657,16 @@ def send_draft(db, draft_id: int, revision: int, sender: Sender, *, again: bool 
                 " status_changed_at, created_at, follow_up_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (channel_id, native_id, title, *status, _iso(now), _iso(now), _follow_up(status[1], now))).lastrowid
             data = {"from": connection["self_id"], "to": to, "cc": cc, "subject": d["subject"]}
+            if checkpoint is not None:
+                data["seen_through_activity_id"] = checkpoint[0]
             activity_id = db.execute(
                 "INSERT INTO activities (thread_id, kind, occurred_at, native_id, content, data)"
                 " VALUES (?, 'MESSAGE', ?, ?, ?, ?)", (thread_id, _iso(now), native_id, d["body"], json.dumps(data))).lastrowid
             _add_sent(db, activity_id, files)
+        if connection["platform"] == "gmail":
+            _reconcile_email_threads(db, True, get_thread(db, thread_id).channel_id)
+            thread_id = get_thread(db, thread_id).id
+            _preserve_send_changes(db, thread_id, changes)
         db.execute("DELETE FROM composition_drafts WHERE id = ?", (draft_id,))
     return get_thread(db, thread_id)
 
@@ -1351,15 +1435,73 @@ def _email_ids(values, single=False, ordered=False) -> set[str] | list[str]:
     return ids if ordered else set(ids)
 
 
+def resend_native_id(email_id: str) -> str:
+    """The immutable local identity of one accepted Resend email, not its SMTP identity."""
+    if not isinstance(email_id, str) or re.fullmatch(
+            r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", email_id) is None:
+        raise ValueError("invalid Resend email ID")
+    return f"<{uuid.UUID(email_id)}@resend>"
+
+
+def record_resend_receipt(db, connection_id: int, email_id: str, message_id: str) -> bool:
+    """Durably store verified receipt metadata. Requires an idle connection; never commits caller work."""
+    email_id = resend_native_id(email_id)[1:-8]
+    if type(connection_id) is not int or connection_id <= 0:
+        raise ValueError("invalid Gmail Connection")
+    if not isinstance(message_id, str) or EMAIL_ID.fullmatch(message_id) is None:
+        raise ValueError("invalid SMTP Message-ID")
+    if message_id.endswith("@resend>"):
+        raise ValueError("invalid SMTP Message-ID")
+    if db.in_transaction:
+        raise ValueError("receipt persistence requires an idle connection")
+    with _write_snapshot(db):
+        connection = db.execute("SELECT platform, self_id, external_id FROM connections WHERE id = ?",
+                                (connection_id,)).fetchone()
+        if (connection is None or connection["platform"] != "gmail"
+                or not connection["self_id"].strip() or not connection["external_id"].strip()):
+            raise ValueError("invalid Gmail Connection")
+        previous = db.execute("SELECT connection_id, message_id FROM resend_receipts WHERE email_id = ?",
+                              (email_id,)).fetchone()
+        if previous:
+            if tuple(previous) != (connection_id, message_id):
+                raise ResendReceiptConflict("conflicting Resend receipt")
+            return False
+        db.execute("INSERT INTO resend_receipts (email_id, connection_id, message_id) VALUES (?, ?, ?)",
+                   (email_id, connection_id, message_id))
+        return True
+
+
+def _gmail_wire_id(db, native_id, connection_id, identity_id):
+    """Project receipt evidence only for an exact local outbound-self provider marker."""
+    if identity_id is not None:
+        return native_id
+    match = re.fullmatch(r"<([0-9a-fA-F-]{36})@resend>", native_id)
+    if not match:
+        return None if native_id.endswith("@resend>") else native_id
+    try:
+        canonical = resend_native_id(match[1])
+    except ValueError:
+        return None
+    receipt = db.execute("SELECT message_id FROM resend_receipts WHERE email_id = ? AND connection_id = ?",
+                         (canonical[1:-8], connection_id)).fetchone()
+    return receipt["message_id"] if receipt else None
+
+
 def _email_evidence(db):
     # ponytail: scan mailbox evidence per ingest; incremental components if mailbox volume makes this slow.
     rows = db.execute(
-        "SELECT a.id, a.thread_id, a.native_id, a.data, t.channel_id FROM thread_activities a"
+        "SELECT a.id, a.thread_id, a.native_id, a.data, a.identity_id, a.occurred_at, t.channel_id,"
+        " ch.connection_id, c.platform FROM thread_activities a"
         " JOIN threads t ON t.id = a.thread_id JOIN channels ch ON ch.id = t.channel_id"
+        " JOIN connections c ON c.id = ch.connection_id"
         " WHERE a.kind = 'MESSAGE' AND ch.kind = 'mailbox' ORDER BY a.id").fetchall()
     own, refs, known = {}, {a["id"]: set() for a in rows}, {}
     for a in rows:
         own[a["id"]] = _email_ids([a["native_id"]], single=True)
+        if a["platform"] == "gmail":
+            wire_id = _gmail_wire_id(db, a["native_id"], a["connection_id"], a["identity_id"])
+            if wire_id:
+                own[a["id"]] |= _email_ids([wire_id], single=True)
         for n in own[a["id"]]:
             known.setdefault(n, set()).add(a["channel_id"])
     for r in db.execute("SELECT activity_id, native_id FROM email_refs"):
@@ -1402,7 +1544,8 @@ def _reconcile_email_threads(db, apply, channel_id, recover=False) -> dict:
                 headers = BytesHeaderParser(policy=policy.default).parsebytes(raw)
                 mids = headers.get_all("Message-ID", [])
                 ids = _email_ids([str(v) for v in mids], single=True)
-                if not ((len(mids) == 1 and len(ids) == 1 and ids == own[a["id"]])
+                if not ((len(mids) == 1 and len(ids) == 1
+                         and ids == _email_ids([a["native_id"]], single=True))
                         or (not mids and a["native_id"] == f"<sha256-{sha}@inbox>")):
                     raise ValueError("raw Message-ID mismatch")
                 recovered = _email_ids([str(v) for h in ("In-Reply-To", "References")
@@ -1427,8 +1570,10 @@ def _reconcile_email_threads(db, apply, channel_id, recover=False) -> dict:
             tid = parent[tid]
         return tid
 
+    valid_refs = {}
     for a in rows:
         valid = {n for n in refs[a["id"]] if not (known.get(n, set()) - {a["channel_id"]})}
+        valid_refs[a["id"]] = valid
         result["held_references"] += len(refs[a["id"]] - valid)
         for n in sorted(own[a["id"]] | valid):
             key = a["channel_id"], n
@@ -1446,6 +1591,23 @@ def _reconcile_email_threads(db, apply, channel_id, recover=False) -> dict:
             result["conflicts"].append(ids)
             continue
         source = max(ids, key=lambda tid: (datetime.fromisoformat(threads[tid]["status_changed_at"]), -tid))
+        messages = [a for a in rows if a["thread_id"] in ids]
+        latest_own = max((a for a in messages if a["identity_id"] is None),
+                         key=lambda a: (datetime.fromisoformat(a["occurred_at"]), a["id"]), default=None)
+        state = threads[source]
+        data = json.loads(latest_own["data"]) if latest_own is not None else {}
+        seen = data.get("seen_through_activity_id") if isinstance(data, dict) else None
+        aliases = {n for a in messages for n in own[a["id"]] - _email_ids([a["native_id"]], single=True)}
+        receipt_linked = any(a["identity_id"] is not None and valid_refs[a["id"]] & aliases for a in messages)
+        if (state["status_detail"] == "WAITING_FOR_CUSTOMER" and receipt_linked
+                and type(seen) is int and 0 <= seen < latest_own["id"]
+                and datetime.fromisoformat(state["status_changed_at"]) <= datetime.fromisoformat(latest_own["occurred_at"])):
+            # The latest send's durable snapshot distinguishes unseen arrivals from already answered work.
+            unseen = {a["thread_id"] for a in messages if a["identity_id"] is not None
+                      and a["id"] > seen and threads[a["thread_id"]]["status"] == "TODO"}
+            if unseen:
+                source = max(unseen, key=lambda tid: (
+                    datetime.fromisoformat(threads[tid]["status_changed_at"]), -tid))
         result["groups"].append({"keep": ids[0], "merge": ids[1:], "status_source": source,
                                  "case_id": next(iter(case_ids), None)})
     if apply:
@@ -1475,10 +1637,19 @@ def reconcile_email_threads(db, apply: bool = False, channel_id: int | None = No
     if not apply:
         with _read_snapshot(db):
             return _reconcile_email_threads(db, False, channel_id, recover=True)
-    with db:
-        if not db.in_transaction:
-            db.execute("BEGIN IMMEDIATE")
+    with _write_snapshot(db):
         return _reconcile_email_threads(db, True, channel_id, recover=True)
+
+
+def reconcile_resend_receipts(db) -> None:
+    """Retry durable receipt evidence without raw recovery; caller owns any outer transaction."""
+    with _write_snapshot(db):
+        channels = db.execute(
+            "SELECT DISTINCT ch.id FROM channels ch JOIN connections c ON c.id = ch.connection_id"
+            " JOIN resend_receipts r ON r.connection_id = c.id"
+            " WHERE c.platform = 'gmail' AND ch.kind = 'mailbox'").fetchall()
+        for channel in channels:
+            _reconcile_email_threads(db, True, channel["id"])
 
 
 def ingest(db, inc: Incoming) -> Thread | None:
@@ -1612,39 +1783,59 @@ def reply(db, thread_id: int, text: str, sender: Sender,
     with _read_snapshot(db):
         t = get_thread(db, thread_id)
         thread_id = t.id
+        records = db.execute(
+            "SELECT native_id, data, content, occurred_at, identity_id FROM thread_activities"
+            " WHERE thread_id = ? AND kind = 'MESSAGE' ORDER BY occurred_at, id", (thread_id,)).fetchall()
         history = [{"native_id": r["native_id"], "data": json.loads(r["data"]), "content": r["content"],
-                    "at": r["occurred_at"]} for r in db.execute(
-            "SELECT native_id, data, content, occurred_at FROM thread_activities WHERE thread_id = ? AND kind = 'MESSAGE'"
-            " ORDER BY occurred_at, id", (thread_id,))]
+                    "at": r["occurred_at"]} for r in records]
         connection_id, platform = db.execute("SELECT c.id, c.platform FROM channels ch JOIN connections c"
                                              " ON c.id = ch.connection_id WHERE ch.id = ?", (t.channel_id,)).fetchone()
         files = staged_files(db, thread_id=staged_on)
+        checkpoint = _send_checkpoint(db, connection_id)
+        if platform == "gmail":
+            for message, record in zip(history, records):
+                message["native_id"] = _gmail_wire_id(
+                    db, record["native_id"], connection_id, record["identity_id"])
+                message["wire_id"] = message["native_id"]
+            if history and history[-1]["native_id"] is None:
+                raise ValueError(EMAIL_CONFIRMATION_PENDING)
     if platform in platforms.EMAIL and (problem := email_size_problem(files)):
         raise ValueError(problem)
     if platform == "slack" and (problem := slack_size_problem(files)):
         raise ValueError(problem)
+    now = _now()
     try:
         native_id = sender.send(t, text, list(to), list(cc), history, files=files)
     except SendFailed as e:
         set_connection_error(db, connection_id, str(e))
         raise
     set_connection_error(db, connection_id, None)
-    now = _now()
+    if platform != "gmail":
+        now = _now()
     with db:
         if not db.in_transaction:
             db.execute("BEGIN IMMEDIATE")
         t = get_thread(db, thread_id)  # reconciliation may have happened while the Sender was in flight
         thread_id = t.id
+        changes = _send_changes(db, connection_id, checkpoint)
+        data = {"to": list(to), "cc": list(cc)}
+        if platform == "gmail":
+            data["seen_through_activity_id"] = checkpoint[0]
         cur = db.execute(
             "INSERT OR IGNORE INTO activities (thread_id, kind, occurred_at, native_id, content, data)"
             " VALUES (?, 'MESSAGE', ?, ?, ?, ?)",
-            (thread_id, _iso(now), native_id, text, json.dumps({"to": list(to), "cc": list(cc)})))
+            (thread_id, _iso(now), native_id, text, json.dumps(data)))
         if cur.rowcount:
             _add_sent(db, cur.lastrowid, files)
         db.execute("DELETE FROM staged_attachments WHERE thread_id = ?", (staged_on,))
-        nxt = _after_activity(t.status, t.status_detail, True, "MESSAGE")
-        if nxt:
-            _set_status(db, thread_id, *nxt, now)
+        if platform == "gmail":
+            _reconcile_email_threads(db, True, t.channel_id)
+            t = get_thread(db, thread_id)
+            thread_id = t.id
+        if not _preserve_send_changes(db, thread_id, changes):
+            nxt = _after_activity(t.status, t.status_detail, True, "MESSAGE")
+            if nxt:
+                _set_status(db, thread_id, *nxt, now)
     return get_thread(db, thread_id)
 
 
@@ -1909,6 +2100,8 @@ def thread_view(db, thread_id: int, files: tuple[str, int] | None = None) -> dic
                 who, _ = _sender(db, a["identity_id"]) if a["identity_id"] else ("You", None)
                 m = {"id": a["id"], "who": who, "at": a["occurred_at"], "content": a["content"], "edited": False,
                      "deleted": False, "native_id": a["native_id"], "data": json.loads(a["data"])}
+                if ch["platform"] == "gmail":
+                    m["wire_id"] = _gmail_wire_id(db, a["native_id"], ch["connection_id"], a["identity_id"])
                 by_id[a["id"]] = m
                 msgs.append(m)
             elif a["target_id"] in by_id:

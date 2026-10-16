@@ -566,7 +566,7 @@ def test_reply_prepares_coherent_history_before_wal_merge_and_releases_snapshot_
     merged = []
 
     def merge_before_history_read(sql):
-        if sql.startswith("SELECT native_id, data, content, occurred_at FROM thread_activities"):
+        if sql.startswith("SELECT native_id, data, content, occurred_at"):
             db.set_trace_callback(None)
             try:
                 merged.append(inbox.reconcile_email_threads(writer, apply=True)["merged"])

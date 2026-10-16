@@ -1,8 +1,17 @@
 """The service's local reply socket (POST /reply) end to end, with fake senders."""
 
+import base64
+import hashlib
+import hmac
+import io
 import json
+import sqlite3
 import threading
 from datetime import datetime, timezone
+from http.client import HTTPMessage
+from types import SimpleNamespace
+
+import pytest
 
 from universal_inbox import inbox, serve
 from universal_inbox.tui import ReplyError, socket_reply
@@ -154,3 +163,322 @@ def test_email_hook_logs_its_outcome_without_content(caplog):
     assert lines[0] == "email filtered as automated (auto-reply, bounce, or bulk) <dsn1@google.com>"
     assert lines[1] == "email stored <dsn1@google.com>"
     assert not any("secret body" in x or "mailer-daemon" in x for x in lines)
+
+
+RESEND_KEY = b"whsec_" + base64.b64encode(b"receipt-test-key")
+RESEND_ID = "7b8de695-b4f1-4e78-87d4-b3dbb40382e1"
+RESEND_NOW = datetime(2026, 10, 16, 12, tzinfo=timezone.utc)
+
+
+def receipt_body(email_id=RESEND_ID, message_id="<wire@delivery.example>"):
+    return json.dumps({"type": "email.sent", "data": {"email_id": email_id, "message_id": message_id,
+                       "from": "private@example.com", "subject": "private subject"}}).encode()
+
+
+def receipt_headers(body, ts=None, wid="msg_receipt"):
+    ts = str(int(datetime.now(timezone.utc).timestamp()) if ts is None else ts)
+    sig = base64.b64encode(hmac.new(base64.b64decode(RESEND_KEY[6:]),
+                                  f"{wid}.{ts}.".encode() + body, hashlib.sha256).digest()).decode()
+    headers = HTTPMessage()
+    for name, value in (("svix-id", wid), ("svix-timestamp", ts), ("svix-signature", "v1," + sig)):
+        headers[name] = value
+    return headers
+
+
+def receipt_db(tmp_path, gmail_count=1):
+    path = str(tmp_path / "receipts.db")
+    db = inbox.connect(path)
+    inbox.migrate(db)
+    with db:
+        for i, platform in enumerate(["gmail"] * gmail_count + ["fastmail", "slack", "quo"], 1):
+            db.execute("INSERT INTO connections (id, platform, external_id, self_id, label, connected_at)"
+                       " VALUES (?, ?, ?, ?, ?, ?)",
+                       (i, platform, f"me{i}@example.com", f"me{i}@example.com", platform, RESEND_NOW.isoformat()))
+    db.close()
+    return path
+
+
+def hook_routes(monkeypatch, path, creds=None, kick=None):
+    # Capture source callbacks, without a listener, real provider, credential file, or network.
+    monkeypatch.setattr(serve, "credential", lambda name: (creds or {}).get(name))
+    monkeypatch.setattr(serve, "ThreadingHTTPServer", lambda address, handler: handler.routes)
+    return serve.hooks_server(path, "127.0.0.1", 0, client=object(), kick=kick)
+
+
+def test_resend_standard_webhooks_vector_and_rotation():
+    headers = HTTPMessage()
+    headers["svix-id"] = "msg_p5jXN8AQM9LWM0D4loKWxJek"
+    headers["svix-timestamp"] = "1614265330"
+    headers["svix-signature"] = "v1,g0hM9SsE+OTPJTGt/tmIKtSyZlE3uFJELVlNIOLJ1OE="
+    key = b"whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw"
+    body, now = b'{"test": 2432232314}', datetime.fromtimestamp(1614265330, timezone.utc)
+    assert serve._verify_resend(headers, body, key, now)  # published Standard Webhooks vector
+    headers.replace_header("svix-signature", "v2," + base64.b64encode(b"new version").decode()
+                           + " v1," + base64.b64encode(b"x" * 32).decode() + " " + headers["svix-signature"])
+    assert serve._verify_resend(headers, body, key, now)
+
+
+@pytest.mark.parametrize("delta,accepted", [(-301, False), (-300, True), (300, True), (301, False)])
+def test_resend_signature_replay_window(delta, accepted):
+    body = receipt_body()
+    headers = receipt_headers(body, int(RESEND_NOW.timestamp()) + delta)
+    assert serve._verify_resend(headers, body, RESEND_KEY, RESEND_NOW) is accepted
+
+
+@pytest.mark.parametrize("change", ["space", "unicode", "missing-id", "missing-timestamp", "missing-signature",
+    "duplicate-id", "duplicate-timestamp", "duplicate-signature", "timestamp", "huge-timestamp",
+    "unicode-timestamp", "unicode-id", "signature", "unicode-signature", "forged", "unsupported", "forwarding"])
+def test_resend_rejects_bad_auth_before_db_or_payload(tmp_path, monkeypatch, caplog, change):
+    routes = hook_routes(monkeypatch, "must-not-open.db", {"resend-webhook-secret": RESEND_KEY})
+    monkeypatch.setattr(inbox, "connect", lambda *a: pytest.fail("unauthenticated database access"))
+    body = receipt_body()
+    headers = receipt_headers(body)
+    if change == "space":
+        body += b" "
+    elif change == "unicode":
+        body = body.replace(b"private subject", "privaté subject".encode())
+    elif change.startswith("missing-"):
+        del headers["svix-" + change.removeprefix("missing-")]
+    elif change.startswith("duplicate-"):
+        name = "svix-" + change.removeprefix("duplicate-")
+        headers[name] = headers[name]
+    elif change.endswith("timestamp"):
+        headers.replace_header("svix-timestamp", {"timestamp": "1.5", "huge-timestamp": "9" * 5000,
+                                                "unicode-timestamp": "１２３"}[change])
+    elif change == "unicode-id":
+        headers.replace_header("svix-id", "msg_é")
+    elif change == "signature":
+        headers.replace_header("svix-signature", "v1,not-base64")
+    elif change == "unicode-signature":
+        headers.replace_header("svix-signature", "v1,é")
+    elif change in ("forged", "unsupported"):
+        version = "v1" if change == "forged" else "v2"
+        headers.replace_header("svix-signature", version + "," + base64.b64encode(b"x" * 32).decode())
+    else:
+        headers = HTTPMessage()
+        headers["X-Inbox-Timestamp"] = str(int(datetime.now(timezone.utc).timestamp()))
+        headers["X-Inbox-Signature"] = "sha256=" + hmac.new(b"forwarding", body, hashlib.sha256).hexdigest()
+    assert routes["/hooks/resend"](headers, body) == (401, "text/plain", b"")
+    assert not caplog.records
+
+
+@pytest.mark.parametrize("secret", [None, b"", b"not-a-key", b"whsec_", b"whsec_%%%%",
+                                   b"whsec_Zg==extra", "whsec_wrong-type", b"whsec_Zg=", b"whsec_Zh=="])
+def test_resend_config_optional_without_changing_other_hooks(tmp_path, monkeypatch, secret):
+    path = receipt_db(tmp_path)
+    seen = []
+    monkeypatch.setattr(serve.email, "handle_hook", lambda db, cid, *a: seen.append(("email", cid)) or 204)
+    monkeypatch.setattr(serve.slack, "handle_hook", lambda db, cid, *a: (seen.append(("slack", cid)) or 200, ""))
+    monkeypatch.setattr(serve.quo, "handle_hook", lambda db, cid, *a: seen.append(("quo", cid)) or 204)
+    routes = hook_routes(monkeypatch, path, {"email-hook-secret": b"forward", "slack-signing-secret": b"slack",
+                                           "quo-webhook-secret": b"quo", "resend-webhook-secret": secret})
+    assert set(routes) == {"/hooks/email", "/hooks/slack", "/hooks/quo", "/hooks/resend"}
+    assert routes["/hooks/resend"](HTTPMessage(), b"{}")[0] == 503
+    assert routes["/hooks/email"](HTTPMessage(), b"raw")[0] == 204
+    headers = HTTPMessage()
+    headers["X-Inbox-To"] = serve.fastmail.INBOUND
+    assert routes["/hooks/email"](headers, b"raw")[0] == 204
+    assert routes["/hooks/slack"](HTTPMessage(), b"{}")[0] == 200
+    assert routes["/hooks/quo"](HTTPMessage(), b"{}")[0] == 204
+    assert seen == [("email", 1), ("email", 2), ("slack", 3), ("quo", 4)]
+
+
+def test_resend_unreadable_config_does_not_break_listener(tmp_path, monkeypatch):
+    routes = hook_routes(monkeypatch, "unused")
+    def unreadable(name):
+        if name == "resend-webhook-secret":
+            raise PermissionError("private filename must not escape")
+        return None
+    monkeypatch.setattr(serve, "credential", unreadable)
+    routes = serve.hooks_server("unused", "127.0.0.1", 0, client=object())
+    assert routes["/hooks/resend"](HTTPMessage(), b"{}") == (503, "text/plain", b"")
+    assert routes["/hooks/email"](HTTPMessage(), b"{}")[0] == 503
+
+
+@pytest.mark.parametrize("count", [0, 2])
+def test_resend_requires_exactly_one_gmail_not_first_or_payload_address(tmp_path, monkeypatch, count):
+    path = receipt_db(tmp_path, gmail_count=count)
+    routes = hook_routes(monkeypatch, path, {"resend-webhook-secret": RESEND_KEY})
+    body = receipt_body()
+    assert routes["/hooks/resend"](receipt_headers(body), body)[0] == 503
+    db = inbox.connect(path)
+    assert db.execute("SELECT count(*) FROM resend_receipts").fetchone()[0] == 0
+    db.close()
+
+
+@pytest.mark.parametrize("field,value", [("self_id", " "), ("external_id", " "), ("id", 0)])
+def test_resend_rejects_unusable_single_gmail_binding(tmp_path, monkeypatch, field, value):
+    path = receipt_db(tmp_path)
+    db = inbox.connect(path)
+    with db:
+        db.execute(f"UPDATE connections SET {field} = ? WHERE platform = 'gmail'", (value,))
+    db.close()
+    routes = hook_routes(monkeypatch, path, {"resend-webhook-secret": RESEND_KEY})
+    body = receipt_body()
+    assert routes["/hooks/resend"](receipt_headers(body), body)[0] == 503
+
+
+def test_resend_receipts_commit_before_kick_and_ack_retries_no_health_or_mail(tmp_path, monkeypatch, caplog):
+    path = receipt_db(tmp_path)
+    db = inbox.connect(path)
+    before = [tuple(r) for r in db.execute("SELECT * FROM connections ORDER BY id")]
+    db.close()
+    class DurableKick(threading.Event):
+        def set(self):
+            check = inbox.connect(path)
+            try:
+                assert check.execute("SELECT count(*) FROM resend_receipts").fetchone()[0] > 0
+            finally:
+                check.close()
+            super().set()
+    kick = DurableKick()
+    route = hook_routes(monkeypatch, path, {"resend-webhook-secret": RESEND_KEY}, kick)["/hooks/resend"]
+    body = receipt_body()
+    assert route(receipt_headers(body), body) == (204, "text/plain", b"")
+    assert kick.is_set()
+    kick.clear()
+    assert route(receipt_headers(body), body)[0] == 204 and not kick.is_set()
+    conflict = receipt_body(message_id="<different@delivery.example>")
+    assert route(receipt_headers(conflict), conflict)[0] == 409 and not kick.is_set()
+    # A later UUID followed by an old duplicate remains durable and never replays work.
+    later = receipt_body("7b8de695-b4f1-4e78-87d4-b3dbb40382e2", "<later@delivery.example>")
+    assert route(receipt_headers(later), later)[0] == 204
+    kick.clear()
+    assert route(receipt_headers(body), body)[0] == 204 and not kick.is_set()
+    db = inbox.connect(path)
+    assert [tuple(r) for r in db.execute("SELECT * FROM connections ORDER BY id")] == before
+    assert tuple(db.execute("SELECT connection_id, message_id FROM resend_receipts WHERE email_id = ?",
+                            (RESEND_ID,)).fetchone()) == (1, "<wire@delivery.example>")
+    assert db.execute("SELECT count(*) FROM activities").fetchone()[0] == 0
+    assert db.execute("SELECT count(*) FROM threads").fetchone()[0] == 0
+    db.close()
+    assert not caplog.records
+
+
+@pytest.mark.parametrize("body,status", [(b"[]", 400), (b"{", 400), (b'{"type":null}', 400),
+    (b'{"type":"email.sent","data":[]}', 400), (b'{"type":"email.sent","data":{}}', 400),
+    (receipt_body("invalid"), 400), (receipt_body(message_id="<a@b> <c@d>"), 400),
+    (b'{"type":"email.delivered"}', 204)])
+def test_resend_authenticated_payload_status_without_kick(tmp_path, monkeypatch, body, status):
+    path, kick = receipt_db(tmp_path), threading.Event()
+    route = hook_routes(monkeypatch, path, {"resend-webhook-secret": RESEND_KEY}, kick)["/hooks/resend"]
+    assert route(receipt_headers(body), body) == (status, "text/plain", b"")
+    assert not kick.is_set()
+    db = inbox.connect(path)
+    assert db.execute("SELECT count(*) FROM resend_receipts").fetchone()[0] == 0
+    db.close()
+
+
+@pytest.mark.parametrize("failure", ["connect", "uncommitted-write"])
+def test_resend_storage_failure_never_acknowledged_or_kicked(tmp_path, monkeypatch, failure):
+    path, kick = receipt_db(tmp_path), threading.Event()
+    route = hook_routes(monkeypatch, path, {"resend-webhook-secret": RESEND_KEY}, kick)["/hooks/resend"]
+    connect = inbox.connect
+    def fail_connect(*args):
+        raise sqlite3.OperationalError("private database path")
+    def fail_write(db, cid, body):
+        db.execute("INSERT INTO resend_receipts VALUES (?, ?, ?)", (RESEND_ID, cid, "<wire@delivery.example>"))
+        raise sqlite3.OperationalError("commit failed: private data")
+    if failure == "connect":
+        monkeypatch.setattr(inbox, "connect", fail_connect)
+    else:
+        monkeypatch.setattr(serve.email, "handle_resend_hook", fail_write)
+    body = receipt_body()
+    assert route(receipt_headers(body), body) == (503, "text/plain", b"")
+    assert not kick.is_set()
+    db = connect(path)
+    assert db.execute("SELECT count(*) FROM resend_receipts").fetchone()[0] == 0
+    db.close()
+
+
+def frame_request(headers, body=b"", path="/hooks/resend", reader=None, known=True):
+    calls, statuses, timeouts = [], [], []
+    handler = object.__new__(serve._Handler)
+    handler.headers = HTTPMessage()
+    for name, value in headers:
+        handler.headers[name] = value
+    handler.path = path
+    handler.routes = {path: lambda headers, body: (calls.append(body) or 204, "text/plain", b"")} if known else {}
+    handler.rfile, handler.wfile = reader or io.BytesIO(body), io.BytesIO()
+    handler.connection = SimpleNamespace(gettimeout=lambda: None, settimeout=timeouts.append)
+    handler.send_response = statuses.append
+    handler.send_error = statuses.append
+    handler.send_header = lambda *args: None
+    handler.end_headers = lambda: None
+    handler.do_POST()
+    return statuses, calls, timeouts
+
+
+@pytest.mark.parametrize("headers,body,status", [
+    ([], b"", 411), ([("Content-Length", "2"), ("Content-Length", "2")], b"{}", 400),
+    ([("Content-Length", "2,2")], b"{}", 400), ([("Content-Length", "-1")], b"", 400),
+    ([("Content-Length", "１２")], b"", 400), ([("Content-Length", "9" * 5000)], b"", 413),
+    ([("Content-Length", str(serve.RESEND_MAX + 1))], b"", 413),
+    ([("Content-Length", "2"), ("Transfer-Encoding", "chunked")], b"{}", 400),
+    ([("Transfer-Encoding", "identity")], b"", 400),
+    ([("Content-Length", "3")], b"{}", 400),
+])
+def test_resend_framing_rejected_before_route(headers, body, status):
+    statuses, calls, _ = frame_request(headers, body)
+    assert statuses == [status] and not calls
+
+
+def test_resend_body_limit_timeout_and_total_deadline(monkeypatch):
+    body = b"x" * serve.RESEND_MAX
+    statuses, calls, timeouts = frame_request([("Content-Length", str(len(body)))], body)
+    assert statuses == [204] and calls == [body] and timeouts[-1] is None
+    def timeout(length):
+        raise TimeoutError("socket timed out")
+    assert frame_request([("Content-Length", "1")], reader=SimpleNamespace(read1=timeout))[:2] == ([408], [])
+    # Trickle data cannot renew the total deadline.
+    ticks = iter([0, 1, 6])
+    monkeypatch.setattr(serve.time, "monotonic", lambda: next(ticks))
+    statuses, calls, timeouts = frame_request([("Content-Length", "2")],
+                                            reader=SimpleNamespace(read1=lambda length: b"x"))
+    assert statuses == [408] and not calls and timeouts == [4, None]
+
+
+def test_resend_framing_does_not_change_old_routes():
+    body = b"x" * (serve.RESEND_MAX + 1)
+    for route in ("/hooks/email", "/hooks/slack", "/hooks/quo", "/reply", "/up/token"):
+        statuses, calls, timeouts = frame_request([("Content-Length", str(len(body)))], body, route)
+        assert statuses == [204] and calls == [body] and not timeouts
+
+
+@pytest.mark.parametrize("path", ["/tana", "/attio", "/linear"])
+def test_unknown_context_route_consumes_legacy_body_before_404(path):
+    body = b'{"emails":["' + b"x" * serve.RESEND_MAX + b'"],"domains":[]}'
+    reader = io.BytesIO(body)
+    statuses, calls, timeouts = frame_request([("Content-Length", str(len(body)))], path=path,
+                                            reader=reader, known=False)
+    assert statuses == [404] and not calls and not timeouts
+    assert reader.tell() == len(body)  # deterministic guard for the Unix client body-write/close race
+
+
+def test_wake_reconciles_durable_receipts_without_kick_before_downloads(tmp_path, monkeypatch):
+    path, calls = receipt_db(tmp_path), []
+    monkeypatch.setattr(inbox, "wake", lambda *a: calls.append("wake"))
+    monkeypatch.setattr(inbox, "reconcile_resend_receipts", lambda *a: calls.append("receipts"))
+    monkeypatch.setattr(inbox, "expire_attachments", lambda *a: calls.append("expiry"))
+    for _ in range(2):  # restart/lost kick still traverses durable receipt work
+        stop = threading.Event()
+        def downloads(*args):
+            calls.append("downloads")
+            stop.set()
+        monkeypatch.setattr(serve, "fetch_pending", downloads)
+        serve.wake_loop(path, stop, every=0)
+    assert calls == ["wake", "receipts", "downloads", "expiry"] * 2
+
+
+@pytest.mark.parametrize("error,status", [(inbox.SendUnknown("outcome unknown; do not retry"), 504),
+                                         (ValueError("Message confirmation pending; try after receipt"), 400)])
+def test_reply_unknown_and_pending_statuses(tmp_path, monkeypatch, error, status):
+    path, tid = setup(tmp_path)
+    def fail(*args):
+        raise error
+    monkeypatch.setattr(inbox, "reply", fail)
+    db = inbox.connect(path)
+    result = serve.handle_reply(db, json.dumps({"thread_id": tid, "text": "retain me"}).encode(),
+                                serve.Senders(made={2: Sender()}))
+    db.close()
+    assert result == (status, {"error": str(error)})

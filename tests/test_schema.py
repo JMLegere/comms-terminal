@@ -119,3 +119,65 @@ def test_waiting_returns_to_todo_after_four_days_without_a_reply():
     assert inbox.wake(db, at + timedelta(days=4)) == 1
     t = inbox.get_thread(db, t.id)
     assert (t.status, t.status_detail, t.follow_up_at) == ("TODO", "NEW_REPLY", None)
+
+
+def test_version_12_upgrade_adds_only_receipts_and_preserves_records_files_and_guards(tmp_path):
+    from test_attachment_store import NOW, setup
+
+    db, thread_id, activity_id = setup(tmp_path)
+    try:
+        sha = inbox.store_file(db, b"retained file")
+        inbox.add_attachments(db, activity_id, [{"name": "retained.txt", "type": "text/plain", "size": 13, "sha": sha}])
+        inbox.stage(db, sha=sha, name="reply.txt", type="text/plain", size=13, thread_id=thread_id)
+        inbox.save_draft(db, {"connection_id": 1, "kind": "email", "sender": "me@x.io", "to": "ana@acme.com",
+                             "cc": "", "subject": "Retained draft", "body": "Unsent"})
+        raw = b"Message-ID: <retained@test>\r\n\r\nRetained raw"
+        raw_sha = inbox.store_raw(db, raw)
+        inbox.ingest(db, inbox.Incoming(1, "me@x.io", "mailbox", "MESSAGE", "<retained@test>", None, NOW,
+                                        "Retained raw", data={"raw": raw_sha}))
+        db.executescript("DROP TABLE resend_receipts; PRAGMA user_version = 12;")
+        tables = [r[0] for r in db.execute("SELECT name FROM sqlite_schema WHERE type = 'table'")]
+        rows = {name: [tuple(r) for r in db.execute(f'SELECT * FROM "{name}" ORDER BY rowid')] for name in tables}
+        schema = [tuple(r) for r in db.execute("SELECT type, name, tbl_name, sql FROM sqlite_schema ORDER BY name")]
+        inbox.migrate(db)
+        assert db.execute("PRAGMA user_version").fetchone()[0] == inbox.SCHEMA_VERSION == 13
+        assert {name: [tuple(r) for r in db.execute(f'SELECT * FROM "{name}" ORDER BY rowid')]
+                for name in tables} == rows
+        assert [tuple(r) for r in db.execute(
+            "SELECT type, name, tbl_name, sql FROM sqlite_schema WHERE tbl_name != 'resend_receipts' ORDER BY name")] == schema
+        assert inbox.attachment_path(db, sha).read_bytes() == b"retained file"
+        assert (inbox.raw_dir(db) / f"{raw_sha}.eml").read_bytes() == raw
+        assert db.execute("PRAGMA foreign_key_check").fetchall() == []
+        with pytest.raises(sqlite3.IntegrityError):
+            db.execute("INSERT INTO resend_receipts VALUES ('provider', 999, '<wire@test>')")
+        db.rollback()
+        for sql in ("UPDATE activities SET native_id = '<rewritten@test>'", "DELETE FROM activities"):
+            with pytest.raises(sqlite3.DatabaseError, match="append-only"):
+                db.execute(sql)
+            db.rollback()
+        after = "\n".join(db.iterdump())
+        inbox.migrate(db)
+        assert "\n".join(db.iterdump()) == after
+    finally:
+        db.close()
+
+
+def test_failed_version_13_upgrade_rolls_back_ddl_and_version_and_restores_fk(tmp_path):
+    from test_attachment_store import setup
+
+    db, thread_id, activity_id = setup(tmp_path)
+    try:
+        db.executescript("DROP TABLE resend_receipts; PRAGMA user_version = 12; PRAGMA foreign_keys = OFF;")
+        with db:
+            db.execute("INSERT INTO attachments (activity_id, position, name, type, size, state)"
+                       " VALUES (999, 0, 'broken', 'text/plain', 0, 'pending')")
+        db.execute("PRAGMA foreign_keys = ON")
+        before = "\n".join(db.iterdump())
+        with pytest.raises(ValueError, match="broken foreign key"):
+            inbox.migrate(db)
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 12
+        assert db.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+        assert db.execute("SELECT name FROM sqlite_schema WHERE name = 'resend_receipts'").fetchall() == []
+        assert "\n".join(db.iterdump()) == before
+    finally:
+        db.close()

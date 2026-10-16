@@ -118,7 +118,7 @@ def email_thread_with_cc(ctx, mid, frm, cc):
 
 @when(parsers.parse('Reply is called with "{text}" through the Email Sender'))
 def reply_email(ctx, text):
-    ctx.provider = Recorder((200, {"id": "re_123"}))
+    ctx.provider = Recorder((200, {"id": "00000000-0000-4000-8000-000000000123"}))
     sender = email.EmailSender("re_test", MAILBOX, post=ctx.provider)
     ctx.thread = inbox.reply(ctx.db, ctx.thread.id, text, sender)
 

@@ -6,7 +6,6 @@ import hmac
 import html
 import json
 import logging
-import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -191,13 +190,22 @@ def _attachments(files) -> dict:
 class EmailSender:
     """Sends replies through Resend (decision #70). `post` is swappable for tests."""
 
-    def __init__(self, api_key: str, from_address: str, post=_post, get=None):
-        self.api_key, self.from_address, self.post, self.get = api_key, from_address, post, get or _get
+    def __init__(self, api_key: str, from_address: str, post=_post):
+        self.api_key, self.from_address, self.post = api_key, from_address, post
 
     def send(self, thread, text, to, cc, history, files=()) -> str:
         if not to:
             to, cc = reply_all(history, self.from_address)
-        ids = [h["native_id"] for h in history]
+        ids = []
+        for message in history:
+            mid = message.get("wire_id", message.get("native_id"))
+            # Core's explicit projection distinguishes genuine incoming IDs from pending local markers.
+            if "wire_id" not in message and mid and mid.lower().endswith("@resend>"):
+                mid = None
+            ids.append(mid)
+        if ids and not ids[-1]:
+            raise ValueError(inbox.EMAIL_CONFIRMATION_PENDING)
+        ids = [mid for mid in ids if mid]
         message_id = make_msgid(domain=self.from_address.rsplit("@", 1)[1])
         subject = thread.title if thread.title.lower().startswith("re:") else f"Re: {thread.title}"
         headers = {"Message-ID": message_id}
@@ -211,13 +219,18 @@ class EmailSender:
                                       "Content-Type": "application/json",
                                       "Idempotency-Key": message_id}, payload)
         except (urllib.error.URLError, OSError, ValueError) as e:
-            raise inbox.SendFailed(f"email send failed: {e}") from e
+            raise inbox.SendUnknown(f"email send outcome unknown: {e}") from e
+        if status >= 500:
+            raise inbox.SendUnknown(f"email send outcome unknown: HTTP {status}")
         if status >= 300:
             raise inbox.SendFailed(f"email send failed: HTTP {status} {body.get('message', '')}".strip())
-        return message_id
+        try:
+            return inbox.resend_native_id(body["id"])
+        except (KeyError, TypeError, ValueError) as e:
+            raise inbox.SendUnknown("email accepted without a usable receipt ID; outcome unknown") from e
 
     def start(self, to, cc, subject, body, key, files=()) -> str:
-        """A new email; returns the Message-ID SES gave it, so replies find the Thread."""
+        """A new email; retain its provider receipt until the signed sent event supplies its SMTP identity."""
         headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
         payload = {"from": self.from_address, "to": to, "cc": cc, "subject": subject, "text": body,
                    **_attachments(files)}
@@ -229,17 +242,10 @@ class EmailSender:
             raise inbox.SendUnknown(f"email send outcome unknown: HTTP {status}")
         if status >= 300:
             raise inbox.SendFailed(f"HTTP {status} {r.get('message', '')}".strip())
-        # ponytail: SES assigns the Message-ID moments after acceptance; 3 tries, a webhook if that falls short
-        for _ in range(3):
-            time.sleep(1)
-            try:
-                status, sent = self.get(f"https://api.resend.com/emails/{r['id']}", headers)
-            except (urllib.error.URLError, OSError, ValueError):
-                continue
-            if status < 300 and sent.get("message_id"):
-                return sent["message_id"]
-        log.warning("no SES Message-ID for Resend email %s; replies will start their own Thread", r["id"])
-        return f"<{r['id']}@resend>"
+        try:
+            return inbox.resend_native_id(r["id"])
+        except (KeyError, TypeError, ValueError) as e:
+            raise inbox.SendUnknown("email accepted without a usable receipt ID; outcome unknown") from e
 
 
 log = logging.getLogger("universal_inbox.email")
@@ -304,3 +310,25 @@ def handle_hook(db, connection_id: int, headers, body: bytes, secret: bytes, now
     log.info("email %s %s", outcome, mid)
     inbox.set_connection_error(db, connection_id, None)
     return 204
+
+
+def handle_resend_hook(db, connection_id: int, body: bytes) -> tuple[int, bool]:
+    """Handle an already authenticated receipt; persist only its provider and SMTP identities."""
+    try:
+        event = json.loads(body)
+    except (ValueError, RecursionError):
+        return 400, False
+    if not isinstance(event, dict) or not isinstance(event.get("type"), str) or not event["type"]:
+        return 400, False
+    if event["type"] != "email.sent":
+        return 204, False
+    data = event.get("data")
+    if not isinstance(data, dict):
+        return 400, False
+    try:
+        inserted = inbox.record_resend_receipt(db, connection_id, data.get("email_id"), data.get("message_id"))
+    except inbox.ResendReceiptConflict:
+        return 409, False
+    except ValueError:
+        return 400, False
+    return 204, inserted

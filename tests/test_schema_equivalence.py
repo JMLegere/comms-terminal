@@ -25,3 +25,19 @@ def test_migrated_schema_matches_a_fresh_one(tmp_path):
     want, got = shape(fresh), shape(old)
     assert sorted(want) == sorted(got)
     assert {k: v for k, v in got.items() if want[k] != v} == {}
+
+
+def test_version_12_upgrade_matches_fresh_schema():
+    fresh, old = inbox.connect(), inbox.connect()
+    try:
+        inbox.migrate(fresh)
+        inbox.migrate(old)
+        old.executescript("DROP TABLE resend_receipts; PRAGMA user_version = 12;")
+        before = shape(old)
+        inbox.migrate(old)
+        assert shape(old) == shape(fresh)
+        assert {key: value for key, value in shape(old).items()
+                if key[1] not in ("resend_receipts", "sqlite_autoindex_resend_receipts_1")} == before
+    finally:
+        fresh.close()
+        old.close()

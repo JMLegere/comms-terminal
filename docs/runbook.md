@@ -44,6 +44,36 @@ D3 (decision #102): Cloudflare Tunnel publishes `https://hooks.agentmaple.com/ho
 7. **You:** Gmail forwarding. Gmail → Settings → Forwarding and POP/IMAP → Add a forwarding address: `jeremy@inbox.agentmaple.com`. Google's confirmation code arrives in the console as a Todo Thread; enter it in Gmail, then choose "Forward a copy … and keep Gmail's copy in the Inbox". If Workspace blocks forwarding to an external address, an admin adds Admin console → Gmail → Routing → "Also deliver to" `jeremy@inbox.agentmaple.com` instead.
 8. Live check: send yourself an email from another account; it appears as a Todo Thread within seconds. Reply from the console; the reply arrives in the other account's thread.
 
+## 2a. Resend sent receipts — separately authorized rollout
+
+**Source implementation: 2026-10-16.** Signed receipt handling, migration 13, optional credential installation, and the exact tunnel allowlist are implemented in source. Verification, package release, live migration, secret provisioning, endpoint subscription, and tunnel changes require their own recorded gates. This section makes no claim that `https://hooks.agentmaple.com/hooks/resend` is configured or receiving events.
+
+Gmail sends retain Resend's accepted email UUID as an immutable `<uuid@resend>` Activity ID. An authenticated `email.sent` receipt supplies its SMTP Message-ID. The service commits this minimal mapping before acknowledgement, then the existing wake loop reconciles exact references before attachment downloads. Receipt, outgoing Activity, and incoming reply can arrive in any order; periodic wake recovers a lost kick or restart. A receipt alone creates no Thread or Activity. Temporary split Threads can remain until the receipt arrives.
+
+New outgoing Gmail Activities may also store internal `data.seen_through_activity_id`: the global Activity high-water mark seen before calling the provider. Delayed/restarted exact receipt reconciliation uses that durable boundary to preserve complete current Todo/Investigating work from inbound Activities recorded afterward; later own sends and newer Done/Paused/Ignored triage keep normal precedence. This needs no operator setting. Legacy rows without a valid checkpoint retain ordinary triage/manual-repair limits; never rewrite existing Activities to add one.
+
+Replying to a latest message whose SMTP identity remains pending is refused before dispatch; text and staged files stay available. Earlier unresolved IDs are omitted from References. Acceptance with a missing usable UUID is an unknown outcome; retain work and investigate delivery, **never automatically resend**. Keep the sender API key **sending-only**: this flow needs no email retrieval permission.
+
+### Admission and setup
+
+Obtain Jeremy's separate approval for the exact live target and operations before each provider, credential, tunnel, migration, service, or real-email action:
+
+1. Review the clean release and current schema. Take and verify an approved consistent database backup before migration 13; preserve raw mail, attachment storage, aliases, and saved drafts. Confirm exactly one Gmail Connection with usable `self_id` and `external_id`; other Platforms can coexist. Zero or multiple Gmail Connections return 503. Endpoint ownership comes from this local binding, never `from`/`to` in an event.
+   Upgrade both the service and console code. Preserve any unsent reply text before restarting an existing console: open reply text is held in that process's memory, so a database backup alone does not capture it. Keep staged-file ownership with its selected original draft; do not silently restart an active editor.
+2. In the authorized Resend account, create the endpoint for `https://hooks.agentmaple.com/hooks/resend`, subscribed to **`email.sent`**. Stage its separate `whsec_…` signing secret as `~/.config/universal-inbox/resend-webhook-secret` (0600), keeping values out of arguments, history, and logs. Preserve the existing forwarding secret and sending-only key.
+3. Review all staged credentials, then use the approved installer/package steps. `deploy/install.sh` encrypts the optional secret, shreds its staged copy, and installs `universal-inbox.service.d/resend.conf` only when its encrypted credential exists. The installer also restarts services and processes other staged credentials: authorize that exact scope. Missing/invalid receipt configuration leaves `/hooks/resend` at 503 while existing hooks and other Platforms retain their behavior.
+4. Refresh the **exact current** Cloudflare tunnel configuration. Preview a scoped replacement changing only the intended hook rule to `^/hooks/(email|slack|quo|resend)$`, preserving all other fields, ingress entries, and private-route protections. Do **not** run `scripts/cloudflare_setup.py --apply` to add this route to an existing deployment: it replaces ingress and also changes DNS, Worker, secrets, and routing rules. The source allowlist is a setup default, not evidence of live state.
+5. Verify the exact public URL after authorized setup: unsigned traffic returns 401; a valid signed receipt returns 204 only after its mapping survives a new database connection. Replay an identical receipt, exercise restart/lost-kick recovery, and confirm conflicting mappings return 409 while preserving the first value. Verify provider retry/deadline/replay behavior in this account, including fresh delivery signatures inside the 300-second window. A permanently missing event needs operator recovery.
+6. Under separate real-email approval, send a synthetic initial Draft, receive its signed receipt, and obtain a controlled reply; repeat for an ordinary reply and reordered delivery. Inspect actual outbound threading headers and the rendered console: one canonical conversation, both old Thread IDs usable, immutable messages/files present, latest triage retained, and selected original reply draft's text/files preserved or cleared only by its own successful send. Keep private reply/file/upload routes inaccessible publicly.
+
+The receipt reader requires one decimal Content-Length, rejects Transfer-Encoding and duplicate lengths, caps bodies at 64 KiB, and imposes a five-second total read deadline. Statuses: missing length 411; invalid/truncated framing or authenticated payload 400; oversized 413; timeout 408; invalid signature 401; missing/invalid config, ambiguous binding, or storage failure 503; conflicting mapping 409; committed new/identical receipt or unrelated authenticated event 204. Unauthenticated receipt traffic changes neither Connection health nor stored mail. Responses/logs contain no receipt payload or signing material.
+
+### Recovery and receipt-specific rollback
+
+- Historical repair needs authoritative UUID↔SMTP-ID proof and approval for the **exact current** mapping and affected Threads. The recorded incident concerns Threads 299/300, but refresh their triage, Cases, aliases, drafts, and files before previewing any repair. Subject/body similarity supplies no proof. Older replies whose provider UUID was discarded require separate manual evidence. A stored orphan receipt cannot establish Draft ownership after a crash between provider acceptance and local recording.
+- A receipt rollback should disable only the new provider subscription/routing and optional receipt drop-in under explicit approval; preserve unrelated hook routes, credentials, and settings. Keep mappings, Activity/raw history, aliases, and drafts intact. Use a rollback build that accepts schema 13: the older schema-12 build rejects a migrated database.
+- Never lower `user_version`, delete receipt rows, or automatically unmerge to force an older build to start. Restoring an earlier consistent backup requires separate approval, an explicit account of concurrent changes it would lose, and matching code/data/storage. Full uninstall in §7 is broader than receipt rollback.
+
 ## 3a. Connect Fastmail
 
 Fastmail is a second email Connection (decisions #111, #113). Incoming mail is event-driven like Gmail: a Fastmail rule sends a copy of every message to `fastmail@inbox.agentmaple.com`, Email Routing hands it to the same Worker, and the hook files it under Fastmail by that address. Jeremy's Basic plan refuses JMAP, IMAP, and API tokens, so replies (and a 10-minute poll of Sent for replies written in Fastmail itself) go through Fastmail's MCP server, signed in as a connected app the way omp is.
@@ -62,7 +92,7 @@ Quo is the SMS Platform (`.agents/discovery/2026-10-12-sms.md`): Jeremy's Work n
 
 1. **You:** save the Quo API key without echoing it: `install -m 600 /dev/null ~/.config/universal-inbox/quo-api-key; and read -s -P 'Quo API key: ' k; and printf %s $k > ~/.config/universal-inbox/quo-api-key; and set -e k`.
 2. Create the webhook through the API (`POST https://api.quo.com/webhooks`, header `Quo-Api-Version: 2026-03-30`): URL `https://hooks.agentmaple.com/hooks/quo`, events `message.received`, `message.delivered`, `message.failed`, `message.undelivered`, `call.completed`, `call.transcript.completed`, `call.voicemail.completed`, `resourceIds: ["PN2ppcGyMM"]`. Calls become Phone calls (`.agents/discovery/2026-10-15-phone-calls.md`); on the live webhook, send the full seven-event list with `PATCH https://api.quo.com/webhooks/43687` (it updates only the fields sent). Write the returned `data.key` (`whsec_…`) straight to `~/.config/universal-inbox/quo-webhook-secret` (0600); it is shown once (rotate with `POST /webhooks/{id}/rotate`). The live webhook is ID `43687`, "Universal Inbox".
-3. Cloudflare: the tunnel's public path is `^/hooks/(email|slack|quo)$` (`scripts/cloudflare_setup.py`).
+3. Cloudflare: Quo originally used `^/hooks/(email|slack|quo)$`. The current setup-source default includes Resend as `^/hooks/(email|slack|quo|resend)$`; refresh live configuration before a scoped change (§2a).
 4. **You:** `sudo bash deploy/install.sh`: it stores `quo-webhook-secret` and `quo-api-key` and adds `universal-inbox.service.d/quo.conf`.
 5. On Workbox: `universal-inbox init --quo +15068324154`. The service makes the Quo sender on first reply; no restart is needed.
 
@@ -171,6 +201,8 @@ uv run python scripts/demo.py --step --keep
 In a second pane, run the console command it prints. The demo runs the real hooks server and reply socket with demo secrets, sends signed fixture mail and Slack events over HTTP, and records replies at fake Resend and Slack endpoints; nothing leaves Workbox. It walks AS-1, AS-3, AS-11, AS-4, AS-6, AS-13, and AS-17 and prints PASS or FAIL for each.
 
 ## 7. Rollback
+
+For the additive receipt release, follow schema-aware, receipt-specific rollback in §2a. Commands below are the broader full-service uninstall and require separate approval.
 
 ```
 sudo systemctl disable --now universal-inbox cloudflared

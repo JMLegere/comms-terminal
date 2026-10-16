@@ -13,6 +13,7 @@ Walks AS-1, AS-3, AS-11, AS-4, AS-6, AS-13, and AS-17 and checks each outcome.
 """
 
 import argparse
+import base64
 import hashlib
 import hmac
 import json
@@ -39,11 +40,12 @@ class FakeEndpoints:
     """Stands in for Resend and Slack's Web API; records each call."""
 
     def __init__(self):
-        self.sent = []
+        self.sent, self.resend_id = [], None
 
     def resend(self, url, headers, payload):
         self.sent.append(("resend", payload))
-        return 200, {"id": f"demo-{len(self.sent)}"}
+        self.resend_id = f"00000000-0000-4000-8000-{len(self.sent):012x}"
+        return 200, {"id": self.resend_id}
 
     def slack_post(self, url, token, payload):
         self.sent.append(("slack", payload))
@@ -82,6 +84,13 @@ class Demo:
         ts = str(int(time.time()))
         sig = "sha256=" + hmac.new(self.secrets["email-hook-secret"], ts.encode() + b"." + body, hashlib.sha256).hexdigest()
         return self.post("/hooks/email", body, {"X-Inbox-Timestamp": ts, "X-Inbox-Signature": sig})
+
+    def sent_receipt(self, email_id, message_id):
+        body = json.dumps({"type": "email.sent", "data": {"email_id": email_id, "message_id": message_id}}).encode()
+        wid, ts = "msg_demo_receipt", str(int(time.time()))
+        key = base64.b64decode(self.secrets["resend-webhook-secret"].removeprefix(b"whsec_"))
+        sig = base64.b64encode(hmac.new(key, f"{wid}.{ts}.".encode() + body, hashlib.sha256).digest()).decode()
+        return self.post("/hooks/resend", body, {"svix-id": wid, "svix-timestamp": ts, "svix-signature": f"v1,{sig}"})
 
     def slack_message(self, channel, user, text, at: datetime, channel_type="im"):
         ts = f"{at.timestamp():.6f}"
@@ -127,7 +136,9 @@ def run(demo: Demo, fakes: FakeEndpoints, step):
     demo.check("AS-3", "sent with In-Reply-To <as1@acme.com>; Thread is Snoozed / Waiting for them",
                bool(resend) and resend[-1]["headers"].get("In-Reply-To") == "<as1@acme.com>"
                and (t.status, t.status_detail) == ("SNOOZED", "WAITING_FOR_CUSTOMER"))
-    our_id = resend[-1]["headers"]["Message-ID"] if resend else None
+    our_id = "<demo-smtp-1@email.amazonses.test>"
+    demo.check("AS-3", "signed sent receipt records the delivered SMTP identity",
+               demo.sent_receipt(fakes.resend_id, our_id) == 204)
 
     pause("AS-11 Ana's out-of-office reply arrives (Auto-Submitted: auto-replied).")
     before = demo.db.execute("SELECT count(*) FROM activities").fetchone()[0]
@@ -199,6 +210,7 @@ def main(argv=None) -> int:
     # Demo secrets in a private directory, loaded the way systemd's LoadCredentialEncrypted= exposes them.
     creds = tempfile.mkdtemp(prefix="universal-inbox-demo-creds-")
     demo_secrets = {n: secrets.token_hex(32).encode() for n in ("email-hook-secret", "slack-signing-secret")}
+    demo_secrets["resend-webhook-secret"] = b"whsec_" + base64.b64encode(secrets.token_bytes(32))
     for name, value in {**demo_secrets, "slack-user-token": b"xoxp-demo", "resend-api-key": b"re_demo"}.items():
         Path(creds, name).write_bytes(value)
         os.chmod(Path(creds, name), 0o600)
