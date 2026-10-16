@@ -2933,7 +2933,10 @@ class PeoplePage(TablePage):
             self.app.main.open(lambda: PersonPage(p["id"]))
 
     def on_mount(self):
-        super().on_mount()
+        # Textual runs TablePage.on_mount (columns, rows) for this page too, so calling it here added every column twice.
+        self.call_after_refresh(self.past_first_header)
+
+    def past_first_header(self):
         if len(self.items) > 1:  # past the first letter header, like Threads past the first Case header
             self.query_one(DataTable).move_cursor(row=1)
 

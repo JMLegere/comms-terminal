@@ -622,13 +622,6 @@ class PersonSequencePage(tui.PersonPage):
 class EnrollPeoplePage(tui.PeoplePage):
     BINDINGS = [Binding("s", "enroll", "enroll in Sequence"), *tui.PeoplePage.BINDINGS]
 
-    def single_columns(self):
-        # Product bug, not a design: PeoplePage.on_mount calls super().on_mount() while Textual also dispatches
-        # TablePage.on_mount, so the live table gets its columns twice. Rebuild them once for the review capture.
-        table = self.query_one(DataTable)
-        table.clear(columns=True)
-        table.add_columns(*self.COLUMNS)
-        self.refresh_data()
 
 
 async def wait(pilot, rounds=6):
@@ -666,8 +659,6 @@ async def capture(entry, output):
             main._show()
             await wait(pilot, 10)
             if isinstance(main.current, EnrollPeoplePage):
-                main.current.single_columns()
-                await wait(pilot, 4)
                 name = "Priya Shah" if spec.get("refused") else "Dana Roy"
                 row = next(i for i, (item, _) in enumerate(main.current.items) if item.get("name") == name)
                 main.current.query_one(DataTable).move_cursor(row=row)

@@ -154,6 +154,7 @@ def test_people_list_groups_by_first_letter_and_folds(tmp_path):
         await pilot.pause()
         page = app.main.current
         assert isinstance(page, PeoplePage)
+        assert len(page.query_one(DataTable).columns) == len(PeoplePage.COLUMNS)  # once, not once per on_mount
         items = [item for item, _ in page.items]
         letters = [i["letter"] for i in items if "letter" in i]
         assert letters == sorted(letters, key=lambda k: (k == "#", k)) and "letter" in items[0]
