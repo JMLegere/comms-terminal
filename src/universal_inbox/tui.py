@@ -705,14 +705,14 @@ class Rail(OptionList):
             else:
                 icon_name, color = VIEW_ICON[name]
                 opts.append(item(f"view:{i}", icon_name, name, counts[name], color))
-        due = len(sequences.tasks_due(db))
-        opts += [gap, header("sequence", "outreach"), item("tasks", "tasks", "Tasks", due or ""),
-                 item("sequences", "sequence", "Sequences", sum(1 for q in sequences.sequences(db) if not q["archived_at"]))]
         opts += [gap, header("cases", "cases")]
         case_counts = Counter(c["status"] for c in inbox.case_queue(db))
         for i, name in enumerate(inbox.CASE_VIEWS):
             icon_name, color = VIEW_ICON[name]
             opts.append(item(f"cases:{i}", icon_name, name, case_counts[name], color))
+        due = len(sequences.tasks_due(db))
+        opts += [gap, header("sequence", "outreach"), item("tasks", "tasks", "Tasks", due or ""),
+                 item("sequences", "sequence", "Sequences", sum(1 for q in sequences.sequences(db) if not q["archived_at"]))]
         opts += [gap, header("inbox", "browse"),
                  item("people", "people", "People", len(inbox.people(db))),
                  item("organizations", "organizations", "Organizations", len(inbox.organizations(db))),
