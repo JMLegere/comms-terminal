@@ -240,6 +240,8 @@ One pure function, `inbox.transition`, decides every rule below; each writer per
 - `Unignore` (I on an Ignored Thread) → `TODO` / `NEW_REPLY` if Jeremy has replied on the Thread, else `TODO` / `CREATED` **[C]**.
 - `SetCase` (C) → Status unchanged.
 
+**Audit log**: every writer that changes a Thread's Status detail, or its Case, appends one `audit_log` entry with its cause: `action` (Jeremy's key), `reply` (Jeremy's own message), `message` / `edit` / `delete` / `call` (the other side's Activity), `woke`, `reopen` (import), `blocked` (Block, at Thread creation), or `undo`. A rule that leaves the detail as it was writes nothing; a Snooze to a new time does. A new Thread's first Status is not an entry, except a Blocked sender's `IGNORED`. Reconciliation merges write none; a merged Thread's entries show on the surviving Thread. Entries never move Status and are not Activities, so queue times and Status rules ignore them. `thread_view` returns them as `audit`, and the console shows each between the messages by time.
+
 ### Threading (inside `inbox`)
 
 - **Email**: MESSAGE Activities form connected components within one mailbox using exact, case-preserved Message-ID tokens from their own `native_id` and explicit `Incoming.thread_ref`. `email_refs` persists declared reference edges; normal ingest reconciles that mailbox inside its ingestion transaction. A late parent, a bridge naming separate parents, and messages sharing an explicit missing ancestor all heal the same graph. IDs known on another mailbox are held rather than used as shared virtual ancestors. Duplicate Activities still return `None`; additional explicit references may strengthen the index and heal aliases only when the duplicate belongs to the incoming mailbox, without replaying status rules.
@@ -259,7 +261,7 @@ One pure function, `inbox.transition`, decides every rule below; each writer per
 
 ## 5. Database
 
-SQLite, one file. The DDL below describes the core model; `src/universal_inbox/schema.sql` is the complete current schema, applied by `inbox.migrate`. `PRAGMA foreign_keys = ON`, `PRAGMA journal_mode = WAL`. Tables are `STRICT`; times are UTC ISO 8601 text; the schema version is `PRAGMA user_version`. Version 4 adds `threads.merged_into`, `email_refs`, alias guards, and `thread_activities` to version 3, preserving Case descriptions, five-day follow-ups, and append-only Activity triggers. Version 13 adds `resend_receipts` to version 12 without changing earlier migrations or immutable Activity/raw records. Migration commits schema/version together and rejects databases newer than the build. Rollback must use a schema-13-compatible build or a separately approved consistent backup; never lower the version or discard mappings/history to start old code (`docs/runbook.md` §2a).
+SQLite, one file. The DDL below describes the core model; `src/universal_inbox/schema.sql` is the complete current schema, applied by `inbox.migrate`. `PRAGMA foreign_keys = ON`, `PRAGMA journal_mode = WAL`. Tables are `STRICT`; times are UTC ISO 8601 text; the schema version is `PRAGMA user_version`. Version 4 adds `threads.merged_into`, `email_refs`, alias guards, and `thread_activities` to version 3, preserving Case descriptions, five-day follow-ups, and append-only Activity triggers. Version 13 adds `resend_receipts` to version 12 without changing earlier migrations or immutable Activity/raw records. Version 15 adds the append-only `audit_log`; earlier changes have no entries. Migration commits schema/version together and rejects databases newer than the build. Rollback must use a schema-13-compatible build or a separately approved consistent backup; never lower the version or discard mappings/history to start old code (`docs/runbook.md` §2a).
 
 ```mermaid
 erDiagram
@@ -414,6 +416,20 @@ CREATE TABLE resend_receipts (
   email_id      TEXT PRIMARY KEY,
   connection_id INTEGER NOT NULL REFERENCES connections (id),
   message_id    TEXT NOT NULL
+) STRICT;
+
+CREATE TABLE audit_log (  -- append-only, like activities
+  id          INTEGER PRIMARY KEY,
+  thread_id   INTEGER NOT NULL REFERENCES threads (id),
+  occurred_at TEXT NOT NULL,
+  kind        TEXT NOT NULL CHECK (kind IN ('STATUS', 'CASE')),
+  cause       TEXT NOT NULL CHECK (cause IN ('action', 'reply', 'message', 'edit', 'delete', 'call',
+                                             'woke', 'reopen', 'blocked', 'undo')),
+  old_detail  TEXT,                           -- Status detail before; NULL for a new Thread
+  new_detail  TEXT,                           -- Status detail after
+  case_id     INTEGER REFERENCES cases (id),  -- CASE: the Case joined, NULL = removed
+  data        TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(data)),  -- {"until": ...} for a timed snooze
+  CHECK ((kind = 'STATUS') = (new_detail IS NOT NULL))
 ) STRICT;
 
 CREATE VIEW thread_activities AS

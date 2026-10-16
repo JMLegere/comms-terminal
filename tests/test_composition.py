@@ -181,7 +181,7 @@ def make_v8(db, monkeypatch):
     two = inbox.ingest(db, incoming("<two@test>"))
     inbox.ingest(db, incoming("<bridge@test>", thread_ref=["<one@test>", "<two@test>"]))
     case_id = inbox.create_case(db, "Synthetic case")
-    inbox.act(db, one.id, inbox.SetCase(case_id=case_id))
+    db.execute("UPDATE threads SET case_id = ? WHERE id = ?", (case_id, one.id))  # v8 has no audit_log
     inbox.add_channel_rule(db, 4, "channel", "CTEST")
     inbox.set_probe(db, 1, "Synthetic probe result")
     assert inbox.get_thread(db, two.id).id == one.id

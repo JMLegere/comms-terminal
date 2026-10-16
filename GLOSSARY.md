@@ -29,6 +29,10 @@ Stored Threads matching an exact email or phone destination, whether or not it i
 A timestamped, never-rewritten record of a message received or sent in a Thread, a Phone call, or an edit or deletion of one.
 _Avoid_: Event, Interaction, Message (when meaning the record)
 
+**Audit entry**:
+A never-rewritten record that a Thread's Status or Case changed, when, and why: Jeremy's action, his own message, the other side's Activity, a snooze ending, an import, a Block, or an undo. It shows in the Thread's timeline between messages. It is not an Activity and never moves Status.
+_Avoid_: Activity, Event, History (when meaning one entry)
+
 **Phone call**:
 An Activity recording one call on the Work number, incoming or outgoing, from any Quo app, with its direction, Call outcome, and length. It joins its number's Thread by the same 7-day rule as Texts, and every Phone call puts its Thread in Todo.
 _Avoid_: Call log, Call event, Dial

@@ -23,7 +23,7 @@ from typing import Protocol, Sequence
 
 from . import files, platforms
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 WAIT = timedelta(days=4)  # Waiting for them ends after this with no reply: back to Todo to follow up (#116)
 EMAIL_CONFIRMATION_PENDING = "Email confirmation pending; wait for its sent receipt before replying."
 MIGRATIONS = {  # version -> statement that upgrades an existing database to it
@@ -188,6 +188,28 @@ CREATE TABLE staged_attachments (
     # Reply Drafts (.agents/prd/2026-10-16-sequencing.md P1): a reply box's text is a Draft of its Thread.
     14: """ALTER TABLE composition_drafts ADD COLUMN thread_id INTEGER REFERENCES threads (id);
 CREATE UNIQUE INDEX composition_drafts_thread ON composition_drafts (thread_id) WHERE thread_id IS NOT NULL;""",
+    15: """CREATE TABLE audit_log (
+  id          INTEGER PRIMARY KEY,
+  thread_id   INTEGER NOT NULL REFERENCES threads (id),
+  occurred_at TEXT NOT NULL,
+  kind        TEXT NOT NULL CHECK (kind IN ('STATUS', 'CASE')),
+  cause       TEXT NOT NULL CHECK (cause IN ('action', 'reply', 'message', 'edit', 'delete', 'call',
+                                             'woke', 'reopen', 'blocked', 'undo')),
+  old_detail  TEXT,
+  new_detail  TEXT,
+  case_id     INTEGER REFERENCES cases (id),
+  data        TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(data)),
+  CHECK ((kind = 'STATUS') = (new_detail IS NOT NULL))
+) STRICT;
+CREATE INDEX audit_log_thread ON audit_log (thread_id, occurred_at);
+CREATE TRIGGER audit_log_no_delete BEFORE DELETE ON audit_log
+BEGIN
+  SELECT RAISE(ABORT, 'the audit log is append-only');
+END;
+CREATE TRIGGER audit_log_no_update BEFORE UPDATE ON audit_log
+BEGIN
+  SELECT RAISE(ABORT, 'the audit log is append-only');
+END;""",
 }
 
 # ponytail: fixed list; extend when a free-mail sender forms an Organization by mistake.
@@ -763,12 +785,22 @@ def _new_thread(db, channel_id, native_id, title, status, at) -> int:
         (channel_id, native_id, title, *status, _iso(at), _iso(at), _follow_up(status[1], at))).lastrowid
 
 
-def _set_status(db, thread_id, at, status, detail, snoozed_until=None, before=None):
+def _set_status(db, thread_id, at, status, detail, snoozed_until=None, before=None, *, cause):
+    old = db.execute("SELECT status_detail FROM threads WHERE id = ?", (thread_id,)).fetchone()[0]
     follow_up = _follow_up(detail, at)
     db.execute(
         "UPDATE threads SET status = ?, status_detail = ?, status_changed_at = ?,"
         " snoozed_until = ?, detail_before_snooze = ?, follow_up_at = ? WHERE id = ?",
         (status, detail, _iso(at), snoozed_until, before, follow_up, thread_id))
+    if detail != old or snoozed_until:  # same detail is no change, except a snooze to a new time
+        _audit(db, thread_id, at, cause, old, detail, data={"until": snoozed_until} if snoozed_until else {})
+
+
+def _audit(db, thread_id, at, cause, old=None, new=None, case_id=None, data=None):
+    """One audit log entry: a Status change (new is its detail) or, with new None, a Case change."""
+    db.execute("INSERT INTO audit_log (thread_id, occurred_at, kind, cause, old_detail, new_detail, case_id, data)"
+               " VALUES (?, ?, ?, ?, ?, ?, ?, ?)", (thread_id, _iso(at), "CASE" if new is None else "STATUS",
+                                                   cause, old, new, case_id, json.dumps(data or {})))
 
 
 def _has_replied(db, thread_id) -> bool:
@@ -1669,7 +1701,9 @@ def _ingest(db, inc: Incoming) -> Thread | None:
     event = Arrived(inc.kind, identity is None and not call, bool(identity and identity["blocked"]))
     if thread_id is None:
         title = inc.title or (inc.content or "").strip()[:80] or "(no subject)"
-        thread_id = _new_thread(db, channel_id, inc.native_id, title, transition(None, event), at)
+        thread_id = _new_thread(db, channel_id, inc.native_id, title, status := transition(None, event), at)
+        if status[1] == "IGNORED":  # Block, at Thread creation (I-4)
+            _audit(db, thread_id, at, "blocked", None, "IGNORED")
     elif inc.kind == "MESSAGE" and identity is None and not call and _echo_of_sent(db, thread_id, inc):
         return None
 
@@ -1687,7 +1721,7 @@ def _ingest(db, inc: Incoming) -> Thread | None:
     t = get_thread(db, thread_id)
     if not created or t.id != thread_id:
         if nxt := transition((t.status, t.status_detail), event):
-            _set_status(db, t.id, at, *nxt)
+            _set_status(db, t.id, at, *nxt, cause="reply" if event.from_jeremy else "call" if call else inc.kind.lower())
     if inc.kind == "DELETE":  # FR-2a
         db.execute("UPDATE activities SET content = NULL WHERE id = ?"
                    " OR (kind = 'EDIT' AND target_id = ?)", (target_id, target_id))
@@ -1709,8 +1743,10 @@ def act(db, thread_id: int, action: Action | Reopen) -> Thread:
                 case_id = db.execute("INSERT INTO cases (title, created_at) VALUES (?, ?)",
                                      (action.new_title, _iso(now))).lastrowid
             db.execute("UPDATE threads SET case_id = ? WHERE id = ?", (case_id, thread_id))
+            if case_id != t.case_id:
+                _audit(db, thread_id, now, "action", case_id=case_id)
         elif nxt := transition((t.status, t.status_detail), action, has_replied=_has_replied(db, thread_id)):
-            _set_status(db, thread_id, now, *nxt)
+            _set_status(db, thread_id, now, *nxt, cause="reopen" if isinstance(action, Reopen) else "action")
         return get_thread(db, thread_id)
 
 
@@ -1764,7 +1800,7 @@ def reply(db, thread_id: int, text: str, sender: Sender,
             t = get_thread(db, tid)
         if not _preserve_send_changes(db, t.id, changes):
             if nxt := transition((t.status, t.status_detail), Arrived(from_jeremy=True)):
-                _set_status(db, t.id, recorded_at[0], *nxt)
+                _set_status(db, t.id, recorded_at[0], *nxt, cause="reply")
         return t.id
 
     return _send(db, connection_id, platforms.PLATFORMS[platform].format, files,
@@ -1786,7 +1822,7 @@ def wake(db, now: datetime) -> int:
         for r in due:
             _set_status(db, r["id"], now, *transition((r["status"], r["status_detail"]), Woke(),
                                                       has_replied=_has_replied(db, r["id"]),
-                                                      before=r["detail_before_snooze"]))
+                                                      before=r["detail_before_snooze"]), cause="woke")
     return len(due)
 
 
@@ -2052,7 +2088,11 @@ def thread_view(db, thread_id: int, files: tuple[str, int] | None = None) -> dic
         case = db.execute("SELECT title FROM cases WHERE id = ?", (t.case_id,)).fetchone() if t.case_id else None
         platform = platforms.PLATFORMS[ch["platform"]]
         msgs = [_shaped(db, m, platform, ch, files) for m in msgs]
-        return {"thread": t, "channel": dict(ch), "messages": msgs, "person": person, "people": people,
+        audit = [dict(r) for r in db.execute(
+            "SELECT l.*, c.title AS case_title FROM audit_log l JOIN threads t ON t.id = l.thread_id"
+            " LEFT JOIN cases c ON c.id = l.case_id WHERE COALESCE(t.merged_into, t.id) = ?"
+            " ORDER BY l.occurred_at, l.id", (thread_id,))]
+        return {"thread": t, "channel": dict(ch), "messages": msgs, "audit": audit, "person": person, "people": people,
                 "others": others, "organizations": orgs, "members": snapshot(db, thread_id)["_members"],
                 "link": next((m["link"] for m in reversed(msgs) if m["link"]), None),
                 "case": case["title"] if case else None, "where": _where(ch, None) if ch["kind"] != "mailbox" else "email"}
@@ -2194,4 +2234,10 @@ def restore(db, snap: dict) -> Thread:
                    " detail_before_snooze = ?, case_id = ?, follow_up_at = ? WHERE id = ?",
                    (snap["status"], snap["status_detail"], snap["status_changed_at"], snap["snoozed_until"],
                     snap["detail_before_snooze"], snap["case_id"], snap["follow_up_at"], thread_id))
+        now = _now()
+        if snap["status_detail"] != current["status_detail"]:
+            _audit(db, thread_id, now, "undo", current["status_detail"], snap["status_detail"],
+                   data={"until": snap["snoozed_until"]} if snap["snoozed_until"] else {})
+        if snap["case_id"] != current["case_id"]:
+            _audit(db, thread_id, now, "undo", case_id=snap["case_id"])
     return get_thread(db, thread_id)

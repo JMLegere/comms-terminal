@@ -1669,6 +1669,26 @@ def gutter_row(gutter: str, content, cls: str = ""):
     return Horizontal(MessageText(gutter, classes="gutter"), content, classes=f"mrow {cls}".strip())
 
 
+AUDIT_CAUSE = {"action": "you", "reply": "you wrote", "message": "they wrote", "edit": "they edited",
+               "delete": "they deleted a message", "call": "a call", "reopen": "import", "blocked": "blocked sender",
+               "undo": "undone"}
+
+
+def audit_markup(e: dict) -> str:
+    """One audit log entry as a timeline line: what changed, why, and when."""
+    dim = "#a89984"
+    if e["kind"] == "CASE":
+        what = f"{ICON['case']} " + (f"Case · {escape(e['case_title'])}" if e["case_id"] else "Removed from its Case")
+    else:
+        glyph, color, label = GLYPH[e["new_detail"]]
+        until = json.loads(e["data"]).get("until")
+        what = f"[{color}]{glyph}[/] {label}" + (f" until {stamp(until)}" if until else "")
+    why = AUDIT_CAUSE.get(e["cause"])
+    if e["cause"] == "woke":
+        why = "no reply in 4 days" if e["old_detail"] == "WAITING_FOR_CUSTOMER" else "snooze ended"
+    return f"[{dim}]{when(e['occurred_at']):<5} {what} · {why}[/]"
+
+
 def message_action_id(native_id: str) -> str:
     """A Python string literal inside Rich markup: brackets must reach the action parser unchanged."""
     return repr(native_id).replace("[", r"\u005b").replace("]", r"\u005d")
@@ -1724,14 +1744,21 @@ def message_widgets(v, st: dict | None = None, raw=None) -> list:
             parts.append(MessageText("\n".join(chips), classes="mchips"))
         return gutter_row(badge(m["who"]), Vertical(*parts, classes="msg"), "open")
 
-    out, i = [], 0
-    while i < len(msgs):
+    # Audit log entries sit between messages by time; one after a message at the same instant follows it.
+    log = [(datetime.fromisoformat(e["occurred_at"]), e) for e in v.get("audit", [])]
+    at = [datetime.fromisoformat(m["at"]) for m in msgs]
+    out, i, k = [], 0, 0
+    while i < len(msgs) or k < len(log):
+        if k < len(log) and (i == len(msgs) or log[k][0] < at[i]):
+            out.append(gutter_row("", MessageText(audit_markup(log[k][1]), classes="mline"), "faded"))
+            k += 1
+            continue
         if is_open(i):
             out.append(card(i, msgs[i]))
             i += 1
             continue
         j = i
-        while j < len(msgs) and not is_open(j):
+        while j < len(msgs) and not is_open(j) and (k == len(log) or log[k][0] >= at[j]):
             j += 1
         run = list(range(i, j))
         if len(run) >= 4 and not st["lines"]:

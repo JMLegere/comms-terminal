@@ -140,6 +140,32 @@ CREATE TABLE resend_receipts (
   message_id TEXT NOT NULL
 ) STRICT;
 
+-- Audit log: each change to a Thread's Status or Case and its cause (action = Jeremy's key; message/edit/
+-- delete/call = the other side's Activity; reply = Jeremy's own message). old/new_detail are Status details;
+-- a CASE entry's case_id is the Case joined, NULL = removed; data holds a timed snooze's until.
+CREATE TABLE audit_log (
+  id          INTEGER PRIMARY KEY,
+  thread_id   INTEGER NOT NULL REFERENCES threads (id),
+  occurred_at TEXT NOT NULL,
+  kind        TEXT NOT NULL CHECK (kind IN ('STATUS', 'CASE')),
+  cause       TEXT NOT NULL CHECK (cause IN ('action', 'reply', 'message', 'edit', 'delete', 'call',
+                                             'woke', 'reopen', 'blocked', 'undo')),
+  old_detail  TEXT,
+  new_detail  TEXT,
+  case_id     INTEGER REFERENCES cases (id),
+  data        TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(data)),
+  CHECK ((kind = 'STATUS') = (new_detail IS NOT NULL))
+) STRICT;
+CREATE INDEX audit_log_thread ON audit_log (thread_id, occurred_at);
+CREATE TRIGGER audit_log_no_delete BEFORE DELETE ON audit_log
+BEGIN
+  SELECT RAISE(ABORT, 'the audit log is append-only');
+END;
+CREATE TRIGGER audit_log_no_update BEFORE UPDATE ON audit_log
+BEGIN
+  SELECT RAISE(ABORT, 'the audit log is append-only');
+END;
+
 CREATE VIEW thread_activities AS
 SELECT a.id, COALESCE(t.merged_into, a.thread_id) AS thread_id,
        a.kind, a.occurred_at, a.identity_id, a.native_id, a.target_id, a.content, a.data
