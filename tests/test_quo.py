@@ -93,6 +93,9 @@ def test_unsigned_or_unconnected():
     assert serve.intake(db, "quo", {}, body, KEY, NOW) == (401, "")
     assert db.execute("SELECT last_error FROM connections WHERE id = ?", (cid,)).fetchone()[0] == \
         "inbound request failed signature check"
+    assert serve.intake(db, "quo", signed(body), body, KEY, NOW)[0] < 300  # a signed request clears it
+    assert db.execute("SELECT last_error FROM connections WHERE id = ?", (cid,)).fetchone()[0] is None
+    db, _ = setup()  # the signed Text above now holds the first Connection
     with db:
         db.execute("DELETE FROM connections")
     assert serve.intake(db, "quo", signed(body), body, KEY, NOW) == (503, "no Quo Connection")

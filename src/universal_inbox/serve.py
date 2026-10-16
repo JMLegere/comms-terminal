@@ -443,6 +443,9 @@ HOOKS = {
 }
 
 
+SIGNATURE_ERROR = "inbound request failed signature check"
+
+
 def intake(db, platform: str, headers, body: bytes, secret: bytes, now: datetime, *args) -> tuple[int, str]:
     """Every inbound webhook: the Platform's Connection (503 when there is none) goes to its adapter's
     `handle_hook`, which verifies and parses; a failed signature check (401) records a Last Error (AS-19)."""
@@ -454,7 +457,9 @@ def intake(db, platform: str, headers, body: bytes, secret: bytes, now: datetime
                                                                             now, *args)
     status, text = out if isinstance(out, tuple) else (out, "")
     if status == 401:
-        inbox.set_connection_error(db, connection["id"], "inbound request failed signature check")
+        inbox.set_connection_error(db, connection["id"], SIGNATURE_ERROR)
+    elif status < 300 and connection["last_error"] == SIGNATURE_ERROR:  # a signed request clears it
+        inbox.set_connection_error(db, connection["id"], None)
     return status, text
 
 
