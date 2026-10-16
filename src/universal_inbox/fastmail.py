@@ -16,6 +16,7 @@ import urllib.error
 from datetime import datetime, timedelta, timezone
 
 from . import inbox
+from .email import handle_hook  # noqa: F401 - Fastmail's copies arrive at /hooks/email (serve.HOOKS)
 from .mcp import McpClient, McpError
 
 MCP = "https://api.fastmail.com/mcp"

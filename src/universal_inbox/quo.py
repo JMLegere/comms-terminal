@@ -130,13 +130,11 @@ def parse(event: dict, connection) -> inbox.Incoming | None:
         channel_name=peer)
 
 
-def handle_hook(db, connection_id: int | None, headers, body: bytes, key: bytes, now: datetime) -> int:
-    """POST /hooks/quo -> HTTP status. Quo retries any non-2xx, and ingest drops repeats by message ID."""
+def handle_hook(db, connection, headers, body: bytes, key: bytes, now: datetime) -> int:
+    """POST /hooks/quo (through serve.intake) -> HTTP status. Quo retries any non-2xx, and ingest drops repeats
+    by message ID."""
     if not verify(headers, body, key, now):
         return 401
-    if connection_id is None:
-        return 503
-    connection = db.execute("SELECT * FROM connections WHERE id = ?", (connection_id,)).fetchone()
     incoming = parse(json.loads(body), connection)
     if incoming is None:
         return 204

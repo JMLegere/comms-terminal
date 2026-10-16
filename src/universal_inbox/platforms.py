@@ -90,6 +90,7 @@ class Platform:
     link: Callable     # (message, channel) -> URL that opens the message in the service, or None
     dm_where: str | None = None  # how a 1:1 Channel reads in the queue; None = "DM · name"
     can_attach: bool = True      # False where this Platform sends no files though its format can (FR-A16)
+    hook_secret: str | None = None  # credential that signs its inbound webhook (serve.HOOKS); None = no webhook
 
     @property
     def sends_files(self) -> bool:
@@ -101,20 +102,22 @@ PLATFORMS = {p.name: p for p in (
     Platform("gmail", "Gmail", "google", "email", "email", True,
              "Receiving forwarded mail and sending replies.",
              "[#c14a4a]Mail may not be arriving or sending.[/] Check the forwarding rule and the Resend key; "
-             "this clears on the next successful message.", _gmail),
+             "this clears on the next successful message.", _gmail, hook_secret="email-hook-secret"),
     Platform("fastmail", "Fastmail", "fastmail", "email", "fastmail", True,
              "Receiving Fastmail's copies and sending replies through Fastmail.",
              "[#c14a4a]Fastmail may not be arriving or sending.[/] Check the Fastmail rule and re-run "
              "scripts/oauth_mcp.py if the sign-in expired; this clears on the next successful poll.", _fastmail,
-             can_attach=False),
+             can_attach=False, hook_secret="email-hook-secret"),
     Platform("slack", "Slack", "slack", "slack", "slack", False,
              "Receiving Slack events and sending replies.",
              "[#c14a4a]Slack messages are not arriving.[/] Reconnect: run scripts/oauth_slack.py on Workbox, "
-             "then restart universal-inbox serve.", _slack),
+             "then restart universal-inbox serve.", _slack,
+             hook_secret="slack-signing-secret"),
     Platform("quo", "Quo", "sms", "sms", "quo", True,
              "Receiving Texts from Quo and sending replies.",
              "[#c14a4a]Texts may not be sending.[/] Check the Quo API key and the webhook in Quo's settings; "
-             "this clears on the next successful reply.", _quo, dm_where="SMS"),
+             "this clears on the next successful reply.", _quo, dm_where="SMS",
+             hook_secret="quo-webhook-secret"),
 )}
 
 EMAIL = tuple(n for n, p in PLATFORMS.items() if p.format == "email")

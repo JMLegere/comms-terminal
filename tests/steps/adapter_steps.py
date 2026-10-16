@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from pytest_bdd import given, parsers, then, when
 
 from steps.inbox_steps import EMAIL, MAILBOX, SLACK, keep, tick
-from universal_inbox import email, health, inbox, slack
+from universal_inbox import email, health, inbox, serve, slack
 
 EMAIL_SECRET, SLACK_SECRET = b"inbox-test-secret", b"slack-test-secret"
 NOW = datetime(2026, 10, 12, 12, tzinfo=timezone.utc)
@@ -159,7 +159,7 @@ def parse_incoming(ctx):
 def bad_email_hook(ctx):
     ctx.totals = totals(ctx)
     headers = {"X-Inbox-Timestamp": str(int(NOW.timestamp())), "X-Inbox-Signature": "sha256=" + "0" * 64}
-    ctx.status = email.handle_hook(ctx.db, EMAIL, headers, raw_mail(), EMAIL_SECRET, NOW)
+    ctx.status, _ = serve.intake(ctx.db, "gmail", headers, raw_mail(), EMAIL_SECRET, NOW)
 
 
 @then(parsers.parse("the response is {status:d}"))
@@ -227,7 +227,7 @@ def bad_slack_hook(ctx):
     ctx.totals = totals(ctx)
     body = json.dumps({"type": "event_callback", "event": slack_event("D0ANA", channel_type="im")}).encode()
     headers = signed_slack(body, secret=b"wrong-secret")
-    ctx.status, _ = slack.handle_hook(ctx.db, SLACK, headers, body, SLACK_SECRET, NOW, FakeClient())
+    ctx.status, _ = serve.intake(ctx.db, "slack", headers, body, SLACK_SECRET, NOW, FakeClient())
 
 
 # --- Sync ------------------------------------------------------------------
@@ -248,7 +248,8 @@ def no_last_error(ctx, platform):
 @when(parsers.parse('a "{event}" event reaches /hooks/slack with a valid signature'))
 def revocation_event(ctx, event):
     body = json.dumps({"type": "event_callback", "event": {"type": event}}).encode()
-    ctx.status, _ = slack.handle_hook(ctx.db, SLACK, signed_slack(body), body, SLACK_SECRET, NOW, FakeClient())
+    ctx.status, _ = slack.handle_hook(ctx.db, connection(ctx, SLACK), signed_slack(body), body, SLACK_SECRET, NOW,
+                                      FakeClient())
 
 
 @then("the Connection's auth is not OK")

@@ -34,12 +34,6 @@ def credential(name: str) -> bytes | None:
     return path.read_bytes().strip() if path is not None and path.exists() else None
 
 
-def connection_id(db, platform: str) -> int | None:
-    """The Connection on a Platform (one each)."""
-    r = db.execute("SELECT id FROM connections WHERE platform = ?", (platform,)).fetchone()
-    return r and r["id"]
-
-
 def fastmail_client(db) -> fastmail.Client | None:
     cred = credential("fastmail-oauth")
     state = Path(db.execute("PRAGMA database_list").fetchone()[2] or ".").parent / "fastmail-oauth.json"
@@ -386,8 +380,7 @@ def hooks_server(db_path: str, host: str, port: int, client=None,
     """`client` (Slack lookups) is swappable for the 6.3 demo; the service uses the real API. Hooks set `kick`
     for deferred file downloads or durable Resend receipt reconciliation."""
     kick = kick or threading.Event()
-    email_secret, slack_secret = credential("email-hook-secret"), credential("slack-signing-secret")
-    quo_secret = credential("quo-webhook-secret")
+    secrets = {n: credential(p.hook_secret) for n, p in platforms.PLATFORMS.items() if p.hook_secret}
     try:
         resend_secret = credential("resend-webhook-secret")
         if (not isinstance(resend_secret, bytes) or not resend_secret.startswith(b"whsec_")
@@ -398,42 +391,23 @@ def hooks_server(db_path: str, host: str, port: int, client=None,
         resend_secret = None
     token = credential("slack-user-token")
     client = client or (slack.SlackClient(token.decode()) if token else None)
+    extra = {"slack": (client,)}  # Slack names users and channels through its API
 
-    def email_hook(headers, body):
-        if email_secret is None:
-            return 503, "text/plain", b"email not connected"
-        db = inbox.connect(db_path)
-        try:
-            # The envelope recipient picks the Platform: Fastmail's rule copies to its own address (#113).
-            to = (headers.get("X-Inbox-To") or "").lower()
-            conn_id = connection_id(db, "fastmail" if to == fastmail.INBOUND else "gmail")
-            status = email.handle_hook(db, conn_id, headers, body, email_secret, datetime.now(timezone.utc))
-        finally:
-            db.close()
-        return status, "text/plain", b""
-
-    def slack_hook(headers, body):
-        if slack_secret is None or client is None:
-            return 503, "text/plain", b"slack not connected"
-        db = inbox.connect(db_path)
-        try:
-            status, text = slack.handle_hook(db, connection_id(db, "slack"), headers, body, slack_secret,
-                                             datetime.now(timezone.utc), client)
-        finally:
-            db.close()
-        kick.set()
-        return status, "text/plain", text.encode()
-
-    def quo_hook(headers, body):
-        if quo_secret is None:
-            return 503, "text/plain", b"quo not connected"
-        db = inbox.connect(db_path)
-        try:
-            status = quo.handle_hook(db, connection_id(db, "quo"), headers, body, quo_secret, datetime.now(timezone.utc))
-        finally:
-            db.close()
-        kick.set()
-        return status, "text/plain", b""
+    def route(path, choose):
+        def hook(headers, body):
+            name = choose(headers)
+            secret, args = secrets[name], extra.get(name, ())
+            if secret is None or None in args:
+                return 503, "text/plain", f"{path.rsplit('/', 1)[1]} not connected".encode()
+            db = inbox.connect(db_path)
+            try:
+                status, text = intake(db, name, headers, body, secret, datetime.now(timezone.utc), *args)
+            finally:
+                db.close()
+            if name not in platforms.EMAIL:  # email stores its files inline
+                kick.set()
+            return status, "text/plain", text.encode()
+        return hook
 
     def resend_hook(headers, body):
         if resend_secret is None:
@@ -456,8 +430,32 @@ def hooks_server(db_path: str, host: str, port: int, client=None,
             kick.set()
         return status, "text/plain", b""
 
-    return ThreadingHTTPServer((host, port), _handler({"/hooks/email": email_hook, "/hooks/slack": slack_hook,
-                                                       "/hooks/quo": quo_hook, "/hooks/resend": resend_hook}))
+    return ThreadingHTTPServer((host, port), _handler({**{path: route(path, choose) for path, choose in HOOKS.items()},
+                                                       "/hooks/resend": resend_hook}))
+
+
+# Public hook path -> the Platform whose Connection it serves. The envelope recipient picks the email Platform:
+# Fastmail's rule copies to its own address (#113).
+HOOKS = {
+    "/hooks/email": lambda h: "fastmail" if (h.get("X-Inbox-To") or "").lower() == fastmail.INBOUND else "gmail",
+    "/hooks/slack": lambda h: "slack",
+    "/hooks/quo": lambda h: "quo",
+}
+
+
+def intake(db, platform: str, headers, body: bytes, secret: bytes, now: datetime, *args) -> tuple[int, str]:
+    """Every inbound webhook: the Platform's Connection (503 when there is none) goes to its adapter's
+    `handle_hook`, which verifies and parses; a failed signature check (401) records a Last Error (AS-19)."""
+    p = platforms.PLATFORMS[platform]
+    connection = db.execute("SELECT * FROM connections WHERE platform = ?", (platform,)).fetchone()
+    if connection is None:
+        return 503, f"no {p.title} Connection"
+    out = importlib.import_module(f".{p.adapter}", __package__).handle_hook(db, connection, headers, body, secret,
+                                                                            now, *args)
+    status, text = out if isinstance(out, tuple) else (out, "")
+    if status == 401:
+        inbox.set_connection_error(db, connection["id"], "inbound request failed signature check")
+    return status, text
 
 
 MAX_FILE = 100 * 1024 * 1024  # larger Attachments are not copied and keep their Platform link

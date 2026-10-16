@@ -424,9 +424,9 @@ class SlackSender:
         raise inbox.SendUnknown("slack send outcome unknown: the shared files' message was not found")
 
 
-def handle_hook(db, connection_id: int, headers, body: bytes, signing_secret: bytes, now: datetime,
+def handle_hook(db, connection, headers, body: bytes, signing_secret: bytes, now: datetime,
                 client) -> tuple[int, str]:
-    """POST /hooks/slack -> (HTTP status, response body)."""
+    """POST /hooks/slack (through serve.intake) -> (HTTP status, response body)."""
     if not verify(headers, body, signing_secret, now):
         return 401, ""
     payload = json.loads(body)
@@ -434,11 +434,10 @@ def handle_hook(db, connection_id: int, headers, body: bytes, signing_secret: by
         return 200, payload["challenge"]
     event = payload.get("event", {})
     if event.get("type") in ("tokens_revoked", "app_uninstalled"):  # NFR-2, AS-8
-        inbox.set_auth(db, connection_id, False)
+        inbox.set_auth(db, connection["id"], False)
         return 200, ""
-    connection = db.execute("SELECT * FROM connections WHERE id = ?", (connection_id,)).fetchone()
     rules = [(r["kind"], r["value"]) for r in db.execute(
-        "SELECT kind, value FROM channel_rules WHERE connection_id = ?", (connection_id,))]
+        "SELECT kind, value FROM channel_rules WHERE connection_id = ?", (connection["id"],))]
     incoming = parse(event, connection, rules, client, lambda c, t: stored_member(db, c, t))
     if incoming is not None:
         inbox.ingest(db, incoming)

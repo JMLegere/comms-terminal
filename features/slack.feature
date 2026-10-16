@@ -58,3 +58,4 @@ Feature: Slack
     When a request reaches /hooks/slack with a wrong X-Slack-Signature
     Then the response is 401
     And no Activity or Thread is created
+    And the Slack Connection has a Last Error

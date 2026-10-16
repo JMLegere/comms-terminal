@@ -6,7 +6,7 @@ import hmac
 import json
 from datetime import datetime, timezone
 
-from universal_inbox import inbox, quo
+from universal_inbox import inbox, quo, serve
 
 KEY = b"whsec_" + base64.b64encode(b"secret-bytes")
 NOW = datetime(2026, 10, 12, 21, 20, tzinfo=timezone.utc)
@@ -39,7 +39,8 @@ def setup():
 
 
 def hook(db, cid, body, wid="msg_1"):
-    return quo.handle_hook(db, cid, signed(body, wid=wid), body, KEY, NOW)
+    connection = db.execute("SELECT * FROM connections WHERE id = ?", (cid,)).fetchone()
+    return quo.handle_hook(db, connection, signed(body, wid=wid), body, KEY, NOW)
 
 
 def test_verify():
@@ -86,10 +87,15 @@ def test_photo_is_an_attachment_and_group_texts_are_dropped():
 
 
 def test_unsigned_or_unconnected():
+    """The intake records a bad signature as the Connection's Last Error, and answers 503 with no Connection."""
     db, cid = setup()
     body = event("message.received", "AC1", "hi", ANA, [ME])
-    assert quo.handle_hook(db, cid, {}, body, KEY, NOW) == 401
-    assert quo.handle_hook(db, None, signed(body), body, KEY, NOW) == 503
+    assert serve.intake(db, "quo", {}, body, KEY, NOW) == (401, "")
+    assert db.execute("SELECT last_error FROM connections WHERE id = ?", (cid,)).fetchone()[0] == \
+        "inbound request failed signature check"
+    with db:
+        db.execute("DELETE FROM connections")
+    assert serve.intake(db, "quo", signed(body), body, KEY, NOW) == (503, "no Quo Connection")
 
 
 def test_console_reply_sends_from_the_work_number_and_its_echo_is_not_stored_twice():

@@ -280,18 +280,16 @@ def backfill_parts(db) -> tuple[int, int]:
     return read, stored
 
 
-def handle_hook(db, connection_id: int, headers, body: bytes, secret: bytes, now: datetime) -> int:
-    """POST /hooks/email -> HTTP status. 401 records a Last Error (AS-19); a valid request clears it.
+def handle_hook(db, connection, headers, body: bytes, secret: bytes, now: datetime) -> int:
+    """POST /hooks/email (through serve.intake) -> HTTP status. A valid request clears the Last Error.
 
     Logs one line per request with its outcome and Message-ID only (no addresses or content, NFR-5),
     so "did this email arrive?" can be answered from the journal.
     """
     if not verify(headers, body, secret, now):
-        inbox.set_connection_error(db, connection_id, "inbound request failed signature check")
         log.info("email rejected: signature check failed")
         return 401
     mid = (BytesHeaderParser(policy=policy.default).parsebytes(body).get("Message-ID") or "").strip() or "(none)"
-    connection = db.execute("SELECT * FROM connections WHERE id = ?", (connection_id,)).fetchone()
     try:
         incoming = parse(body, connection)
     except Exception:  # noqa: BLE001 - malformed mail must not crash the hook
@@ -308,7 +306,7 @@ def handle_hook(db, connection_id: int, headers, body: bytes, secret: bytes, now
                                   (incoming.native_id,)).fetchone()
             store_parts(db, activity["id"], body, incoming.data["raw"])
     log.info("email %s %s", outcome, mid)
-    inbox.set_connection_error(db, connection_id, None)
+    inbox.set_connection_error(db, connection["id"], None)
     return 204
 
 

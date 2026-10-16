@@ -144,6 +144,27 @@ def test_service_runs_with_email_only(tmp_path, monkeypatch):
         server.shutdown()
 
 
+def test_slack_hook_without_a_connection_answers_503(tmp_path, monkeypatch):
+    """Slack's secret is installed but no Slack Connection exists: the intake answers 503 before verifying."""
+    import urllib.error
+    import urllib.request
+    creds = tmp_path / "creds"
+    creds.mkdir()
+    (creds / "slack-signing-secret").write_text("s")
+    monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(creds))
+    db_path = str(tmp_path / "inbox.db")
+    inbox.migrate(inbox.connect(db_path))
+    server = serve.hooks_server(db_path, "127.0.0.1", 0, client=object())
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        req = urllib.request.Request(f"http://127.0.0.1:{server.server_address[1]}/hooks/slack", b"{}", method="POST")
+        with pytest.raises(urllib.error.HTTPError) as e:
+            urllib.request.urlopen(req, timeout=5)
+        assert (e.value.code, e.value.read()) == (503, b"no Slack Connection")
+    finally:
+        server.shutdown()
+
+
 def test_email_post_sends_a_user_agent_and_returns_provider_errors():
     """Resend sits behind Cloudflare, which 403s Python's default User-Agent; errors keep the provider's message."""
     from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -187,7 +208,8 @@ def test_email_hook_logs_its_outcome_without_content(caplog):
     def post(raw):
         ts = str(int(now.timestamp()))
         sig = "sha256=" + _hm.new(b"k", ts.encode() + b"." + raw, _h.sha256).hexdigest()
-        return _email.handle_hook(db, cid, {"X-Inbox-Timestamp": ts, "X-Inbox-Signature": sig}, raw, b"k", now)
+        connection = db.execute("SELECT * FROM connections WHERE id = ?", (cid,)).fetchone()
+        return _email.handle_hook(db, connection, {"X-Inbox-Timestamp": ts, "X-Inbox-Signature": sig}, raw, b"k", now)
 
     bounce = (b"From: Mail Delivery Subsystem <mailer-daemon@googlemail.com>\r\nTo: me@x.io\r\n"
               b"Subject: Delivery Status Notification (Failure)\r\nMessage-ID: <dsn1@google.com>\r\n"
@@ -303,9 +325,11 @@ def test_resend_rejects_bad_auth_before_db_or_payload(tmp_path, monkeypatch, cap
 def test_resend_config_optional_without_changing_other_hooks(tmp_path, monkeypatch, secret):
     path = receipt_db(tmp_path)
     seen = []
-    monkeypatch.setattr(serve.email, "handle_hook", lambda db, cid, *a: seen.append(("email", cid)) or 204)
-    monkeypatch.setattr(serve.slack, "handle_hook", lambda db, cid, *a: (seen.append(("slack", cid)) or 200, ""))
-    monkeypatch.setattr(serve.quo, "handle_hook", lambda db, cid, *a: seen.append(("quo", cid)) or 204)
+    email_hook = lambda db, c, *a: seen.append(("email", c["id"])) or 204  # noqa: E731
+    monkeypatch.setattr(serve.email, "handle_hook", email_hook)
+    monkeypatch.setattr(serve.fastmail, "handle_hook", email_hook)  # the email route's Fastmail Platform
+    monkeypatch.setattr(serve.slack, "handle_hook", lambda db, c, *a: (seen.append(("slack", c["id"])) or 200, ""))
+    monkeypatch.setattr(serve.quo, "handle_hook", lambda db, c, *a: seen.append(("quo", c["id"])) or 204)
     routes = hook_routes(monkeypatch, path, {"email-hook-secret": b"forward", "slack-signing-secret": b"slack",
                                            "quo-webhook-secret": b"quo", "resend-webhook-secret": secret})
     assert set(routes) == {"/hooks/email", "/hooks/slack", "/hooks/quo", "/hooks/resend"}

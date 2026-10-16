@@ -170,7 +170,7 @@ Action = Done | Snooze(until: datetime | None) | Wait | Investigate
 # email.py
 def verify(headers, body: bytes, secret: bytes, now: datetime) -> bool
 def parse(raw: bytes, connection) -> Incoming | None   # None for an auto-reply (FR-3a)
-def handle_hook(db, connection_id, headers, body, secret, now) -> int  # POST /hooks/email status
+def handle_hook(db, connection, headers, body, secret, now) -> int  # POST /hooks/email status
 def handle_resend_hook(db, connection_id: int, body: bytes) -> tuple[int, bool]  # verified payload only
 class EmailSender:  # Sender over Resend's REST API (decision #70); reply-all when to is empty
     def send(self, thread, text, to, cc, history) -> str   # accepted <uuid@resend>, identity pending receipt
@@ -178,7 +178,7 @@ class EmailSender:  # Sender over Resend's REST API (decision #70); reply-all wh
 # slack.py
 def verify(headers, body: bytes, signing_secret: bytes, now: datetime) -> bool
 def parse(event: dict, connection, rules) -> Incoming | None   # None if not selected
-def handle_hook(db, connection_id, headers, body, signing_secret, now, client) -> tuple[int, str]
+def handle_hook(db, connection, headers, body, signing_secret, now, client) -> tuple[int, str]
 class SlackClient:  # conversations.info / users.info reads, cached (channel names, profile emails)
 class SlackSender:  # Sender over chat.postMessage with Jeremy's user token
     def send(self, thread, text, to, cc, history) -> str   # returns "<channel>:<ts>"
@@ -469,7 +469,7 @@ Two listeners in one process.
 
 ### Public hooks listener
 
-Four exact hook routes compose this listener; absent optional credentials return 503 for their route while siblings remain available (NFR-4). The source tunnel allowlist is `^/hooks/(email|slack|quo|resend)$`; private routes are excluded.
+Four exact hook routes compose this listener; absent optional credentials return 503 for their route while siblings remain available (NFR-4). The source tunnel allowlist is `^/hooks/(email|slack|quo|resend)$`; private routes are excluded. `serve.HOOKS` maps the email, Slack, and Quo paths to their Platform; `serve.intake` finds the Connection (`503` when none), calls the adapter's `handle_hook`, and records `connections.last_error` on any `401`. `/hooks/resend` carries Resend receipts for the Gmail Connection and stays separate.
 
 - **`POST /hooks/email`**: one forwarded message as raw RFC 5322 (`Content-Type: message/rfc822`).
   - Auth: `X-Inbox-Timestamp` and `X-Inbox-Signature: sha256=<hex>`, HMAC-SHA256 over `timestamp + "." + body` with the shared secret; 5-minute window.
@@ -477,7 +477,7 @@ Four exact hook routes compose this listener; absent optional credentials return
 - **`POST /hooks/slack`**: the Slack Events API Request URL.
   - Auth: Slack's `X-Slack-Signature` (`v0`) over `v0:<X-Slack-Request-Timestamp>:<body>` with the signing secret; 5-minute window.
   - `url_verification` echoes `challenge`. `event_callback` handles `message`, `message_changed`, `message_deleted`, and `tokens_revoked` / `app_uninstalled` (set `auth_ok = 0`).
-  - `200` within Slack's 3-second limit; `401` bad signature. Retries are harmless because `ingest` is idempotent.
+  - `200` within Slack's 3-second limit; `401` bad signature (sets `connections.last_error`). Retries are harmless because `ingest` is idempotent.
 
 - **`POST /hooks/quo`**: Quo's existing Standard Webhooks events and separate credential; unchanged by receipt support.
 - **`POST /hooks/resend`**: signed Resend `email.sent` receipt, separate optional `resend-webhook-secret` (`whsec_` plus canonical nonempty Base64). Existing `quo.verify` owns HMAC-SHA256, constant-time signature comparison, and the 300-second timestamp window; strict adaptation supplies single `svix-id`, `svix-timestamp`, `svix-signature` headers under the Standard Webhooks names. Verify original raw bytes before JSON parsing or database access. Duplicate/malformed headers and unsupported signatures reject safely. No forwarding-secret fallback or address-derived ownership.

@@ -38,7 +38,8 @@ def gmail_raw(mid="<c1@acme.com>"):
 def post_email(db, cid, raw):
     ts = str(int(NOW.timestamp()))
     sig = "sha256=" + hmac.new(b"k", ts.encode() + b"." + raw, hashlib.sha256).hexdigest()
-    return email.handle_hook(db, cid, {"X-Inbox-Timestamp": ts, "X-Inbox-Signature": sig}, raw, b"k", NOW)
+    connection = db.execute("SELECT * FROM connections WHERE id = ?", (cid,)).fetchone()
+    return email.handle_hook(db, connection, {"X-Inbox-Timestamp": ts, "X-Inbox-Signature": sig}, raw, b"k", NOW)
 
 
 def rows(db):
