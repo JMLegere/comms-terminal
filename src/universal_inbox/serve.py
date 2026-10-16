@@ -15,16 +15,13 @@ import sqlite3
 import socketserver
 import threading
 import time
-import urllib.error
-import urllib.request
 import urllib.parse
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlsplit
 
-from . import attio, email, fastmail, inbox, linear, mcp, platforms, quo, slack, tana
+from . import attio, email, fastmail, files, inbox, linear, mcp, platforms, quo, slack, tana
 
 
 def credential(name: str) -> bytes | None:
@@ -463,45 +460,15 @@ def intake(db, platform: str, headers, body: bytes, secret: bytes, now: datetime
     return status, text
 
 
-MAX_FILE = 100 * 1024 * 1024  # larger Attachments are not copied and keep their Platform link
-
-
-def download(url: str, headers: dict | None = None) -> tuple[int, str, bytes]:
-    """GET one file -> (status, content type, at most MAX_FILE + 1 bytes)."""
-    req = urllib.request.Request(url, headers={"User-Agent": slack.USER_AGENT, **(headers or {})})
-    try:
-        with urllib.request.urlopen(req, timeout=60) as r:
-            return r.status, r.headers.get_content_type(), r.read(MAX_FILE + 1)
-    except urllib.error.HTTPError as e:
-        return e.code, "", b""
-
-
-def getters(slack_token: bytes | None) -> dict:
-    """Attachment downloads by Platform: Slack files with Jeremy's user token (files:read), sent to Slack hosts
-    only; Quo media URLs are signed and need none."""
-    def slack_get(url):
-        if not (urlsplit(url).hostname or "").endswith(".slack.com"):
-            return 0, "", b""
-        return download(url, {"Authorization": f"Bearer {slack_token.decode()}"})
-    return {"quo": download, **({"slack": slack_get} if slack_token else {})}
-
-
 def fetch_pending(db, getters: dict) -> int:
     """Copy pending Slack and Quo Attachments into the file store (FR-A3, FR-A4); returns how many were stored.
-    A non-2xx answer, an HTML page in place of a file (Slack's sign-in page when the token is refused), or a file
-    over MAX_FILE counts one failed try; a Platform with no getter waits."""
+    A download `files.fetch` refuses counts one failed try; a Platform with no getter waits."""
     stored = 0
     for a in inbox.pending_attachments(db):
         if (get := getters.get(a["platform"])) is None:
             continue
-        try:
-            status, ctype, data = get(json.loads(a["source"])["url"]) if a["size"] <= MAX_FILE else (0, "", b"")
-        except (OSError, ValueError, KeyError):  # URLError is an OSError
-            status, ctype, data = 0, "", b""
-        page = not a["type"].startswith("text/html") and (
-            ctype == "text/html" or data[:64].lstrip().lower().startswith((b"<!doctype html", b"<html")))
-        if 200 <= status < 300 and not page and len(data) <= MAX_FILE:
-            inbox.mark_stored(db, a["id"], inbox.store_file(db, data), len(data))
+        if (data := files.fetch(get, a)) is not None:
+            inbox.mark_stored(db, a["id"], files.store_file(db, data), len(data))
             stored += 1
         else:
             inbox.mark_failed(db, a["id"])
@@ -549,7 +516,7 @@ def handle_upload(db, owner: tuple[str, int], content_type: str, body: bytes) ->
         if ctype == "application/octet-stream":
             ctype = mimetypes.guess_type(name)[0] or ctype
         try:
-            staged_id = inbox.stage(db, sha=inbox.store_file(db, data), name=name, type=ctype, size=len(data),
+            staged_id = inbox.stage(db, sha=files.store_file(db, data), name=name, type=ctype, size=len(data),
                                     **{f"{owner[0]}_id": owner[1]})
         except sqlite3.IntegrityError:  # the Draft or Thread is gone
             return 404, {"error": "unknown owner"}
@@ -572,13 +539,13 @@ class _FilesHandler(_Handler):
 
     def do_GET(self):
         parts = self.path.split("?")[0].split("/")
-        if len(parts) == 3 and parts[1] == "up" and inbox.upload_owner(self.secret, parts[2]):
+        if len(parts) == 3 and parts[1] == "up" and files.upload_owner(self.secret, parts[2]):
             return self._send(200, "text/html; charset=utf-8", UPLOAD_PAGE, [("X-Content-Type-Options", "nosniff")])
-        sha = inbox.cap_sha(self.secret, parts[2]) if len(parts) == 4 and parts[1] == "f" else None
+        sha = files.cap_sha(self.secret, parts[2]) if len(parts) == 4 and parts[1] == "f" else None
         db = inbox.connect(self.db_path)
         try:
             ctype = sha and inbox.file_type(db, sha)
-            path = ctype and inbox.attachment_path(db, sha)
+            path = ctype and files.attachment_path(db, sha)
         finally:
             db.close()
         if not path or not path.is_file():
@@ -618,7 +585,7 @@ class _FilesHandler(_Handler):
 
     def do_POST(self):
         parts = self.path.split("?")[0].split("/")
-        owner = inbox.upload_owner(self.secret, parts[2]) if len(parts) == 3 and parts[1] == "up" else None
+        owner = files.upload_owner(self.secret, parts[2]) if len(parts) == 3 and parts[1] == "up" else None
         if owner is None:
             return self.send_error(404)
         try:
@@ -665,7 +632,7 @@ def files_server(db_path: str, host: str, port: int) -> ThreadingHTTPServer:
     for seeking video; GET and POST /up/<token> take uploads onto a Draft or reply. Anything else, a bad capability, or an expired token is 404 (AS-A11)."""
     db = inbox.connect(db_path)
     try:
-        secret = inbox.files_secret(db)
+        secret = files.files_secret(db)
     finally:
         db.close()
     # ponytail: whole file in memory per upload (<=100 MB); stream to disk if uploads grow
@@ -743,7 +710,7 @@ def run(db_path: str, socket_path: str, host: str, port: int, files_host: str | 
         servers.append(files_server(db_path, files_host, files_port))
     threads = [threading.Thread(target=s.serve_forever, daemon=True) for s in servers]
     threads.append(threading.Thread(target=wake_loop, args=(db_path, stop, 60, kick,
-                                                      getters(credential("slack-user-token"))), daemon=True))
+                                                      files.getters(credential("slack-user-token"))), daemon=True))
     threads.append(threading.Thread(target=probe_loop, args=(db_path, senders.shared, stop), daemon=True))
     if fm is not None:
         threads.append(threading.Thread(target=fastmail.poll_loop, args=(db_path, fm, stop), daemon=True))

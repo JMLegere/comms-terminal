@@ -16,7 +16,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import import_takeout  # noqa: E402
 
-from universal_inbox import email, inbox  # noqa: E402
+from universal_inbox import email, files, inbox  # noqa: E402
 
 SINCE = datetime(2026, 9, 12, tzinfo=timezone.utc)
 UNTIL = datetime(2026, 10, 12, 16, tzinfo=timezone.utc)
@@ -76,7 +76,7 @@ def _seed(db, key, action, connection_id=1):
     connection = db.execute("SELECT * FROM connections WHERE id = ?", (connection_id,)).fetchone()
     raw = _mail(key, "Thu, 10 Sep 2026 00:00:00 +0000").as_bytes()
     incoming = email.parse(raw, connection)
-    incoming.data["raw"] = inbox.store_raw(db, raw)
+    incoming.data["raw"] = files.store_raw(db, raw)
     thread = inbox.ingest(db, incoming)
     inbox.act(db, thread.id, action)
     return thread.id

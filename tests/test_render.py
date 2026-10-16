@@ -3,7 +3,7 @@
 from datetime import datetime, timezone
 from email.message import EmailMessage
 
-from universal_inbox import email as em, inbox, render
+from universal_inbox import email as em, files, inbox, render
 
 
 def html_mail(html: str, subject="Hello", text=None, **parts) -> bytes:
@@ -112,10 +112,10 @@ def test_raw_message_is_kept_beside_the_database(tmp_path):
     db = inbox.connect(str(tmp_path / "inbox.db"))
     inbox.migrate(db)
     raw = html_mail("<p>hi</p>")
-    sha = inbox.store_raw(db, raw)
+    sha = files.store_raw(db, raw)
     path = tmp_path / "raw" / f"{sha}.eml"
     assert path.read_bytes() == raw and oct(path.stat().st_mode)[-3:] == "600"
-    assert inbox.store_raw(db, raw) == sha  # content-addressed: storing again is a no-op
+    assert files.store_raw(db, raw) == sha  # content-addressed: storing again is a no-op
 
 
 def test_reply_quotes_the_last_inbound_message_gmail_style():

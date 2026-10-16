@@ -14,7 +14,7 @@ from textual import events
 from textual.widgets import OptionList, TextArea
 from test_reconcile_console import bridge_console, seed_console
 
-from universal_inbox import agent, inbox
+from universal_inbox import agent, files, inbox
 from universal_inbox.tui import Console, DraftsPage, Pick, PickFile, ReplyBox, StagedList, thread_text
 
 
@@ -33,11 +33,11 @@ def with_files(tmp_path):
     """Ana's newest message carries a stored PDF, a stored PNG, and a Slack-style file still pending."""
     path, ids = seeded(tmp_path)
     db = inbox.connect(path)
-    pdf = inbox.store_file(db, b"%PDF-1.7 deck")
+    pdf = files.store_file(db, b"%PDF-1.7 deck")
     pic = png()
     inbox.add_attachments(db, newest(db, ids["ana"]), [
         {"name": "deck.pdf", "type": "application/pdf", "size": 13, "sha": pdf},
-        {"name": "shot.png", "type": "image/png", "size": len(pic), "sha": inbox.store_file(db, pic)},
+        {"name": "shot.png", "type": "image/png", "size": len(pic), "sha": files.store_file(db, pic)},
         {"name": "late.zip", "type": "application/zip", "size": 9, "source": {"url": "https://files.slack.test/z"}}])
     return path, ids, db, pdf
 
@@ -80,10 +80,10 @@ def with_inline_image(tmp_path, stored):
         mid = db.execute("INSERT INTO activities (thread_id, kind, occurred_at, identity_id, native_id, content, data)"
                          " SELECT thread_id, 'MESSAGE', ?, identity_id, '<look@acme.com>', 'Look', ? FROM activities"
                          " WHERE id = ?", (datetime.now(timezone.utc).isoformat(),
-                                           json.dumps({"raw": inbox.store_raw(db, bytes(m))}),
+                                           json.dumps({"raw": files.store_raw(db, bytes(m))}),
                                            newest(db, ids["ana"]))).lastrowid
     inbox.add_attachments(db, mid, [{"name": "shot1_x.png", "type": "image/png", "size": len(pic), "inline": True,
-                                     "content_id": "shot1@x", "sha": inbox.store_file(db, pic) if stored else None}])
+                                     "content_id": "shot1@x", "sha": files.store_file(db, pic) if stored else None}])
     return path, ids, db
 
 
@@ -100,7 +100,7 @@ def card_parts(tmp_path, stored):
 
     run(app, [go])
     return [(next(iter(k)), text) for k, text in seen["parts"]], thread_text(inbox.thread_view(db, ids["ana"]),
-                                                                              inbox.raw_dir(db))
+                                                                              files.raw_dir(db))
 
 
 def test_an_inline_image_shows_where_it_sits_in_the_body_once(tmp_path):
@@ -118,12 +118,12 @@ def test_an_inline_image_not_stored_reads_as_its_name_in_place(tmp_path):
 
 def test_y_lists_each_stored_file_path_for_threads_and_drafts(tmp_path):
     path, ids, db, pdf = with_files(tmp_path)
-    text = thread_text(inbox.thread_view(db, ids["ana"]), inbox.raw_dir(db))
-    assert f"Attachment: deck.pdf (application/pdf, 13 bytes) — {inbox.files_dir(db) / pdf}" in text
+    text = thread_text(inbox.thread_view(db, ids["ana"]), files.raw_dir(db))
+    assert f"Attachment: deck.pdf (application/pdf, 13 bytes) — {files.files_dir(db) / pdf}" in text
     assert "Attachment: late.zip (application/zip, 9 bytes)\n" in text + "\n"
     d = inbox.save_draft(db, dict(connection_id=1, kind="email", sender="me@x.io", to="", cc="", subject="s", body=""))
     inbox.stage(db, sha=pdf, name="deck.pdf", type="application/pdf", size=13, draft_id=d["id"])
-    assert f"Attachment: deck.pdf (application/pdf, 13 bytes) — {inbox.files_dir(db) / pdf}" in \
+    assert f"Attachment: deck.pdf (application/pdf, 13 bytes) — {files.files_dir(db) / pdf}" in \
         agent.draft(db, str(d["id"]), {}, None, None)
 
 
@@ -244,7 +244,7 @@ def test_selected_alias_reply_attaches_and_sends_only_its_original_files_and_tex
     db = inbox.connect(path)
     for owner, name, content in ((ids["keep"], "unchosen.txt", b"private other draft"),
                                  (ids["old"], "selected.txt", b"chosen file")):
-        inbox.stage(db, sha=inbox.store_file(db, content), name=name, type="text/plain",
+        inbox.stage(db, sha=files.store_file(db, content), name=name, type="text/plain",
                     size=len(content), thread_id=owner)
     shot = tmp_path / "chosen-shot.png"
     shot.write_bytes(png())

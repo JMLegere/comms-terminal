@@ -11,7 +11,7 @@ from urllib.parse import quote
 
 import pytest
 
-from universal_inbox import email, inbox, platforms
+from universal_inbox import email, files, inbox, platforms
 from test_email_reconcile import (  # noqa: F401
     AT, OTHER, SELF, RecordingSender, activities, db, historical, incoming,
     message_ids, persisted, raw_bytes, triage,
@@ -43,9 +43,9 @@ def receipt(db):
 
 
 def staged_file(db, **owner):
-    sha = inbox.store_file(db, b"private attachment")
+    sha = files.store_file(db, b"private attachment")
     inbox.stage(db, sha=sha, name="private.txt", type="text/plain", size=18, **owner)
-    return inbox.attachment_path(db, sha)
+    return files.attachment_path(db, sha)
 
 
 def test_receipt_is_minimal_durable_idempotent_and_does_not_create_work(db, tmp_path):
@@ -199,7 +199,7 @@ def test_receipt_survives_failed_reconcile_and_retries_without_raw_recovery(db, 
         db.execute("CREATE TRIGGER reject_receipt_alias BEFORE UPDATE OF merged_into ON threads"
                    " WHEN NEW.merged_into IS NOT NULL BEGIN SELECT RAISE(ABORT, 'alias blocked'); END")
     before = persisted(db)
-    monkeypatch.setattr(inbox, "raw_dir", lambda db: pytest.fail("receipt wake must not read raw files"))
+    monkeypatch.setattr(files, "raw_dir", lambda db: pytest.fail("receipt wake must not read raw files"))
     with pytest.raises(sqlite3.DatabaseError, match="alias blocked"):
         inbox.reconcile_resend_receipts(db)
     assert persisted(db) == before and inbox.get_thread(db, child.id).id == child.id

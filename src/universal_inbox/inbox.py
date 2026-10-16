@@ -5,7 +5,6 @@ Design: docs/design/api-and-database.md.
 """
 
 import hashlib
-import hmac
 import json
 import os
 import re
@@ -22,7 +21,7 @@ from email.parser import BytesHeaderParser
 from email.utils import getaddresses
 from typing import Protocol, Sequence
 
-from . import platforms
+from . import files, platforms
 
 SCHEMA_VERSION = 13
 WAIT = timedelta(days=4)  # Waiting for them ends after this with no reply: back to Todo to follow up (#116)
@@ -1185,128 +1184,9 @@ def _echo_of_sent(db, thread_id: int, inc: Incoming) -> bool:
         " AND occurred_at >= ?", (thread_id, since)))
 
 
-def raw_dir(db) -> Path | None:
-    """Where raw messages are kept: `raw/` beside the database file (decision #106); None in memory."""
-    f = db.execute("PRAGMA database_list").fetchone()[2]
-    return Path(f).parent / "raw" if f else None
-
-
-def store_raw(db, raw: bytes) -> str | None:
-    """Keep a message's raw bytes, content-addressed and 0600; returns the sha256 name."""
-    d = raw_dir(db)
-    if d is None:
-        return None
-    sha = hashlib.sha256(raw).hexdigest()
-    d.mkdir(mode=0o700, exist_ok=True)
-    path = d / f"{sha}.eml"
-    if not path.exists():
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(fd, "wb") as f:
-            f.write(raw)
-    return sha
-
-
 # --- attachments (.agents/prd/2026-10-15-attachments.md) -------------------
 
 ATTACHMENT_TRIES = 5  # downloads given up after this many failures
-
-
-def files_dir(db) -> Path | None:
-    """Where Attachment bytes are kept: `files/` beside the database; None in memory."""
-    f = db.execute("PRAGMA database_list").fetchone()[2]
-    return Path(f).parent / "files" if f else None
-
-
-def store_file(db, data: bytes) -> str | None:
-    """Keep one file's bytes, content-addressed and 0600; returns the sha256 name (unchanged once written)."""
-    d = files_dir(db)
-    if d is None:
-        return None
-    sha = hashlib.sha256(data).hexdigest()
-    d.mkdir(mode=0o700, exist_ok=True)
-    path = d / sha
-    if not path.exists():
-        try:
-            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        except FileExistsError:  # another process wrote the same bytes first
-            return sha
-        with os.fdopen(fd, "wb") as f:
-            f.write(data)
-    return sha
-
-
-def attachment_path(db, sha: str) -> Path | None:
-    d = files_dir(db)
-    return d / sha if d is not None and re.fullmatch(r"[0-9a-f]{64}", sha or "") else None
-
-
-UPLOAD_TTL = 3600  # upload links expire after 1 hour (D-A2)
-
-
-def files_secret(db) -> bytes:
-    """The link secret (NFR-A3): 32 random bytes in `files-secret` beside the database, 0600, made on first use
-    (written aside, then linked in, so a reader never sees it half-written). In memory: one per process."""
-    d = files_dir(db)
-    if d is None:
-        return _MEMORY_SECRET
-    path = d.parent / "files-secret"
-    if not path.exists():
-        tmp = path.with_name(f".files-secret.{os.getpid()}")
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "wb") as f:
-            f.write(os.urandom(32))
-        try:
-            os.link(tmp, path)
-        except FileExistsError:  # another process made it first
-            pass
-        finally:
-            os.unlink(tmp)
-    return path.read_bytes()
-
-
-_MEMORY_SECRET = os.urandom(32)
-
-
-def _mac(secret: bytes, message: str) -> str:
-    return hmac.new(secret, message.encode(), hashlib.sha256).hexdigest()[:32]  # 128 bits
-
-
-def file_cap(secret: bytes, sha: str) -> str:
-    """A file link's capability segment: `<sha>.<HMAC(secret, sha)>`, so the server checks it without a lookup."""
-    return f"{sha}.{_mac(secret, sha)}"
-
-
-def cap_sha(secret: bytes, cap: str) -> str | None:
-    sha, _, mac = cap.partition(".")
-    return sha if re.fullmatch(r"[0-9a-f]{64}", sha) and hmac.compare_digest(mac, _mac(secret, sha)) else None
-
-
-def file_url(db, sha: str, name: str, host: str, port: int) -> str:
-    """A permanent LAN link to a stored file (FR-A5, D-A2)."""
-    return f"http://{host}:{port}/f/{file_cap(files_secret(db), sha)}/{urllib.parse.quote(name, safe='')}"
-
-
-def upload_token(secret: bytes, owner: tuple[str, int], expires: float | None = None) -> str:
-    """An upload link's token for ("draft", id) or ("thread", id), valid until `expires` (default 1 hour)."""
-    kind, owner_id = owner
-    if kind not in ("draft", "thread"):
-        raise ValueError("owner is a draft or a thread")
-    expires = int(expires if expires is not None else _now().timestamp() + UPLOAD_TTL)
-    body = f"{kind}.{int(owner_id)}.{expires}"
-    return f"{body}.{_mac(secret, 'up:' + body)}"
-
-
-def upload_owner(secret: bytes, token: str, now: float | None = None) -> tuple[str, int] | None:
-    """The token's owner, or None when it is forged, malformed, or expired."""
-    m = re.fullmatch(r"(draft|thread)\.(\d+)\.(\d+)\.([0-9a-f]{32})", token)
-    if not m or not hmac.compare_digest(m[4], _mac(secret, f"up:{m[1]}.{m[2]}.{m[3]}")):
-        return None
-    return (m[1], int(m[2])) if int(m[3]) > (now if now is not None else _now().timestamp()) else None
-
-
-def upload_url(db, owner: tuple[str, int], host: str, port: int) -> str:
-    """A 1-hour LAN upload page whose files are staged on `owner` (FR-A9)."""
-    return f"http://{host}:{port}/up/{upload_token(files_secret(db), owner)}"
 
 
 def file_type(db, sha: str) -> str | None:
@@ -1382,7 +1262,7 @@ def expire_attachments(db, now: datetime) -> int:
             (_iso(now - timedelta(days=365)),))]
         db.executemany("UPDATE attachments SET state = 'expired', sha = NULL WHERE sha = ?", [(s,) for s in shas])
     for sha in shas:
-        if (path := attachment_path(db, sha)) is not None:
+        if (path := files.attachment_path(db, sha)) is not None:
             path.unlink(missing_ok=True)
     return len(shas)
 
@@ -1405,8 +1285,8 @@ def stage(db, *, sha: str, name: str, type: str, size: int,
           draft_id: int | None = None, thread_id: int | None = None) -> int:
     """Attach a stored file to an unsent Draft or to one Thread's open reply."""
     column, owner = _owner(draft_id, thread_id)
-    path = attachment_path(db, sha)
-    if files_dir(db) is not None and (path is None or not path.is_file()):
+    path = files.attachment_path(db, sha)
+    if files.files_dir(db) is not None and (path is None or not path.is_file()):
         raise ValueError("stage needs the sha256 of a stored file")
     with db:
         return db.execute(f"INSERT INTO staged_attachments ({column}, sha, name, type, size, added_at)"
@@ -1423,7 +1303,7 @@ def staged_files(db, *, draft_id: int | None = None, thread_id: int | None = Non
     """A Draft's or reply's staged Attachments as files to send; ValueError when a stored file is gone."""
     out = []
     for s in staged(db, draft_id=draft_id, thread_id=thread_id):
-        path = attachment_path(db, s["sha"])
+        path = files.attachment_path(db, s["sha"])
         if path is None or not path.is_file():
             raise ValueError(f"Attachment {s['name']} is missing from the file store; remove it and attach it again")
         out.append(Staged(path, s["name"], s["type"], s["size"], s["sha"]))
@@ -1433,12 +1313,6 @@ def staged_files(db, *, draft_id: int | None = None, thread_id: int | None = Non
 def unstage(db, staged_id: int) -> None:
     with db:
         db.execute("DELETE FROM staged_attachments WHERE id = ?", (staged_id,))
-
-
-def clear_staged(db, *, draft_id: int | None = None, thread_id: int | None = None) -> None:
-    column, owner = _owner(draft_id, thread_id)
-    with db:
-        db.execute(f"DELETE FROM staged_attachments WHERE {column} = ?", (owner,))
 
 
 EMAIL_ATOM = r"[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+"
@@ -1574,7 +1448,7 @@ def _reconcile_email_threads(db, apply, channel_id, recover=False) -> dict:
               "held_references": 0}
     added = []
     if recover:
-        d = raw_dir(db)
+        d = files.raw_dir(db)
         for a in rows:
             data = json.loads(a["data"])
             sha = data.get("raw") if isinstance(data, dict) else None
@@ -2077,12 +1951,12 @@ def queue(db, view: str) -> list[dict]:
     return sorted(out, key=lambda x: x["last_at"], reverse=True)
 
 
-def _shaped(db, m: dict, platform, channel, files) -> dict:
+def _shaped(db, m: dict, platform, channel, lan) -> dict:
     """A message as the console shows it, whatever its Platform: raw source (email), recipients, a link that
     opens it in the service, and attachments; `data` stays for email reply-all.
 
     Each attachment: name, type, size, inline and content_id, state (None when the Platform only lists it), sha
-    and path (the stored copy, else None), and url: the LAN file link once stored and `files` = (host, port) is
+    and path (the stored copy, else None), and url: the LAN file link once stored and `lan` = (host, port) is
     given (FR-A5), else the Platform link."""
     d = m["data"]
     m["link"] = platform.link(m, channel)
@@ -2092,8 +1966,8 @@ def _shaped(db, m: dict, platform, channel, files) -> dict:
     m["attachments"] = [
         {"name": r["name"], "type": r["type"], "size": r["size"], "inline": bool(r["inline"]), "state": r["state"],
          "content_id": r["content_id"], "sha": r["sha"],
-         "path": str(attachment_path(db, r["sha"])) if r["sha"] else None,
-         "url": file_url(db, r["sha"], r["name"], *files) if r["sha"] and files else link(r["position"])}
+         "path": str(files.attachment_path(db, r["sha"])) if r["sha"] else None,
+         "url": files.file_url(db, r["sha"], r["name"], *lan) if r["sha"] and lan else link(r["position"])}
         for r in rows] or [
         {"name": a[0], "type": a[1], "size": a[2], "inline": False, "state": None, "sha": None, "path": None,
          "url": link(k)}

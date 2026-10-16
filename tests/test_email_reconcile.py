@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from universal_inbox import email, inbox
+from universal_inbox import email, files, inbox
 
 AT = datetime(2026, 10, 12, 10, tzinfo=timezone.utc)
 SELF = "me@example.test"
@@ -46,7 +46,7 @@ def historical(db, mid, refs="", **changes):
            f"References: {refs}\r\nContent-Type: text/plain\r\n\r\nSame body").encode()
     connection = db.execute("SELECT * FROM connections WHERE id = 1").fetchone()
     parsed = email.parse(raw, connection)
-    return replace(parsed, thread_ref=[], data={**parsed.data, "raw": inbox.store_raw(db, raw)}, **changes)
+    return replace(parsed, thread_ref=[], data={**parsed.data, "raw": files.store_raw(db, raw)}, **changes)
 
 
 def activities(db):
@@ -58,7 +58,7 @@ def persisted(db):
 
 
 def raw_bytes(db):
-    directory = inbox.raw_dir(db)
+    directory = files.raw_dir(db)
     return {p.name: p.read_bytes() for p in directory.iterdir()} if directory.exists() else {}
 
 
@@ -139,7 +139,7 @@ def test_email_header_prose_cannot_supply_exact_reference_evidence(db, header, v
            f"{header}: {value}\r\n\r\nHello").encode()
     parsed = email.parse(raw, db.execute("SELECT * FROM connections WHERE id = 1").fetchone())
     child = inbox.ingest(db, replace(parsed, occurred_at=AT,
-                                    data={**parsed.data, "raw": inbox.store_raw(db, raw)}))
+                                    data={**parsed.data, "raw": files.store_raw(db, raw)}))
     assert child.id != root.id
     physical, stored_raw = activities(db), raw_bytes(db)
     result = inbox.reconcile_email_threads(db, apply=True)
@@ -328,8 +328,8 @@ def test_missing_unsafe_or_hash_mismatched_raw_is_held_without_guessing(db, tmp_
     raw = b"Message-ID: <child@test>\r\nReferences: <root@test>\r\n\r\nHello"
     (tmp_path / "outside.eml").write_bytes(raw)
     if pointer == "corrupt":
-        pointer = inbox.store_raw(db, raw)
-        (inbox.raw_dir(db) / f"{pointer}.eml").write_bytes(raw + b"tampered")
+        pointer = files.store_raw(db, raw)
+        (files.raw_dir(db) / f"{pointer}.eml").write_bytes(raw + b"tampered")
     child = inbox.ingest(db, incoming("<child@test>", data={"raw": pointer}))
     before, raw_before = activities(db), raw_bytes(db)
     result = inbox.reconcile_email_threads(db, apply=True)
@@ -341,7 +341,7 @@ def test_missing_unsafe_or_hash_mismatched_raw_is_held_without_guessing(db, tmp_
 def test_raw_recovery_reads_headers_not_body(db):
     root = inbox.ingest(db, incoming("<root@test>"))
     raw = b"Message-ID: <child@test>\r\n\r\nReferences: <root@test>\r\nquoted mail"
-    child = inbox.ingest(db, incoming("<child@test>", data={"raw": inbox.store_raw(db, raw)}))
+    child = inbox.ingest(db, incoming("<child@test>", data={"raw": files.store_raw(db, raw)}))
     assert inbox.reconcile_email_threads(db, apply=True)["merged"] == 0
     assert inbox.get_thread(db, child.id).id != root.id
 
@@ -653,7 +653,7 @@ def test_schema3_migration_preserves_records_raw_and_append_only_guards(tmp_path
             db.execute("INSERT INTO channels (id, connection_id, native_id, kind) VALUES (1, 1, ?, 'mailbox')", (SELF,))
             for tid, mid in ((1, "<root@test>"), (2, "<child@test>")):
                 raw = (f"Message-ID: {mid}\r\nReferences: " + ("<root@test>" if tid == 2 else "") + "\r\n\r\nHello").encode()
-                pointer = inbox.store_raw(db, raw)
+                pointer = files.store_raw(db, raw)
                 db.execute("INSERT INTO threads (id, channel_id, native_thread_id, title, status, status_detail, status_changed_at, created_at)"
                            " VALUES (?, 1, ?, 'Original', 'TODO', 'CREATED', ?, ?)", (tid, mid, AT.isoformat(), AT.isoformat()))
                 db.execute("INSERT INTO activities (id, thread_id, kind, occurred_at, native_id, content, data)"

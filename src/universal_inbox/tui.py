@@ -35,7 +35,7 @@ from textual.widgets import DataTable, DirectoryTree, Input, OptionList, Static,
 from textual.widgets.option_list import Option
 from textual.worker import get_current_worker
 
-from . import inbox, render
+from . import files, inbox, render
 from .health import problem
 from .icons import ICON
 from .platforms import E164, FORMATS, PLATFORMS
@@ -1187,7 +1187,7 @@ def attachable(platform: str | None) -> bool:
 
 def staged_files(db, owner) -> list[dict]:
     """The files staged on ("draft", id) or ("thread", id) (FR-A8), each with its stored copy's path."""
-    return [r | {"path": str(inbox.attachment_path(db, r["sha"]))}
+    return [r | {"path": str(files.attachment_path(db, r["sha"]))}
             for r in inbox.staged(db, **{f"{owner[0]}_id": owner[1]})]
 
 
@@ -1199,7 +1199,7 @@ def stage_file(host, owner, path) -> None:
     except OSError as e:
         host.app.notify(f"Not attached · {e.strerror or e}", severity="error")
         return
-    inbox.stage(host.app.db, sha=inbox.store_file(host.app.db, data), name=p.name, size=len(data),
+    inbox.stage(host.app.db, sha=files.store_file(host.app.db, data), name=p.name, size=len(data),
                 type=mimetypes.guess_type(p.name)[0] or "application/octet-stream", **{f"{owner[0]}_id": owner[1]})
     for staged in host.query(StagedList):
         staged.refresh_staged()
@@ -1216,7 +1216,7 @@ def attach(host, owner) -> None:
         if choice == "workbox":
             app.push_screen(PickFile(), lambda path: stage_file(host, owner, path) if path and host.is_attached else None)
         elif choice == "upload":
-            url = inbox.upload_url(app.db, owner, *app.files)
+            url = files.upload_url(app.db, owner, *app.files)
             app.notify(f"Upload from Mani (ctrl+shift+click; works for 1 hour): [link='{url}']{url}[/link]", timeout=60)
     app.push_screen(Pick("Attach", [("workbox", f"{ICON['attachment']} File on Workbox…"),
                                     ("upload", f"{ICON['open']} Upload from Mani")]), chosen)
@@ -3835,7 +3835,7 @@ class Console(App):
         self.theme = "textual-light"  # toasts and built-in widgets match the light palette
         self.db = inbox.connect(self.db_path)
         inbox.migrate(self.db)
-        self.raw = inbox.raw_dir(self.db)
+        self.raw = files.raw_dir(self.db)
         self.data_version = self.db.execute("PRAGMA data_version").fetchone()[0]
         self.install_screen(MainScreen(), "main")
         self.push_screen("main")

@@ -8,7 +8,7 @@ import urllib.error
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 
-from universal_inbox import email, inbox, main, quo, render, serve, slack
+from universal_inbox import email, files, inbox, main, quo, render, serve, slack
 
 NOW = datetime(2026, 10, 15, 15, 0, tzinfo=timezone.utc)
 PDF, PNG = b"%PDF-1.7 contract", b"\x89PNG logo"
@@ -55,7 +55,7 @@ def test_gmail_parts_are_stored_with_cid_images_inline_and_ics_skipped(tmp_path)
     assert [(r["position"], r["name"], r["type"], r["size"], r["inline"], r["content_id"], r["state"])
             for r in got] == [(0, "logo.png", "image/png", len(PNG), 1, "logo1", "stored"),
                               (1, "contract.pdf", "application/pdf", len(PDF), 0, None, "stored")]
-    assert inbox.attachment_path(db, got[1]["sha"]).read_bytes() == PDF
+    assert files.attachment_path(db, got[1]["sha"]).read_bytes() == PDF
     assert json.loads(got[1]["source"]) == {"raw": hashlib.sha256(raw).hexdigest(), "part": 1}
     assert post_email(db, conn["id"], raw) == 204  # the Worker retries: a duplicate adds nothing
     assert len(rows(db)) == 2
@@ -82,7 +82,7 @@ def test_backfill_stores_parts_of_kept_messages_once(tmp_path, capsys):
     db, conn = connect(tmp_path)
     raw = gmail_raw()
     inc = email.parse(raw, conn)
-    inc.data["raw"] = inbox.store_raw(db, raw)
+    inc.data["raw"] = files.store_raw(db, raw)
     inbox.ingest(db, inc)  # a message from before this release: raw kept, no Attachments
     assert rows(db) == []
     main.main(["--db", str(tmp_path / "inbox.db"), "attachments-backfill"])
@@ -165,7 +165,7 @@ def test_downloads_store_files_and_count_failures(tmp_path):
     assert serve.fetch_pending(db, {}) == 0 and [r["tries"] for r in rows(db)] == [0, 0]  # no token: wait
     assert serve.fetch_pending(db, {"slack": get}) == 1
     deck, shot = rows(db)
-    assert deck["state"] == "stored" and inbox.attachment_path(db, deck["sha"]).read_bytes() == PDF
+    assert deck["state"] == "stored" and files.attachment_path(db, deck["sha"]).read_bytes() == PDF
     assert (shot["state"], shot["tries"]) == ("pending", 1)
     answers["shot"] = (200, "text/html", b"<!DOCTYPE html><title>Slack sign in</title>")  # not the file
     serve.fetch_pending(db, {"slack": get})
@@ -181,7 +181,7 @@ def test_downloads_store_files_and_count_failures(tmp_path):
 def test_html_without_a_content_type_and_oversize_files_are_refused(tmp_path):
     db, _, _ = slack_db(tmp_path)
     with db:
-        db.execute("UPDATE attachments SET size = ? WHERE name = 'deck.pdf'", (serve.MAX_FILE + 1,))
+        db.execute("UPDATE attachments SET size = ? WHERE name = 'deck.pdf'", (files.MAX_FILE + 1,))
     calls = []
     serve.fetch_pending(db, {"slack": lambda url: calls.append(url) or (200, "", b"  <html><body>login")})
     assert len(calls) == 1 and [(r["state"], r["tries"]) for r in rows(db)] == [("pending", 1), ("pending", 1)]
@@ -196,7 +196,7 @@ def test_expiry_deletes_year_old_files_unless_newer_or_staged(tmp_path):
                                             inbox.Identity("email", "ana@acme.com"), at, "hi"))
         aid = db.execute("SELECT id FROM activities WHERE native_id = ?", (mid,)).fetchone()[0]
         inbox.add_attachments(db, aid, [{"name": "f", "type": "application/pdf", "size": len(b),
-                                         "sha": inbox.store_file(db, b)} for b in blobs])
+                                         "sha": files.store_file(db, b)} for b in blobs])
         return t
 
     message("<a@x>", old, b"gone", b"shared", b"staged")
@@ -207,7 +207,7 @@ def test_expiry_deletes_year_old_files_unless_newer_or_staged(tmp_path):
     assert inbox.expire_attachments(db, NOW) == 2  # "gone" and "other"
     states = {(r["position"], r["activity_id"]): (r["state"], r["sha"]) for r in rows(db)}
     assert [s for s, _ in states.values()] == ["expired", "stored", "stored", "stored", "expired"]
-    assert inbox.attachment_path(db, hashlib.sha256(b"gone").hexdigest()).exists() is False
-    assert inbox.attachment_path(db, hashlib.sha256(b"shared").hexdigest()).exists()
-    assert inbox.attachment_path(db, hashlib.sha256(b"staged").hexdigest()).exists()
+    assert files.attachment_path(db, hashlib.sha256(b"gone").hexdigest()).exists() is False
+    assert files.attachment_path(db, hashlib.sha256(b"shared").hexdigest()).exists()
+    assert files.attachment_path(db, hashlib.sha256(b"staged").hexdigest()).exists()
     assert inbox.expire_attachments(db, NOW) == 0

@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from universal_inbox import inbox
+from universal_inbox import files, inbox
 
 NOW = datetime(2026, 10, 15, 15, 0, tzinfo=timezone.utc)
 
@@ -34,18 +34,18 @@ def test_a_v11_database_gains_the_tables_and_keeps_its_rows(tmp_path):
 
 def test_files_are_content_addressed_and_private(tmp_path):
     db, _, _ = setup(tmp_path)
-    sha = inbox.store_file(db, b"%PDF-1.7 contract")
-    path = inbox.attachment_path(db, sha)
+    sha = files.store_file(db, b"%PDF-1.7 contract")
+    path = files.attachment_path(db, sha)
     assert path == tmp_path / "files" / sha and path.read_bytes() == b"%PDF-1.7 contract"
     assert oct(path.stat().st_mode & 0o777) == "0o600" and oct(path.parent.stat().st_mode & 0o777) == "0o700"
-    assert inbox.store_file(db, b"%PDF-1.7 contract") == sha  # same bytes, same file, never rewritten
-    assert inbox.attachment_path(db, "../inbox.db") is None
-    assert inbox.store_file(inbox.connect(), b"x") is None  # in memory: nowhere to keep files
+    assert files.store_file(db, b"%PDF-1.7 contract") == sha  # same bytes, same file, never rewritten
+    assert files.attachment_path(db, "../inbox.db") is None
+    assert files.store_file(inbox.connect(), b"x") is None  # in memory: nowhere to keep files
 
 
 def test_attachments_are_stored_or_wait_for_a_download(tmp_path):
     db, _, activity = setup(tmp_path)
-    sha = inbox.store_file(db, b"png")
+    sha = files.store_file(db, b"png")
     ids = inbox.add_attachments(db, activity, [
         {"name": "logo.png", "type": "image/png", "size": 3, "inline": True, "content_id": "logo", "sha": sha},
         {"name": "deck.pdf", "type": "application/pdf", "size": 1200, "source": {"id": "F1", "url": "https://files.slack.com/F1"}}])
@@ -57,7 +57,7 @@ def test_attachments_are_stored_or_wait_for_a_download(tmp_path):
     assert inbox.attachments(db, activity)[1]["state"] == "pending"
     inbox.mark_failed(db, ids[1])
     assert inbox.attachments(db, activity)[1]["state"] == "failed" and inbox.pending_attachments(db) == []
-    inbox.mark_stored(db, ids[1], inbox.store_file(db, b"pdf"))
+    inbox.mark_stored(db, ids[1], files.store_file(db, b"pdf"))
     assert inbox.attachments(db, activity)[1]["state"] == "stored"
 
 
@@ -75,16 +75,16 @@ def test_staging_on_a_draft_or_a_reply(tmp_path):
     db, thread_id, _ = setup(tmp_path)
     draft = inbox.save_draft(db, {"connection_id": 1, "kind": "email", "sender": "me@x.io", "to": "ana@acme.com",
                                   "cc": "", "subject": "Contract", "body": "attached"})
-    sha = inbox.store_file(db, b"%PDF")
+    sha = files.store_file(db, b"%PDF")
     a = inbox.stage(db, sha=sha, name="contract.pdf", type="application/pdf", size=4, draft_id=draft["id"])
-    inbox.stage(db, sha=sha, name="contract.pdf", type="application/pdf", size=4, thread_id=thread_id)
+    t = inbox.stage(db, sha=sha, name="contract.pdf", type="application/pdf", size=4, thread_id=thread_id)
     assert [s["id"] for s in inbox.staged(db, draft_id=draft["id"])] == [a]
     assert len(inbox.staged(db, thread_id=thread_id)) == 1
     with pytest.raises(ValueError):
         inbox.stage(db, sha=sha, name="x", type="t", size=4, draft_id=draft["id"], thread_id=thread_id)
     with pytest.raises(ValueError):
         inbox.stage(db, sha="0" * 64, name="x", type="t", size=4, thread_id=thread_id)  # no such file
-    inbox.clear_staged(db, thread_id=thread_id)
+    inbox.unstage(db, t)
     assert inbox.staged(db, thread_id=thread_id) == []
     inbox.delete_draft(db, draft["id"])  # a deleted Draft takes its staged files with it
     assert db.execute("SELECT count(*) FROM staged_attachments").fetchone()[0] == 0

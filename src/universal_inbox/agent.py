@@ -3,7 +3,7 @@ Jeremy sends from the console."""
 
 import sys
 
-from . import inbox
+from . import files, inbox
 from .platforms import PLATFORMS
 from .tui import (CONTEXT_SOURCES, DRAFT_FIELDS, ReplyError, connection_label, draft_history, draft_text,
                   socket_context, staged_files, thread_addresses, thread_text)
@@ -55,7 +55,7 @@ def thread(db, thread_id, socket) -> str:
             context[source] = (socket_context(socket, source)(emails, domains), None)
         except ReplyError as e:
             context[source] = (None, str(e))
-    return thread_text(v, inbox.raw_dir(db), context)
+    return thread_text(v, files.raw_dir(db), context)
 
 
 def draft(db, ref, changes, revision, connection_id) -> str:
@@ -76,5 +76,5 @@ def draft(db, ref, changes, revision, connection_id) -> str:
                                  expected_revision=revision)
     c = next((c for c in inbox.connections(db) if c["id"] == d["connection_id"]), None)
     history = draft_history(db, d["kind"], d["connection_id"], d["to"]) or []
-    return draft_text(d, connection_label(c), history, inbox.raw_dir(db), (d["id"], d["revision"]),
+    return draft_text(d, connection_label(c), history, files.raw_dir(db), (d["id"], d["revision"]),
                       staged_files(db, ("draft", d["id"])))

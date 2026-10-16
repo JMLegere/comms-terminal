@@ -18,7 +18,7 @@ from email.utils import parseaddr, parsedate_to_datetime
 from pathlib import Path
 from zipfile import ZipFile
 
-from universal_inbox import email, inbox, platforms
+from universal_inbox import email, files, inbox, platforms
 
 MEMBERS = ("Takeout/Mail/Inbox.mbox", "Takeout/Mail/Sent.mbox")
 STATUS_COLUMNS = "status, status_detail, snoozed_until, detail_before_snooze"
@@ -152,7 +152,7 @@ def run(archive, db_path, connection_id, since, until, apply=False) -> dict:
             if incoming.sender is None and thread_id is not None and inbox._echo_of_sent(db, thread_id, incoming):
                 counts["filtered"] += 1
                 continue
-            incoming.data["raw"] = inbox.store_raw(db, raw)
+            incoming.data["raw"] = files.store_raw(db, raw)
             thread = inbox.ingest(db, incoming)
             if thread is None:
                 counts["filtered"] += 1

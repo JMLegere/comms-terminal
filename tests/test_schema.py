@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from universal_inbox import inbox
+from universal_inbox import files, inbox
 
 
 def test_activities_are_append_only_except_content_clearing_after_delete():
@@ -126,13 +126,13 @@ def test_version_12_upgrade_adds_only_receipts_and_preserves_records_files_and_g
 
     db, thread_id, activity_id = setup(tmp_path)
     try:
-        sha = inbox.store_file(db, b"retained file")
+        sha = files.store_file(db, b"retained file")
         inbox.add_attachments(db, activity_id, [{"name": "retained.txt", "type": "text/plain", "size": 13, "sha": sha}])
         inbox.stage(db, sha=sha, name="reply.txt", type="text/plain", size=13, thread_id=thread_id)
         inbox.save_draft(db, {"connection_id": 1, "kind": "email", "sender": "me@x.io", "to": "ana@acme.com",
                              "cc": "", "subject": "Retained draft", "body": "Unsent"})
         raw = b"Message-ID: <retained@test>\r\n\r\nRetained raw"
-        raw_sha = inbox.store_raw(db, raw)
+        raw_sha = files.store_raw(db, raw)
         inbox.ingest(db, inbox.Incoming(1, "me@x.io", "mailbox", "MESSAGE", "<retained@test>", None, NOW,
                                         "Retained raw", data={"raw": raw_sha}))
         db.executescript("DROP TABLE resend_receipts; PRAGMA user_version = 12;")
@@ -145,8 +145,8 @@ def test_version_12_upgrade_adds_only_receipts_and_preserves_records_files_and_g
                 for name in tables} == rows
         assert [tuple(r) for r in db.execute(
             "SELECT type, name, tbl_name, sql FROM sqlite_schema WHERE tbl_name != 'resend_receipts' ORDER BY name")] == schema
-        assert inbox.attachment_path(db, sha).read_bytes() == b"retained file"
-        assert (inbox.raw_dir(db) / f"{raw_sha}.eml").read_bytes() == raw
+        assert files.attachment_path(db, sha).read_bytes() == b"retained file"
+        assert (files.raw_dir(db) / f"{raw_sha}.eml").read_bytes() == raw
         assert db.execute("PRAGMA foreign_key_check").fetchall() == []
         with pytest.raises(sqlite3.IntegrityError):
             db.execute("INSERT INTO resend_receipts VALUES ('provider', 999, '<wire@test>')")

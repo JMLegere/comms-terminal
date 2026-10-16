@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from universal_inbox import email, inbox
+from universal_inbox import email, files, inbox
 from test_email_reconcile import SCHEMA3
 from test_schema_equivalence import shape
 
@@ -277,7 +277,7 @@ def test_recipient_history_email_raw_unlinked_detached_outgoing_and_canonical_al
            "Message-ID: <raw@test>\r\nDate: Thu, 1 Oct 2026 10:00:00 +0000\r\n"
            "Subject: Synthetic source\r\n\r\nCaptured source body").encode()
     source = email.parse(raw, inbox.connections(db)[0])
-    inbox.ingest(db, replace(source, data=source.data | {"raw": inbox.store_raw(db, raw)},
+    inbox.ingest(db, replace(source, data=source.data | {"raw": files.store_raw(db, raw)},
                              thread_ref=["<in@test>", "<out@test>"]))
     assert inbox.get_thread(db, outbound.id).id == inbound.id
     before = old_rows(db)

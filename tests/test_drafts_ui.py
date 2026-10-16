@@ -14,7 +14,7 @@ from textual.worker import get_current_worker
 from test_console import run, seeded
 from test_pane_arrows import check_editor_arrows
 from test_reconcile_console import bridge_console, seed_console
-from universal_inbox import inbox, serve
+from universal_inbox import files, inbox, serve
 from universal_inbox.tui import (DRAFT_FIELDS, Console, DraftConnection, DraftSendError, DraftsPage,
                                  Pick, ReplyBox, ReplyError, ThreadsPage, VIEW_NAMES)
 
@@ -803,7 +803,7 @@ def test_selected_alias_reply_errors_keep_text_and_each_owners_files(tmp_path, o
         inbox.reply(db, ids["old"], "Previous send",
                     SimpleNamespace(send=lambda *a, **k: "<00000000-0000-4000-8000-000000000001@resend>"))
     for owner, name in ((ids["keep"], "unchosen.txt"), (ids["old"], "selected.txt")):
-        inbox.stage(db, sha=inbox.store_file(db, name.encode()), name=name, type="text/plain",
+        inbox.stage(db, sha=files.store_file(db, name.encode()), name=name, type="text/plain",
                     size=len(name), thread_id=owner)
     requests, dispatches = [], []
 
@@ -930,7 +930,7 @@ def test_cancelled_reply_callbacks_preserve_material_warning_and_draft(tmp_path,
         inbox.reply(db, ids["old"], "Previous send",
                     SimpleNamespace(send=lambda *a, **k: "<00000000-0000-4000-8000-000000000001@resend>"))
     for owner, name in ((ids["keep"], "unchosen.txt"), (ids["old"], "selected.txt")):
-        inbox.stage(db, sha=inbox.store_file(db, name.encode()), name=name, type="text/plain",
+        inbox.stage(db, sha=files.store_file(db, name.encode()), name=name, type="text/plain",
                     size=len(name), thread_id=owner)
     started, release = Event(), Event()
     requests, workers = [], []

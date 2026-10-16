@@ -501,6 +501,7 @@ The console is a terminal app (`docs/design/console.md`, decisions #71–#75). I
   - Accepted gap: if the process crashes after an email is sent but before it is stored, the reply is not recorded. Slack replies come back as events and are recorded anyway.
   - 2026-10-16: a reply whose provider call times out or loses its response reports Send outcome unknown (504), like a Draft; replies still have no stored send status and no lock.
 - **#60, one deep `inbox` module** with `ingest`, `act`, `reply`, and `wake`; email and Slack as adapters behind two seams.
+  - 2026-10-16: file storage and capabilities live in `files` (raw and Attachment bytes, the link secret, file and upload links, download policy); `inbox` keeps Attachment and staged-Attachment records.
 - **#66, event-driven completeness** (Plain): delivery and health remain event-driven. Jeremy's 2026-10-12 exact-reference reconciliation approval adds logical email repair over stored evidence, independently of provider delivery or history polling.
 - **#119, Health Checks** (Jeremy, 2026-10-13): event-driven health stayed green while a source went quiet. Every 30 minutes `serve.probe_all` calls each adapter's `probe` (Resend `/domains`, Slack `auth.test`, Quo `/webhooks`); Fastmail's Sent poll is its check. Results live in `probe_error`/`probed_at`, apart from `last_error`, so a passing message cannot hide a failed check. Forwarded Gmail and Slack event delivery still cannot be checked.
 - **#62, Block applies to one Identity only**: no Person-level block.

@@ -6,7 +6,7 @@ import urllib.error
 
 import pytest
 
-from universal_inbox import email, fastmail, inbox, platforms, quo, serve, slack
+from universal_inbox import email, fastmail, files, inbox, platforms, quo, serve, slack
 from test_composition import AT, SELF, db, envelope, incoming  # noqa: F401  (db is a fixture)
 
 PDF = b"%PDF-1.4 contract"
@@ -31,11 +31,11 @@ class FakeSender:
 
 
 def pdf(db):
-    return inbox.store_file(db, PDF)
+    return files.store_file(db, PDF)
 
 
 def staged_file(db):
-    return inbox.Staged(inbox.attachment_path(db, pdf(db)), "contract.pdf", "application/pdf", len(PDF))
+    return inbox.Staged(files.attachment_path(db, pdf(db)), "contract.pdf", "application/pdf", len(PDF))
 
 
 def email_draft(db, size=len(PDF)):
@@ -237,7 +237,7 @@ def test_draft_keeps_files_when_refused_or_unknown_and_drops_them_when_sent(db):
 
 def test_missing_stored_file_refuses_the_send(db):
     d = email_draft(db)
-    inbox.attachment_path(db, pdf(db)).unlink()
+    files.attachment_path(db, pdf(db)).unlink()
     with pytest.raises(ValueError, match="contract.pdf is missing"):
         inbox.send_draft(db, d["id"], d["revision"], FakeSender())
 
@@ -280,7 +280,7 @@ def test_alias_reply_sends_and_clears_only_selected_original_files(db):
     inbox.stage(db, sha=pdf(db), name="contract.pdf", type="application/pdf", size=len(PDF), thread_id=keep.id)
     old = inbox.ingest(db, incoming("<split@acme.test>", thread_ref=["<wire@delivery.test>"]))
     selected = b"selected alias bytes"
-    inbox.stage(db, sha=inbox.store_file(db, selected), name="selected.txt", type="text/plain",
+    inbox.stage(db, sha=files.store_file(db, selected), name="selected.txt", type="text/plain",
                 size=len(selected), thread_id=old.id)
     assert old.id != keep.id
     inbox.record_resend_receipt(db, 1, marker[1:-8], "<wire@delivery.test>")
@@ -294,7 +294,7 @@ def test_alias_reply_sends_and_clears_only_selected_original_files(db):
     assert inbox.staged(db, thread_id=old.id) == []
     assert [r["name"] for r in inbox.staged(db, thread_id=keep.id)] == ["contract.pdf"]
     assert sent_files(db, "<chosen@example.test>") == [
-        (inbox.store_file(db, selected), "selected.txt", "text/plain", len(selected), 0, 0, "stored", {"sent": True})]
+        (files.store_file(db, selected), "selected.txt", "text/plain", len(selected), 0, 0, "stored", {"sent": True})]
 
 
 def test_alias_reply_unknown_keeps_both_owners_files(db):
