@@ -1,15 +1,20 @@
 """Local Drafts UI checks; no service, provider, or real-send path."""
 
+import asyncio
 import json
 import sqlite3
 from datetime import datetime, timezone
+from threading import Event
+from types import SimpleNamespace
 
 import pytest
 from textual.widgets import DataTable, Input, OptionList, TextArea
+from textual.worker import get_current_worker
 
 from test_console import run, seeded
 from test_pane_arrows import check_editor_arrows
-from universal_inbox import inbox
+from test_reconcile_console import bridge_console, seed_console
+from universal_inbox import inbox, serve
 from universal_inbox.tui import (DRAFT_FIELDS, Console, DraftConnection, DraftSendError, DraftsPage,
                                  Pick, ReplyBox, ReplyError, ThreadsPage, VIEW_NAMES)
 
@@ -782,3 +787,221 @@ def test_slack_conversation_fetch_failure_keeps_the_draft_editable(tmp_path):
         assert to.value == "ext" and not to.disabled
 
     run(Console(path, slack_conversations=broken), [scenario])
+
+
+@pytest.mark.parametrize("outcome,status", [
+    ("pending", 400), ("pending-before-callback", 400), ("unknown", 504), ("refused", 502),
+    ("cached-unknown", 504), ("cached-refused", 502),
+])
+def test_selected_alias_reply_errors_keep_text_and_each_owners_files(tmp_path, outcome, status):
+    path = str(tmp_path / "inbox.db")
+    ids = seed_console(path)
+    bridge_console(path)
+    db = inbox.connect(path)
+    cached = outcome in ("cached-unknown", "cached-refused")
+    if outcome in ("pending", "pending-before-callback") or cached:
+        inbox.reply(db, ids["old"], "Previous send",
+                    SimpleNamespace(send=lambda *a, **k: "<00000000-0000-4000-8000-000000000001@resend>"))
+    for owner, name in ((ids["keep"], "unchosen.txt"), (ids["old"], "selected.txt")):
+        inbox.stage(db, sha=inbox.store_file(db, name.encode()), name=name, type="text/plain",
+                    size=len(name), thread_id=owner)
+    requests, dispatches = [], []
+
+    def send(thread, text, to, cc, history, files=()):
+        dispatches.append([f.name for f in files])
+        raise (inbox.SendUnknown("email send outcome unknown") if outcome in ("unknown", "cached-unknown")
+               else inbox.SendFailed("HTTP 422 refused"))
+
+    senders = serve.Senders(made={1: SimpleNamespace(send=send)})
+
+    def reply(tid, text, to, cc):
+        service = inbox.connect(path)
+        try:
+            if cached:
+                inbox.record_resend_receipt(service, 1, "00000000-0000-4000-8000-000000000001",
+                                            "<confirmed@email.amazonses.test>")
+                inbox.reconcile_resend_receipts(service)
+            code, body = serve.handle_reply(service, json.dumps(
+                dict(thread_id=tid, text=text, to=to, cc=cc)).encode(), senders)
+            requests.append((tid, code))
+            if outcome == "pending-before-callback":
+                inbox.record_resend_receipt(service, 1, "00000000-0000-4000-8000-000000000001",
+                                            "<confirmed@email.amazonses.test>")
+                inbox.reconcile_resend_receipts(service)
+                app.call_from_thread(refresh)
+            if code != 200:
+                raise ReplyError(body["error"])
+            return body
+        finally:
+            service.close()
+
+    app = Console(path, reply=reply)
+    app.drafts.update({ids["keep"]: "Unchosen text", ids["old"]: "Selected text"})
+    refresh = app.check_changes
+    if cached:
+        app.check_changes = lambda: None  # hold the old view until after the provider outcome is displayed
+
+    async def scenario(app, pilot):
+        app.action_open_thread(ids["old"])
+        await pilot.pause()
+        await pilot.press("r")
+        assert isinstance(app.screen, Pick)
+        await choose(app, pilot, str(ids["old"]))
+        box = app.main.thread_view.query_one(ReplyBox)
+        area = box.query_one(TextArea)
+        box.query_one(".toinput", Input).value = "chosen@example.test"
+        box.query_one(".ccinput", Input).value = "copy@example.test"
+        area.text = "Selected revised text"
+        area.focus()
+        await pilot.press("ctrl+enter")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        hint = str(box.query_one(".replyhint").render())
+        if outcome == "pending-before-callback":
+            assert box.parent_confirmed() and not box.pending_confirmation
+            assert "ctrl+enter send" in hint and not box.query_one(".replyhint").has_class("error")
+        else:
+            assert "Send error" in hint and "Not sent" not in hint
+        assert box.has_class("open") and area.text == "Selected revised text"
+        assert (box.query_one(".toinput", Input).value, box.query_one(".ccinput", Input).value) == (
+            "chosen@example.test", "copy@example.test")
+        assert box.draft_key == ids["old"] and box.attach_owner() == ("thread", ids["old"])
+        assert [r["name"] for r in inbox.staged(db, thread_id=ids["old"])] == ["selected.txt"]
+        assert [r["name"] for r in inbox.staged(db, thread_id=ids["keep"])] == ["unchosen.txt"]
+        if outcome == "pending":
+            assert inbox.EMAIL_CONFIRMATION_PENDING in hint and box.pending_confirmation
+            assert box.view["messages"][-1]["wire_id"] is None
+            staged = {owner: inbox.staged(db, thread_id=owner) for owner in (ids["old"], ids["keep"])}
+            drafts = dict(app.drafts)
+            inbox.record_resend_receipt(db, 1, "00000000-0000-4000-8000-000000000001",
+                                        "<confirmed@email.amazonses.test>")
+            inbox.reconcile_resend_receipts(db)
+            app.check_changes()
+            await pilot.pause()
+            assert app.main.thread_view.query_one(ReplyBox) is box
+            ready = box.query_one(".replyhint")
+            assert "ctrl+enter send" in str(ready.render()) and "confirmation pending" not in str(ready.render())
+            assert not ready.has_class("error")
+            assert not box.pending_confirmation
+            assert box.has_class("open") and area.text == "Selected revised text"
+            assert (box.query_one(".toinput", Input).value, box.query_one(".ccinput", Input).value) == (
+                "chosen@example.test", "copy@example.test")
+            assert box.draft_key == ids["old"] and box.attach_owner() == ("thread", ids["old"])
+            assert app.drafts == drafts
+            assert {owner: inbox.staged(db, thread_id=owner) for owner in staged} == staged
+            assert requests == [(ids["old"], status)] and dispatches == []
+        if cached:
+            assert box.view["messages"][-1]["wire_id"] is None
+            assert not box.pending_confirmation
+            staged = {owner: inbox.staged(db, thread_id=owner) for owner in (ids["old"], ids["keep"])}
+            drafts = dict(app.drafts)
+            refresh()
+            await pilot.pause()
+            assert app.main.thread_view.query_one(ReplyBox) is box
+            assert box.view["messages"][-1]["wire_id"] == "<confirmed@email.amazonses.test>"
+            retained = box.query_one(".replyhint")
+            assert str(retained.render()) == hint and retained.has_class("error")
+            assert not box.pending_confirmation
+            assert box.has_class("open") and area.text == "Selected revised text"
+            assert (box.query_one(".toinput", Input).value, box.query_one(".ccinput", Input).value) == (
+                "chosen@example.test", "copy@example.test")
+            assert box.draft_key == ids["old"] and box.attach_owner() == ("thread", ids["old"])
+            assert app.drafts == drafts
+            assert {owner: inbox.staged(db, thread_id=owner) for owner in staged} == staged
+            assert requests == [(ids["old"], status)] and dispatches == [["selected.txt"]]
+        await pilot.press("escape")
+        assert app.drafts == {ids["keep"]: "Unchosen text", ids["old"]: "Selected revised text"}
+
+    run(app, [scenario])
+    assert requests == [(ids["old"], status)]
+    assert dispatches == ([] if outcome in ("pending", "pending-before-callback") else [["selected.txt"]])
+
+
+@pytest.mark.parametrize("older,newer", [
+    (inbox.EMAIL_CONFIRMATION_PENDING, "email send outcome unknown"),
+    ("email send outcome unknown", "HTTP 422 refused"),
+])
+def test_cancelled_reply_callbacks_preserve_material_warning_and_draft(tmp_path, older, newer):
+    path = str(tmp_path / "inbox.db")
+    ids = seed_console(path)
+    bridge_console(path)
+    db = inbox.connect(path)
+    if older != inbox.EMAIL_CONFIRMATION_PENDING:
+        inbox.reply(db, ids["old"], "Previous send",
+                    SimpleNamespace(send=lambda *a, **k: "<00000000-0000-4000-8000-000000000001@resend>"))
+    for owner, name in ((ids["keep"], "unchosen.txt"), (ids["old"], "selected.txt")):
+        inbox.stage(db, sha=inbox.store_file(db, name.encode()), name=name, type="text/plain",
+                    size=len(name), thread_id=owner)
+    started, release = Event(), Event()
+    requests, workers = [], []
+
+    def reply(tid, text, to, cc):
+        requests.append((tid, text, to, cc))
+        workers.append(get_current_worker())
+        if len(workers) == 1:
+            started.set()
+            assert release.wait(5), "older fixture was not released"
+            raise ReplyError(older)
+        raise ReplyError(newer)
+
+    app = Console(path, reply=reply)
+    app.drafts.update({ids["keep"]: "Unchosen text", ids["old"]: "Selected text"})
+
+    async def scenario(app, pilot):
+        app.action_open_thread(ids["old"])
+        await pilot.pause()
+        await pilot.press("r")
+        await choose(app, pilot, str(ids["old"]))
+        box = app.main.thread_view.query_one(ReplyBox)
+        box.query_one(".toinput", Input).value = "chosen@example.test"
+        box.query_one(".ccinput", Input).value = "copy@example.test"
+        box.query_one(TextArea).text = "Selected revised text"
+        box.query_one(TextArea).focus()
+        staged = {owner: inbox.staged(db, thread_id=owner) for owner in (ids["old"], ids["keep"])}
+        old_done, new_done = asyncio.Event(), asyncio.Event()
+        show_result = box.send_result
+
+        def observe_result(worker, error):
+            show_result(worker, error)
+            (old_done if worker is workers[0] else new_done).set()
+
+        box.send_result = observe_result
+        try:
+            await pilot.press("ctrl+enter")
+            assert await asyncio.to_thread(started.wait, 5)
+            await pilot.press("ctrl+enter")
+            await asyncio.wait_for(new_done.wait(), 5)
+            assert workers[0].is_cancelled and not workers[1].is_cancelled
+            hint = str(box.query_one(".replyhint").render())
+            assert newer in hint and box.query_one(".replyhint").has_class("error")
+            if older == inbox.EMAIL_CONFIRMATION_PENDING:
+                box.hint(f"Send error: {inbox.EMAIL_CONFIRMATION_PENDING}", True, True)
+                assert str(box.query_one(".replyhint").render()) == hint
+            release.set()
+            await asyncio.wait_for(old_done.wait(), 5)
+            await pilot.pause()
+            retained = str(box.query_one(".replyhint").render())
+            if older == inbox.EMAIL_CONFIRMATION_PENDING:
+                assert retained == hint
+            else:
+                assert older in retained and newer not in retained
+                assert box.view["messages"][-1]["wire_id"] is None
+                inbox.record_resend_receipt(db, 1, "00000000-0000-4000-8000-000000000001",
+                                            "<confirmed@email.amazonses.test>")
+                inbox.reconcile_resend_receipts(db)
+                app.check_changes()
+                await pilot.pause()
+                assert box.view["messages"][-1]["wire_id"] == "<confirmed@email.amazonses.test>"
+                assert str(box.query_one(".replyhint").render()) == retained
+            assert box.query_one(".replyhint").has_class("error") and not box.pending_confirmation
+            assert box.has_class("open") and box.query_one(TextArea).text == "Selected revised text"
+            assert (box.query_one(".toinput", Input).value, box.query_one(".ccinput", Input).value) == (
+                "chosen@example.test", "copy@example.test")
+            assert box.draft_key == ids["old"] and box.attach_owner() == ("thread", ids["old"])
+            assert app.drafts == {ids["keep"]: "Unchosen text", ids["old"]: "Selected text"}
+            assert {owner: inbox.staged(db, thread_id=owner) for owner in staged} == staged
+            assert len(requests) == 2  # the two explicit keypresses; the late callback never retries
+        finally:
+            release.set()
+
+    run(app, [scenario])

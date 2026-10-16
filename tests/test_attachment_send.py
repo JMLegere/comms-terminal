@@ -52,16 +52,16 @@ def gmail_thread(db, size=len(PDF)):
 
 # --- email (FR-A13) ----------------------------------------------------------
 
-def test_resend_payload_carries_base64_attachments(db, monkeypatch):
-    monkeypatch.setattr(email.time, "sleep", lambda s: None)
+def test_resend_payload_carries_base64_attachments(db):
     posts = []
-    sender = email.EmailSender("re_key", SELF, post=lambda url, headers, payload: posts.append(payload) or (200, {"id": "r1"}),
-                               get=lambda url, headers: (200, {"message_id": "<ses-1@example.test>"}))
+    receipt = "00000000-0000-4000-8000-000000000001"
+    sender = email.EmailSender("re_key", SELF,
+                               post=lambda url, headers, payload: posts.append(payload) or (200, {"id": receipt}))
     f = staged_file(db)
     want = [{"filename": "contract.pdf", "content": base64.b64encode(PDF).decode(), "content_type": "application/pdf"}]
-    assert sender.start(["ana@acme.test"], [], "Contract", "Attached", "k1", files=[f]) == "<ses-1@example.test>"
+    assert sender.start(["ana@acme.test"], [], "Contract", "Attached", "k1", files=[f]) == f"<{receipt}@resend>"
     t = inbox.get_thread(db, inbox.ingest(db, incoming("<m1@acme.test>")).id)
-    sender.send(t, "Here it is", ["ana@acme.test"], [], [], files=[f])
+    assert sender.send(t, "Here it is", ["ana@acme.test"], [], [], files=[f]) == f"<{receipt}@resend>"
     assert [p["attachments"] for p in posts] == [want, want]
     sender.start(["ana@acme.test"], [], "No files", "x", "k2")
     assert "attachments" not in posts[-1]
@@ -203,9 +203,10 @@ def test_slack_draft_or_reply_with_a_file_over_1_gb_is_refused_before_slack(db):
 
 def test_reply_sends_staged_files_and_clears_them_only_on_success(db):
     t = gmail_thread(db)
-    with pytest.raises(inbox.SendFailed):
-        inbox.reply(db, t.id, "Here", FakeSender(inbox.SendFailed("HTTP 422")))
-    assert len(inbox.staged(db, thread_id=t.id)) == 1
+    for error in (inbox.SendFailed("HTTP 422"), inbox.SendUnknown("outcome unknown")):
+        with pytest.raises(type(error)):
+            inbox.reply(db, t.id, "Here", FakeSender(error))
+        assert len(inbox.staged(db, thread_id=t.id)) == 1
     sender = FakeSender("<r1@example.test>")
     inbox.reply(db, t.id, "Here", sender)
     assert [(f.name, f.path.read_bytes()) for f in sender.files] == [("contract.pdf", PDF)]
@@ -261,3 +262,70 @@ def test_sent_reply_and_slack_draft_record_their_files_as_stored_attachments(db)
     assert db.execute("SELECT COUNT(*) FROM attachments").fetchone()[0] == 1
     inbox.send_draft(db, d["id"], d["revision"], SlackDraftSender("C1:9.0"))
     assert sent_files(db, "C1:9.0") == want
+
+
+def test_alias_reply_sends_and_clears_only_selected_original_files(db):
+    marker = "<00000000-0000-4000-8000-000000000001@resend>"
+    d = email_draft(db)
+    keep = inbox.send_draft(db, d["id"], d["revision"], FakeSender(marker))
+    original_files = sent_files(db, marker)
+    inbox.stage(db, sha=pdf(db), name="contract.pdf", type="application/pdf", size=len(PDF), thread_id=keep.id)
+    old = inbox.ingest(db, incoming("<split@acme.test>", thread_ref=["<wire@delivery.test>"]))
+    selected = b"selected alias bytes"
+    inbox.stage(db, sha=inbox.store_file(db, selected), name="selected.txt", type="text/plain",
+                size=len(selected), thread_id=old.id)
+    assert old.id != keep.id
+    inbox.record_resend_receipt(db, 1, marker[1:-8], "<wire@delivery.test>")
+    inbox.reconcile_resend_receipts(db)
+    assert sent_files(db, marker) == original_files
+    assert inbox.get_thread(db, old.id).id == keep.id
+    sender = FakeSender("<chosen@example.test>")
+    result = inbox.reply(db, old.id, "Chosen reply", sender)
+    assert result.id == keep.id
+    assert [(f.name, f.path.read_bytes()) for f in sender.files] == [("selected.txt", selected)]
+    assert inbox.staged(db, thread_id=old.id) == []
+    assert [r["name"] for r in inbox.staged(db, thread_id=keep.id)] == ["contract.pdf"]
+    assert sent_files(db, "<chosen@example.test>") == [
+        (inbox.store_file(db, selected), "selected.txt", "text/plain", len(selected), 0, 0, "stored", {"sent": True})]
+
+
+def test_alias_reply_unknown_keeps_both_owners_files(db):
+    keep = gmail_thread(db)
+    old = inbox.ingest(db, incoming("<split@acme.test>"))
+    inbox.stage(db, sha=pdf(db), name="selected.pdf", type="application/pdf", size=len(PDF), thread_id=old.id)
+    inbox.ingest(db, incoming("<bridge@acme.test>", thread_ref=["<m1@acme.test>", "<split@acme.test>"]))
+    sender = FakeSender(inbox.SendUnknown("outcome unknown"))
+    with pytest.raises(inbox.SendUnknown):
+        inbox.reply(db, old.id, "Chosen reply", sender)
+    assert [f.name for f in sender.files] == ["selected.pdf"]
+    assert [r["name"] for r in inbox.staged(db, thread_id=old.id)] == ["selected.pdf"]
+    assert [r["name"] for r in inbox.staged(db, thread_id=keep.id)] == ["contract.pdf"]
+    assert db.execute("SELECT count(*) FROM attachments").fetchone()[0] == 0
+
+
+def test_pending_resend_parent_keeps_reply_files_without_dispatch(db):
+    d = email_draft(db)
+    marker = "<00000000-0000-4000-8000-000000000001@resend>"
+    t = inbox.send_draft(db, d["id"], d["revision"], FakeSender(marker))
+    inbox.stage(db, sha=pdf(db), name="followup.pdf", type="application/pdf", size=len(PDF), thread_id=t.id)
+    sender = FakeSender()
+    with pytest.raises(ValueError, match="confirmation pending"):
+        inbox.reply(db, t.id, "Follow up", sender)
+    assert sender.files is None
+    assert [r["name"] for r in inbox.staged(db, thread_id=t.id)] == ["followup.pdf"]
+    assert sent_files(db, marker) == [
+        (pdf(db), "contract.pdf", "application/pdf", len(PDF), 0, 0, "stored", {"sent": True})]
+
+
+def test_malformed_resend_acceptance_keeps_draft_file_and_locks_without_retry(db):
+    d, posts = email_draft(db), []
+    sender = email.EmailSender("re_key", SELF, post=lambda *a: posts.append(a) or (200, {"id": "invalid"}))
+    with pytest.raises(inbox.SendUnknown):
+        inbox.send_draft(db, d["id"], d["revision"], sender)
+    with pytest.raises(inbox.SendUnknown):
+        inbox.send_draft(db, d["id"], d["revision"], sender)
+    assert len(posts) == 1
+    assert posts[0][2]["attachments"][0]["content"] == base64.b64encode(PDF).decode()
+    assert inbox.get_draft(db, d["id"])["sending_at"] and inbox.get_draft(db, d["id"])["body"] == "Attached"
+    assert [r["name"] for r in inbox.staged(db, draft_id=d["id"])] == ["contract.pdf"]
+    assert db.execute("SELECT count(*) FROM attachments").fetchone()[0] == 0

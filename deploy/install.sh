@@ -16,7 +16,7 @@ store=/etc/credstore.encrypted
 for name in fastmail-oauth tana-oauth; do
   [[ -f "$conf/$name.json" ]] && mv "$conf/$name.json" "$conf/$name"
 done
-for name in email-hook-secret resend-api-key slack-signing-secret slack-user-token fastmail-oauth quo-webhook-secret quo-api-key tana-oauth attio-token linear-token; do
+for name in email-hook-secret resend-api-key resend-webhook-secret slack-signing-secret slack-user-token fastmail-oauth quo-webhook-secret quo-api-key tana-oauth attio-token linear-token; do
   if [[ -f "$conf/$name" ]]; then
     systemd-creds encrypt --name="$name" "$conf/$name" "$store/universal-inbox.$name"
     shred -u "$conf/$name"
@@ -30,6 +30,11 @@ done
 # 2. Service (Slack's drop-in only once both Slack credentials exist)
 install -d -o "$user" -g "$user" "$home/.local/share/universal-inbox"
 install -m 0644 "$repo/deploy/universal-inbox.service" /etc/systemd/system/universal-inbox.service
+if [[ -f "$store/universal-inbox.resend-webhook-secret" ]]; then
+  install -D -m 0644 "$repo/deploy/universal-inbox.service.d/resend.conf" \
+    /etc/systemd/system/universal-inbox.service.d/resend.conf
+  echo "Resend receipts enabled"
+fi
 if [[ -f "$store/universal-inbox.slack-signing-secret" && -f "$store/universal-inbox.slack-user-token" ]]; then
   install -D -m 0644 "$repo/deploy/universal-inbox.service.d/slack.conf" \
     /etc/systemd/system/universal-inbox.service.d/slack.conf

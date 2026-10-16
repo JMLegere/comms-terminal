@@ -1,11 +1,12 @@
-"""The service: public hooks (/hooks/email, /hooks/slack, /hooks/quo), the local reply socket (POST /reply), wake(),
+"""The service: public hooks (/hooks/email, /hooks/slack, /hooks/quo, /hooks/resend), the local reply socket (POST /reply), wake(),
 and a health check of every Connection each 30 minutes.
 
 Credentials come from systemd's $CREDENTIALS_DIRECTORY (LoadCredentialEncrypted=):
 email-hook-secret, slack-signing-secret, slack-user-token, resend-api-key, fastmail-oauth, quo-webhook-secret,
-quo-api-key, tana-oauth, attio-token, linear-token.
+quo-api-key, tana-oauth, attio-token, linear-token, resend-webhook-secret.
 """
 
+import base64
 import importlib
 import json
 import os
@@ -170,9 +171,11 @@ def handle_reply(db, body: bytes, senders: Senders) -> tuple[int, dict]:
         return 503, {"error": f"{r['label'] or r['platform']} is not connected for sending"}
     try:
         t = inbox.reply(db, thread_id, text, sender, req.get("to") or [], req.get("cc") or [])
+    except inbox.SendUnknown as e:
+        return 504, {"error": str(e)}
     except inbox.SendFailed as e:
         return 502, {"error": str(e)}
-    except ValueError as e:  # an Attachment problem found before sending (FR-A15)
+    except ValueError as e:  # pre-send Attachment or pending email identity problem
         return 400, {"error": str(e)}
     return 200, {"status": t.status, "status_detail": t.status_detail}
 
@@ -224,16 +227,84 @@ def handle_slack_conversations(db, body: bytes, senders: Senders) -> tuple[int, 
         return 502, {"error": str(e)}
 
 
+RESEND_MAX = 64 * 1024
+RESEND_TIMEOUT = 5  # total body-read deadline, not a fresh timeout per chunk
+
+
+def _verify_resend(headers, body: bytes, key: bytes, now: datetime) -> bool:
+    """Strict Svix header adaptation; quo.verify owns the existing HMAC and replay-window check."""
+    adapted = {}
+    for name in ("id", "timestamp", "signature"):
+        values = headers.get_all("svix-" + name, [])
+        if len(values) != 1 or not isinstance(values[0], str):
+            return False
+        adapted["webhook-" + name] = values[0]
+    wid, ts, sigs = (adapted["webhook-" + name] for name in ("id", "timestamp", "signature"))
+    if not re.fullmatch(r"[!-~]{1,256}", wid) or not re.fullmatch(r"[0-9]{1,12}", ts):
+        return False
+    if not re.fullmatch(r"v[0-9]+,[A-Za-z0-9+/]+={0,2}(?: +v[0-9]+,[A-Za-z0-9+/]+={0,2})*", sigs):
+        return False
+    try:
+        for sig in sigs.split():
+            version, value = sig.split(",")
+            raw = base64.b64decode(value, validate=True)
+            if base64.b64encode(raw).decode() != value or (version == "v1" and len(raw) != 32):
+                return False
+        return quo.verify(adapted, body, key, now)
+    except (ValueError, TypeError, OverflowError):
+        return False
+
+
 class _Handler(BaseHTTPRequestHandler):
     routes: dict = {}  # path -> callable(headers, body) -> (status, content_type, bytes)
 
+    def _resend_body(self) -> tuple[int, bytes]:
+        lengths = self.headers.get_all("Content-Length", [])
+        if self.headers.get_all("Transfer-Encoding", []):
+            return 400, b""
+        if not lengths:
+            return 411, b""
+        if len(lengths) != 1 or not re.fullmatch(r"[0-9]+", lengths[0]):
+            return 400, b""
+        if len(lengths[0]) > 10 or int(lengths[0]) > RESEND_MAX:
+            return 413, b""
+        length, body = int(lengths[0]), bytearray()
+        deadline, previous = time.monotonic() + RESEND_TIMEOUT, self.connection.gettimeout()
+        try:
+            while len(body) < length:
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    return 408, b""
+                self.connection.settimeout(left)
+                chunk = self.rfile.read1(length - len(body))
+                if not chunk:
+                    return 400, b""
+                body.extend(chunk)
+            return 200, bytes(body)
+        except TimeoutError:
+            return 408, b""
+        except OSError:
+            return 400, b""
+        finally:
+            self.connection.settimeout(previous)
+
     def do_POST(self):
+        if self.path != "/hooks/resend":
+            # Drain legacy bodies before 404: Unix clients may still be writing an unknown context request.
+            body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
         route = self.routes.get(self.path)
         if route is None:
             self.send_error(404)
             return
-        body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
-        status, ctype, out = route(self.headers, body)
+        if self.path == "/hooks/resend":
+            status, body = self._resend_body()
+            if status != 200:
+                self.close_connection = True
+                ctype, out = "text/plain", b""
+            else:
+                status, ctype, out = route(self.headers, body)
+        else:
+            status, ctype, out = route(self.headers, body)
         self.send_response(status)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(out)))
@@ -312,11 +383,19 @@ def reply_server(db_path: str, socket_path: str, senders: Senders, contexts: dic
 
 def hooks_server(db_path: str, host: str, port: int, client=None,
                  kick: threading.Event | None = None) -> ThreadingHTTPServer:
-    """`client` (Slack lookups) is swappable for the 6.3 demo; the service uses the real API. A Slack or Quo hook
-    sets `kick` so the wake loop downloads its files."""
+    """`client` (Slack lookups) is swappable for the 6.3 demo; the service uses the real API. Hooks set `kick`
+    for deferred file downloads or durable Resend receipt reconciliation."""
     kick = kick or threading.Event()
     email_secret, slack_secret = credential("email-hook-secret"), credential("slack-signing-secret")
     quo_secret = credential("quo-webhook-secret")
+    try:
+        resend_secret = credential("resend-webhook-secret")
+        if (not isinstance(resend_secret, bytes) or not resend_secret.startswith(b"whsec_")
+                or not resend_secret[6:]
+                or base64.b64encode(base64.b64decode(resend_secret[6:], validate=True)) != resend_secret[6:]):
+            resend_secret = None
+    except (OSError, ValueError, TypeError):
+        resend_secret = None
     token = credential("slack-user-token")
     client = client or (slack.SlackClient(token.decode()) if token else None)
 
@@ -356,8 +435,29 @@ def hooks_server(db_path: str, host: str, port: int, client=None,
         kick.set()
         return status, "text/plain", b""
 
+    def resend_hook(headers, body):
+        if resend_secret is None:
+            return 503, "text/plain", b""
+        if not _verify_resend(headers, body, resend_secret, datetime.now(timezone.utc)):
+            return 401, "text/plain", b""
+        try:
+            db = inbox.connect(db_path)
+            try:
+                rows = db.execute("SELECT id, self_id, external_id FROM connections WHERE platform = 'gmail'").fetchall()
+                if (len(rows) != 1 or rows[0]["id"] <= 0
+                        or not rows[0]["self_id"].strip() or not rows[0]["external_id"].strip()):
+                    return 503, "text/plain", b""
+                status, inserted = email.handle_resend_hook(db, rows[0]["id"], body)
+            finally:
+                db.close()
+        except (sqlite3.Error, OSError):
+            return 503, "text/plain", b""
+        if status == 204 and inserted:
+            kick.set()
+        return status, "text/plain", b""
+
     return ThreadingHTTPServer((host, port), _handler({"/hooks/email": email_hook, "/hooks/slack": slack_hook,
-                                                       "/hooks/quo": quo_hook}))
+                                                       "/hooks/quo": quo_hook, "/hooks/resend": resend_hook}))
 
 
 MAX_FILE = 100 * 1024 * 1024  # larger Attachments are not copied and keep their Platform link
@@ -572,8 +672,8 @@ def files_server(db_path: str, host: str, port: int) -> ThreadingHTTPServer:
 
 def wake_loop(db_path: str, stop: threading.Event, every: float = 60, kick: threading.Event | None = None,
               get: dict | None = None) -> None:
-    """wake() each minute. Pending Attachments download then too, and at once when a hook sets `kick` (after it
-    has answered, NFR-A5); old files expire once a day (NFR-A6)."""
+    """wake() each minute; reconcile durable receipts before slow file downloads. Hook `kick` also wakes this
+    pass (after acknowledgement, NFR-A5); old files expire once a day (NFR-A6)."""
     import logging
     kick, expired = kick or threading.Event(), None
     while True:
@@ -585,6 +685,7 @@ def wake_loop(db_path: str, stop: threading.Event, every: float = 60, kick: thre
         try:
             now = datetime.now(timezone.utc)
             inbox.wake(db, now)
+            inbox.reconcile_resend_receipts(db)
             fetch_pending(db, get or {})
             if expired is None or now - expired >= timedelta(days=1):
                 expired = now

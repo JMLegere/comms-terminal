@@ -6,7 +6,7 @@
 - **Status**: **Draft (revision 3; updated 2026-10-15).** Revision 3 adopted Plain's status model and integration architecture and added replying from the console (decisions #51–#56). Behavior follows Plain unless a deviation is stated with its reason. The technical design in §4–§5 is **Approved** (D1, decision #67). Each phase needs its own implementation authorization. D2 is resolved (SSH, #71); D3 is resolved (Cloudflare Tunnel, Email Routing with an Email Worker, Resend; #102). Phases 0–5 and the 6.1 and 6.3 builds are done; 6.2 and 6.4 are Jeremy's connect steps in `docs/runbook.md`. Linear context (FR-13c, #125) was built under Jeremy's "execute the plan"; under his subsequent "ship it", release `38e196e` is published to `main`/`dev` and deployed to the existing Workbox package/service. Linear was connected on 2026-10-16 with a Read-only key covering both workspace teams; see the connection receipt in `docs/design/linear-context.md`. Attachments (#127–#137) are built on `dev` (P1–P6) and their release (P7) is authorized; plan: `.agents/prd/2026-10-15-attachments.md`.
 - **Owner / authority**: Jeremy Legere (single user and product owner)
 - **Created**: 2026-10-10T20:04+00:00
-- **Updated**: 2026-10-15
+- **Updated**: 2026-10-16
 - **Topic**: MVP of a single-user, Plain-style Thread queue across Gmail and Slack
 - **Authority chain**:
   - `.agents/discovery/2026-10-10-universal-inbox.md`: validated problem and strategy.
@@ -103,11 +103,14 @@ Status key in brackets:
   - Every new inbound email creates a Thread; a reply that references an earlier message (`In-Reply-To` / `References`) joins its Thread.
   - [D] Reconcile stored email Threads within one mailbox using exact Message-ID references, including late parents and shared referenced ancestors outside stored history (decision #118). Subject, body, sender, time-window, fuzzy, and AI matching are excluded.
   - Activity records and raw messages remain immutable. Old Thread IDs resolve to the retained Thread; the latest complete triage state and one Case association are preserved. Conflicting Case associations keep their Threads separate for review.
+  - Gmail accepted sends retain an immutable Resend UUID marker. Signed `email.sent` receipts bind that UUID to one exact SMTP Message-ID, scoped to exactly one eligible Gmail Connection. Minimal receipt metadata commits before acknowledgement; periodic wake reuses mailbox reconciliation, including reordered receipt/message arrival and restart. Receipt records create no mail Activity; reconciliation selects an existing complete triage state without replaying an Activity-driven transition.
   - Mail Jeremy sends from Gmail directly is never seen (Plain assumes replies happen in Plain). Accepted in decision #55.
 - **FR-3a** [PL]: **Auto-reply filter.** An inbound email is an auto-reply when it carries one of Plain's header signals: `Auto-Submitted` (other than `no`), `Precedence: auto_reply` or `bulk`, `X-AutoReply`, `X-Autorespond`, `X-Amazon-Auto-Reply`, `X-amzn-vacation`, `X-SFDC-AutoResponse`, `X-ServiceNow-Generated`, `X-Front-Autoreply`, `X-CodeTwo-AutoResponse` / `X-C2AutoRespond`, `X-MDAutoResponse`, `X-QQ-Auto-Reply`, `X-MS-Exchange-Generated-Message-Source`. A matching subject prefix ("Automatic reply:", "Out of office:", and others) counts only together with a header signal.
   - A filtered auto-reply is not stored, creates no Thread, and never moves one.
 - **FR-3b** [PL + D]: **Email sending.** A reply written in the console is sent through the outbound mail provider from `jeremy@agentmaple.com`, with `In-Reply-To` and `References` set so the recipient's client threads it.
   - [D] Recipients default to reply-all (the original From, To, and CC, minus Jeremy), editable before sending. Reason: Plain drops CC'd recipients; Jeremy's conversations often include several people.
+  - Gmail reply headers use resolved SMTP IDs while timeline `native_id` stays immutable. An unresolved intended parent refuses dispatch with a pending-confirmation error, preserving text/files; earlier unresolved markers are omitted from References. Accepted responses without a usable UUID remain unknown outcomes and must never trigger an automatic resend.
+  - Outgoing recording preserves inbound activity and user triage arriving during the provider call. Alias-aware reply sends/clears only the selected original draft's text/files; canonical destination does not change attachment ownership.
   - [P] Console replies do not appear in Gmail's Sent folder unless BCC is configured (Plain's BCC addresses). Open item in §6.
 - **FR-4** [PL]: **Slack channels.** A bot joins the channels Jeremy selects, and their messages arrive as Slack events, as in Plain.
   - Jeremy selects channels by hand, or by name prefix/suffix rules (Plain's auto-join rules).
@@ -183,10 +186,11 @@ Status key in brackets:
 - **NFR-2** [C / P]: **Sync health.**
   - Slack: Broken when Slack reports the token revoked or the app uninstalled (`tokens_revoked`, `app_uninstalled` events), or a reply fails to post.
   - Email: Broken on an inbound request that fails verification or a send failure.
+  - The separate Resend receipt endpoint rejects unsigned traffic without changing Connection health. Sender acceptance/health does not establish signed receipt delivery or SMTP identity resolution.
   - Every Connection: Broken when its Health Check fails or none has run for over an hour (decision #119). Every 30 minutes the service checks that Resend, Slack, and Quo accept their keys and that Quo's webhook is enabled; Fastmail's 10-minute Sent poll is its check.
   - Silence on any channel cannot be told apart from a quiet inbox (R7, R12).
 - **NFR-3** [C]: **Pull only.** No notifications.
-- **NFR-4** [C]: **Single user.** The console is a terminal app reachable only by SSH to Workbox (D2, decision #71); the reply socket is owned by `jerry` with mode 0600. The public ingress exposes only the inbound mail and Slack event endpoints, and each request is verified (Slack signing secret; inbound mail shared secret).
+- **NFR-4** [C]: **Single user.** The console is a terminal app reachable only by SSH to Workbox (D2, decision #71); the reply socket is owned by `jerry` with mode 0600. The source tunnel allowlist is exactly `^/hooks/(email|slack|quo|resend)$`; each route verifies its own protocol/secret. Private reply, context, file, and upload routes stay outside public ingress. Live tunnel changes require separately approved, scoped preservation of current configuration.
 - **NFR-5** [P]: **Secrets.** Tokens and keys are never logged or printed, and are never stored as plaintext user-service credentials (Ledgere precedent).
 - **NFR-8** [P]: **Simplicity.** A single process, the standard library first, and no added service without evidence that it is needed. The inbound mail service, outbound provider, and ingress are needed by Plain's architecture (decision #55).
 
@@ -343,7 +347,7 @@ flowchart LR
 - **`src/universal_inbox/tui.py`** (**Current**): the Textual console (`docs/design/console.md`).
 - **`src/universal_inbox/main.py`** (**Current**): the `universal-inbox` command: console (default), `serve`, `init`.
 - **`scripts/seed_demo.py`** (**Current**): synthetic data for visual QA and the 6.3 demo.
-- **`src/universal_inbox/serve.py`** (**Current**): the service's HTTP handlers: `/hooks/email` and `/hooks/slack` on the public listener, `POST /reply` on the local Unix socket.
+- **`src/universal_inbox/serve.py`** (**Current**): public `/hooks/email`, `/hooks/slack`, `/hooks/quo`, and optional signed `/hooks/resend`; sending/context APIs on the private Unix socket; periodic receipt reconciliation and deferred downloads.
 - **`src/universal_inbox/main.py`**: both listeners and `wake` every minute; reads credentials from `$CREDENTIALS_DIRECTORY`.
 - **`scripts/oauth_slack.py`**: consent helper for Jeremy's post-build connect.
 - **`deploy/universal-inbox.service`**: systemd system unit. Ingress and mail-service configuration per D3.
@@ -383,6 +387,10 @@ Every path is **Proposed** unless marked Current. D1 is approved (#67); each pha
 - **2.2 `email.EmailSender`.**
   - Requirements: FR-3b, AS-3.
   - Verify: against a fake provider endpoint: `In-Reply-To` / `References` and reply-all recipients.
+
+- **Sent-receipt follow-up — implemented in local source, 2026-10-16.** Migration 13 stores provider UUID/Connection/SMTP-ID mappings; accepted initial sends and ordinary replies retain the UUID without provider GET polling. `/hooks/resend` authenticates bounded raw bodies through the existing Standard Webhooks verifier with strict Svix header adaptation and a separate optional encrypted secret. Config/ownership/storage failures return 503; bad signature 401; malformed authenticated payload 400; mapping conflict 409; committed new/identical or unrelated authenticated event 204. Other transports and existing hook configuration remain independent.
+  - Verification/release status must be recorded separately; this source change establishes no configured/live endpoint. Keep Resend's API key sending-only. Provider endpoint creation/replay, credential provisioning, exact tunnel update, backup/migration, package/service changes, and real email need separate authorization (`docs/runbook.md` §2a).
+  - Live admission must prove actual signed payload/delivery, provider retry/replay timing, durable acknowledgement/restart recovery, exact outbound threading headers, and rendered conversation/draft ownership. Missing historical identity requires authoritative UUID↔SMTP-ID proof plus an approved current-state repair; no subject/body inference or automatic resend/unmerge.
 
 ### Phase 3 — Slack adapter
 

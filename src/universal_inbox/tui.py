@@ -32,6 +32,7 @@ from textual.screen import ModalScreen, Screen
 from textual.suggester import Suggester
 from textual.widgets import DataTable, DirectoryTree, Input, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
+from textual.worker import get_current_worker
 
 from . import inbox, render
 from .health import problem
@@ -1296,6 +1297,7 @@ class ReplyBox(Vertical):
         super().__init__(classes="replybox composer")
         self.thread_id, self.view, self.mode = thread_id, None, "sender"
         self.draft_key = thread_id  # keep the original saved-text key when this Thread becomes an alias
+        self.pending_confirmation = False
 
     def compose(self) -> ComposeResult:
         yield Static(classes="idle")
@@ -1327,13 +1329,28 @@ class ReplyBox(Vertical):
         """Where an attached file goes: this Thread's open reply (FR-A8); None where files cannot be sent (FR-A16)."""
         if self.view is None or not self.has_class("open") or not attachable(self.view["channel"]["platform"]):
             return None
-        return ("thread", inbox.get_thread(self.app.db, self.thread_id).id)
+        return ("thread", self.draft_key)
 
     def check_action(self, action, parameters):
         return action != "attach" or self.attach_owner() is not None
 
     def action_attach(self):
         attach(self, self.attach_owner())
+
+    def parent_confirmed(self):
+        return bool(self.view and self.view["channel"]["platform"] == "gmail" and self.view["messages"]
+                    and self.view["messages"][-1].get("wire_id"))
+
+    def ready_hint(self):
+        return "ctrl+enter send · " + ("ctrl+o attach · " if self.attach_owner() else "") + "esc close (keeps draft)"
+
+    def set_view(self, view):
+        """Refresh conversation state while preserving an open reply's selected draft and fields."""
+        self.view, self.thread_id = view, view["thread"].id
+        if not self.has_class("open"):
+            self.show_idle(view)
+        elif self.pending_confirmation and self.parent_confirmed():
+            self.hint(self.ready_hint())
 
     def show_idle(self, view):
         """Closed state: the saved draft, or where a reply would go."""
@@ -1392,7 +1409,7 @@ class ReplyBox(Vertical):
         area.move_cursor(area.document.end)
         self.add_class("open")
         owner = self.attach_owner()
-        self.hint("ctrl+enter send · " + ("ctrl+o attach · " if owner else "") + "esc close (keeps draft)")
+        self.hint(self.ready_hint())
         self.query_one(StagedList).show(owner)
         self.query_one(TextArea).focus()
 
@@ -1408,8 +1425,13 @@ class ReplyBox(Vertical):
             f"[@click=set('sender')]{(on if mode == 'sender' else off).format(ICON['reply'] + ' reply')}[/]"
             f"[@click=set('all')]{(on if mode == 'all' else off).format(ICON['people'] + ' reply all')}[/]")
 
-    def hint(self, text, error=False):
+    def hint(self, text, error=False, pending_confirmation=False):
         h = self.query_one(".replyhint")
+        if error and pending_confirmation and self.parent_confirmed():
+            if h.has_class("error") and not self.pending_confirmation:
+                return
+            text, error, pending_confirmation = self.ready_hint(), False, False
+        self.pending_confirmation = error and pending_confirmation
         h.update(escape(text))
         h.set_class(error, "error")
 
@@ -1438,18 +1460,27 @@ class ReplyBox(Vertical):
         if self.email and not to:
             self.hint("Not sent: add at least one recipient in To.", error=True)
             return
-        self.thread_id = inbox.get_thread(self.app.db, self.thread_id).id
         self.hint("sending…")
         self.send(text, to, cc)
 
     @work(thread=True, exclusive=True)
     def send(self, text, to, cc):
+        worker = get_current_worker()
         try:
-            self.app.send_reply(self.thread_id, text, to, cc)
+            self.app.send_reply(self.draft_key, text, to, cc)
         except ReplyError as e:
-            self.app.call_from_thread(self.hint, f"Not sent: {e}", True)
+            self.app.call_from_thread(self.send_result, worker, str(e))
             return
-        self.app.call_from_thread(self.sent)
+        self.app.call_from_thread(self.send_result, worker, None)
+
+    def send_result(self, worker, error):
+        # Cancellation cannot undo provider sends; only this pre-dispatch error is safe to discard.
+        if worker.is_cancelled and error == inbox.EMAIL_CONFIRMATION_PENDING:
+            return
+        if error is not None:
+            self.hint(f"Send error: {error}", True, error == inbox.EMAIL_CONFIRMATION_PENDING)
+        else:
+            self.sent()
 
     def sent(self):
         self.app.drafts.pop(self.draft_key, None)
@@ -1989,10 +2020,7 @@ class ThreadView(Horizontal):
         load_context(self, *thread_addresses([v]))
         show_messages(self.query_one(".msgs"), message_widgets(v, self.app.message_state(self.thread_id), self.app.raw),
                       self.query_one(".timeline"))
-        box = self.query_one(ReplyBox)
-        box.view, box.thread_id = v, self.thread_id
-        if not box.has_class("open"):
-            box.show_idle(v)
+        self.query_one(ReplyBox).set_view(v)
 
     def paint_status(self):
         """Header and properties: they carry the status, and a Snoozed Thread's countdown."""
@@ -3322,10 +3350,8 @@ class CaseCard(Vertical):
         self.query_one(".cardbody").update(body)
         self.query_one(".cardbody").display = bool(body)
         box = self.query_one(ReplyBox)
-        box.view, box.thread_id = v, t.id
+        box.set_view(v)
         box.display = expanded
-        if not box.has_class("open"):
-            box.show_idle(v)
         self.set_class(selected, "sel")
 
     def on_click(self, _):

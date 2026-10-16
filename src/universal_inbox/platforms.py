@@ -11,7 +11,8 @@ from urllib.parse import quote
 
 
 def _gmail(m, ch):
-    return f"https://mail.google.com/mail/u/0/#search/rfc822msgid%3A{quote(m['native_id'].strip('<>'))}"
+    native_id = m.get("wire_id", m["native_id"])
+    return f"https://mail.google.com/mail/u/0/#search/rfc822msgid%3A{quote(native_id.strip('<>'))}" if native_id else None
 
 
 def _fastmail(m, ch):

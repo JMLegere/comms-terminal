@@ -1,14 +1,19 @@
 """Sending a Draft as a new Thread; fake senders and fake HTTP only, never a real provider."""
 
 import json
+import sqlite3
 import urllib.error
 
 import pytest
 
 from datetime import timedelta
+from types import SimpleNamespace
 
 from universal_inbox import email, inbox, quo, serve, slack
 from test_composition import AT, PEER, PHONE, SELF, db, envelope, incoming  # noqa: F401  (db is a fixture)
+
+RESEND_ID = "0a1b2c3d-1234-4000-8000-123456789abc"
+RESEND_MARKER = f"<{RESEND_ID}@resend>"
 
 
 class FakeSender:
@@ -109,30 +114,172 @@ def test_echo_that_arrives_before_recording_keeps_one_activity(db):
     assert inbox.list_drafts(db) == []
 
 
-def test_resend_start_returns_the_ses_message_id(monkeypatch):
-    monkeypatch.setattr(email.time, "sleep", lambda s: None)
-    posts, gets = [], iter([(200, {"message_id": None}), (200, {"message_id": "<x@email.amazonses.com>"})])
-    sender = email.EmailSender("k", SELF, post=lambda *a: posts.append(a) or (200, {"id": "re-1"}),
-                               get=lambda *a: next(gets))
-    assert sender.start(["ana@acme.test"], [], "Hello", "Hi", "draft-1") == "<x@email.amazonses.com>"
+def test_resend_start_retains_receipt_without_retrieval(monkeypatch):
+    monkeypatch.setattr(email, "_get", lambda *a: pytest.fail("sending-only credentials must not retrieve email"))
+    posts = []
+    sender = email.EmailSender("k", SELF, post=lambda *a: posts.append(a) or (200, {"id": RESEND_ID.upper()}))
+    assert sender.start(["ana@acme.test"], [], "Hello", "Hi", "draft-1") == RESEND_MARKER
+    assert len(posts) == 1
     url, headers, payload = posts[0]
+    assert url == "https://api.resend.com/emails"
     assert headers["Idempotency-Key"] == "draft-1" and payload["subject"] == "Hello" and payload["text"] == "Hi"
     assert "In-Reply-To" not in json.dumps(payload)
 
 
+def test_resend_reply_retains_receipt_not_the_requested_message_id(monkeypatch):
+    monkeypatch.setattr(email, "_get", lambda *a: pytest.fail("sending-only credentials must not retrieve email"))
+    posts = []
+    sender = email.EmailSender("k", SELF, post=lambda *a: posts.append(a) or (200, {"id": RESEND_ID}))
+    history = [{"native_id": "<parent@acme.test>", "data": {"from": "ana@acme.test"}, "content": "Original"}]
+    result = sender.send(SimpleNamespace(title="Hello"), "Hi", ["ana@acme.test"], [], history)
+    assert result == RESEND_MARKER and len(posts) == 1
+    _, headers, payload = posts[0]
+    assert payload["headers"]["In-Reply-To"] == "<parent@acme.test>"
+    assert payload["headers"]["References"] == "<parent@acme.test>"
+    assert payload["headers"]["Message-ID"] == headers["Idempotency-Key"] != result
+    assert payload["to"] == ["ana@acme.test"] and "Original" in payload["text"]
+
+
+@pytest.mark.parametrize("parent", [RESEND_MARKER, "<legacy@resend>", None])
+def test_resend_reply_pending_parent_refuses_before_post(parent):
+    posts = []
+    sender = email.EmailSender("k", SELF, post=lambda *a: posts.append(a))
+    with pytest.raises(ValueError, match="confirmation pending") as error:
+        sender.send(SimpleNamespace(title="Hello"), "Hi", ["ana@acme.test"], [],
+                    [{"native_id": parent, "data": {}}])
+    assert str(error.value) == inbox.EMAIL_CONFIRMATION_PENDING
+    assert posts == []
+
+
+def test_resend_reply_omits_earlier_unresolved_references():
+    posts = []
+    sender = email.EmailSender("k", SELF, post=lambda *a: posts.append(a) or (200, {"id": RESEND_ID}))
+    history = [{"native_id": mid, "data": {}} for mid in (None, RESEND_MARKER, "<parent@acme.test>")]
+    sender.send(SimpleNamespace(title="Hello"), "Hi", ["ana@acme.test"], [], history)
+    assert posts[0][2]["headers"]["References"] == "<parent@acme.test>"
+    assert posts[0][2]["headers"]["In-Reply-To"] == "<parent@acme.test>"
+
+
+@pytest.mark.parametrize("parent", [RESEND_MARKER, "<genuine-incoming@resend>"])
+def test_resend_reply_trusts_explicit_genuine_incoming_wire_id(parent):
+    posts = []
+    sender = email.EmailSender("k", SELF, post=lambda *a: posts.append(a) or (200, {"id": RESEND_ID}))
+    history = [{"native_id": parent, "wire_id": parent, "data": {"from": "ana@acme.test"}}]
+    assert sender.send(SimpleNamespace(title="Hello"), "Hi", ["ana@acme.test"], [], history) == RESEND_MARKER
+    assert len(posts) == 1
+    assert posts[0][2]["headers"]["In-Reply-To"] == parent
+    assert posts[0][2]["headers"]["References"] == parent
+
+
+def test_resend_reply_explicit_pending_projection_refuses_without_native_id_fallback():
+    posts = []
+    sender = email.EmailSender("k", SELF, post=lambda *a: posts.append(a))
+    history = [{"native_id": "<looks-resolved@acme.test>", "wire_id": None, "data": {}}]
+    with pytest.raises(ValueError, match="confirmation pending") as error:
+        sender.send(SimpleNamespace(title="Hello"), "Hi", ["ana@acme.test"], [], history)
+    assert str(error.value) == inbox.EMAIL_CONFIRMATION_PENDING
+    assert posts == []
+
+
+def test_resend_reply_projects_references_and_keeps_genuine_resend_domain_id():
+    posts = []
+    sender = email.EmailSender("k", SELF, post=lambda *a: posts.append(a) or (200, {"id": RESEND_ID}))
+    history = [
+        {"native_id": "<genuine-incoming@resend>", "wire_id": "<genuine-incoming@resend>", "data": {}},
+        {"native_id": RESEND_MARKER, "wire_id": None, "data": {}},
+        {"native_id": "<legacy@resend>", "data": {}},
+        {"native_id": RESEND_MARKER, "wire_id": "<parent@acme.test>", "data": {}},
+    ]
+    sender.send(SimpleNamespace(title="Hello"), "Hi", ["ana@acme.test"], [], history)
+    assert len(posts) == 1
+    assert posts[0][2]["headers"]["In-Reply-To"] == "<parent@acme.test>"
+    assert posts[0][2]["headers"]["References"] == "<genuine-incoming@resend> <parent@acme.test>"
+
+
+@pytest.mark.parametrize("method", ["start", "send"])
 @pytest.mark.parametrize("outcome,error", [
     ((422, {"message": "Invalid `to` field"}), inbox.SendFailed),
     ((503, {}), inbox.SendUnknown),
     (urllib.error.URLError("timed out"), inbox.SendUnknown),
+    ((200, {}), inbox.SendUnknown),
+    ((200, {"id": None}), inbox.SendUnknown),
+    ((200, {"id": 123}), inbox.SendUnknown),
+    ((200, {"id": "re-1"}), inbox.SendUnknown),
+    ((200, []), inbox.SendUnknown),
 ])
-def test_resend_start_tells_refusal_from_unknown(outcome, error):
+def test_resend_tells_refusal_from_unknown(outcome, error, method):
+    posts = []
     def post(*a):
+        posts.append(a)
         if isinstance(outcome, Exception):
             raise outcome
         return outcome
+    sender = email.EmailSender("k", SELF, post=post)
     with pytest.raises(error) as e:
-        email.EmailSender("k", SELF, post=post).start(["a@b.c"], [], "s", "b", "k1")
+        if method == "start":
+            sender.start(["a@b.c"], [], "s", "b", "k1")
+        else:
+            sender.send(SimpleNamespace(title="s"), "b", ["a@b.c"], [], [])
     assert type(e.value) is error
+    assert len(posts) == 1
+
+
+def test_resend_malformed_acceptance_keeps_draft_locked_without_retry(db):
+    d, posts = email_draft(db), []
+    sender = email.EmailSender("k", SELF, post=lambda *a: posts.append(a) or (200, {"id": "invalid"}))
+    with pytest.raises(inbox.SendUnknown):
+        inbox.send_draft(db, d["id"], d["revision"], sender)
+    with pytest.raises(inbox.SendUnknown):
+        inbox.send_draft(db, d["id"], d["revision"], sender)
+    saved = inbox.get_draft(db, d["id"])
+    assert saved["sending_at"] and saved["body"] == "Hi Ana" and len(posts) == 1
+    assert db.execute("SELECT count(*) FROM activities").fetchone()[0] == 0
+
+
+def test_authenticated_sent_payload_is_minimal_durable_and_idempotent(db):
+    body = json.dumps({"type": "email.sent", "data": {"email_id": RESEND_ID.upper(),
+                      "message_id": "<Actual-ID@email.amazonses.com>", "to": ["private@example.test"],
+                      "subject": "discard", "text": "discard"}}).encode()
+    assert email.handle_resend_hook(db, 1, body) == (204, True)
+    assert not db.in_transaction
+    assert email.handle_resend_hook(db, 1, body) == (204, False)
+    assert [tuple(r) for r in db.execute("SELECT * FROM resend_receipts")] == [
+        (RESEND_ID, 1, "<Actual-ID@email.amazonses.com>")]
+    assert all(db.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 0 for table in ("activities", "threads"))
+    conflicting = json.dumps({"type": "email.sent", "data": {"email_id": RESEND_ID,
+                              "message_id": "<different@email.amazonses.com>"}}).encode()
+    assert email.handle_resend_hook(db, 1, conflicting) == (409, False)
+    assert db.execute("SELECT message_id FROM resend_receipts").fetchone()[0] == "<Actual-ID@email.amazonses.com>"
+
+
+@pytest.mark.parametrize("body", [
+    b"not JSON", b"\xff", b"[]", b"null", b"{}", b'{"type":null}', b'{"type":1}', b'{"type":""}',
+    b'{"type":"email.sent"}', b'{"type":"email.sent","data":[]}',
+    b"[" * 2000 + b"0" + b"]" * 2000,
+    *[json.dumps({"type": "email.sent", "data": data}).encode() for data in (
+        {}, {"email_id": RESEND_ID}, {"email_id": "invalid", "message_id": "<x@test>"},
+        {"email_id": RESEND_ID, "message_id": None}, {"email_id": RESEND_ID, "message_id": 1},
+        {"email_id": RESEND_ID, "message_id": "<one@test> <two@test>"},
+        {"email_id": RESEND_ID, "message_id": "<one@test>\r\nHeader: bad"},
+    )],
+])
+def test_authenticated_sent_payload_rejects_malformed_without_writes(db, body):
+    assert email.handle_resend_hook(db, 1, body) == (400, False)
+    assert db.execute("SELECT count(*) FROM resend_receipts").fetchone()[0] == 0
+
+
+def test_authenticated_unrelated_event_is_ignored_without_parsing_its_data(db):
+    assert email.handle_resend_hook(db, 1, b'{"type":"email.delivered","data":"not a sent receipt"}') == (204, False)
+    assert db.execute("SELECT count(*) FROM resend_receipts").fetchone()[0] == 0
+
+
+def test_authenticated_sent_payload_does_not_acknowledge_storage_failure(db, monkeypatch):
+    def broken(*args):
+        raise sqlite3.OperationalError("storage unavailable")
+    monkeypatch.setattr(inbox, "record_resend_receipt", broken)
+    body = json.dumps({"type": "email.sent", "data": {"email_id": RESEND_ID, "message_id": "<x@test>"}}).encode()
+    with pytest.raises(sqlite3.OperationalError):
+        email.handle_resend_hook(db, 1, body)
 
 
 def test_quo_start_sends_to_the_one_number():

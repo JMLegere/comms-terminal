@@ -171,8 +171,9 @@ Action = Done | Snooze(until: datetime | None) | Wait | Investigate
 def verify(headers, body: bytes, secret: bytes, now: datetime) -> bool
 def parse(raw: bytes, connection) -> Incoming | None   # None for an auto-reply (FR-3a)
 def handle_hook(db, connection_id, headers, body, secret, now) -> int  # POST /hooks/email status
+def handle_resend_hook(db, connection_id: int, body: bytes) -> tuple[int, bool]  # verified payload only
 class EmailSender:  # Sender over Resend's REST API (decision #70); reply-all when to is empty
-    def send(self, thread, text, to, cc, history) -> str   # returns the Message-ID
+    def send(self, thread, text, to, cc, history) -> str   # accepted <uuid@resend>, identity pending receipt
 
 # slack.py
 def verify(headers, body: bytes, signing_secret: bytes, now: datetime) -> bool
@@ -239,10 +240,15 @@ Stored values are Plain's enum names. The console shows the product label.
 ### Threading (inside `inbox`)
 
 - **Email**: MESSAGE Activities form connected components within one mailbox using exact, case-preserved Message-ID tokens from their own `native_id` and explicit `Incoming.thread_ref`. `email_refs` persists declared reference edges; normal ingest reconciles that mailbox inside its ingestion transaction. A late parent, a bridge naming separate parents, and messages sharing an explicit missing ancestor all heal the same graph. IDs known on another mailbox are held rather than used as shared virtual ancestors. Duplicate Activities still return `None`; additional explicit references may strengthen the index and heal aliases only when the duplicate belongs to the incoming mailbox, without replaying status rules.
+- **Resend receipts (Gmail only)**: `resend_receipts` stores canonical provider UUID, explicit Gmail Connection FK, and one strict, case-preserved SMTP Message-ID. Only an exact UUID marker on an outbound-self Gmail MESSAGE Activity in that Connection contributes the SMTP alias to its own-ID evidence. Foreign-mailbox detection includes aliases too. Receipt-only evidence synthesizes no mail; duplicates do not replay Status. Receipt-before-record, reply-before-receipt, and restart all converge through the existing guarded reconciler with raw recovery disabled.
+- **Receipt persistence**: `resend_native_id(email_id) -> str` validates the UUID and returns `<uuid@resend>`. `record_resend_receipt(db, connection_id, email_id, message_id) -> bool` requires an idle connection and commits its own serialized transaction: new tuple True, identical tuple False, conflict `ResendReceiptConflict` without overwrite, invalid input ValueError. No Activity FK is required because a receipt can arrive before local outbound recording. `reconcile_resend_receipts(db) -> None` retries relevant mailbox mappings on periodic/kicked wake before downloads and after outbound insertion.
+- **Gmail reply projection**: a coherent read snapshot may add resolved `wire_id` to history while preserving stored `native_id`; the Gmail adapter prefers `wire_id`. Pending intended parent raises an actionable ValueError before sender invocation; earlier pending markers may be omitted from References. Provider markers never become threading headers. Other adapters and ordinary history dictionaries keep their existing contract.
 - **Initial email parent**: a new message first attaches to the earliest valid, stored same-mailbox parent in `Incoming.thread_ref` order (`In-Reply-To` precedes `References`). Shared-ancestor and native-ID intersections are the fallback. Eligible reconciliation still chooses the lowest canonical ID afterward; a Case-conflicting bridge stays attached to its explicit parent while the component remains separate.
 - **Identifier syntax**: bracketed ASCII dot-atom Message-IDs and domain literals; nested RFC comments and quoted prose are skipped with their escapes, and identifier case stays exact. The remaining field must be a sequence of valid Message-IDs and whitespace; adjacent IDs are accepted. Unstructured residual text, bare IDs, whitespace/control characters inside IDs, malformed IDs, and ambiguous own IDs supply no identity evidence. Subjects, senders, bodies, dates, and `fm_thread` alone never create reconciliation edges. Provider-supplied explicit member Message-IDs retain their existing behavior; reconciliation makes no provider calls.
-- **Raw recovery**: explicit preview/apply reads `data.raw` only as a lowercase 64-hex SHA256 pointer to `raw/<sha>.eml` beside the database. It rejects symlinks, verifies the complete byte hash, parses headers only, and requires the raw Message-ID to agree with the stored normalized identity. Mail lacking a Message-ID may instead prove the existing `<sha256-<verified hash>@inbox>` fallback. Recovery indexes `In-Reply-To` and `References`; missing or invalid evidence remains a coverage gap.
+- **Raw recovery**: explicit preview/apply reads `data.raw` only as a lowercase 64-hex SHA256 pointer to `raw/<sha>.eml` beside the database. It rejects symlinks, verifies the complete byte hash, parses headers only, and requires the raw Message-ID to agree with the original stored native-ID singleton, independently of any receipt aliases. Mail lacking a Message-ID may instead prove the existing `<sha256-<verified hash>@inbox>` fallback. Recovery indexes `In-Reply-To` and `References`; missing or invalid evidence remains a coverage gap.
 - **Triage during ingest**: reconciliation first selects the latest complete existing triage state, then the new Activity follows the ordinary inbound/outbound status rules. Duplicate evidence never repeats those rules. Existing sent-echo deduplication remains a separate operation.
+- **Triage during sending**: capture pre-provider attempt time, Activity high-water mark, and complete triage state. Outbound persistence resolves the canonical Thread without overwriting newer inbound work or user triage. Selected original reply draft ID remains the staging owner; alias reconciliation never unions staged files from different drafts.
+- **Durable send boundary**: new outgoing Gmail Activities may persist `data.seen_through_activity_id`, the global Activity high-water mark captured in the coherent pre-provider snapshot. The latest logical own send's valid integer checkpoint lets a Case-compatible exact component with an actual receipt-derived alias/reference link retain its complete current Todo/Investigating state when inbound Activity IDs exceed that boundary, instead of hiding unseen inbound work under ordinary Waiting. A later own send whose snapshot included that inbound and newer Done/Paused/Ignored triage retain normal precedence. This internal metadata is written only at Activity insertion; legacy latest-own rows without a valid checkpoint keep ordinary reducer/manual-repair limits. No user configuration, schema change, or old Activity rewrite is involved.
 - **Slack**:
   - A reply whose `thread_ref` names an earlier stored reply of the same Slack reply-thread joins that reply's Thread. The first reply to a top-level message starts a Thread (#124).
   - A top-level message in a channel or private channel joins the Channel's latest top-level Thread unless the Channel has had no message for 1 hour; otherwise it starts one (#124). A DM or group DM joins its Channel's latest Thread for the same sender within 2 hours, or a different sender within 1 hour, of the last message (FR-4b); otherwise it starts one.
@@ -250,7 +256,7 @@ Stored values are Plain's enum names. The console shows the product label.
 
 ## 5. Database
 
-SQLite, one file. The DDL below is copied in `src/universal_inbox/schema.sql`, which `inbox.migrate` runs; change both together. `PRAGMA foreign_keys = ON`, `PRAGMA journal_mode = WAL`. Tables are `STRICT`; times are UTC ISO 8601 text; the schema version is `PRAGMA user_version`. Version 4 adds `threads.merged_into`, `email_refs`, alias guards, and `thread_activities` to version 3, preserving Case descriptions, five-day follow-ups, and append-only Activity triggers. Migration commits the schema/version together and rejects databases newer than the build.
+SQLite, one file. The DDL below describes the core model; `src/universal_inbox/schema.sql` is the complete current schema, applied by `inbox.migrate`. `PRAGMA foreign_keys = ON`, `PRAGMA journal_mode = WAL`. Tables are `STRICT`; times are UTC ISO 8601 text; the schema version is `PRAGMA user_version`. Version 4 adds `threads.merged_into`, `email_refs`, alias guards, and `thread_activities` to version 3, preserving Case descriptions, five-day follow-ups, and append-only Activity triggers. Version 13 adds `resend_receipts` to version 12 without changing earlier migrations or immutable Activity/raw records. Migration commits schema/version together and rejects databases newer than the build. Rollback must use a schema-13-compatible build or a separately approved consistent backup; never lower the version or discard mappings/history to start old code (`docs/runbook.md` §2a).
 
 ```mermaid
 erDiagram
@@ -260,6 +266,7 @@ erDiagram
   threads ||--o{ activities : timeline
   threads |o--o{ threads : aliases
   activities ||--o{ email_refs : references
+  connections ||--o{ resend_receipts : owns
   cases |o--o{ threads : groups
   persons ||--o{ identities : owns
   identities |o--o{ activities : sent
@@ -400,6 +407,12 @@ CREATE TABLE email_refs (
 ) STRICT;
 CREATE INDEX email_refs_native ON email_refs (native_id);
 
+CREATE TABLE resend_receipts (
+  email_id      TEXT PRIMARY KEY,
+  connection_id INTEGER NOT NULL REFERENCES connections (id),
+  message_id    TEXT NOT NULL
+) STRICT;
+
 CREATE VIEW thread_activities AS
 SELECT a.id, COALESCE(t.merged_into, a.thread_id) AS thread_id,
        a.kind, a.occurred_at, a.identity_id, a.native_id, a.target_id, a.content, a.data
@@ -438,6 +451,7 @@ END;
 - Idempotency: `(kind, native_id)` is unique, so a retried event or a re-sent message is stored once.
 - Stable aliases: `merged_into` targets an older, active Thread in the same mailbox. Guards require aliases to be flattened before their target retires. The physical Activity foreign key continues to reference its original Thread; `thread_activities` projects canonical IDs for logical reads.
 - Reference idempotency: `(activity_id, native_id)` is unique in `email_refs`.
+- Receipt identity: the provider UUID is unique and its Connection is required. Domain persistence validates Gmail ownership and exact SMTP-ID syntax, serializes duplicate/conflict handling, and commits before HTTP acknowledgement; conflicting values never replace the first tuple.
 
 **What is computed, not stored**
 - A Thread's last activity, last sender, and preview: from its latest logical Activity in `thread_activities`.
@@ -453,7 +467,7 @@ Two listeners in one process.
 
 ### Public hooks listener
 
-Only these two routes exist on it (NFR-4).
+Four exact hook routes compose this listener; absent optional credentials return 503 for their route while siblings remain available (NFR-4). The source tunnel allowlist is `^/hooks/(email|slack|quo|resend)$`; private routes are excluded.
 
 - **`POST /hooks/email`**: one forwarded message as raw RFC 5322 (`Content-Type: message/rfc822`).
   - Auth: `X-Inbox-Timestamp` and `X-Inbox-Signature: sha256=<hex>`, HMAC-SHA256 over `timestamp + "." + body` with the shared secret; 5-minute window.
@@ -463,13 +477,20 @@ Only these two routes exist on it (NFR-4).
   - `url_verification` echoes `challenge`. `event_callback` handles `message`, `message_changed`, `message_deleted`, and `tokens_revoked` / `app_uninstalled` (set `auth_ok = 0`).
   - `200` within Slack's 3-second limit; `401` bad signature. Retries are harmless because `ingest` is idempotent.
 
+- **`POST /hooks/quo`**: Quo's existing Standard Webhooks events and separate credential; unchanged by receipt support.
+- **`POST /hooks/resend`**: signed Resend `email.sent` receipt, separate optional `resend-webhook-secret` (`whsec_` plus canonical nonempty Base64). Existing `quo.verify` owns HMAC-SHA256, constant-time signature comparison, and the 300-second timestamp window; strict adaptation supplies single `svix-id`, `svix-timestamp`, `svix-signature` headers under the Standard Webhooks names. Verify original raw bytes before JSON parsing or database access. Duplicate/malformed headers and unsupported signatures reject safely. No forwarding-secret fallback or address-derived ownership.
+  - Exactly one Gmail Connection must exist, with usable self/external identity; zero/multiple or invalid binding returns 503. Payload handler accepts a JSON object and `email.sent` data with provider UUID plus one SMTP Message-ID, discards all other fields, and stores only the mapping. Unrelated authenticated event types return 204 without a write.
+  - Reader requires one decimal Content-Length, rejects Transfer-Encoding, caps raw bytes at 64 KiB, and bounds total body read to five seconds. Missing length 411; malformed/duplicate/truncated framing 400; oversized 413; timeout 408. Limits apply only to this route; existing hooks and private uploads retain their previous defaults.
+  - Bad signature 401 with no writes/health change; missing/invalid config or storage failure 503; invalid authenticated payload 400; conflict 409 preserves first mapping; committed new/identical tuple 204. Only newly committed mappings set existing wake `kick`; periodic wake also retries after restart/lost kick. Expensive graph work stays outside HTTP acknowledgement. Fixed responses exclude receipt data; no payload/signature/credential logging.
+  - **Implementation/release boundary (2026-10-16):** local source and optional installer/drop-in support exist. Configured provider endpoint, signed live delivery/replay, exact scoped tunnel change, secret provisioning, database migration, service/package release, and real-email smoke checks remain separately authorized gates. Keep sender API access sending-only. Recovery requires authoritative exact-ID evidence and bounded repair approval; see `docs/runbook.md` §2a.
+
 ### Local reply socket (console)
 
 The console is a terminal app (`docs/design/console.md`, decisions #71–#75). It calls `inbox` directly for everything except sending.
 
 - **`POST /reply`** on the service's Unix socket `$XDG_RUNTIME_DIR/universal-inbox.sock` (mode 0600, owned by `jerry`).
   - Body: JSON `{"thread_id", "text", "to", "cc"}`.
-  - `200 {"status", "status_detail"}` after `inbox.reply` succeeds; `502 {"error"}` on `SendFailed`; `404` for an unknown Thread.
+  - `200 {"status", "status_detail"}` after `inbox.reply` succeeds; `504 {"error"}` on `SendUnknown` before its `SendFailed` base class maps to 502; `400 {"error"}` for a pre-send pending parent/Attachment problem; `404` for an unknown Thread. Failed/pending/unknown sends retain work; no automatic retry.
   - Only the service holds the Resend key and Slack token (NFR-5).
 
 ## 7. Decisions and open points

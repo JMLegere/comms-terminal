@@ -134,6 +134,12 @@ CREATE TABLE email_refs (
 ) STRICT;
 CREATE INDEX email_refs_native ON email_refs (native_id);
 
+CREATE TABLE resend_receipts (
+  email_id TEXT PRIMARY KEY,
+  connection_id INTEGER NOT NULL REFERENCES connections (id),
+  message_id TEXT NOT NULL
+) STRICT;
+
 CREATE VIEW thread_activities AS
 SELECT a.id, COALESCE(t.merged_into, a.thread_id) AS thread_id,
        a.kind, a.occurred_at, a.identity_id, a.native_id, a.target_id, a.content, a.data
