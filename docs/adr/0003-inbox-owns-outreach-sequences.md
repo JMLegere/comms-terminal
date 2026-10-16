@@ -21,4 +21,4 @@ Jeremy's cold outreach follows the Secret Sequence: 15 working days of manual em
 - Inbox grows from tracking messages into running outreach, which puts pressure on NFR-8 simplicity.
 - Attio holds no Step history.
 - LinkedIn replies are invisible to Inbox; Jeremy pauses or finishes those Enrollments by hand.
-- Step email still needs a send path whose terms allow cold mail. Resend's terms restrict it (ADR 0002). Until a Connection is marked as allowed for cold mail, sending Step Drafts stays off.
+- Step email sends through the Sequence's Connection like any other Draft; every Person is eligible for email. Jeremy rejected a cold-mail send gate as out of scope (2026-10-16, `.agents/prd/2026-10-16-sequencing.md` gate 5), accepting that Resend's terms restrict cold mail (ADR 0002).

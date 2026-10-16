@@ -107,12 +107,12 @@ One Person's run through one Sequence. It is Active, Paused, or Finished. Anythi
 _Avoid_: Lead, Prospect, Membership
 
 **Finished**:
-An Enrollment that has ended, as Completed (its last Step is done), Opted out, or Other.
-_Avoid_: Exited, Unenrolled, Done
+An Enrollment that has ended, as Completed (its last Step is done), Unsubscribed, or Canceled (Jeremy stopped it).
+_Avoid_: Exited, Unenrolled, Done, Other
 
-**Opted out**:
-A Person who asked not to be contacted; they cannot be enrolled again.
-_Avoid_: Unsubscribed, Suppressed
+**Unsubscribed**:
+A Person who asked not to be contacted; they cannot be enrolled in any Sequence again.
+_Avoid_: Opted out, Suppressed
 
 **Due Step**:
 A Step whose day has come in an Enrollment and which is not yet done.
