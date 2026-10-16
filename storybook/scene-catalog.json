@@ -1626,7 +1626,7 @@
       },
       "docs": {
         "description": {
-          "story": "Sequences in the rail opens this list, like People. Each row shows Steps, Enrollments, Tasks due today and the last edit; archived Sequences fold under Archived. enter opens a Sequence's Steps; n makes a new one; a archives."
+          "story": "Sequences in the rail opens two stacked panes: every Sequence on top, the selected Sequence's Steps below. j/k on the top pane changes which Sequence's Steps show; the side pane summarises it. enter moves to its Steps, n makes a new Sequence, a archives; archived Sequences fold under Archived."
         }
       }
     }
@@ -1649,7 +1649,7 @@
       },
       "docs": {
         "description": {
-          "story": "n on the Sequences list asks for a name, then opens the empty Sequence. It sends from the only email Connection; n adds the first Step. esc returns to the list."
+          "story": "n on the Sequences pane asks for a name; the new Sequence joins the list and its empty Steps pane takes focus. It sends from the only email Connection; n adds the first Step, esc returns to the Sequences pane."
         }
       }
     }
@@ -1675,7 +1675,7 @@
       },
       "docs": {
         "description": {
-          "story": "Opened from the Sequences list (enter on Secret Sequence; esc goes back). A Sequence is an ordered collection of Step rows. The selected day-9 email Step replies to Step 1; its detail pane edits kind, gap, time, reply-to and body, previews the text for Sam Lee, and states that edits apply to Tasks not yet due."
+          "story": "enter on Secret Sequence moves focus to its Steps pane, under the Sequences pane (esc goes back up). A Sequence is an ordered collection of Step rows. The selected day-9 email Step replies to Step 1; its detail pane edits kind, gap, time, reply-to and body, previews the text for Sam Lee, and states that edits apply to Tasks not yet due."
         }
       }
     }

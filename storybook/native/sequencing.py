@@ -124,17 +124,17 @@ STATES = {  # state: (story file, title, PRD requirements, PRD scenarios, descri
                    "No Due Tasks: the empty state says what empty means and where Tasks come from."),
     "SequencesList": ("sequences", dict(page="sequences"),
                       ["FR-SEQ-18", "FR-SEQ-23"], ["AS-SEQ-17"],
-                      "Sequences in the rail opens this list, like People. Each row shows Steps, Enrollments, Tasks due today and the last edit; archived Sequences fold under Archived. enter opens a Sequence's Steps; n makes a new one; a archives."),
+                      "Sequences in the rail opens two stacked panes: every Sequence on top, the selected Sequence's Steps below. j/k on the top pane changes which Sequence's Steps show; the side pane summarises it. enter moves to its Steps, n makes a new Sequence, a archives; archived Sequences fold under Archived."),
     "SequenceNew": ("sequences", dict(page="sequence", new=True),
                     ["FR-SEQ-1", "FR-SEQ-18"], ["AS-SEQ-17"],
-                    "n on the Sequences list asks for a name, then opens the empty Sequence. It sends from the only email Connection; n adds the first Step. esc returns to the list."),
+                    "n on the Sequences pane asks for a name; the new Sequence joins the list and its empty Steps pane takes focus. It sends from the only email Connection; n adds the first Step, esc returns to the Sequences pane."),
     "SequenceEditor": ("sequences", dict(page="sequence", select=6),
                        ["FR-SEQ-1", "FR-SEQ-2", "FR-SEQ-3", "FR-SEQ-5", "FR-SEQ-18"], ["AS-SEQ-10"],
-                       "Opened from the Sequences list (enter on Secret Sequence; esc goes back). A Sequence is an ordered collection of Step rows. The selected day-9 email Step replies to Step 1; its detail pane edits kind, gap, time, reply-to and body, previews the text for Sam Lee, and states that edits apply to Tasks not yet due."),
+                       "enter on Secret Sequence moves focus to its Steps pane, under the Sequences pane (esc goes back up). A Sequence is an ordered collection of Step rows. The selected day-9 email Step replies to Step 1; its detail pane edits kind, gap, time, reply-to and body, previews the text for Sam Lee, and states that edits apply to Tasks not yet due."),
     "SequenceEditorWarnings": ("sequences", dict(page="sequence", select=1, warnings=True),
                                ["FR-SEQ-4", "FR-SEQ-18"], ["AS-SEQ-10"],
                                "Validator warnings: an unknown {title} fill-in and a first Step set to reply. Both rows are flagged and the detail pane names each problem and its fix."),
-    "SequenceArchive": ("sequences", dict(page="sequence", select=1, archive=True),
+    "SequenceArchive": ("sequences", dict(page="sequence", archive=True),
                         ["FR-SEQ-23"], ["AS-SEQ-15"],
                         "A used Sequence can only be archived. The archive menu asks whether to cancel the live Enrollments (Finished: Canceled) or let them finish; archived Sequences take no new Enrollments and can be restored."),
     "SequenceStepDeleted": ("sequences", dict(page="sequence", select=3, deleted=True),
@@ -457,93 +457,134 @@ class StepEditor(tui.ThreadView, inherit_bindings=False):
             f"{props_head('summary', 'fill-ins')}\n{{first_name}} {{last_name}}\n{{company}}")
 
 
-class SequencesPage(tui.TablePage):
-    """Every Sequence, like People: enter opens one; archived Sequences fold under their header."""
+NEW_SEQUENCE = "Trade show follow-up"
+STACK_CSS = """
+#main.stacked { border: none; padding: 0; }
+.stackpane { border: round #a89984; border-title-align: center; border-subtitle-align: right; padding: 0 1; }
+.stackpane:focus-within { border: round #45707a; }
+#seqpane { height: auto; }
+#seqpane DataTable { height: auto; max-height: 9; }
+#steppane { height: 1fr; }
+"""
+
+
+class SequencesTable(tui.ClickTable):
+    BINDINGS = [Binding("enter", "steps", "Steps"), Binding("n", "new", "new Sequence"), Binding("a", "archive", "archive")]
+
+
+class StepsTable(tui.ClickTable):
+    BINDINGS = [Binding("escape", "sequences", "Sequences"), Binding("n", "new", "new Step"), Binding("x", "delete", "delete Step"),
+                Binding("J", "move_down", "move", key_display="J/K"), Binding("K", "move_up", show=False)]
+
+
+class SequencesPage(tui.Page):
+    """Two stacked panes: every Sequence on top, the selected Sequence's Steps below; the side pane shows the
+    selected Sequence (top focused) or Step (bottom focused). enter moves down to the Steps, esc back up."""
     TITLE = f"{ICON['sequence']} sequences"
     RAIL = "sequences"
-    COLUMNS = ("", "Sequence", "Steps", "Enrolled", "Due today", "Sends from", "Edited")
-    NARROW = ("", "Sequence", "Due")
-    BINDINGS = [*tui.TablePage.BINDINGS, Binding("n", "new", "new Sequence"), Binding("a", "archive", "archive")]
-
-    def on_resize(self, _):
-        self.call_after_refresh(self.refresh_data)
-
-    def rows(self):
-        narrow, out = self.size.width < 70, []
-        for archived in (False, True):
-            group = [q for q in SEQUENCES if q[8] == archived]
-            n = f"{len(group)} Sequence{'s' * (len(group) != 1)}"
-            head = f"[#928374]{ICON['collapsed' if archived else 'expanded']}[/]", f"[b #45707a]{'Archived' if archived else 'Active'}[/]"
-            out.append((dict(header=archived), (*head, f"[#928374]{n}[/]") if narrow else (*head, f"[#928374]{n}[/]", "", "", "", "")))
-            if archived:  # folded until enter on its header
-                continue
-            for name, steps, days, active, paused, finished, due, edited, _ in group:
-                enrolled = f"{active} active" + (f" · {paused} paused" if paused else "") if active or paused else "[#928374]never used[/]"
-                due_cell = f"[#45707a]{due}[/]" if due else "[#928374]·[/]"
-                icon = f"[#654735]{ICON['sequence']}[/]"
-                out.append((dict(name=name), (icon, f"[b]{escape(name)}[/]", due_cell) if narrow else
-                            (icon, f"[b]{escape(name)}[/]", f"{steps} Steps · {days} days", enrolled, due_cell, f"Gmail · {ME}",
-                             f"[#928374]{edited}[/]")))
-        return out
-
-    def refresh_data(self):
-        table = self.query_one(DataTable)
-        columns = self.NARROW if self.size.width < 70 else self.COLUMNS
-        if [str(c.label) for c in table.columns.values()] != list(columns):
-            table.clear(columns=True)
-            table.add_columns(*columns)
-        super().refresh_data()
-        table.move_cursor(row=1)
-        self.query_one("#below").update("[#928374]enter opens a Sequence's Steps · n new Sequence · a archive · "
-                                        "enter on Archived shows archived Sequences[/]")
-
-
-class SequencePage(tui.TablePage):
-    TITLE = f"{ICON['sequence']} sequence · Secret Sequence"
-    RAIL = "sequences"
-    SIDE = f"{ICON['sequence']} step"
-    COLUMNS = ("#", "", "Step", "Gap", "Time", "What")
-    BINDINGS = [*tui.TablePage.BINDINGS, Binding("n", "new", "new Step"), Binding("x", "delete", "delete Step"),
-                Binding("J", "move_down", "move down", key_display="J/K"), Binding("K", "move_up", show=False),
-                Binding("a", "archive", "archive")]
-
-    EMPTY = "No Steps yet. n adds the first Step: its kind, gap, time and text."
+    SIDE = f"{ICON['sequence']} sequence"
+    BINDINGS = [Binding("j", "down", "move", key_display="j/k"), Binding("k", "up", show=False)]
 
     def __init__(self, spec):
         super().__init__()
         self.spec = spec
-        if spec.get("new"):
-            self.TITLE = f"{ICON['sequence']} sequence · Trade show follow-up"
+        self.new = bool(spec.get("new"))
+        self.sequences = [*SEQUENCES[:3], (NEW_SEQUENCE, 0, 0, 0, 0, 0, 0, "today", False)] if self.new else SEQUENCES[:3]
+        self.sequences += [q for q in SEQUENCES if q[8]]
+        self.on_steps = spec.get("select") is not None or self.new
+        self.side_shown = False
+        if self.on_steps:
+            self.SIDE = f"{ICON['sequence']} step" if not self.new else f"{ICON['sequence']} sequence"
 
-    def rows(self):
-        rows = []
-        if self.spec.get("new"):
-            return rows
+    def compose(self):
+        top = Vertical(id="seqpane", classes="stackpane")
+        top.border_title = tui.pill(f"{ICON['sequence']} sequences", "blue")
+        archived = sum(1 for q in self.sequences if q[8])
+        top.border_subtitle = f"[#928374]{len(self.sequences) - archived} active · {archived} archived[/]"
+        with top:
+            yield SequencesTable(id="seqs", cursor_type="row", show_header=True)
+        name = NEW_SEQUENCE if self.new else SECRET
+        bottom = Vertical(id="steppane", classes="stackpane")
+        bottom.border_title = tui.pill(f"{ICON['sequence']} steps · {name}", "blue")
+        bottom.border_subtitle = ("[#928374]0 Steps · no Enrollments yet[/]" if self.new else
+                                  f"[#928374]{len(SEQUENCE) - bool(self.spec.get('deleted'))} Steps · 7 active[/]")
+        with bottom:
+            yield StepsTable(id="steps", cursor_type="row")
+
+    def on_mount(self):
+        self.app.main.query_one("#main").add_class("stacked")
+        self.call_after_refresh(self.refresh_data)
+
+    def on_resize(self, _):
+        self.call_after_refresh(self.refresh_data)
+
+    def focus_first(self):
+        for table in self.query("#steps" if self.on_steps else "#seqs"):
+            table.focus()
+
+    def sequence_rows(self, narrow):
+        out = []
+        for name, steps, days, active, paused, finished, due, edited, archived in self.sequences:
+            if archived:
+                continue
+            enrolled = (f"{active} active" + (f" · {paused} paused" if paused else "")) if active or paused else "[#928374]never used[/]"
+            due_cell = f"[#45707a]{due}[/]" if due else "[#928374]·[/]"
+            icon = f"[#654735]{ICON['sequence']}[/]"
+            out.append((icon, f"[b]{escape(name)}[/]", due_cell) if narrow else (icon, f"[b]{escape(name)}[/]", enrolled, due_cell))
+        n = sum(1 for q in self.sequences if q[8])
+        folded = (f"[#928374]{ICON['collapsed']}[/]", f"[#928374]Archived · {n}[/]")
+        out.append((*folded, "") if narrow else (*folded, "", ""))
+        return out
+
+    def step_rows(self, narrow):
+        if self.new:
+            return []
+        out = []
         steps = [s for i, s in enumerate(SEQUENCE, 1) if not (self.spec.get("deleted") and i == 4)]
         for i, (kind, gap, at, reply, summary) in enumerate(steps, 1):
-            flag = f" [#c14a4a]{ICON['warn']} 2 problems[/]" if self.spec.get("warnings") and i == 1 else ""
-            reply_mark = f" [#928374]↩ Step {reply}[/]" if reply else ""
-            rows.append((dict(number=i), (f"[#928374]{i}[/]", f"[#654735]{ICON[KIND[kind][0]]}[/]",
-                                          escape(KIND[kind][1]) + reply_mark + flag,
-                                          "day 0" if i == 1 else f"+{gap}", at or "[#928374]·[/]",
-                                          f"[#928374]{escape(summary)}[/]")))
-        return rows
+            flag = f" [#c14a4a]{ICON['warn']}[/]" if self.spec.get("warnings") and i == 1 else ""
+            reply_mark = f" [#928374]↩ {reply}[/]" if reply else ""
+            glyph = f"[#654735]{ICON[KIND[kind][0]]}[/]"
+            gap_cell = "day 0" if i == 1 else f"+{gap}"
+            out.append((f"[#928374]{i}[/]", glyph, escape(KIND[kind][1]) + reply_mark + flag) if narrow else
+                       (f"[#928374]{i}[/]", glyph, escape(KIND[kind][1]) + reply_mark + flag, gap_cell, at or "[#928374]·[/]",
+                        f"[#928374]{escape(summary)}[/]"))
+        return out
 
     def refresh_data(self):
-        super().refresh_data()
-        pane = self.app.main.query_one("#thread")
-        pane.remove_children()
-        if self.spec.get("new"):
-            self.query_one("#below").update("[#928374]0 Steps · no Enrollments yet · esc back to Sequences[/]")
-            pane.mount(Static(f"{props_head('sequence', 'sequence')}\nTrade show follow-up\n[#928374]new · 0 Steps[/]\n\n"
-                              f"{props_head('connection', 'sends from')}\nGmail · {ME}\n[#928374]the only email Connection[/]\n\n"
-                              f"{props_head('people', 'enrollments')}\nnone\n[#928374]Enroll People from People (s) once it has Steps.[/]",
-                              classes="threadempty"))
+        if len(self.query("#seqs, #steps")) != 2:  # a resize can land before compose or after unmount
             return
-        self.query_one(DataTable).move_cursor(row=self.spec["select"] - 1)
-        self.query_one("#below").update(f"[#928374]{len(self.items)} Steps · 7 active Enrollments · "
-                                        "edits apply to Tasks not yet due · esc back to Sequences[/]")
-        pane.mount(StepEditor(self.spec, self.spec["select"]))
+        narrow = self.size.width < 60
+        for table, columns, rows, cursor in (
+                (self.query_one("#seqs", DataTable), ("", "Sequence", "Due") if narrow else ("", "Sequence", "Enrolled", "Due"),
+                 self.sequence_rows(narrow), 3 if self.new else 0),
+                (self.query_one("#steps", DataTable), ("#", "", "Step") if narrow else ("#", "", "Step", "Gap", "Time", "What"),
+                 self.step_rows(narrow), (self.spec.get("select") or 1) - 1)):
+            table.clear(columns=True)
+            table.add_columns(*columns)
+            for cells in rows:
+                table.add_row(*cells)
+            if not rows:
+                table.add_row("", "", "[#928374]No Steps yet. n adds the first Step.[/]", *[""] * (len(columns) - 3))
+            table.move_cursor(row=cursor)
+            table.show_cursor = bool(rows)
+        pane = self.app.main.query_one("#thread")
+        if self.side_shown:  # the side pane depends on the selection only, not on the width
+            return
+        self.side_shown = True
+        pane.remove_children()
+        if self.on_steps and not self.new:
+            pane.mount(StepEditor(self.spec, self.spec["select"]))
+            return
+        name, steps, days, active, paused, finished, due, edited, _ = self.sequences[3 if self.new else 0]
+        pane.mount(Static(
+            f"{props_head('sequence', 'sequence')}\n[b]{escape(name)}[/]\n[#928374]{f"{steps} Steps · {days} days" if steps else "no Steps yet"} · edited {edited}[/]\n\n"
+            f"{props_head('connection', 'sends from')}\nGmail · {ME}\n\n"
+            f"{props_head('people', 'enrollments')}\n" + (f"{active} active · {paused} paused · {finished} finished\n"
+                                                         f"[#928374]{due} Tasks due today[/]" if active else
+                                                         "none\n[#928374]Enroll People from People (s) once it has Steps.[/]") + "\n\n"
+            f"[#928374]{'n adds the first Step' if self.new else 'enter edits its Steps · a archives'}[/]",
+            classes="threadempty"))
 
 
 class SequenceSection:
@@ -613,15 +654,15 @@ async def capture(entry, output):
         app = tui.Console(str(db_path), reply=None, sources=sources, send_draft=lambda *a, **k: None)
         app.capture_spec = spec
         app.step_drafts = drafts
-        app.CSS = tui.CSS + render.NATIVE_CSS
+        app.CSS = tui.CSS + render.NATIVE_CSS + STACK_CSS
         rendered = []
         async with app.run_test(size=(render.COLUMNS[0], render.ROWS), notifications=True) as pilot:
             await wait(pilot)
             main = app.main
             page = spec["page"]
-            factory = {"tasks": lambda: TasksPage(spec), "sequence": lambda: SequencePage(spec), "sequences": SequencesPage,
+            factory = {"tasks": lambda: TasksPage(spec), "sequence": lambda: SequencesPage(spec), "sequences": lambda: SequencesPage(spec),
                        "person": lambda: PersonSequencePage(spec["person"]), "people": lambda: EnrollPeoplePage()}[page]
-            main.stack = [SequencesPage, factory] if page == "sequence" else [factory]
+            main.stack = [factory]
             main._show()
             await wait(pilot, 10)
             if isinstance(main.current, EnrollPeoplePage):
