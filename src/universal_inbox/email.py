@@ -280,15 +280,20 @@ def backfill_parts(db) -> tuple[int, int]:
     return read, stored
 
 
-def handle_hook(db, connection, headers, body: bytes, secret: bytes, now: datetime) -> int:
+def handle_hook(db, connection, headers, body: bytes, secret: bytes, now: datetime) -> int | tuple[int, str]:
     """POST /hooks/email (through serve.intake) -> HTTP status. A valid request clears the Last Error.
 
     Logs one line per request with its outcome and Message-ID only (no addresses or content, NFR-5),
     so "did this email arrive?" can be answered from the journal.
     """
     if not verify(headers, body, secret, now):
-        log.info("email rejected: signature check failed")
-        return 401
+        # The reason tells the Worker (stale timestamp, bad signature) from internet noise (unsigned).
+        ts = headers.get("X-Inbox-Timestamp", "")
+        why = ("unsigned" if not headers.get("X-Inbox-Signature")
+               else "stale timestamp" if not ts.isdigit() or abs(now.timestamp() - int(ts)) > SIGNATURE_WINDOW
+               else "bad signature")
+        log.info("email rejected: signature check failed (%s)", why)
+        return 401, why
     mid = (BytesHeaderParser(policy=policy.default).parsebytes(body).get("Message-ID") or "").strip() or "(none)"
     try:
         incoming = parse(body, connection)

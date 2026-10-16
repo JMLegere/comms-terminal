@@ -223,6 +223,33 @@ def test_email_hook_logs_its_outcome_without_content(caplog):
     assert not any("secret body" in x or "mailer-daemon" in x for x in lines)
 
 
+def test_email_signature_failure_reason_shows_on_the_connection():
+    """A rejected inbound email names why on its Connection (unsigned, stale timestamp, bad signature),
+    tells the caller nothing, and a signed request clears it."""
+    db = inbox.connect()
+    inbox.migrate(db)
+    with db:
+        cid = db.execute("INSERT INTO connections (platform, external_id, self_id, label, connected_at) VALUES"
+                         " ('gmail', 'me@x.io', 'me@x.io', 'Gmail', '2026-10-12T00:00:00+00:00')").lastrowid
+    now = datetime(2026, 10, 12, 10, tzinfo=timezone.utc)
+    raw = b"From: a@b.io\r\nTo: me@x.io\r\nSubject: hi\r\nMessage-ID: <m1@b.io>\r\n\r\nhello"
+    ts = str(int(now.timestamp()))
+
+    def sign(t, key=b"k"):
+        return {"X-Inbox-Timestamp": t, "X-Inbox-Signature": "sha256=" + hmac.new(key, t.encode() + b"." + raw,
+                                                                                  hashlib.sha256).hexdigest()}
+
+    def error():
+        return db.execute("SELECT last_error FROM connections WHERE id = ?", (cid,)).fetchone()[0]
+
+    for headers, why in [({}, "unsigned"), (sign(str(int(ts) - 3600)), "stale timestamp"),
+                         (sign(ts, b"wrong"), "bad signature")]:
+        assert serve.intake(db, "gmail", headers, raw, b"k", now) == (401, "")
+        assert error() == f"inbound request failed signature check ({why})"
+    assert serve.intake(db, "gmail", sign(ts), raw, b"k", now)[0] == 204
+    assert error() is None
+
+
 RESEND_KEY = b"whsec_" + base64.b64encode(b"receipt-test-key")
 RESEND_ID = "7b8de695-b4f1-4e78-87d4-b3dbb40382e1"
 RESEND_NOW = datetime(2026, 10, 16, 12, tzinfo=timezone.utc)

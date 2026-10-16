@@ -453,9 +453,10 @@ def intake(db, platform: str, headers, body: bytes, secret: bytes, now: datetime
     out = importlib.import_module(f".{p.adapter}", __package__).handle_hook(db, connection, headers, body, secret,
                                                                             now, *args)
     status, text = out if isinstance(out, tuple) else (out, "")
-    if status == 401:
-        inbox.set_connection_error(db, connection["id"], SIGNATURE_ERROR)
-    elif status < 300 and connection["last_error"] == SIGNATURE_ERROR:  # a signed request clears it
+    if status == 401:  # the adapter's reason goes on the Connection page, not back to the caller
+        inbox.set_connection_error(db, connection["id"], f"{SIGNATURE_ERROR} ({text})" if text else SIGNATURE_ERROR)
+        return status, ""
+    if status < 300 and (connection["last_error"] or "").startswith(SIGNATURE_ERROR):  # a signed request clears it
         inbox.set_connection_error(db, connection["id"], None)
     return status, text
 
