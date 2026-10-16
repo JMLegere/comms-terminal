@@ -23,7 +23,7 @@ from typing import Protocol, Sequence
 
 from . import files, platforms
 
-SCHEMA_VERSION = 17
+SCHEMA_VERSION = 18
 WAIT = timedelta(days=4)  # Waiting for them ends after this with no reply: back to Todo to follow up (#116)
 EMAIL_CONFIRMATION_PENDING = "Email confirmation pending; wait for its sent receipt before replying."
 MIGRATIONS = {  # version -> statement that upgrades an existing database to it
@@ -281,6 +281,10 @@ CREATE TABLE tasks (
   CHECK ((state = 'DUE') = (done_at IS NULL))
 ) STRICT;
 CREATE INDEX tasks_due ON tasks (state, due_at);""",
+    # A reply Draft's files are its Thread's reply files (stage); move any staged on the reply Draft itself.
+    18: """UPDATE staged_attachments SET draft_id = NULL, thread_id = (
+  SELECT d.thread_id FROM composition_drafts d WHERE d.id = staged_attachments.draft_id)
+WHERE draft_id IN (SELECT id FROM composition_drafts WHERE thread_id IS NOT NULL);""",
 }
 
 # ponytail: fixed list; extend when a free-mail sender forms an Organization by mistake.
@@ -757,7 +761,7 @@ def _send(db, connection_id: int, fmt: str, files: Sequence[Staged], call, recor
         set_connection_error(db, connection_id, f"Send outcome unknown: {e}")
         raise SendUnknown(f"Send outcome unknown: {e}") from e
     set_connection_error(db, connection_id, None)
-    column, owner = _owner(draft_id, thread_id)
+    column, owner = _owner(db, draft_id, thread_id)
     with db:
         if not db.in_transaction:
             db.execute("BEGIN IMMEDIATE")
@@ -1434,16 +1438,21 @@ def mark_failed(db, attachment_id: int) -> None:
                    (ATTACHMENT_TRIES, attachment_id))
 
 
-def _owner(draft_id, thread_id) -> tuple[str, int]:
+def _owner(db, draft_id, thread_id) -> tuple[str, int]:
+    """The staged_attachments column and id that own these files. A reply Draft's files are its Thread's
+    reply files, the ones `reply` sends, so staging on a reply Draft stages on its Thread."""
     if (draft_id is None) == (thread_id is None):
         raise ValueError("stage on exactly one of draft_id or thread_id")
-    return ("draft_id", draft_id) if draft_id is not None else ("thread_id", thread_id)
+    if thread_id is not None:
+        return "thread_id", thread_id
+    r = db.execute("SELECT thread_id FROM composition_drafts WHERE id = ?", (draft_id,)).fetchone()
+    return ("thread_id", r[0]) if r and r[0] is not None else ("draft_id", draft_id)
 
 
 def stage(db, *, sha: str, name: str, type: str, size: int,
           draft_id: int | None = None, thread_id: int | None = None) -> int:
     """Attach a stored file to an unsent Draft or to one Thread's open reply."""
-    column, owner = _owner(draft_id, thread_id)
+    column, owner = _owner(db, draft_id, thread_id)
     path = files.attachment_path(db, sha)
     if files.files_dir(db) is not None and (path is None or not path.is_file()):
         raise ValueError("stage needs the sha256 of a stored file")
@@ -1453,7 +1462,7 @@ def stage(db, *, sha: str, name: str, type: str, size: int,
 
 
 def staged(db, *, draft_id: int | None = None, thread_id: int | None = None) -> list[dict]:
-    column, owner = _owner(draft_id, thread_id)
+    column, owner = _owner(db, draft_id, thread_id)
     return [dict(r) for r in db.execute(
         f"SELECT * FROM staged_attachments WHERE {column} = ? ORDER BY id", (owner,))]
 

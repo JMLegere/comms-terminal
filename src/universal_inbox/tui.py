@@ -4999,6 +4999,11 @@ class Console(App):
         v = self.db.execute("PRAGMA data_version").fetchone()[0]
         if v != self.data_version:
             self.data_version = v
+            if not getattr(self, "outdated", False) and (
+                    self.db.execute("PRAGMA user_version").fetchone()[0] > inbox.SCHEMA_VERSION):
+                self.outdated = True  # the service migrated the database past this console's code
+                self.notify("The inbox was upgraded while this console ran · quit (q) and start it again.",
+                            severity="error", timeout=24 * 3600)
             self.undo = None  # new activity may have moved the Thread; restoring would hide it
             self.main.refresh_all()
             self.toast_pauses()

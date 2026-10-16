@@ -44,7 +44,7 @@ Connected, missed, voicemail, or no answer. Missed and voicemail are incoming on
 A later record appended to a Phone call, holding Quo's transcript of the conversation or the voicemail. It never changes the Thread's Status.
 
 **Attachment**:
-A file that arrives or is sent with a message, or is added to a Draft to go with it, listed beside the message rather than placed in its body. A Slack file or an SMS photo is an Attachment.
+A file that arrives or is sent with a message, or is added to a Draft to go with it, listed beside the message rather than placed in its body. A reply Draft's Attachments are its Thread's reply Attachments. A Slack file or an SMS photo is an Attachment.
 _Avoid_: File (alone), Part, Upload
 
 **Inline image**:

@@ -26,7 +26,7 @@ Workbox
   - Socket: `$XDG_RUNTIME_DIR/universal-inbox.sock` (mode 0600, owned by `jerry`).
   - `POST /reply` with JSON `{"thread_id", "text", "to", "cc"}` → `200 {"status", "status_detail"}`, or `502 {"error"}` on `SendFailed`.
 - Both processes open the same SQLite file in WAL mode with a 5-second busy timeout.
-- The app refreshes when `PRAGMA data_version` changes (checked every 2 seconds), so new mail and Slack messages appear without a keypress.
+- The app refreshes when `PRAGMA data_version` changes (checked every 2 seconds), so new mail and Slack messages appear without a keypress. If the service has migrated the database past the console's code (`user_version` above `SCHEMA_VERSION`), one error toast says to quit and start the console again.
 
 ## 2. Look
 

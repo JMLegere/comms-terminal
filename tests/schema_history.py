@@ -3,6 +3,7 @@
 from universal_inbox import inbox
 
 UNDO = {
+    18: "",  # moves reply-Draft files to their Thread; no DDL to undo
     17: "DROP INDEX composition_drafts_task; ALTER TABLE composition_drafts DROP COLUMN task_id;"
         " ALTER TABLE persons DROP COLUMN unsubscribed_at;"
         " DROP TABLE tasks; DROP TABLE enrollments; DROP TABLE sequence_steps; DROP TABLE sequences;",

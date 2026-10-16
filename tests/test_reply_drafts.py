@@ -124,3 +124,56 @@ def test_agent_drafts_list_labels_reply_drafts(seeded, capsys):
     d = inbox.save_reply_draft(db, ids["ana"], "Hi Ana,")
     agent.run(SimpleNamespace(cmd="drafts"), db)
     assert f"{d['id']}\temail reply · Thread {ids['ana']}\t" in capsys.readouterr().out
+
+
+def test_a_file_staged_on_a_reply_draft_goes_out_with_the_reply(seeded):
+    from test_attachment_send import PDF, pdf
+    path, ids = seeded
+    db = inbox.connect(path)
+    d = inbox.save_reply_draft(db, ids["ana"], "Hi Ana, attached.")
+    inbox.stage(db, sha=pdf(db), name="pkg.pdf", type="application/pdf", size=len(PDF), draft_id=d["id"])
+    assert [s["name"] for s in inbox.staged(db, thread_id=ids["ana"])] == ["pkg.pdf"]  # the reply box lists it
+    assert [s["name"] for s in inbox.staged(db, draft_id=d["id"])] == ["pkg.pdf"]
+    sender = FakeSender()
+    inbox.reply(db, ids["ana"], d["body"], sender, to=d["to"].split(", "), cc=[c for c in d["cc"].split(", ") if c])
+    assert [f.name for f in sender.files] == ["pkg.pdf"]
+    assert inbox.list_drafts(db) == [] and inbox.staged(db, thread_id=ids["ana"]) == []
+
+
+def test_version_18_moves_files_staged_on_a_reply_draft_to_its_thread(seeded):
+    from test_attachment_send import PDF, pdf
+    path, ids = seeded
+    db = inbox.connect(path)
+    reply = inbox.save_reply_draft(db, ids["ana"], "Hi Ana,")
+    new = inbox.save_draft(db, {"connection_id": 1, "kind": "email", "sender": "me@x.io", "to": "a@b.io",
+                                "cc": "", "subject": "New", "body": "x"})
+    sha = pdf(db)
+    with db:  # how a schema-17 inbox.stage stored them
+        for draft_id in (reply["id"], new["id"]):
+            db.execute("INSERT INTO staged_attachments (draft_id, sha, name, type, size, added_at)"
+                       " VALUES (?, ?, 'pkg.pdf', 'application/pdf', ?, '2026-10-16T21:10:06+00:00')",
+                       (draft_id, sha, len(PDF)))
+    db.execute("PRAGMA user_version = 17")
+    inbox.migrate(db)
+    rows = db.execute("SELECT draft_id, thread_id FROM staged_attachments ORDER BY id").fetchall()
+    assert [tuple(r) for r in rows] == [(None, ids["ana"]), (new["id"], None)]
+
+
+def test_console_says_to_restart_once_the_database_outgrows_its_code(seeded):
+    from test_console import run
+    from universal_inbox.tui import Console
+    path, _ = seeded
+    seen = {}
+
+    async def upgrade(app, pilot):
+        other = sqlite3.connect(path)
+        other.execute(f"PRAGMA user_version = {inbox.SCHEMA_VERSION + 1}")
+        other.commit()
+        other.close()
+        for _ in range(2):
+            app.check_changes()
+            await pilot.pause()
+        seen["toasts"] = [n.message for n in app._notifications if "upgraded" in n.message]
+
+    run(Console(path), [upgrade])
+    assert seen["toasts"] == ["The inbox was upgraded while this console ran · quit (q) and start it again."]

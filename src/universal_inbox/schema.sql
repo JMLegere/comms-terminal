@@ -255,7 +255,7 @@ CREATE TABLE attachments (
 CREATE INDEX attachments_sha ON attachments (sha);
 CREATE INDEX attachments_pending ON attachments (state) WHERE state = 'pending';
 
--- Files attached to an unsent Draft or to the open reply of one Thread.
+-- Files attached to an unsent Draft or to the open reply of one Thread (a reply Draft's files are its Thread's).
 CREATE TABLE staged_attachments (
   id INTEGER PRIMARY KEY,
   draft_id INTEGER REFERENCES composition_drafts (id) ON DELETE CASCADE,
