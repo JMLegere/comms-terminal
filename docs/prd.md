@@ -180,6 +180,10 @@ Status key in brackets:
   - [D] Enter opens the Thread in the console; O shows a Ctrl-clickable link to it in Gmail or Slack. Reason: reading full context in the native app; Attachments open from their chips (#130). Other console keys: `docs/design/console.md` §4.
 - **FR-15** [C]: The console sends only replies Jeremy writes. It never edits, deletes, archives, or marks read anything in Gmail or Slack.
 
+### Sequences
+
+- **FR-SEQ** [C]: Outreach Sequences run inside Universal Inbox (ADR 0003): Jeremy edits Sequences of Steps, enrolls one Person at a time, and works each Enrollment's Due Tasks on the Tasks page; anything inbound from the Person pauses their Enrollments. Requirements FR-SEQ-1–24 and acceptance scenarios AS-SEQ-1–17 are in the Sequencing PRD (`.agents/prd/2026-10-16-sequencing.md`); the interface names (Enroll, Due Tasks, Complete Task, Skip Task, Pause, Resume, Finish) are in `docs/design/api-and-database.md` §2.
+
 ### Non-functional
 
 - **NFR-1** [PL]: **Completeness** relies on event delivery, as in Plain (decisions #55, #66). Reference-based reconciliation repairs stored Thread membership; it does not establish source completeness. See R7 and R12.

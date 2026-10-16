@@ -36,7 +36,7 @@ from textual.widgets import DataTable, DirectoryTree, Input, OptionList, Static,
 from textual.widgets.option_list import Option
 from textual.worker import get_current_worker
 
-from . import files, inbox, render
+from . import files, inbox, render, sequences
 from .health import problem
 from .icons import ICON
 from .platforms import E164, FORMATS, PLATFORMS
@@ -179,6 +179,16 @@ ContextSection { height: auto; margin: 1 0 0 0; padding: 0 1; border: round #d5c
                  border-title-color: #654735; }
 .props ContextSection { text-wrap: wrap; }  /* Tana and Attio titles are long; wrap them, unlike the one-line entries above */
 .sidescroll ContextSection { margin: 1 1 1 1; }
+/* Sequences: the Sequences page stacks two bordered panes in the main column (Jeremy, 2026-10-16) */
+#main.stacked, #main.stacked:focus-within { border: none; padding: 0; }
+.stackpane { border: round #a89984; border-title-align: center; border-subtitle-align: right; padding: 0 1; }
+.stackpane:focus-within { border: round #45707a; }
+#seqpane { height: auto; }
+#seqpane DataTable { height: auto; max-height: 9; }
+#steppane { height: 1fr; }
+.stepeditor { height: 1fr; }
+.stepeditor > .timeline { height: auto; max-height: 12; }
+.stepeditor .composer { margin: 0 1 1 1; }
 """
 
 
@@ -467,6 +477,17 @@ HELP = [  # (group, [(keys, what it does)]) — the full key map; Gmail-style wh
                 ("ctrl+o", "attach a file on Workbox, or upload one from Mani; paste an image path to attach it"),
                 ("delete", "in the draft's file list: remove the highlighted file"),
                 ("Connection", "choose email or SMS; sending unavailable")]),
+    ("Tasks", [("e", "done: the next Step's Task comes due by its gap (email Tasks are done when their Draft sends)"),
+               ("x", "skip: the next Step counts from today (z undoes)"), ("f", "filter by kind or Sequence"),
+               ("n", "a reply Task whose email was skipped: start a new Thread instead"),
+               ("enter", "an email Task: edit its Draft, or open its Thread's reply box"),
+               ("p", "open the person"), ("y", "copy the Task and its person as Markdown for an agent")]),
+    ("Sequences", [("enter", "move from a Sequence to its Steps (esc back)"), ("n", "new Sequence, or new Step in the Steps pane"),
+                   ("a", "archive a Sequence (asks about its live Enrollments), or restore an archived one"),
+                   ("x", "delete an unused Sequence, or a Step (Enrollments on it move on; z undoes)"),
+                   ("J / K", "move a Step down / up"), ("R", "rename a Sequence"), ("ctrl+s", "save the Step being edited")]),
+    ("Enroll", [("s", "People or a Person page: enroll in a Sequence"), ("r", "Person page: resume a Paused Enrollment"),
+                ("f", "Person page: finish an Enrollment (Canceled, Unsubscribed, Completed)")]),
     ("Case", [("n", "Cases views: start a case (a goal) with no threads yet"),
               ("enter", "Cases views or a case header row: open the case"),
               ("j / k", "select a thread card (↑/↓ also work)"), ("enter", "show or hide a done thread"),
@@ -684,6 +705,9 @@ class Rail(OptionList):
             else:
                 icon_name, color = VIEW_ICON[name]
                 opts.append(item(f"view:{i}", icon_name, name, counts[name], color))
+        due = len(sequences.tasks_due(db))
+        opts += [gap, header("sequence", "outreach"), item("tasks", "tasks", "Tasks", due or ""),
+                 item("sequences", "sequence", "Sequences", sum(1 for q in sequences.sequences(db) if not q["archived_at"]))]
         opts += [gap, header("cases", "cases")]
         case_counts = Counter(c["status"] for c in inbox.case_queue(db))
         for i, name in enumerate(inbox.CASE_VIEWS):
@@ -1841,6 +1865,8 @@ def details_markup(v, db) -> str:
         "[#928374]none · [/][@click=app.thread('case')][underline]add to a case[/][/] [#928374](l)[/]")
     kind = v["channel"]["kind"]
     lines += ["", head("case", "case"), case, "", f"[#928374]{ICON.get(kind, ICON['channel'])} channel[/]", escape(v["where"])]
+    if p and (section := sequence_section(db, p["id"], keys=False)):  # FR-SEQ-19; its keys are on the Person page
+        lines += ["", section]
     return "\n".join(lines + related_markup(db, v))
 
 
@@ -2547,6 +2573,8 @@ class DraftView(Composer, Horizontal):
     def action_page(self, action):
         if isinstance(self.app.main.current, DraftsPage):
             getattr(self.app.main.current, f"action_{action}")()
+        elif isinstance(self.app.main.current, TasksPage):  # an email Task's Draft: x skips, y copies
+            self.app.main.current.action_page(action)
 
     def action_close(self):
         if self.save():
@@ -2651,6 +2679,9 @@ class DraftView(Composer, Horizontal):
         page = self.app.main.current
         if isinstance(page, DraftsPage):
             page.refresh_data(select_id=page.neighbor(self.draft_id))
+        elif isinstance(page, TasksPage):  # the Task is done; the next one shows
+            self.app.main.showing = None
+            page.refresh_data()
 
 
 class DraftsPage(Page):
@@ -2782,19 +2813,9 @@ class DraftsPage(Page):
         event.stop()
         selected = self.selected()
         if selected and selected["thread_id"]:
-            self.open_reply(selected["thread_id"])
+            self.app.main.open_reply(selected["thread_id"])
         else:
             self.focus_editor()
-
-    def open_reply(self, thread_id):
-        """The reply Draft's Thread, selected, with its reply box open on the Draft."""
-        main = self.app.main
-        main.open_thread(thread_id)
-
-        def reply():
-            if isinstance(main.current, ThreadsPage):
-                main.current.action_reply("all")
-        self.app.call_after_refresh(lambda: self.app.call_after_refresh(reply))
 
     def focus_editor(self):
         view = self.app.main.draft_view
@@ -2930,7 +2951,13 @@ class PeoplePage(TablePage):
     COLUMNS = ("", "Name", "Address", "Organizations", "Blocked", "Todo")
     EMPTY = "No people yet. Everyone who writes to you appears here."
     TABLE = DragTable
-    BINDINGS = [Binding("g", "merge", "merge into…"), Binding("c", "collapse_all", "collapse / expand all")]
+    BINDINGS = [Binding("g", "merge", "merge into…"), Binding("c", "collapse_all", "collapse / expand all"),
+                Binding("s", "enroll", "enroll in Sequence")]
+
+    def action_enroll(self):
+        p = self.selected()
+        if p and "id" in p:
+            enroll_person(self.app, p["id"], p["name"])
 
     def on_drag_table_dropped(self, event):
         drop, keep = self.items[event.source][0], self.items[event.target][0]
@@ -3120,7 +3147,8 @@ class PersonPage(Page):
     BINDINGS = [Binding("escape", "back", "back"), Binding("j", "down", "move", key_display="j/k"),
                 Binding("k", "up", show=False), Binding("b", "block", "block / unblock"),
                 Binding("n", "rename", "rename"), Binding("a", "add", "add identity"),
-                Binding("x", "remove", "remove identity")]
+                Binding("x", "remove", "remove identity"), Binding("s", "enroll", "enroll in Sequence"),
+                Binding("r", "resume", "resume"), Binding("f", "finish", "finish")]
 
     def __init__(self, person_id: int):
         super().__init__()
@@ -3151,7 +3179,9 @@ class PersonPage(Page):
         threads = "\n".join(f"[@click=app.open_thread({t.id})]{glyph(t.status_detail)} [underline]{escape(t.title)}[/][/]"
                             for t in p["threads"]) or "—"
         orgs = ", ".join(f"[@click=app.open_org('{o}')][underline]{escape(o)}[/][/]" for o in p["organizations"]) or "—"
+        section = sequence_section(self.app.db, self.person_id)
         self.query_one("#prest").update(
+            (f"\n{section}\n" if section else "") +
             f"\n[#928374]{ICON['organizations']} organizations[/]\n{orgs}\n\n"
             f"[#928374]{ICON['threads']} threads[/]\n{threads}\n\n"
             f"[#928374]{ICON['cases']} cases[/]\n{escape(', '.join(p['cases']) or '—')}")
@@ -3161,6 +3191,15 @@ class PersonPage(Page):
     def selected(self):
         ids = self.person["identities"]
         return ids[self.query_one(DataTable).cursor_row] if ids else None
+
+    def action_enroll(self):
+        enroll_person(self.app, self.person_id, self.person["name"])
+
+    def action_resume(self):
+        resume_enrollment(self.app, self.person_id)
+
+    def action_finish(self):
+        finish_enrollment(self.app, self.person_id)
 
     def action_back(self):
         self.app.main.back()
@@ -3661,8 +3700,851 @@ class CasePage(Page, ThreadActions):
         self.query_one(DescriptionBox).open()
 
 
+# --- Sequences: the Tasks and Sequences pages, enrolling, the Sequence section --------------------
+# (.agents/prd/2026-10-16-sequencing.md; layout from the accepted storybook/native/sequencing.py mocks)
+
+KIND_LABEL = {"email": "Email", "call": "Call", "linkedin": "LinkedIn", "letter": "Letter"}
+FINISH_REASONS = [("CANCELED", "Canceled · you stopped it; enrolling again is allowed"),
+                  ("UNSUBSCRIBED", "Unsubscribed · they asked to stop; ends every Sequence for them"),
+                  ("COMPLETED", "Completed · count it as done")]
+
+
+def props_head(icon_name: str, text: str) -> str:
+    return f"[#928374]{ICON[icon_name]} {text}[/]"
+
+
+def sequence_section(db, person_id: int, keys: bool = True) -> str:
+    """One block per Enrollment, live first: state, day, the next Task, and the Tasks timeline (FR-SEQ-19)."""
+    blocks = []
+    for e in sequences.enrollments(db, person_id):
+        if e["state"] == "FINISHED":
+            blocks.append(f"[#928374]{escape(e['sequence'])} · Finished: {e['reason'].title()}[/]")
+            continue
+        lines = [f"[b]{escape(e['sequence'])}[/] · [#928374]{e['state'].title()} · Day {e['day']} of {e['days']}[/]"]
+        if e["state"] == "PAUSED":
+            why = "they called" if e["pause_reason"] == "call" else "they replied"
+            lines.append(f"[#928374]{ICON['pause']} paused: {why} {stamp(e['paused_at'])}[/]")
+        for x in e["timeline"]:
+            label = f"Day {x['day']:<2} {KIND_LABEL[x['step']['kind']]}"
+            if x["state"] in ("done", "skipped"):
+                lines.append(f"[#6c782e]{ICON['done']}[/] {label} · {x['state']}")
+            elif x["state"] == "due":
+                lines.append(f"[#c35e0a]▸[/] {label} · [#928374]{'next, due when resumed' if e['state'] == 'PAUSED' else 'due'}[/]")
+            else:
+                lines.append(f"[#928374]· {label}[/]")
+        blocks.append("\n".join(lines))
+    if not blocks:
+        return ""
+    tail = "\n\n[#928374]r resume · f finish · s enroll[/]" if keys else ""
+    return f"{props_head('sequence', 'sequence')}\n" + "\n\n".join(blocks) + tail
+
+
+def enroll_person(app, person_id: int, name: str):
+    """Pick a Sequence for one Person (FR-SEQ-6); refusals say why."""
+    live = {e["sequence_id"]: e["state"] for e in sequences.enrollments(app.db, person_id) if e["state"] != "FINISHED"}
+    active = [q for q in sequences.sequences(app.db) if not q["archived_at"]]
+    if not active:
+        app.notify("No Sequences yet: make one under Sequences (n).", severity="warning")
+        return
+    options = [(str(q["id"]), f"[#928374]{escape(q['name'])} · already in it, {live[q['id']].title()}[/]" if q["id"] in live
+                else f"{escape(q['name'])} · {q['steps']} Steps · first Task due today") for q in active]
+    names = {str(q["id"]): q["name"] for q in active}
+
+    def chosen(sid):
+        if sid is None:
+            return
+        try:
+            eid = sequences.enroll(app.db, person_id, int(sid))
+        except sequences.Refused as e:
+            app.notify(f"Not enrolled: {e}", severity="error")
+            return
+        app.offer_undo(f"Enrolled {name} in {names[sid]}: the first Task is due today, under Tasks.",
+                       lambda: sequences.unenroll(app.db, eid))
+        app.main.refresh_all()
+    app.push_screen(Pick(f"Enroll {name}", options, "Every active Sequence. One live Enrollment per Person per Sequence."),
+                    chosen)
+
+
+def pick_enrollment(app, person_id: int, states: tuple, then):
+    """`then(enrollment)` for the Person's one live Enrollment in `states`, or the one Jeremy picks."""
+    live = [e for e in sequences.enrollments(app.db, person_id) if e["state"] in states]
+    if not live:
+        app.notify("No " + (" or ".join(s.title() for s in states)) + " Enrollment here.", severity="warning")
+    elif len(live) == 1:
+        then(live[0])
+    else:
+        app.push_screen(Pick("Which Enrollment?", [(str(e["id"]), f"{escape(e['sequence'])} · {e['state'].title()}") for e in live]),
+                        lambda eid: eid and then(next(e for e in live if str(e["id"]) == eid)))
+
+
+def resume_enrollment(app, person_id: int):
+    def go(e):
+        sequences.resume(app.db, e["id"])
+        app.notify(f"Resumed {e['sequence']}: the next Task is due now, under Tasks.")
+        app.main.refresh_all()
+    pick_enrollment(app, person_id, ("PAUSED",), go)
+
+
+def finish_enrollment(app, person_id: int):
+    def reason(e):
+        def go(why):
+            if why is None:
+                return
+            undo = sequences.finish(app.db, e["id"], why)
+            app.offer_undo(f"Finished {e['sequence']}: {why.title()}. Its unsent Task Drafts are gone.",
+                           lambda: sequences.restore_finish(app.db, undo))
+            app.main.refresh_all()
+        app.push_screen(Pick(f"Finish {e['sequence']}", FINISH_REASONS), go)
+    pick_enrollment(app, person_id, ("ACTIVE", "PAUSED"), reason)
+
+
+def task_props(t: dict) -> str:
+    nxt = "last Step" if t["position"] >= t["steps"] else f"Step {t['position'] + 1}"
+    return (f"{props_head('tasks', 'task')}\nDay {t['day']} · {KIND_LABEL[t['kind']]}\n[#928374]Step {t['position']} of {t['steps']}[/]\n\n"
+            f"{props_head('sequence', 'enrollment')}\nActive · Day {t['day']}\n[#928374]{escape(t['sequence'])}[/]\n\n"
+            f"{props_head('wait', 'next')}\n{nxt}\n\n"
+            f"{props_head('person', 'person')}\n[@click=app.open_person({t['person_id']})][b underline]{escape(t['person'])}[/][/]\n\n"
+            f"{props_head('organizations', 'organization')}\n{escape(t['organization']) if t['organization'] else '[#928374]none[/]'}")
+
+
+def task_markdown(db, t: dict) -> str:
+    """One Task for a terminal agent: what to do, for whom, with the Person's addresses."""
+    fill_values = sequences.person_fill(db, t["person_id"])
+    body, _ = sequences.fill(t["body"], fill_values)
+    ids = [r[0] for r in db.execute("SELECT value FROM identities WHERE person_id = ? ORDER BY kind, id", (t["person_id"],))]
+    lines = [f"# {KIND_LABEL[t['kind']]} Task · Day {t['day']} of {t['sequence']}", "",
+             f"- Person: {t['person']} ({', '.join(ids)})", f"- Organization: {t['organization'] or 'none'}",
+             f"- Due: {t['group']}", f"- Task id: {t['id']}"]
+    if t["flag"]:
+        lines.append(f"- Flag: {t['flag']}")
+    if t["draft_id"]:
+        lines.append(f"- Draft: {t['draft_id']} (`universal-inbox draft {t['draft_id']}`)")
+    lines += ["", body]
+    if t["kind"] == "call" and t["voicemail"]:
+        lines += ["", "Voicemail:", sequences.fill(t["voicemail"], fill_values)[0]]
+    return "\n".join(lines) + "\n"
+
+
+class TaskPane(Horizontal):
+    """A non-email Task, or an email Task waiting for Jeremy, laid out like the Thread pane (FR-SEQ-16)."""
+
+    def __init__(self, task: dict):
+        super().__init__(classes="threadview")
+        self.item = task
+
+    def compose(self):
+        t = self.item
+        values = sequences.person_fill(self.app.db, t["person_id"])
+        text = lambda s: escape(sequences.fill(s or "", values)[0])  # noqa: E731
+        phone = self.app.db.execute("SELECT value FROM identities WHERE person_id = ? AND kind = 'phone' ORDER BY id LIMIT 1",
+                                    (t["person_id"],)).fetchone()
+        with Vertical(classes="convo"):
+            with TextScroll(classes="timeline", can_focus=True):
+                yield Static(classes="thead")
+                if t["kind"] == "call":
+                    yield Static(f"[b]{escape(phone[0]) if phone else '[#c14a4a]no phone[/]'}[/]   "
+                                 f"[#928374]{ICON['call']} dial in Quo · the call appears in their Thread[/]")
+                    yield Static(f"\n[#928374]{ICON['summary']} script[/]\n{text(t['body']) or '[#928374]none[/]'}")
+                    if t["voicemail"]:
+                        yield Static(f"\n[#928374]{ICON['summary']} voicemail[/]\n{text(t['voicemail'])}")
+                elif t["kind"] == "linkedin":
+                    yield Static(f"[b]{(t['action'] or 'connect').title()}[/]   [#928374]{ICON['linkedin']} on their LinkedIn profile[/]")
+                    yield Static(f"\n[#928374]{ICON['summary']} note[/]\n{text(t['body']) or '[#928374]none[/]'}")
+                    yield Static("\n[#928374]LinkedIn replies do not reach Inbox. If they reply there, pause on their Person page.[/]")
+                elif t["kind"] == "letter":
+                    yield Static(f"[#928374]{ICON['letter']} letter[/]\n{text(t['body'])}")
+                elif t["flag"] == "reply target skipped":
+                    yield Static(f"[#c14a4a]{ICON['warn']} Reply target skipped[/]")
+                    yield Static("[#c14a4a]This Task replies in an earlier email's Thread, but that email was skipped. "
+                                 "Choose: n start a new Thread, or x skip this Task.[/]")
+                    yield Static(f"\n[#928374]{ICON['summary']} text[/]\n{text(t['body'])}")
+                elif t["flag"] == "reply Draft already there":
+                    yield Static(f"[#c14a4a]{ICON['warn']} The Thread already has a reply Draft[/]")
+                    yield Static("[#928374]It was left as it is. Open the Thread (enter) to send it, or x skip this Task.[/]")
+                    yield Static(f"\n[#928374]{ICON['summary']} this Step's text[/]\n{text(t['body'])}")
+                elif t["thread_id"] or t["draft_id"]:
+                    yield Static(f"[#928374]{ICON['reply']} reply in the Thread · enter opens its reply box to edit and send[/]")
+                    yield Static(f"\n{text(t['body'])}")
+                else:
+                    yield Static(f"[#c14a4a]{ICON['warn']} {escape(t['flag'] or 'No Draft yet')}[/]")
+            yield Static(self.hint(), classes="replyhint")
+        with TextScroll(classes="props", can_focus=False):
+            yield Static(classes="detailtext")
+            yield from context_sections()
+
+    def hint(self):
+        if self.item["kind"] == "email":
+            return "n new Thread · x skip · p person" if self.item["flag"] == "reply target skipped" else "enter open Thread · x skip · p person"
+        return "e done · next · x skip · next · p person · y copy for agent"
+
+    def on_mount(self):
+        self.paint()
+        emails = [r[0] for r in self.app.db.execute("SELECT value FROM identities WHERE person_id = ? AND kind = 'email'",
+                                                    (self.item["person_id"],))]
+        load_context(self, emails, inbox.person_organizations(self.app.db, self.item["person_id"]))
+
+    def on_resize(self, event):
+        narrow = event.size.width < 84
+        if narrow != self.has_class("narrow"):
+            self.set_class(narrow, "narrow")
+            self.paint()
+
+    def paint(self):
+        t = self.item
+        head = f"[b #45707a]Day {t['day']} · {KIND_LABEL[t['kind']]} · {escape(t['person'])}[/]"
+        if self.has_class("narrow"):
+            head += f"\n[#928374]{escape(t['organization'] or 'no organization')} · {escape(t['sequence'])}[/]"
+        self.query_one(".thead").update(head + "\n")
+        self.query_one(".detailtext").update(task_props(t))
+
+
+class TaskDraftView(DraftView):
+    """An email Task's new-Thread Draft: the real Draft editor, with the Task's notice and properties."""
+
+    def __init__(self, draft, task):
+        super().__init__(draft)
+        self.item = task
+
+    def on_mount(self):
+        problem = sequences.send_problem(self.app.db, self.draft)
+        if problem:
+            self.query_one(".timeline").mount(Static(escape(problem), classes="draftnotice error"), after=self.query_one(".thead"))
+        self.query_one(".props").mount(*context_sections())
+        emails = [r[0] for r in self.app.db.execute("SELECT value FROM identities WHERE person_id = ? AND kind = 'email'",
+                                                    (self.item["person_id"],))]
+        load_context(self, emails, inbox.person_organizations(self.app.db, self.item["person_id"]))
+
+    def paint(self):
+        super().paint()
+        if not self.query(".detailtext"):
+            return
+        detail = self.query_one(".detailtext")
+        rest = str(detail.content).split("\n\n", 1)[-1]
+        detail.update(task_props(self.item) + "\n\n" + rest)
+
+
+class TasksPage(Page):
+    """Due Tasks (FR-SEQ-15): Overdue, Today, Later today; the selected one in the side pane."""
+    TITLE = f"{ICON['tasks']} tasks · today"
+    RAIL = "tasks"
+    SIDE = f"{ICON['tasks']} task"
+    BINDINGS = [Binding("j", "down", "move", key_display="j/k"), Binding("k", "up", show=False),
+                Binding("e", "done", "done · next"), Binding("x", "skip", "skip · next"),
+                Binding("n", "new_thread", show=False), Binding("f", "filter", "filter"),
+                Binding("p", "person", "person"), Binding("y", "copy", "copy for agent")]
+
+    def __init__(self):
+        super().__init__()
+        self.items, self.filter = [], None  # filter: a kind, or ("sequence", id)
+
+    def compose(self):
+        yield ClickTable(id="table", cursor_type="row", show_header=False)
+        yield Static(id="below")
+
+    def on_mount(self):
+        self.refresh_data()
+
+    def on_resize(self, _):
+        self.call_after_refresh(self.refresh_data)
+
+    def tasks(self):
+        ts = sequences.tasks_due(self.app.db)
+        if isinstance(self.filter, str):
+            ts = [t for t in ts if t["kind"] == self.filter]
+        elif self.filter:
+            ts = [t for t in ts if t["sequence_id"] == self.filter[1]]
+        return ts
+
+    def refresh_data(self, select_id=None):
+        if not self.query(DataTable) or self.app.main.current is not self:
+            return
+        table = self.query_one(DataTable)
+        keep = select_id or (self.selected() or {}).get("id")
+        width = self.size.width
+        narrow = width < 50
+        table.clear(columns=True)
+        table.add_columns("", "Person", "Task", "Sequence", "When")
+        self.items, group = [], None
+        for t in self.tasks():
+            if t["group"] != group:
+                group = t["group"]
+                self.items.append(None)
+                table.add_row("", f"[b #7c6f64]{group.upper()}[/]", "", "", "")
+            mark = f"[#c14a4a]{ICON['warn']}[/] " if t["flag"] else ""
+            name = t["person"][:max(4, width - 8 - 2 * bool(t["flag"]))]
+            room = max(4, width - 40)
+            seq = t["sequence"] if len(t["sequence"]) <= room else t["sequence"][:room - 1] + "…"
+            when = (f"{t['age']}d" if t["group"] == "overdue" else
+                    sequences._at(t["due_at"]).astimezone(sequences.LOCAL).strftime("%H:%M") if t["group"] == "later today" else "")
+            self.items.append(t)
+            table.add_row(f"[#654735]{ICON[t['kind']]}[/]", mark + f"[b]{escape(name)}[/]",
+                          "" if narrow else f"Day {t['day']}", "" if narrow else f"[#928374]{escape(seq)}[/]",
+                          "" if narrow else f"[{'#c14a4a' if t['group'] == 'overdue' else '#928374'}]{when}[/]")
+        if not self.items:
+            table.add_row("", "[#928374]All caught up: no Tasks due. Tasks come due from Enrollments; enroll People from People (s).[/]",
+                          "", "", "")
+        table.show_cursor = bool(self.items)
+        ids = [t and t["id"] for t in self.items]
+        row = ids.index(keep) if keep is not None and keep in ids else next((i for i, t in enumerate(self.items) if t), 0)
+        table.move_cursor(row=row)
+        label = {None: "today"} | {k: KIND_LABEL[k].lower() for k in KIND_LABEL}
+        self.TITLE = f"{ICON['tasks']} tasks · " + (label.get(self.filter) if not isinstance(self.filter, tuple) else
+                                                     escape(sequences.get_sequence(self.app.db, self.filter[1])["name"]))
+        self.app.main.query_one("#main").border_title = pill(self.TITLE, "blue")
+        count = sum(1 for t in self.items if t)
+        self.query_one("#below").update(f"[#928374]{count} due · f filters by kind or Sequence[/]" if count else "")
+        self.show_selected()
+        self.app.main.refresh_chrome()
+
+    def selected(self):
+        if not self.items or not self.query(DataTable):
+            return None
+        return self.items[min(self.query_one(DataTable).cursor_row, len(self.items) - 1)]
+
+    def show_selected(self):
+        t = self.selected()
+        showing = f"task:{t['id']}:{t['draft_id']}:{t['flag']}" if t else "task:none"
+        if self.app.main.showing == showing:
+            return
+        view = self.app.main.draft_view
+        if view and not view.save(refresh=False):
+            return
+        self.app.main.showing = showing
+        pane = self.app.main.query_one("#thread")
+        pane.remove_children()
+        if t is None:
+            pane.mount(Static("[#928374]No Task selected.[/]", classes="threadempty"))
+            return
+        draft = inbox.get_draft(self.app.db, t["draft_id"]) if t["draft_id"] else None
+        if draft and draft["thread_id"] is None:
+            self.app.selected_draft = draft["id"]
+            pane.mount(TaskDraftView(draft, t))
+        else:
+            pane.mount(TaskPane(t))
+
+    def on_data_table_row_highlighted(self, event):
+        event.stop()
+        row = event.cursor_row
+        if 0 <= row < len(self.items) and self.items[row] is None:  # a group header: step onto its first Task
+            prev = getattr(self, "last_row", 0)
+            target = row + 1 if row >= prev or row == 0 else row - 1
+            if 0 <= target < len(self.items) and self.items[target] is not None:
+                self.query_one(DataTable).move_cursor(row=target)
+                return
+        self.last_row = row
+        if self.app.main.current is self:
+            self.show_selected()
+
+    def on_data_table_row_selected(self, event):
+        event.stop()
+        t = self.selected()
+        if not t:
+            return
+        draft = inbox.get_draft(self.app.db, t["draft_id"]) if t["draft_id"] else None
+        if draft and draft["thread_id"]:
+            self.app.main.open_reply(draft["thread_id"])
+        elif draft:
+            view = self.app.main.draft_view
+            if view is not None and view.query(DraftConnection):
+                view.query_one(DraftConnection).focus()
+
+    def after_change(self):
+        self.refresh_data()
+
+    def _next_after(self, t):
+        ids = [x["id"] for x in self.items if x]
+        i = ids.index(t["id"])
+        return (ids[i + 1:] or ids[:i][-1:] or [None])[0]
+
+    def action_down(self):
+        self.query_one(DataTable).action_cursor_down()
+
+    def action_up(self):
+        self.query_one(DataTable).action_cursor_up()
+
+    def action_done(self):
+        t = self.selected()
+        if not t:
+            return
+        if t["kind"] == "email":
+            self.app.notify("An email Task is done when its Draft sends: ctrl+enter in the Draft, or enter to open its Thread.")
+            return
+        nxt = self._next_after(t)
+        undo = sequences.complete_task(self.app.db, t["id"])
+        self.app.offer_undo(f"Done: {t['person']}, Day {t['day']} {KIND_LABEL[t['kind']]}.", lambda: sequences.undo_task(self.app.db, undo))
+        self.refresh_data(select_id=nxt)
+
+    def action_skip(self):
+        t = self.selected()
+        if not t:
+            return
+        nxt = self._next_after(t)
+        undo = sequences.skip_task(self.app.db, t["id"])
+        self.app.offer_undo(f"Skipped: {t['person']}, Day {t['day']} {KIND_LABEL[t['kind']]}. The next Step counts from today.",
+                            lambda: sequences.undo_task(self.app.db, undo))
+        self.refresh_data(select_id=nxt)
+
+    def action_page(self, action):  # the Draft editor's x and y reach here
+        {"delete": self.action_skip, "copy": self.action_copy}.get(action, lambda: None)()
+
+    def action_delete(self):
+        self.action_skip()
+
+    def action_new_thread(self):
+        t = self.selected()
+        if t and t["flag"] == "reply target skipped":
+            sequences.task_new_thread(self.app.db, t["id"])
+            self.refresh_data(select_id=t["id"])
+
+    def action_filter(self):
+        counts = Counter(t["kind"] for t in sequences.tasks_due(self.app.db))
+        by_seq = Counter((t["sequence_id"], t["sequence"]) for t in sequences.tasks_due(self.app.db))
+        options = [("all", f"All Tasks · {sum(counts.values())}")] + [
+            (k, f"{ICON[k]} {KIND_LABEL[k]} · {counts[k]}") for k in KIND_LABEL] + [
+            (f"seq:{sid}", f"{ICON['sequence']} {escape(name)} · {n}") for (sid, name), n in by_seq.items()]
+
+        def chosen(choice):
+            if choice is None:
+                return
+            self.filter = None if choice == "all" else ("sequence", int(choice[4:])) if choice.startswith("seq:") else choice
+            self.refresh_data()
+        self.app.push_screen(Pick("Filter Tasks", options), chosen)
+
+    def action_person(self):
+        t = self.selected()
+        if t:
+            self.app.main.open_person(t["person_id"])
+
+    def action_copy(self):
+        t = self.selected()
+        if t:
+            copy_for_agent(self.app, task_markdown(self.app.db, t), "the task")
+
+
+class SequencesTable(ClickTable):
+    BINDINGS = [Binding("enter", "steps", "Steps"), Binding("n", "new_sequence", "new Sequence"),
+                Binding("a", "archive", "archive / restore"), Binding("x", "delete_sequence", "delete"),
+                Binding("R", "rename", "rename")]
+
+    def action_steps(self):
+        self.screen.query_one(SequencesPage).enter_steps()
+
+    def action_new_sequence(self):
+        self.screen.query_one(SequencesPage).new_sequence()
+
+    def action_archive(self):
+        self.screen.query_one(SequencesPage).archive()
+
+    def action_delete_sequence(self):
+        self.screen.query_one(SequencesPage).delete_sequence()
+
+    def action_rename(self):
+        self.screen.query_one(SequencesPage).rename()
+
+
+class StepsTable(ClickTable):
+    BINDINGS = [Binding("escape", "sequences", "Sequences"), Binding("enter", "edit", "edit"),
+                Binding("n", "new_step", "new Step"), Binding("x", "delete_step", "delete Step"),
+                Binding("J", "move(1)", "move", key_display="J/K"), Binding("K", "move(-1)", show=False)]
+
+    def action_sequences(self):
+        self.screen.query_one("#seqs").focus()
+
+    def action_edit(self):
+        editors = self.screen.query(StepEditor)
+        if editors:
+            editors.first().query_one(".fvalue").focus()
+
+    def action_new_step(self):
+        self.screen.query_one(SequencesPage).new_step()
+
+    def action_delete_step(self):
+        self.screen.query_one(SequencesPage).delete_step()
+
+    def action_move(self, delta):
+        self.screen.query_one(SequencesPage).move_step(delta)
+
+
+class SequencesPage(Page):
+    """Two stacked panes (Jeremy, 2026-10-16): every Sequence on top, the selected Sequence's Steps below; the side
+    pane shows the selected Sequence, or the selected Step's editor once the Steps pane has focus (FR-SEQ-18)."""
+    TITLE = f"{ICON['sequence']} sequences"
+    RAIL = "sequences"
+    SIDE = f"{ICON['sequence']} sequence"
+    BINDINGS = [Binding("j", "down", "move", key_display="j/k"), Binding("k", "up", show=False)]
+
+    def __init__(self):
+        super().__init__()
+        self.rows, self.show_archived, self.sequence_id, self.steps = [], False, None, []
+
+    def compose(self):
+        top = Vertical(id="seqpane", classes="stackpane")
+        top.border_title = pill(f"{ICON['sequence']} sequences", "blue")
+        with top:
+            yield SequencesTable(id="seqs", cursor_type="row")
+        bottom = Vertical(id="steppane", classes="stackpane")
+        bottom.border_title = pill(f"{ICON['sequence']} steps", "blue")
+        with bottom:
+            yield StepsTable(id="steps", cursor_type="row")
+
+    def on_mount(self):
+        self.app.main.query_one("#main").add_class("stacked")
+        self.refresh_data()
+
+    def on_unmount(self):
+        self.app.main.query_one("#main").remove_class("stacked")
+
+    def on_resize(self, _):
+        self.call_after_refresh(self.refresh_data)
+
+    def focus_first(self):
+        for table in self.query("#seqs"):
+            table.focus()
+
+    def refresh_data(self):
+        if len(self.query("#seqs, #steps")) != 2:
+            return
+        narrow = self.size.width < 60
+        all_seqs = sequences.sequences(self.app.db)
+        active = [q for q in all_seqs if not q["archived_at"]]
+        archived = [q for q in all_seqs if q["archived_at"]]
+        self.rows = active + [None] + (archived if self.show_archived else [])
+        table = self.query_one("#seqs", DataTable)
+        keep = self.sequence_id
+        table.clear(columns=True)
+        table.add_columns(*(("", "Sequence", "Due") if narrow else ("", "Sequence", "Enrolled", "Due")))
+        for q in self.rows:
+            if q is None:
+                head = (f"[#928374]{ICON['expanded' if self.show_archived else 'collapsed']}[/]", f"[#928374]Archived · {len(archived)}[/]")
+                table.add_row(*head, "", *(() if narrow else ("",)))
+                continue
+            enrolled = (f"{q['active']} active" + (f" · {q['paused']} paused" if q["paused"] else "")
+                        if q["active"] or q["paused"] else "[#928374]never used[/]")
+            due = f"[#45707a]{q['due_today']}[/]" if q["due_today"] else "[#928374]·[/]"
+            icon = f"[#928374]{ICON['archive']}[/]" if q["archived_at"] else f"[#654735]{ICON['sequence']}[/]"
+            name = f"[b]{escape(q['name'])}[/]" if not q["archived_at"] else f"[#928374]{escape(q['name'])}[/]"
+            table.add_row(icon, name, due) if narrow else table.add_row(icon, name, enrolled, due)
+        ids = [q and q["id"] for q in self.rows]
+        table.move_cursor(row=ids.index(keep) if keep is not None and keep in ids else 0)
+        self.query_one("#seqpane").border_subtitle = f"[#928374]{len(active)} active · {len(archived)} archived[/]"
+        self.show_sequence()
+
+    def selected_sequence(self):
+        if not self.rows:
+            return None
+        return self.rows[min(self.query_one("#seqs", DataTable).cursor_row, len(self.rows) - 1)]
+
+    def show_sequence(self, step_row=None):
+        q = self.selected_sequence()
+        self.sequence_id = q["id"] if q else None
+        table = self.query_one("#steps", DataTable)
+        narrow = self.size.width < 60
+        table.clear(columns=True)
+        table.add_columns(*(("#", "", "Step") if narrow else ("#", "", "Step", "Gap", "Time", "What")))
+        self.steps = sequences.sequence_steps(self.app.db, q["id"]) if q else []
+        problems = dict(sequences.validate(self.app.db, q["id"])) if q else {}
+        by_id = {s["id"]: s for s in self.steps}
+        for s in self.steps:
+            reply = f" [#928374]↩ {by_id[s['reply_to_step_id']]['position']}[/]" if s["reply_to_step_id"] in by_id else ""
+            flag = f" [#c14a4a]{ICON['warn']}[/]" if s["id"] in problems else ""
+            what = (s["subject"] if s["kind"] == "email" else (s["action"] or "") if s["kind"] == "linkedin" else "") or s["body"]
+            cells = (f"[#928374]{s['position']}[/]", f"[#654735]{ICON[s['kind']]}[/]", KIND_LABEL[s["kind"]] + reply + flag)
+            table.add_row(*cells) if narrow else table.add_row(
+                *cells, "day 0" if s["position"] == 1 else f"+{s['gap_days']}", s["at_time"] or "[#928374]·[/]",
+                f"[#928374]{escape(what.splitlines()[0][:60] if what else '')}[/]")
+        if not self.steps:
+            table.add_row("", "", "[#928374]No Steps yet. n adds the first Step.[/]" if q else "", *(() if narrow else ("", "", "")))
+        table.show_cursor = bool(self.steps)
+        if step_row is not None and self.steps:
+            table.move_cursor(row=min(step_row, len(self.steps) - 1))
+        pane = self.query_one("#steppane")
+        pane.border_title = pill(f"{ICON['sequence']} steps · {escape(q['name'])}" if q else f"{ICON['sequence']} steps", "blue")
+        pane.border_subtitle = (f"[#928374]{len(self.steps)} Steps · {q['active']} active · edits apply to Tasks not yet due[/]"
+                                if q else "")
+        self.show_side()
+
+    def selected_step(self):
+        if not self.steps:
+            return None
+        return self.steps[min(self.query_one("#steps", DataTable).cursor_row, len(self.steps) - 1)]
+
+    def show_side(self):
+        """The side pane follows focus: the Step editor while the Steps pane has focus, else the Sequence."""
+        main = self.app.main
+        pane = main.query_one("#thread")
+        st = self.selected_step()
+        on_steps = self.query_one("#steps").has_focus or bool(pane.query(StepEditor) and pane.query(StepEditor).first().has_focus_within)
+        showing = f"step:{st['id']}" if on_steps and st else f"sequence:{self.sequence_id}"
+        if main.showing == showing:
+            return
+        for editor in pane.query(StepEditor):
+            editor.save()
+        main.showing = showing
+        pane.remove_children()
+        pane.border_title = pill(f"{ICON['sequence']} {'step' if showing.startswith('step') else 'sequence'}", "green")
+        if showing.startswith("step"):
+            pane.mount(StepEditor(st["id"]))
+            return
+        q = next((q for q in sequences.sequences(self.app.db) if q["id"] == self.sequence_id), None)
+        if q is None:
+            pane.mount(Static("[#928374]No Sequences yet. n makes one.[/]" if not self.rows or self.rows == [None]
+                              else "[#928374]enter on Archived shows archived Sequences.[/]", classes="threadempty"))
+            return
+        conn = self.app.db.execute("SELECT * FROM connections WHERE id = ?", (q["connection_id"],)).fetchone()
+        size = f"{q['steps']} Steps · {q['days']} days" if q["steps"] else "no Steps yet"
+        enrolled = (f"{q['active']} active · {q['paused']} paused · {q['finished']} finished\n[#928374]{q['due_today']} Tasks due today[/]"
+                    if q["used"] else "none\n[#928374]Enroll People from People (s) once it has Steps.[/]")
+        keys = "a restores it" if q["archived_at"] else "enter edits its Steps · a archives"
+        pane.mount(Static(
+            f"{props_head('sequence', 'sequence')}\n[b]{escape(q['name'])}[/]\n[#928374]{size} · edited {stamp(q['updated_at'])}[/]"
+            + (f"\n[#928374]{ICON['archive']} archived {stamp(q['archived_at'])}[/]" if q["archived_at"] else "") + "\n\n"
+            f"{props_head('connection', 'sends from')}\n{escape(connection_label(conn)) if conn else '[#c14a4a]no email Connection[/]'}\n\n"
+            f"{props_head('people', 'enrollments')}\n{enrolled}\n\n[#928374]{keys}[/]", classes="threadempty"))
+
+    def on_data_table_row_highlighted(self, event):
+        event.stop()
+        if event.data_table.id == "seqs":
+            if self.selected_sequence() is None or self.selected_sequence()["id"] != self.sequence_id:
+                self.show_sequence()
+        else:
+            self.show_side()
+
+    def on_data_table_row_selected(self, event):
+        event.stop()
+        if event.data_table.id == "seqs":
+            self.enter_steps()
+
+    def on_descendant_focus(self, event):
+        self.call_after_refresh(self.show_side)
+
+    def action_down(self):
+        self.app.focused.action_cursor_down() if isinstance(self.app.focused, DataTable) else None
+
+    def action_up(self):
+        self.app.focused.action_cursor_up() if isinstance(self.app.focused, DataTable) else None
+
+    def after_change(self):
+        self.app.main.showing = None
+        self.refresh_data()
+
+    def enter_steps(self):
+        q = self.selected_sequence()
+        if q is None:
+            self.show_archived = not self.show_archived
+            self.refresh_data()
+            return
+        self.query_one("#steps").focus()
+
+    def new_sequence(self):
+        def named(name):
+            if not name:
+                return
+            sid = sequences.create_sequence(self.app.db, name)
+            self.sequence_id = sid
+            self.app.main.showing = None
+            self.refresh_data()
+            self.query_one("#steps").focus()
+            self.app.notify(f"Created {name}. n adds the first Step.")
+        self.app.push_screen(Ask("New Sequence", "name, e.g. Trade show follow-up"), named)
+
+    def rename(self):
+        q = self.selected_sequence()
+        if q is None:
+            return
+
+        def named(name):
+            if name and name != q["name"]:
+                sequences.rename_sequence(self.app.db, q["id"], name)
+                self.after_change()
+        self.app.push_screen(Ask(f"Rename {q['name']}", q["name"]), named)
+
+    def archive(self):
+        q = self.selected_sequence()
+        if q is None:
+            return
+        if q["archived_at"]:
+            sequences.restore_sequence(self.app.db, q["id"])
+            self.app.offer_undo(f"Restored {q['name']}: it takes new Enrollments again.",
+                                lambda: sequences.archive_sequence(self.app.db, q["id"], False))
+            self.after_change()
+            return
+        live = q["active"] + q["paused"]
+
+        def chosen(choice):
+            if choice is None:
+                return
+            undo = sequences.archive_sequence(self.app.db, q["id"], cancel_live=choice == "cancel")
+            self.app.offer_undo(f"Archived {q['name']}" + (f": {live} Enrollments Canceled." if choice == "cancel" else "."),
+                                lambda: sequences.restore_sequence(self.app.db, q["id"], undo))
+            self.after_change()
+        options = ([("cancel", f"Cancel the {live} live Enrollments · Finished: Canceled"),
+                    ("finish", "Let them finish · no new Enrollments")] if live else [("finish", "Archive · no new Enrollments")])
+        self.app.push_screen(Pick(f"Archive {q['name']}", options,
+                                  "Archived Sequences take no new Enrollments and can be restored (a)."), chosen)
+
+    def delete_sequence(self):
+        q = self.selected_sequence()
+        if q is None:
+            return
+        try:
+            rows = sequences.delete_sequence(self.app.db, q["id"])
+        except sequences.Refused as e:
+            self.app.notify(f"Not deleted: {e} Archive it (a).", severity="error")
+            return
+        self.app.offer_undo(f"Deleted {q['name']}.", lambda: sequences.undelete_sequence(self.app.db, rows))
+        self.after_change()
+
+    def new_step(self):
+        if self.sequence_id is None:
+            return
+        st = self.selected_step()
+
+        def chosen(kind):
+            if kind is None:
+                return
+            sid = sequences.add_step(self.app.db, self.sequence_id, kind, after=st["position"] if st else None)
+            self.app.main.showing = None
+            self.show_sequence(step_row=next(i for i, s in enumerate(sequences.sequence_steps(self.app.db, self.sequence_id))
+                                             if s["id"] == sid))
+            self.query_one("#steps").focus()
+        self.app.push_screen(Pick("New Step", [(k, f"{ICON[k]} {KIND_LABEL[k]}") for k in KIND_LABEL]), chosen)
+
+    def delete_step(self):
+        st = self.selected_step()
+        if st is None:
+            return
+        row = self.query_one("#steps", DataTable).cursor_row
+        moved, undo = sequences.delete_step(self.app.db, st["id"])
+        self.app.offer_undo(f"Step {st['position']} deleted. {moved} Enrollment{'s' * (moved != 1)} on it moved to the next Step.",
+                            lambda: sequences.restore_step(self.app.db, undo))
+        self.app.main.showing = None
+        self.show_sequence(step_row=row)
+
+    def move_step(self, delta):
+        st = self.selected_step()
+        if st is None:
+            return
+        sequences.move_step(self.app.db, st["id"], delta)
+        self.app.main.showing = None
+        self.show_sequence(step_row=st["position"] - 1 + delta)
+
+
+class StepEditor(Vertical):
+    """One Step's fields and text, with a preview for an enrolled Person (FR-SEQ-18); ctrl+s or leaving saves."""
+    BINDINGS = [Binding("ctrl+s", "save", "save Step"), Binding("escape", "close", "back to Steps")]
+    FIELDS = {"email": ("Gap", "Time", "Reply to", "Subject"), "call": ("Gap", "Time"),
+              "linkedin": ("Gap", "Time", "Action"), "letter": ("Gap", "Time")}
+
+    def __init__(self, step_id: int):
+        super().__init__(classes="stepeditor")
+        self.step_id = step_id
+
+    def compose(self):
+        st = dict(self.app.db.execute("SELECT * FROM sequence_steps WHERE id = ?", (self.step_id,)).fetchone())
+        self.step = st
+        steps = {s["id"]: s for s in sequences.sequence_steps(self.app.db, st["sequence_id"])}
+        values = {"Gap": str(st["gap_days"]), "Time": st["at_time"] or "", "Subject": st["subject"],
+                  "Reply to": str(steps[st["reply_to_step_id"]]["position"]) if st["reply_to_step_id"] in steps else "",
+                  "Action": st["action"] or "connect"}
+        with TextScroll(classes="timeline", can_focus=False):
+            yield Static(classes="thead")
+            yield Static(classes="draftnotice problems")
+            yield Static(classes="preview")
+        with Vertical(classes="composer open"):
+            with Vertical(classes="fields"):
+                for label in self.FIELDS[st["kind"]]:
+                    with Horizontal(classes="field"):
+                        yield Static(label, classes="flabel")
+                        yield Input(values[label], placeholder={"Gap": "business days after the previous Step",
+                                                                "Time": "HH:MM, or empty for any time",
+                                                                "Reply to": "an earlier email Step's number, or empty for a new Thread",
+                                                                "Subject": "subject with {first_name} {last_name} {company}",
+                                                                "Action": "connect, message, or engage"}[label],
+                                    classes="fvalue", id=f"f-{label.lower().replace(' ', '')}")
+            label = {"email": "body", "call": "script", "linkedin": "note", "letter": "letter"}[st["kind"]]
+            yield Static(f"[#928374]{label} · fill-ins {{first_name}} {{last_name}} {{company}}[/]", classes="replyhint")
+            yield TextArea(st["body"], classes="body-editor", id="f-body")
+            if st["kind"] == "call":
+                yield Static("[#928374]voicemail, left on the second call[/]", classes="replyhint")
+                yield TextArea(st["voicemail"], classes="body-editor", id="f-voicemail")
+            yield Static("ctrl+s save · edits apply to Tasks not yet due · esc back to Steps", classes="replyhint")
+
+    def on_mount(self):
+        self.paint()
+
+    def values(self) -> dict:
+        get = lambda i: self.query_one(f"#f-{i}").value.strip() if self.query(f"#f-{i}") else None  # noqa: E731
+        out = {"body": self.query_one("#f-body", TextArea).text}
+        if self.query("#f-voicemail"):
+            out["voicemail"] = self.query_one("#f-voicemail", TextArea).text
+        if (gap := get("gap")) is not None:
+            out["gap_days"] = int(gap) if gap.isdigit() else gap
+        if (at := get("time")) is not None:
+            out["at_time"] = at
+        if (subject := get("subject")) is not None:
+            out["subject"] = subject
+        if (action := get("action")) is not None:
+            out["action"] = action
+        if (reply := get("replyto")) is not None:
+            steps = {str(s["position"]): s["id"] for s in sequences.sequence_steps(self.app.db, self.step["sequence_id"])}
+            out["reply_to_step_id"] = steps.get(reply) if reply else None
+        return out
+
+    def save(self) -> bool:
+        if not self.query("#f-body"):
+            return True
+        v = self.values()
+        if all(self.step.get(k) == val for k, val in v.items()):
+            return True
+        try:
+            if type(v.get("gap_days", 0)) is not int:
+                raise ValueError("Gap is a whole number of business days, 0 or more.")
+            self.step = sequences.save_step(self.app.db, self.step_id, **v)
+        except ValueError as e:
+            self.query(".replyhint").last().update(f"[#c14a4a]Not saved: {escape(str(e))}[/]")
+            return False
+        self.query(".replyhint").last().update("[#928374]saved · edits apply to Tasks not yet due · esc back to Steps[/]")
+        self.paint()
+        return True
+
+    def action_save(self):
+        if self.save():
+            page = self.screen.query(SequencesPage)
+            if page:
+                row = page.first().query_one("#steps", DataTable).cursor_row
+                self.app.main.showing = f"step:{self.step_id}"
+                page.first().show_sequence(step_row=row)
+
+    def action_close(self):
+        self.action_save()
+        for table in self.screen.query("#steps"):
+            table.focus()
+
+    def on_descendant_blur(self, _):
+        self.save()
+
+    def paint(self):
+        st = self.step
+        problems = [m for sid, m in sequences.validate(self.app.db, st["sequence_id"]) if sid == self.step_id]
+        self.query_one(".thead").update(f"[b #45707a]Step {st['position']} · {KIND_LABEL[st['kind']]}[/]\n")
+        self.query_one(".problems").update("\n".join(f"[#c14a4a]{ICON['warn']} {escape(m)}[/]" for m in problems))
+        who = self.app.db.execute("SELECT e.person_id, p.display_name FROM enrollments e JOIN persons p ON p.id = e.person_id"
+                                  " WHERE e.sequence_id = ? ORDER BY e.state != 'ACTIVE', e.id DESC LIMIT 1",
+                                  (st["sequence_id"],)).fetchone() or \
+            self.app.db.execute("SELECT id, display_name FROM persons ORDER BY id LIMIT 1").fetchone()
+        if who is None:
+            self.query_one(".preview").update("")
+            return
+        values = sequences.person_fill(self.app.db, who[0])
+        subject = sequences.fill(st["subject"], values)[0] if st["kind"] == "email" else ""
+        text = " ".join(sequences.fill(st["body"], values)[0].split())
+        self.query_one(".preview").update(
+            f"\n[#928374]{ICON['person']} preview · {escape(who[1])}[/]\n" + (f"[b]{escape(subject)}[/]\n" if subject else "")
+            + escape(text if len(text) <= 300 else text[:299] + "…"))
+
+
 SECTIONS = {"threads": ThreadsPage, "people": PeoplePage, "organizations": OrganizationsPage,
-            "cases": CasesPage, "channels": ChannelsPage}
+            "cases": CasesPage, "channels": ChannelsPage, "tasks": TasksPage, "sequences": SequencesPage}
 
 
 class MainScreen(Screen):
@@ -3711,7 +4593,7 @@ class MainScreen(Screen):
         return next((v for v in self.query("#thread DraftView") if v.draft_id == self.app.selected_draft), None)
 
     def save_draft(self):
-        view = self.draft_view if isinstance(self.current, DraftsPage) else None
+        view = self.draft_view if isinstance(self.current, (DraftsPage, TasksPage)) else None
         return view.save(refresh=False) if view is not None else True
 
     def on_mount(self):
@@ -3782,6 +4664,15 @@ class MainScreen(Screen):
             return
         self.stack.append(factory)
         self._show()
+
+    def open_reply(self, thread_id):
+        """A reply Draft's Thread, selected, with its reply box open on the Draft (Drafts and Tasks pages)."""
+        self.open_thread(thread_id)
+
+        def reply():
+            if isinstance(self.current, ThreadsPage):
+                self.current.action_reply("all")
+        self.app.call_after_refresh(lambda: self.app.call_after_refresh(reply))
 
     def open_thread(self, thread_id):
         """Show a Thread where it lives: its Status view, selected, in the thread pane."""
@@ -4110,3 +5001,14 @@ class Console(App):
             self.data_version = v
             self.undo = None  # new activity may have moved the Thread; restoring would hide it
             self.main.refresh_all()
+            self.toast_pauses()
+
+    def toast_pauses(self):
+        """A pause during a session says what it means and the way back (FR-SEQ-20)."""
+        since = getattr(self, "paused_seen", None) or inbox._iso(inbox._now() - timedelta(minutes=5))
+        for e in sequences.pauses_since(self.db, since):
+            why = "called" if e["pause_reason"] == "call" else "replied"
+            self.notify(f"{e['person']} {why}: their {e['sequence']} Enrollment paused and its Tasks are hidden. "
+                        f"Resume on their Person page (r).", timeout=20)
+            since = max(since, e["paused_at"])
+        self.paused_seen = max(since, inbox._iso(inbox._now()))

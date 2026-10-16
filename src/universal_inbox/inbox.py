@@ -23,7 +23,7 @@ from typing import Protocol, Sequence
 
 from . import files, platforms
 
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 17
 WAIT = timedelta(days=4)  # Waiting for them ends after this with no reply: back to Todo to follow up (#116)
 EMAIL_CONFIRMATION_PENDING = "Email confirmation pending; wait for its sent receipt before replying."
 MIGRATIONS = {  # version -> statement that upgrades an existing database to it
@@ -226,6 +226,61 @@ CREATE TRIGGER case_log_no_update BEFORE UPDATE ON case_log
 BEGIN
   SELECT RAISE(ABORT, 'the case log is append-only');
 END;""",
+    # Sequences (same PRD, P2-P4): Sequences, Steps, Enrollments, Tasks; Task Drafts; Unsubscribed People.
+    17: """ALTER TABLE persons ADD COLUMN unsubscribed_at TEXT;
+ALTER TABLE composition_drafts ADD COLUMN task_id INTEGER REFERENCES tasks (id);
+CREATE UNIQUE INDEX composition_drafts_task ON composition_drafts (task_id) WHERE task_id IS NOT NULL;
+CREATE TABLE sequences (
+  id            INTEGER PRIMARY KEY,
+  name          TEXT NOT NULL,
+  connection_id INTEGER REFERENCES connections (id),
+  archived_at   TEXT,
+  created_at    TEXT NOT NULL,
+  updated_at    TEXT NOT NULL
+) STRICT;
+
+CREATE TABLE sequence_steps (
+  id               INTEGER PRIMARY KEY,
+  sequence_id      INTEGER NOT NULL REFERENCES sequences (id),
+  position         INTEGER CHECK (position > 0),
+  kind             TEXT NOT NULL CHECK (kind IN ('email', 'call', 'linkedin', 'letter')),
+  gap_days         INTEGER NOT NULL DEFAULT 0 CHECK (gap_days >= 0),
+  at_time          TEXT CHECK (at_time GLOB '[0-2][0-9]:[0-5][0-9]'),
+  subject          TEXT NOT NULL DEFAULT '',
+  body             TEXT NOT NULL DEFAULT '',
+  voicemail        TEXT NOT NULL DEFAULT '',
+  action           TEXT CHECK (action IN ('connect', 'message', 'engage')),
+  reply_to_step_id INTEGER REFERENCES sequence_steps (id),
+  UNIQUE (sequence_id, position)
+) STRICT;
+
+CREATE TABLE enrollments (
+  id           INTEGER PRIMARY KEY,
+  person_id    INTEGER NOT NULL REFERENCES persons (id),
+  sequence_id  INTEGER NOT NULL REFERENCES sequences (id),
+  state        TEXT NOT NULL CHECK (state IN ('ACTIVE', 'PAUSED', 'FINISHED')),
+  reason       TEXT CHECK (reason IN ('COMPLETED', 'UNSUBSCRIBED', 'CANCELED')),
+  paused_at    TEXT,
+  pause_reason TEXT,
+  enrolled_at  TEXT NOT NULL,
+  finished_at  TEXT,
+  CHECK ((state = 'FINISHED') = (reason IS NOT NULL))
+) STRICT;
+CREATE UNIQUE INDEX enrollments_live ON enrollments (person_id, sequence_id) WHERE state != 'FINISHED';
+
+CREATE TABLE tasks (
+  id            INTEGER PRIMARY KEY,
+  enrollment_id INTEGER NOT NULL REFERENCES enrollments (id),
+  step_id       INTEGER NOT NULL REFERENCES sequence_steps (id),
+  due_at        TEXT NOT NULL,
+  state         TEXT NOT NULL CHECK (state IN ('DUE', 'DONE', 'SKIPPED')),
+  done_at       TEXT,
+  thread_id     INTEGER REFERENCES threads (id),
+  flag          TEXT,
+  UNIQUE (enrollment_id, step_id),
+  CHECK ((state = 'DUE') = (done_at IS NULL))
+) STRICT;
+CREATE INDEX tasks_due ON tasks (state, due_at);""",
 }
 
 # ponytail: fixed list; extend when a free-mail sender forms an Organization by mistake.
@@ -470,9 +525,10 @@ def get_thread(db, thread_id: int) -> Thread:
 # --- unsent composition ------------------------------------------------------
 
 def save_draft(db, values: dict, *, draft_id: int | None = None,
-               expected_revision: int | None = None, thread_id: int | None = None) -> dict:
+               expected_revision: int | None = None, thread_id: int | None = None, task_id: int | None = None) -> dict:
     """Persist the complete edited envelope, including incomplete text; never send or create work.
-    `thread_id` makes a new Draft that Thread's reply Draft (save_reply_draft); an edit keeps it."""
+    `thread_id` makes a new Draft that Thread's reply Draft (save_reply_draft) and `task_id` an email Task's
+    Draft (sequences); an edit keeps both."""
     if not isinstance(values, dict) or set(values) != {
             "connection_id", "kind", "sender", "to", "cc", "subject", "body"}:
         raise ValueError("draft values must contain exactly connection_id, kind, sender, to, cc, subject, body")
@@ -505,8 +561,8 @@ def save_draft(db, values: dict, *, draft_id: int | None = None,
         if draft_id is None:
             draft_id = db.execute(
                 'INSERT INTO composition_drafts (connection_id, kind, sender, "to", cc, subject, body,'
-                " revision, created_at, updated_at, thread_id) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)",
-                (*envelope, at, at, thread_id)).lastrowid
+                " revision, created_at, updated_at, thread_id, task_id) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)",
+                (*envelope, at, at, thread_id, task_id)).lastrowid
         else:
             saved = db.execute(
                 'UPDATE composition_drafts SET connection_id = ?, kind = ?, sender = ?, "to" = ?,'
@@ -518,17 +574,19 @@ def save_draft(db, values: dict, *, draft_id: int | None = None,
         return get_draft(db, draft_id)
 
 
-def save_reply_draft(db, thread_id: int, body: str) -> dict | None:
+def save_reply_draft(db, thread_id: int, body: str, task_id: int | None = None) -> dict | None:
     """The reply Draft kept under one Thread id (the one its reply box opened on, so an alias keeps its own):
     text replaces it, empty text deletes it. The envelope comes from the Thread as the reply box shows it; the
     box still sends its own To and Cc. ponytail: last writer wins here; revisions guard the agent's edits."""
     with db:
         if not db.in_transaction:
             db.execute("BEGIN IMMEDIATE")
-        row = db.execute("SELECT id, revision FROM composition_drafts WHERE thread_id = ?", (thread_id,)).fetchone()
+        row = db.execute("SELECT id, revision, task_id FROM composition_drafts WHERE thread_id = ?", (thread_id,)).fetchone()
         if not body.strip():
             if row:
                 db.execute("DELETE FROM composition_drafts WHERE id = ?", (row["id"],))
+                from . import sequences
+                sequences.task_draft_deleted(db, dict(row))  # an email Task's reply cleared: the Task is skipped
             return None
         v = thread_view(db, thread_id)
         ch, title = v["channel"], v["thread"].title
@@ -543,7 +601,7 @@ def save_reply_draft(db, thread_id: int, body: str) -> dict | None:
                            else f"Re: {title}")
         if row:
             return save_draft(db, values, draft_id=row["id"], expected_revision=row["revision"])
-        return save_draft(db, values, thread_id=thread_id)
+        return save_draft(db, values, thread_id=thread_id, task_id=task_id)
 
 
 def reply_drafts(db) -> dict[int, str]:
@@ -562,15 +620,19 @@ def get_draft(db, draft_id: int) -> dict:
 
 def delete_draft(db, draft_id: int) -> dict:
     """Remove one unsent Draft; return its row so `restore_draft` can put it back."""
+    from . import sequences
     with db:
         draft = get_draft(db, draft_id)
         db.execute("DELETE FROM composition_drafts WHERE id = ?", (draft_id,))
+        sequences.task_draft_deleted(db, draft)  # deleting an email Task's Draft skips the Task
     return draft
 
 
 def restore_draft(db, draft: dict) -> None:
+    from . import sequences
     columns = ", ".join(f'"{c}"' for c in draft)
     with db:
+        sequences.task_draft_restored(db, draft)
         db.execute(f"INSERT INTO composition_drafts ({columns}) VALUES ({', '.join('?' * len(draft))})",
                    tuple(draft.values()))
 
@@ -727,7 +789,8 @@ def send_draft(db, draft_id: int, revision: int, sender: Sender, *, again: bool 
         if d["sending_at"] and not again:
             raise SendUnknown("Send outcome unknown; check before sending again.")
         files = staged_files(db, draft_id=draft_id)
-        problem = draft_problem(d, files)  # includes the size check, so _send's cannot fail after the claim
+        from . import sequences
+        problem = draft_problem(d, files) or sequences.send_problem(db, d)  # size check included, so _send's cannot fail after the claim
         if problem:
             raise ValueError(problem)
         connection = db.execute("SELECT * FROM connections WHERE id = ?", (d["connection_id"],)).fetchone()
@@ -777,15 +840,17 @@ def send_draft(db, draft_id: int, revision: int, sender: Sender, *, again: bool 
             " VALUES (?, 'MESSAGE', ?, ?, ?, ?)", (thread_id, _iso(now), native_id, d["body"], json.dumps(data))).lastrowid, thread_id
 
     def settle(thread_id):
-        _reconcile_email_threads(db, True, get_thread(db, thread_id).channel_id)
-        thread_id = get_thread(db, thread_id).id
-        _preserve_send_changes(db, thread_id, changes)
+        if gmail:
+            _reconcile_email_threads(db, True, get_thread(db, thread_id).channel_id)
+            thread_id = get_thread(db, thread_id).id
+            _preserve_send_changes(db, thread_id, changes)
+        sequences.task_sent(db, d, thread_id, _now())  # an email Task's Draft: the Task is done
         return thread_id
 
     try:
         return _send(db, connection["id"], d["kind"], files,
                      lambda: sender.start(to, cc, d["subject"], d["body"], f"draft-{draft_id}-{revision}-{at}", files=files),
-                     record, settle=settle if gmail else None, draft_id=draft_id)
+                     record, settle=settle, draft_id=draft_id)
     except SendUnknown:
         raise
     except SendFailed:
@@ -996,6 +1061,8 @@ def merge_persons(db, keep: int, drop: int) -> None:
     with db:
         name = _merged_name(db, keep, drop)
         db.execute("UPDATE identities SET person_id = ? WHERE person_id = ?", (keep, drop))
+        from . import sequences
+        sequences.merge_people(db, keep, drop)
         db.execute("DELETE FROM persons WHERE id = ?", (drop,))
         db.execute("UPDATE persons SET display_name = ? WHERE id = ?", (name, keep))
 
@@ -1746,6 +1813,14 @@ def _ingest(db, inc: Incoming) -> Thread | None:
     if inc.kind == "DELETE":  # FR-2a
         db.execute("UPDATE activities SET content = NULL WHERE id = ?"
                    " OR (kind = 'EDIT' AND target_id = ?)", (target_id, target_id))
+    if inc.kind == "MESSAGE":  # Sequences: anything from the Person, or a connected call, pauses (FR-SEQ-12)
+        from . import sequences
+        person = identity["person_id"] if identity else None
+        if identity is None and call and inc.data["call"]["outcome"] == "connected" and inc.data.get("peer"):
+            row = db.execute("SELECT person_id FROM identities WHERE kind = 'phone' AND value = ?", (inc.data["peer"],)).fetchone()
+            person = row[0] if row else None
+        if person is not None:
+            sequences.pause_person(db, person, at, "call" if call else "replied")
     return get_thread(db, thread_id)
 
 
@@ -1788,6 +1863,11 @@ def reply(db, thread_id: int, text: str, sender: Sender,
         connection_id, platform = db.execute("SELECT c.id, c.platform FROM channels ch JOIN connections c"
                                              " ON c.id = ch.connection_id WHERE ch.id = ?", (t.channel_id,)).fetchone()
         files = staged_files(db, thread_id=staged_on)
+        from . import sequences
+        draft = db.execute("SELECT * FROM composition_drafts WHERE thread_id = ?", (staged_on,)).fetchone()
+        draft = dict(draft) if draft else {}
+        if problem := sequences.send_problem(db, draft, text):
+            raise ValueError(problem)
         checkpoint = _send_checkpoint(db, connection_id)
         if platform == "gmail":
             for message, record in zip(history, records):
@@ -1812,6 +1892,7 @@ def reply(db, thread_id: int, text: str, sender: Sender,
             "INSERT OR IGNORE INTO activities (thread_id, kind, occurred_at, native_id, content, data)"
             " VALUES (?, 'MESSAGE', ?, ?, ?, ?)", (t.id, _iso(now), native_id, text, json.dumps(data)))
         db.execute("DELETE FROM composition_drafts WHERE thread_id = ?", (staged_on,))  # the reply Draft went out
+        sequences.task_sent(db, draft, t.id, now)
         return cur.lastrowid if cur.rowcount else None, t.id
 
     def settle(tid):
@@ -1844,6 +1925,8 @@ def wake(db, now: datetime) -> int:
             _set_status(db, r["id"], now, *transition((r["status"], r["status_detail"]), Woke(),
                                                       has_replied=_has_replied(db, r["id"]),
                                                       before=r["detail_before_snooze"]), cause="woke")
+    from . import sequences
+    sequences.materialize(db, now)  # Sequences: each Enrollment's next Task, and email Tasks' Drafts (NFR-SEQ-1)
     return len(due)
 
 

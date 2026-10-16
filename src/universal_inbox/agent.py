@@ -1,12 +1,12 @@
-"""Commands for a terminal agent: Threads and Drafts as Markdown, and changes to a Draft. Nothing here sends;
-Jeremy sends from the console."""
+"""Commands for a terminal agent: Threads, Drafts, and Due Tasks as Markdown, changes to a Draft, and enrolling a
+Person in a Sequence. Nothing here sends, completes, or finishes; Jeremy does that from the console (FR-SEQ-22)."""
 
 import sys
 
-from . import files, inbox
+from . import files, inbox, sequences
 from .platforms import PLATFORMS
 from .tui import (CONTEXT_SOURCES, DRAFT_FIELDS, ReplyError, connection_label, draft_history, draft_text,
-                  socket_context, staged_files, thread_addresses, thread_text)
+                  socket_context, staged_files, task_markdown, thread_addresses, thread_text)
 
 
 def add_parsers(sub):
@@ -22,6 +22,10 @@ def add_parsers(sub):
     for field in ("to", "cc", "subject"):
         d.add_argument(f"--{field}")
     d.add_argument("--body", help="the body, or - to read it from stdin")
+    sub.add_parser("tasks", help="Due Tasks as Markdown, each with its Person and Draft (Sequences)")
+    e = sub.add_parser("enroll", help="enroll one Person in a Sequence; its first Task is due today")
+    e.add_argument("person", help="a Person id, email address, or exact name")
+    e.add_argument("sequence", help="a Sequence id or exact name")
 
 
 def run(a, db):
@@ -38,12 +42,17 @@ def run(a, db):
             print("\nConnections (draft new --connection ID):")
             for c in inbox.connections(db):
                 print(f"{c['id']}\t{connection_label(c)}")
+        elif a.cmd == "tasks":
+            due = sequences.tasks_due(db)
+            print("".join(task_markdown(db, t) + "\n" for t in due) or "No Tasks due.\n", end="")
+        elif a.cmd == "enroll":
+            print(enroll(db, a.person, a.sequence))
         else:
             changes = {k: getattr(a, k) for k in ("to", "cc", "subject", "body") if getattr(a, k) is not None}
             if changes.get("body") == "-":
                 changes["body"] = sys.stdin.read()
             print(draft(db, a.id, changes, a.revision, a.connection), end="")
-    except (KeyError, ValueError, inbox.DraftConflict) as e:
+    except (KeyError, ValueError, inbox.DraftConflict) as e:  # sequences.Refused is a ValueError
         raise SystemExit(f"universal-inbox {a.cmd}: {e.args[0] if e.args else e}") from e
 
 
@@ -79,3 +88,16 @@ def draft(db, ref, changes, revision, connection_id) -> str:
     history = draft_history(db, d["kind"], d["connection_id"], d["to"]) or []
     return draft_text(d, connection_label(c), history, files.raw_dir(db), (d["id"], d["revision"]),
                       staged_files(db, ("draft", d["id"])))
+
+
+def enroll(db, person: str, sequence: str) -> str:
+    rows = db.execute("SELECT p.id FROM persons p WHERE CAST(p.id AS TEXT) = ? OR lower(p.display_name) = lower(?)"
+                      " UNION SELECT person_id FROM identities WHERE lower(value) = lower(?) AND person_id IS NOT NULL",
+                      (person, person, person)).fetchall()
+    if len(rows) != 1:
+        raise ValueError(f"{'no' if not rows else 'more than one'} Person matches {person!r}")
+    match = [q for q in sequences.sequences(db) if str(q["id"]) == sequence or q["name"].lower() == sequence.lower()]
+    if len(match) != 1:
+        raise ValueError(f"no Sequence matches {sequence!r}")
+    sequences.enroll(db, rows[0][0], match[0]["id"])
+    return f"Enrolled in {match[0]['name']}: the first Task is due today."

@@ -52,6 +52,7 @@ def test_migrates_a_version_1_database(tmp_path):
     db.executemany("INSERT INTO organizations (domain, name, created_at) VALUES (?, ?, '2026-10-01T00:00:00+00:00')",
                    [("accounts.google.com", "accounts.google.com"), ("google.com", "google.com"),
                     ("ws-ts.nb.ca", "ws-ts.nb.ca"), ("mail.attio.com", "Attio")])
+    db.execute("CREATE TABLE persons (id INTEGER PRIMARY KEY, display_name TEXT NOT NULL, created_at TEXT NOT NULL) STRICT")
     db.execute("PRAGMA user_version = 1")
     inbox.migrate(db)
     assert db.execute("SELECT description FROM cases").fetchone()[0] == ""
@@ -135,20 +136,21 @@ def test_version_12_upgrade_adds_only_receipts_and_preserves_records_files_and_g
         raw_sha = files.store_raw(db, raw)
         inbox.ingest(db, inbox.Incoming(1, "me@x.io", "mailbox", "MESSAGE", "<retained@test>", None, NOW,
                                         "Retained raw", data={"raw": raw_sha}))
-        db.executescript("DROP TABLE case_log; DROP TABLE audit_log; DROP INDEX composition_drafts_thread; ALTER TABLE composition_drafts DROP COLUMN thread_id;"
-                         " DROP TABLE resend_receipts; PRAGMA user_version = 12;")
+        from schema_history import downgrade
+        downgrade(db, 12)
         tables = [r[0] for r in db.execute("SELECT name FROM sqlite_schema WHERE type = 'table'")]
         columns = {name: ", ".join(f'"{c[1]}"' for c in db.execute(f'PRAGMA table_info("{name}")')) for name in tables}
         read = lambda: {name: [tuple(r) for r in db.execute(f'SELECT {columns[name]} FROM "{name}" ORDER BY rowid')]  # noqa: E731
                         for name in tables}
         rows = read()
-        unchanged = "SELECT type, name, tbl_name, sql FROM sqlite_schema WHERE tbl_name NOT IN ('resend_receipts', 'composition_drafts', 'audit_log', 'case_log') ORDER BY name"
+        unchanged = "SELECT type, name, tbl_name, sql FROM sqlite_schema WHERE tbl_name NOT IN ('composition_drafts', 'persons') ORDER BY name"
         schema = [tuple(r) for r in db.execute(unchanged)]
         inbox.migrate(db)
-        assert db.execute("PRAGMA user_version").fetchone()[0] == inbox.SCHEMA_VERSION == 16
-        assert read() == rows  # 14 only adds composition_drafts.thread_id, NULL on every existing Draft
+        assert db.execute("PRAGMA user_version").fetchone()[0] == inbox.SCHEMA_VERSION
+        assert read() == rows  # 13-17 add tables, and NULL columns on existing Drafts and People
         assert db.execute("SELECT count(*) FROM composition_drafts WHERE thread_id IS NOT NULL").fetchone()[0] == 0
-        assert [tuple(r) for r in db.execute(unchanged)] == schema
+        names = {row[1] for row in schema}  # 15-17 add the audit logs and Sequences tables
+        assert [tuple(r) for r in db.execute(unchanged) if r[1] in names] == schema
         assert files.attachment_path(db, sha).read_bytes() == b"retained file"
         assert (files.raw_dir(db) / f"{raw_sha}.eml").read_bytes() == raw
         assert db.execute("PRAGMA foreign_key_check").fetchall() == []
@@ -171,8 +173,8 @@ def test_failed_version_13_upgrade_rolls_back_ddl_and_version_and_restores_fk(tm
 
     db, thread_id, activity_id = setup(tmp_path)
     try:
-        db.executescript("DROP TABLE case_log; DROP TABLE audit_log; DROP INDEX composition_drafts_thread; ALTER TABLE composition_drafts DROP COLUMN thread_id;"
-                         " DROP TABLE resend_receipts; PRAGMA user_version = 12; PRAGMA foreign_keys = OFF;")
+        from schema_history import downgrade
+        downgrade(db, 12, " PRAGMA foreign_keys = OFF;")
         with db:
             db.execute("INSERT INTO attachments (activity_id, position, name, type, size, state)"
                        " VALUES (999, 0, 'broken', 'text/plain', 0, 'pending')")

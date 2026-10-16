@@ -51,7 +51,8 @@ def incoming(native_id, **changes):
 
 
 def old_rows(db):
-    return {r[0]: [tuple(a) for a in db.execute(f'SELECT * FROM "{r[0]}" ORDER BY rowid')]
+    columns = {"persons": "id, display_name, created_at"}  # 17 adds unsubscribed_at, NULL on existing People
+    return {r[0]: [tuple(a) for a in db.execute(f'SELECT {columns.get(r[0], "*")} FROM "{r[0]}" ORDER BY rowid')]
             for r in db.execute("SELECT name FROM sqlite_schema WHERE type = 'table'"
                                 " AND name NOT LIKE 'sqlite_%' AND name != 'composition_drafts'")}
 
@@ -197,14 +198,16 @@ def test_v8_draft_migration_matches_fresh_preserves_old_rows_aliases_guards_and_
         inbox.migrate(fresh)
         assert old.execute("PRAGMA user_version").fetchone()[0] == inbox.SCHEMA_VERSION
         assert shape(old) == shape(fresh)
-        assert {k: v for k, v in shape(old).items() if k in old_shape} == old_shape
+        assert {k: v for k, v in shape(old).items() if k in old_shape and k[1] != "persons"} == \
+            {k: v for k, v in old_shape.items() if k[1] != "persons"}  # 17: persons.unsubscribed_at
         assert {k: v for k, v in old_rows(old).items() if k in before} == before  # later migrations may add tables
         assert inbox.get_thread(old, two.id).id == one.id
         assert old.execute("PRAGMA foreign_keys").fetchone()[0] == 1
         assert old.execute("PRAGMA foreign_key_check").fetchall() == []
         assert [tuple(r) for r in old.execute("PRAGMA foreign_key_list(composition_drafts)")] == [
-            (0, 0, "threads", "thread_id", "id", "NO ACTION", "NO ACTION", "NONE"),  # 14: reply Drafts
-            (1, 0, "connections", "connection_id", "id", "NO ACTION", "NO ACTION", "NONE")]
+            (0, 0, "tasks", "task_id", "id", "NO ACTION", "NO ACTION", "NONE"),  # 17: Task Drafts
+            (1, 0, "threads", "thread_id", "id", "NO ACTION", "NO ACTION", "NONE"),  # 14: reply Drafts
+            (2, 0, "connections", "connection_id", "id", "NO ACTION", "NO ACTION", "NONE")]
         for sql in ("DELETE FROM activities", "UPDATE activities SET content = 'changed'",
                     f"UPDATE threads SET merged_into = {two.id} WHERE id = {one.id}"):
             with pytest.raises(sqlite3.DatabaseError), old:

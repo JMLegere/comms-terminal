@@ -196,6 +196,10 @@ class SequencingRail(tui.Rail):
 
     def add_options(self, new_options):
         options, section = [], self.app.main.section
+        # The console now has its own outreach rows; the mocks show synthetic counts in their place.
+        real = [o for o in new_options if isinstance(o, Option) and (o.id in ("tasks", "sequences") or "outreach" in str(o.prompt))]
+        drop = {id(o) for o in real} | {id(new_options[new_options.index(real[0]) - 1])} if real else set()
+        new_options = [o for o in new_options if id(o) not in drop]
         for option in new_options:
             options.append(option)
             if isinstance(option, Option) and option.id == "drafts":

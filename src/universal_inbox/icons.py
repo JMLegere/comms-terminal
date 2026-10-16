@@ -64,6 +64,14 @@ ICON = {
     "done": "\U000f012c",           # md-check
     "pause": "\U000f03e4",          # md-pause
     "wait": "\U000f051f",           # md-timer_sand
+    # Sequences (.agents/prd/2026-10-16-sequencing.md); present in the bundled VictorMono
+    "tasks": "\U000f05c7",          # md-format_list_checks
+    "sequence": "\U000f027b",       # md-format_list_numbered
+    "call": "\U000f0df0",           # md-phone_outgoing_outline
+    "linkedin": "\U000f033b",       # md-linkedin
+    "letter": "\U000f0d8c",         # md-mailbox_outline
+    "archive": "\U000f120e",        # md-archive_outline
+    "warn": "\U000f002a",           # md-alert_outline
     "status": "\U000f0996",         # md-progress_clock
     "ignore": "\U000f06d1",         # md-eye_off_outline
     "add_case": "\U000f0c40",       # md-briefcase_plus_outline

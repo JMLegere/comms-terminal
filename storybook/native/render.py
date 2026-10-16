@@ -122,7 +122,7 @@ def seed(db_path, spec):
         db.execute("INSERT INTO connections (id, platform, external_id, self_id, label, connected_at)"
                    " VALUES (3, 'quo', ?, ?, 'Work', ?)", (WORK_PHONE, WORK_PHONE, NOW.isoformat()))
         db.execute("INSERT INTO channels (id, connection_id, native_id, name, kind) VALUES (17, 3, ?, ?, 'im')", (PHONE, PHONE))
-        db.execute("INSERT INTO persons VALUES (51, 'Maya Chen', ?)", (NOW.isoformat(),))
+        db.execute("INSERT INTO persons (id, display_name, created_at) VALUES (51, 'Maya Chen', ?)", (NOW.isoformat(),))
         raw = spec["group"] == "recipient" or spec.get("raw")
         db.execute("INSERT INTO identities (id, person_id, kind, value) VALUES (51, ?, 'email', ?)", (None if raw else 51, EMAIL))
         db.execute("INSERT INTO identities (id, person_id, kind, value) VALUES (52, ?, 'phone', ?)", (None if raw else 51, PHONE))
@@ -672,10 +672,13 @@ def assert_native_workspace(app, spec):
     assert rail.styles.background.hex.lower() == "#f5edca" and rail.region.right <= listing.region.x
     options = [rail.get_option_at_index(i) for i in range(rail.option_count)]
     ids = [option.id for option in options if option.id is not None]
-    assert [option.id for option in options[:9]] == [None, "view:0", "view:1", "view:2", "view:3", "drafts", None, None, "cases:0"], "Drafts must replace All after Ignored and before Cases"
+    assert [option.id for option in options[:12]] == [None, "view:0", "view:1", "view:2", "view:3", "drafts", None, None, "tasks",
+                                                     "sequences", None, None], "Drafts must replace All after Ignored, then outreach (Tasks, Sequences), then Cases"
+    assert options[12].id == "cases:0"
     assert options[0].disabled and Text.from_markup(options[0].prompt).plain.endswith("threads")
     assert options[6].disabled and not options[6].prompt and options[7].disabled
-    assert Text.from_markup(options[7].prompt).plain.endswith("cases")
+    assert Text.from_markup(options[7].prompt).plain.endswith("outreach")
+    assert options[10].disabled and not options[10].prompt and Text.from_markup(options[11].prompt).plain.endswith("cases")
     assert "compose" not in ids and "view:4" not in ids and ids.count("drafts") == 1 and len(ids) == len(set(ids))
     assert not any(re.search(r"\bAll\b", Text.from_markup(option.prompt).plain) for option in options[1:6]), "Mock rail must not retain All navigation"
     draft = rail.get_option("drafts")

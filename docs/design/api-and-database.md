@@ -75,6 +75,18 @@ The authorized Drafts-first expansion persists unsent compositions independently
 Draft reads return a dictionary containing integer `id` and `revision`, the complete fields above, and UTC `created_at`/`updated_at`. Incomplete fields are allowed. Connection is optional until selected; a selected Connection must support the Draft's message format. Email subject is an explicit string, including empty; SMS subject is `None` and Cc is empty. Saving creates no Thread or Activity. New-Thread Drafts have no Thread; a Reply Draft names one. The table holds no send attempts. Existing rows and append-only invariants remain.
 
 
+### Sequences interface
+
+`src/universal_inbox/sequences.py` owns Sequences (`GLOSSARY.md` Outreach); `inbox` calls it from Wake, Ingest, Send Draft, Reply, and the Draft delete and restore calls. Nothing in it sends.
+
+- **Create Sequence** (`sequences.create_sequence(db, name, connection_id=None)`), **Add Step** (`add_step(db, sequence_id, kind, after=None)`), **Save Step** (`save_step(db, step_id, **fields)`), **Move Step** (`move_step`), **Delete Step** (`delete_step`, live: Enrollments on it move to the next Step; `restore_step` undoes), **Archive Sequence** (`archive_sequence(db, sequence_id, cancel_live)`; a used Sequence is archived, never deleted), and **Validate** (`validate`: unknown fill-ins and reply targets).
+- **Enroll** (`sequences.enroll(db, person_id, sequence_id, now)`): one Person into one Sequence; refused (`sequences.Refused`) for an Unsubscribed Person, an archived or empty Sequence, or a live Enrollment in it. The first Task is due on the enroll day.
+- **Materialize** (`sequences.materialize(db, now)`, run by Wake): each Active Enrollment's next Task, due its Step's gap in business days (Mon–Fri, Halifax) after the previous Task is done or skipped, and the Draft of each email Task whose day has come (a reply Draft when the Step replies to an earlier email). Idempotent: one Task per Enrollment and Step, one Draft per Task.
+- **Due Tasks** (`sequences.tasks_due(db, now)`): Active Enrollments' Tasks whose day has come, grouped Overdue, Today, and Later today.
+- **Complete Task** (`complete_task`) and **Skip Task** (`skip_task`), undone by `undo_task`. An email Task completes when its Draft sends; deleting its Draft skips it.
+- **Pause** (`pause_person`, inside Ingest): any message or call from one of the Person's Identities, or a connected outbound call, pauses their Active Enrollments. **Resume** (`resume`) makes the next Task due at once. **Finish** (`finish(db, enrollment_id, reason)`: `COMPLETED`, `UNSUBSCRIBED`, `CANCELED`) deletes its unsent Task Drafts; Unsubscribed marks the Person (`persons.unsubscribed_at`) and finishes every live Enrollment. `restore_finish` undoes.
+- Send Draft and Reply refuse a Task Draft with a fill-in marker left, and Send Draft refuses one whose Enrollment is Paused (`sequences.send_problem`).
+
 ### Exact-reference reconciliation
 
 `channel_id=None` covers every mailbox independently. A supplied Channel ID must be an integer naming an existing `kind='mailbox'` Channel, otherwise the operation raises `ValueError`. `apply` must be a boolean. The default preview reads persisted evidence and recovers validated raw headers in memory under a read-only SAVEPOINT, keeping its reads coherent while preserving the caller's existing transaction. SQL rows and raw files remain unchanged.
@@ -261,7 +273,7 @@ One pure function, `inbox.transition`, decides every rule below; each writer per
 
 ## 5. Database
 
-SQLite, one file. The DDL below describes the core model; `src/universal_inbox/schema.sql` is the complete current schema, applied by `inbox.migrate`. `PRAGMA foreign_keys = ON`, `PRAGMA journal_mode = WAL`. Tables are `STRICT`; times are UTC ISO 8601 text; the schema version is `PRAGMA user_version`. Version 4 adds `threads.merged_into`, `email_refs`, alias guards, and `thread_activities` to version 3, preserving Case descriptions, five-day follow-ups, and append-only Activity triggers. Version 13 adds `resend_receipts` to version 12 without changing earlier migrations or immutable Activity/raw records. Version 15 adds the append-only `audit_log`; earlier changes have no entries. Version 16 adds the append-only `case_log`. Migration commits schema/version together and rejects databases newer than the build. Rollback must use a schema-13-compatible build or a separately approved consistent backup; never lower the version or discard mappings/history to start old code (`docs/runbook.md` §2a).
+SQLite, one file. The DDL below describes the core model; `src/universal_inbox/schema.sql` is the complete current schema, applied by `inbox.migrate`. `PRAGMA foreign_keys = ON`, `PRAGMA journal_mode = WAL`. Tables are `STRICT`; times are UTC ISO 8601 text; the schema version is `PRAGMA user_version`. Version 4 adds `threads.merged_into`, `email_refs`, alias guards, and `thread_activities` to version 3, preserving Case descriptions, five-day follow-ups, and append-only Activity triggers. Version 13 adds `resend_receipts` to version 12 without changing earlier migrations or immutable Activity/raw records. Version 14 adds `composition_drafts.thread_id` (Reply Drafts). Version 15 adds the append-only `audit_log`; earlier changes have no entries. Version 16 adds the append-only `case_log`. Version 17 adds the Sequences tables (`sequences`, `sequence_steps`, `enrollments`, `tasks`), `composition_drafts.task_id`, and `persons.unsubscribed_at`. Migration commits schema/version together and rejects databases newer than the build. Rollback must use a schema-17-compatible build or a separately approved consistent backup; never lower the version or discard mappings/history to start old code (`docs/runbook.md` §2a).
 
 ```mermaid
 erDiagram
@@ -275,6 +287,12 @@ erDiagram
   cases |o--o{ threads : groups
   persons ||--o{ identities : owns
   identities |o--o{ activities : sent
+  sequences ||--o{ sequence_steps : orders
+  persons ||--o{ enrollments : runs
+  sequences ||--o{ enrollments : runs
+  enrollments ||--o{ tasks : works
+  sequence_steps ||--o{ tasks : as
+  tasks |o--o| composition_drafts : drafts
 ```
 
 ```sql

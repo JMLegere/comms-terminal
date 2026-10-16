@@ -38,12 +38,9 @@ def test_version_12_upgrade_matches_fresh_schema(monkeypatch):
         before = shape(old)
         inbox.migrate(old)
         assert shape(old) == shape(fresh)
-        added = {"resend_receipts", "sqlite_autoindex_resend_receipts_1", "composition_drafts_thread",
-                 "composition_drafts", "audit_log", "audit_log_thread", "audit_log_no_delete",
-                 "audit_log_no_update", "case_log", "case_log_case", "case_log_no_delete", "case_log_no_update"}
-    # 13: resend_receipts; 14: composition_drafts.thread_id; 15: audit_log; 16: case_log
-        assert {key: value for key, value in shape(old).items() if key[1] not in added} == \
-            {key: value for key, value in before.items() if key[1] not in added}
+        changed = ("composition_drafts", "persons")  # 14: reply Drafts; 17: Task Drafts and Unsubscribed
+        assert {k: v for k, v in shape(old).items() if k in before and k[1] not in changed} == \
+            {k: v for k, v in before.items() if k[1] not in changed}
         assert "thread_id integer references threads(id)" in shape(old)[("table", "composition_drafts")]
     finally:
         fresh.close()

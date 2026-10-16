@@ -91,7 +91,8 @@ END;
 CREATE TABLE persons (
   id           INTEGER PRIMARY KEY,
   display_name TEXT NOT NULL,
-  created_at   TEXT NOT NULL
+  created_at   TEXT NOT NULL,
+  unsubscribed_at TEXT  -- asked not to be contacted: no Sequence enrolls them again
 ) STRICT;
 
 CREATE TABLE identities (
@@ -226,10 +227,12 @@ CREATE TABLE composition_drafts (
   updated_at TEXT NOT NULL,
   sending_at TEXT,
   thread_id INTEGER REFERENCES threads (id),  -- a reply Draft: its Thread's reply box text (FR-SEQ-11)
+  task_id INTEGER REFERENCES tasks (id),  -- an email Task's Draft (Sequences)
   CHECK ((kind = 'email' AND subject IS NOT NULL)
          OR (kind IN ('sms', 'slack') AND subject IS NULL AND cc = ''))
 ) STRICT;
 CREATE UNIQUE INDEX composition_drafts_thread ON composition_drafts (thread_id) WHERE thread_id IS NOT NULL;
+CREATE UNIQUE INDEX composition_drafts_task ON composition_drafts (task_id) WHERE task_id IS NOT NULL;
 
 -- Attachments (.agents/prd/2026-10-15-attachments.md): files copied on arrival, content-addressed in files/
 -- beside the database. Their own table, since activities.data never changes after ingest.
@@ -264,3 +267,58 @@ CREATE TABLE staged_attachments (
   added_at TEXT NOT NULL,
   CHECK ((draft_id IS NULL) <> (thread_id IS NULL))
 ) STRICT;
+
+-- Sequences (.agents/prd/2026-10-16-sequencing.md P2-P4, ADR 0003): Jeremy's outreach, run one Person at a time.
+CREATE TABLE sequences (
+  id            INTEGER PRIMARY KEY,
+  name          TEXT NOT NULL,
+  connection_id INTEGER REFERENCES connections (id),  -- the email Connection its email Tasks send from
+  archived_at   TEXT,
+  created_at    TEXT NOT NULL,
+  updated_at    TEXT NOT NULL
+) STRICT;
+
+-- A Step is the template; position NULL marks a deleted Step, kept because Tasks name it.
+CREATE TABLE sequence_steps (
+  id               INTEGER PRIMARY KEY,
+  sequence_id      INTEGER NOT NULL REFERENCES sequences (id),
+  position         INTEGER CHECK (position > 0),
+  kind             TEXT NOT NULL CHECK (kind IN ('email', 'call', 'linkedin', 'letter')),
+  gap_days         INTEGER NOT NULL DEFAULT 0 CHECK (gap_days >= 0),
+  at_time          TEXT CHECK (at_time GLOB '[0-2][0-9]:[0-5][0-9]'),
+  subject          TEXT NOT NULL DEFAULT '',
+  body             TEXT NOT NULL DEFAULT '',
+  voicemail        TEXT NOT NULL DEFAULT '',
+  action           TEXT CHECK (action IN ('connect', 'message', 'engage')),
+  reply_to_step_id INTEGER REFERENCES sequence_steps (id),
+  UNIQUE (sequence_id, position)
+) STRICT;
+
+CREATE TABLE enrollments (
+  id           INTEGER PRIMARY KEY,
+  person_id    INTEGER NOT NULL REFERENCES persons (id),
+  sequence_id  INTEGER NOT NULL REFERENCES sequences (id),
+  state        TEXT NOT NULL CHECK (state IN ('ACTIVE', 'PAUSED', 'FINISHED')),
+  reason       TEXT CHECK (reason IN ('COMPLETED', 'UNSUBSCRIBED', 'CANCELED')),
+  paused_at    TEXT,
+  pause_reason TEXT,
+  enrolled_at  TEXT NOT NULL,
+  finished_at  TEXT,
+  CHECK ((state = 'FINISHED') = (reason IS NOT NULL))
+) STRICT;
+CREATE UNIQUE INDEX enrollments_live ON enrollments (person_id, sequence_id) WHERE state != 'FINISHED';
+
+-- One Step for one Enrollment; created when the previous Task is done, due at due_at.
+CREATE TABLE tasks (
+  id            INTEGER PRIMARY KEY,
+  enrollment_id INTEGER NOT NULL REFERENCES enrollments (id),
+  step_id       INTEGER NOT NULL REFERENCES sequence_steps (id),
+  due_at        TEXT NOT NULL,
+  state         TEXT NOT NULL CHECK (state IN ('DUE', 'DONE', 'SKIPPED')),
+  done_at       TEXT,
+  thread_id     INTEGER REFERENCES threads (id),  -- the Thread its email went out in, for later reply Steps
+  flag          TEXT,  -- why it waits for Jeremy: a reply target skipped, or a reply Draft already there
+  UNIQUE (enrollment_id, step_id),
+  CHECK ((state = 'DUE') = (done_at IS NULL))
+) STRICT;
+CREATE INDEX tasks_due ON tasks (state, due_at);

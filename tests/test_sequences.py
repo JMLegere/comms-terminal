@@ -1,0 +1,324 @@
+"""Sequences (.agents/prd/2026-10-16-sequencing.md P2-P4): editor rules, Enrollments, Tasks, pause and finish.
+Times are fixed: Monday 2026-10-19, 10:00 in Halifax."""
+
+from datetime import datetime, timedelta, timezone
+
+import pytest
+
+from universal_inbox import inbox, sequences as sq
+from test_attachment_send import FakeSender
+
+ME = "jeremy@agentmaple.example"
+MONDAY = datetime(2026, 10, 19, 13, 0, tzinfo=timezone.utc)  # 10:00 ADT
+DAY = timedelta(days=1)
+
+
+class Clock:
+    """inbox and sequences read the time here; tests move it."""
+    at = MONDAY
+
+
+@pytest.fixture
+def clock(monkeypatch):
+    c = Clock()
+    monkeypatch.setattr(inbox, "_now", lambda: c.at)
+    monkeypatch.setattr(sq, "_now", lambda: c.at)
+    return c
+
+
+@pytest.fixture
+def db(clock):
+    db = inbox.connect()
+    inbox.migrate(db)
+    with db:
+        db.execute("INSERT INTO connections (id, platform, external_id, self_id, label, connected_at)"
+                   " VALUES (1, 'fastmail', ?, ?, 'Fastmail', ?)", (ME, ME, MONDAY.isoformat()))
+    return db
+
+
+def person(db, address, name, at=MONDAY - 30 * DAY, org=None):
+    inbox.ingest(db, inbox.Incoming(1, ME, "mailbox", "MESSAGE", f"<hello-{address}>", inbox.Identity("email", address, name),
+                                    at, "hello", title="Hello"))
+    pid = db.execute("SELECT person_id FROM identities WHERE value = ?", (address,)).fetchone()[0]
+    if org:
+        with db:
+            db.execute("UPDATE organizations SET name = ? WHERE domain = ?", (org, address.split("@")[1]))
+    return pid
+
+
+def secret(db):
+    """Four Steps: an email, a call the next day, a reply to the email, a LinkedIn connect."""
+    s = sq.create_sequence(db, "Secret Sequence")
+    one = sq.add_step(db, s, "email")
+    sq.save_step(db, one, subject="Pilot with {company}", body="Hi {first_name}, a pilot at {company}?")
+    call = sq.add_step(db, s, "call")
+    sq.save_step(db, call, body="Script for {first_name}", voicemail="Voicemail")
+    again = sq.add_step(db, s, "email")
+    sq.save_step(db, again, gap_days=3, body="Following up, {first_name}.", reply_to_step_id=one)
+    sq.add_step(db, s, "linkedin")
+    return s, sq.sequence_steps(db, s)
+
+
+def due(db, now):
+    return [(t["person"], t["kind"], t["group"], t["day"]) for t in sq.tasks_due(db, now)]
+
+
+def draft_of(db, task_id):
+    return dict(db.execute("SELECT * FROM composition_drafts WHERE task_id = ?", (task_id,)).fetchone())
+
+
+def test_schedule_counts_business_days_in_halifax_time():
+    friday = datetime(2026, 10, 23, 20, 0, tzinfo=timezone.utc)
+    assert sq.due_date(friday, 1, None).astimezone(sq.LOCAL).date().isoformat() == "2026-10-26"  # Monday
+    assert sq.due_date(friday + DAY, 0, None).astimezone(sq.LOCAL).date().isoformat() == "2026-10-26"  # Saturday rolls on
+    assert sq.due_date(MONDAY, 2, "10:00").astimezone(sq.LOCAL).isoformat() == "2026-10-21T10:00:00-03:00"
+    late = datetime(2026, 10, 20, 2, 0, tzinfo=timezone.utc)  # Monday 23:00 in Halifax, Tuesday in UTC
+    assert sq.due_date(late, 1, None).astimezone(sq.LOCAL).date().isoformat() == "2026-10-20"
+    assert sq.day_number(MONDAY, MONDAY + 7 * DAY) == 6
+
+
+def test_editor_validates_fill_ins_and_reply_targets(db):
+    s, (one, call, again, li) = secret(db)
+    assert sq.validate(db, s) == []
+    sq.save_step(db, one["id"], body="Hi {first_name} {title}", reply_to_step_id=again["id"])
+    sq.save_step(db, call["id"], kind="call")
+    problems = sq.validate(db, s)
+    assert (one["id"], "{title} is not a fill-in. Use {first_name}, {last_name}, or {company}.") in problems
+    assert (one["id"], "Step 1 cannot reply to another Step: there is no earlier email. Clear Reply to.") in problems
+    assert sq.fill("Hi {first_name} at {company}", dict(first_name="Priya", company=None)) == (
+        "Hi Priya at {company}", ["company"])
+
+
+def test_steps_add_reorder_and_archive_or_delete(db):
+    s, steps = secret(db)
+    sq.move_step(db, steps[1]["id"], +1)
+    assert [x["kind"] for x in sq.sequence_steps(db, s)] == ["email", "email", "call", "linkedin"]
+    sq.move_step(db, steps[1]["id"], -1)
+    unused = sq.create_sequence(db, "Partner intro")
+    rows = sq.delete_sequence(db, unused)
+    sq.undelete_sequence(db, rows)
+    assert [q["name"] for q in sq.sequences(db, now=MONDAY)] == ["Secret Sequence", "Partner intro"]
+    dana = person(db, "dana@harbourline.example", "Dana Roy")
+    sq.enroll(db, dana, s, MONDAY)
+    with pytest.raises(sq.Refused, match="archived but not deleted"):
+        sq.delete_sequence(db, s)
+    undo = sq.archive_sequence(db, s, cancel_live=True, now=MONDAY)  # AS-SEQ-15
+    assert db.execute("SELECT state, reason FROM enrollments").fetchone()[:] == ("FINISHED", "CANCELED")
+    with pytest.raises(sq.Refused, match="archived"):
+        sq.enroll(db, dana, s, MONDAY)
+    sq.restore_sequence(db, s, undo)
+    assert db.execute("SELECT state FROM enrollments").fetchone()[0] == "ACTIVE"
+
+
+def test_enroll_send_skip_and_finish_completed(db):  # AS-SEQ-1, 2, 3, 9
+    s, steps = secret(db)
+    dana = person(db, "dana@harbourline.example", "Dana Roy", org="Harbourline")
+    sq.enroll(db, dana, s, MONDAY)
+    (t,) = sq.tasks_due(db, MONDAY)
+    assert (t["kind"], t["group"], t["day"], t["sequence"]) == ("email", "today", 1, "Secret Sequence")
+    d = draft_of(db, t["id"])
+    assert (d["to"], d["subject"], d["body"]) == ("dana@harbourline.example", "Pilot with Harbourline",
+                                                  "Hi Dana, a pilot at Harbourline?")
+    sent = inbox.send_draft(db, d["id"], d["revision"], FakeSender("<day1@example.test>"))
+    assert db.execute("SELECT state, thread_id FROM tasks WHERE id = ?", (t["id"],)).fetchone()[:] == ("DONE", sent.id)
+    assert due(db, MONDAY) == []
+    assert due(db, MONDAY + DAY) == [("Dana Roy", "call", "today", 2)]
+    assert due(db, MONDAY + 2 * DAY) == [("Dana Roy", "call", "overdue", 2)]  # skipped a day: shows its age
+    (call,) = sq.tasks_due(db, MONDAY + 2 * DAY)
+    assert call["age"] == 1
+    sq.complete_task(db, call["id"], MONDAY + 2 * DAY)  # gaps count from completion
+    inbox.wake(db, MONDAY + 7 * DAY)  # the service's minute loop makes the Draft on the day
+    (reply,) = sq.tasks_due(db, MONDAY + 7 * DAY)
+    assert reply["day"] == 6 and sq.tasks_due(db, MONDAY + 6 * DAY) == []
+    rd = draft_of(db, reply["id"])  # AS-SEQ-6: the reply Draft in the day-1 Thread
+    assert (rd["thread_id"], rd["body"]) == (sent.id, "Following up, Dana.")
+    inbox.reply(db, sent.id, rd["body"], FakeSender("<day6@example.test>"), ["dana@harbourline.example"])
+    (li,) = sq.tasks_due(db, MONDAY + 8 * DAY)
+    undo = sq.skip_task(db, li["id"], MONDAY + 8 * DAY)
+    assert db.execute("SELECT state, reason FROM enrollments").fetchone()[:] == ("FINISHED", "COMPLETED")
+    sq.undo_task(db, undo)
+    assert db.execute("SELECT state FROM enrollments").fetchone()[0] == "ACTIVE" and len(sq.tasks_due(db, MONDAY + 8 * DAY)) == 1
+    sq.skip_task(db, li["id"], MONDAY + 8 * DAY)
+    second = sq.enroll(db, dana, s, MONDAY + 9 * DAY)  # a Finished Enrollment allows a new one
+    assert db.execute("SELECT count(*) FROM enrollments WHERE person_id = ?", (dana,)).fetchone()[0] == 2 and second
+
+
+def test_enroll_refuses_unsubscribed_and_live_enrollments(db):  # AS-SEQ-8
+    s, _ = secret(db)
+    priya = person(db, "priya@gmail.com", "Priya Shah")
+    sq.enroll(db, priya, s, MONDAY)
+    with pytest.raises(sq.Refused, match="already in Secret Sequence"):
+        sq.enroll(db, priya, s, MONDAY)
+    other = sq.create_sequence(db, "Event follow-up")
+    sq.add_step(db, other, "call")
+    sq.enroll(db, priya, other, MONDAY)  # several Sequences at once
+    (e,) = [e for e in sq.enrollments(db, priya) if e["sequence"] == "Secret Sequence"]
+    undo = sq.finish(db, e["id"], "UNSUBSCRIBED", MONDAY)
+    assert {r[0] for r in db.execute("SELECT reason FROM enrollments")} == {"UNSUBSCRIBED"}
+    assert db.execute("SELECT count(*) FROM composition_drafts").fetchone()[0] == 0  # unsent Task Drafts go
+    with pytest.raises(sq.Refused, match="unsubscribed on Oct 19"):
+        sq.enroll(db, priya, other, MONDAY + DAY)
+    sq.restore_finish(db, undo)
+    assert {r[0] for r in db.execute("SELECT state FROM enrollments")} == {"ACTIVE"}
+    assert db.execute("SELECT count(*) FROM composition_drafts").fetchone()[0] == 1
+
+
+def test_missing_fill_in_flags_the_task_and_refuses_the_send(db):  # AS-SEQ-7
+    s, _ = secret(db)
+    priya = person(db, "priya@gmail.com", "Priya Shah")
+    sq.enroll(db, priya, s, MONDAY)
+    (t,) = sq.tasks_due(db, MONDAY)
+    d = draft_of(db, t["id"])
+    assert t["flag"] == "{company}" and "{company}" in d["subject"]
+    with pytest.raises(ValueError, match=r"replace \{company\} first"):
+        inbox.send_draft(db, d["id"], d["revision"], FakeSender())
+    d = inbox.save_draft(db, {k: d[k] for k in ("connection_id", "kind", "sender", "to", "cc", "subject", "body")}
+                         | dict(subject="Pilot", body="Hi Priya"), draft_id=d["id"], expected_revision=d["revision"])
+    inbox.send_draft(db, d["id"], d["revision"], FakeSender())
+    assert db.execute("SELECT state FROM tasks WHERE id = ?", (t["id"],)).fetchone()[0] == "DONE"
+
+
+def test_inbound_reply_pauses_and_resume_makes_the_next_task_due(db):  # AS-SEQ-4, 5, 13
+    s, _ = secret(db)
+    dana = person(db, "dana@harbourline.example", "Dana Roy", org="Harbourline")
+    sq.enroll(db, dana, s, MONDAY)
+    (t,) = sq.tasks_due(db, MONDAY)
+    d = draft_of(db, t["id"])
+    inbox.ingest(db, inbox.Incoming(1, ME, "mailbox", "MESSAGE", "<dana-reply@x>",
+                                    inbox.Identity("email", "dana@harbourline.example", "Dana Roy"),
+                                    MONDAY + timedelta(hours=1), "Interested!", title="Re: Pilot"))
+    (e,) = sq.enrollments(db, dana)
+    assert (e["state"], e["pause_reason"]) == ("PAUSED", "replied") and sq.tasks_due(db, MONDAY + DAY) == []
+    assert [p["person"] for p in sq.pauses_since(db, MONDAY.isoformat())] == ["Dana Roy"]
+    with pytest.raises(ValueError, match="Enrollment is Paused"):
+        inbox.send_draft(db, d["id"], d["revision"], FakeSender())
+    sq.resume(db, e["id"], MONDAY + 3 * DAY)
+    assert due(db, MONDAY + 3 * DAY) == [("Dana Roy", "email", "overdue", 1)]
+    sq.skip_task(db, t["id"], MONDAY + 3 * DAY)
+    assert due(db, MONDAY + 4 * DAY) == [("Dana Roy", "call", "today", 5)]
+    inbox.ingest(db, inbox.Incoming(1, ME, "mailbox", "MESSAGE", "<jeremy@x>", None, MONDAY + 3 * DAY, "from me",
+                                    title="Note"))
+    assert sq.enrollments(db, dana)[0]["state"] == "ACTIVE"  # Jeremy's own messages do not pause
+    with db:
+        db.execute("INSERT INTO identities (person_id, kind, value) VALUES (?, 'phone', '+15065550101')", (dana,))
+        db.execute("INSERT INTO connections (id, platform, external_id, self_id, label, connected_at)"
+                   " VALUES (3, 'quo', '+15065550000', '+15065550000', 'Quo', ?)", (MONDAY.isoformat(),))
+    call = {"direction": "outgoing", "outcome": "connected", "length": 70}
+    inbox.ingest(db, inbox.Incoming(3, "+15065550101", "im", "MESSAGE", "AC1", None, MONDAY + 3 * DAY + timedelta(hours=1),
+                                    "Outgoing call, 1m 10s", data={"peer": "+15065550101", "call": call}))
+    assert sq.enrollments(db, dana)[0]["pause_reason"] == "call"
+
+
+def test_reply_target_skipped_and_a_step_edit_reach_later_tasks_only(db):  # AS-SEQ-10, 11
+    s, (one, call, again, li) = secret(db)
+    dana = person(db, "dana@harbourline.example", "Dana Roy", org="Harbourline")
+    sq.enroll(db, dana, s, MONDAY)
+    (t,) = sq.tasks_due(db, MONDAY)
+    sq.save_step(db, one["id"], body="Changed")
+    assert draft_of(db, t["id"])["body"] == "Hi Dana, a pilot at Harbourline?"  # already due: keeps its text
+    sq.save_step(db, again["id"], body="New follow-up, {first_name}.")
+    inbox.delete_draft(db, draft_of(db, t["id"])["id"])  # deleting the Draft skips the Task
+    (c,) = sq.tasks_due(db, MONDAY + DAY)
+    sq.complete_task(db, c["id"], MONDAY + DAY)
+    inbox.wake(db, MONDAY + 5 * DAY)
+    (r,) = sq.tasks_due(db, MONDAY + 5 * DAY)
+    assert (r["flag"], r["draft_id"]) == ("reply target skipped", None)
+
+
+def test_wake_twice_makes_each_task_and_draft_once(db):  # AS-SEQ-14
+    s, _ = secret(db)
+    dana = person(db, "dana@harbourline.example", "Dana Roy")
+    sq.enroll(db, dana, s, MONDAY)
+    inbox.wake(db, MONDAY)
+    inbox.wake(db, MONDAY)
+    assert db.execute("SELECT count(*) FROM tasks").fetchone()[0] == 1
+    assert db.execute("SELECT count(*) FROM composition_drafts").fetchone()[0] == 1
+
+
+def test_deleting_the_current_step_moves_enrollments_on_and_undoes(db):  # AS-SEQ-16
+    s, (one, call, again, li) = secret(db)
+    dana = person(db, "dana@harbourline.example", "Dana Roy")
+    sq.enroll(db, dana, s, MONDAY)
+    (t,) = sq.tasks_due(db, MONDAY)
+    moved, undo = sq.delete_step(db, one["id"], MONDAY)
+    assert moved == 1 and db.execute("SELECT count(*) FROM composition_drafts").fetchone()[0] == 0
+    assert [x["kind"] for x in sq.sequence_steps(db, s)] == ["call", "email", "linkedin"]
+    (c,) = sq.tasks_due(db, MONDAY + DAY)
+    assert c["kind"] == "call"
+    sq.restore_step(db, undo)
+    assert [x["kind"] for x in sq.sequence_steps(db, s)] == ["email", "call", "email", "linkedin"]
+    assert [x["id"] for x in sq.tasks_due(db, MONDAY)] == [t["id"]] and draft_of(db, t["id"])
+
+
+def test_restoring_a_deleted_task_draft_makes_the_task_due_again(db):
+    s, _ = secret(db)
+    dana = person(db, "dana@harbourline.example", "Dana Roy")
+    sq.enroll(db, dana, s, MONDAY)
+    (t,) = sq.tasks_due(db, MONDAY)
+    gone = inbox.delete_draft(db, draft_of(db, t["id"])["id"])
+    sq.materialize(db, MONDAY)
+    inbox.restore_draft(db, gone)
+    assert [x["id"] for x in sq.tasks_due(db, MONDAY + DAY)] == [t["id"]]
+
+
+def test_merging_people_moves_enrollments(db):
+    s, _ = secret(db)
+    a = person(db, "dana@harbourline.example", "Dana Roy")
+    b = person(db, "dana.roy@gmail.com", "Dana R")
+    sq.enroll(db, a, s, MONDAY)
+    sq.enroll(db, b, s, MONDAY)
+    inbox.merge_persons(db, a, b)
+    assert sorted(r[:] for r in db.execute("SELECT person_id, state FROM enrollments")) == [(a, "ACTIVE"), (a, "FINISHED")]
+
+
+def test_agent_lists_due_tasks_and_enrolls_but_never_sends(db, capsys):  # AS-SEQ-12, FR-SEQ-22
+    from types import SimpleNamespace
+    from universal_inbox import agent
+    s, _ = secret(db)
+    priya = person(db, "priya@gmail.com", "Priya Shah")
+    agent.run(SimpleNamespace(cmd="enroll", person="priya@gmail.com", sequence="secret sequence"), db)
+    agent.run(SimpleNamespace(cmd="tasks"), db)
+    out = capsys.readouterr().out
+    assert "Enrolled in Secret Sequence" in out and "# Email Task · Day 1 of Secret Sequence" in out
+    assert "Priya Shah (priya@gmail.com)" in out and "Flag: {company}" in out
+    sq.unsubscribe(db, priya, MONDAY)
+    with pytest.raises(SystemExit, match="unsubscribed"):
+        agent.run(SimpleNamespace(cmd="enroll", person="Priya Shah", sequence=str(s)), db)
+    assert db.execute("SELECT count(*) FROM activities WHERE identity_id IS NULL").fetchone()[0] == 0
+
+
+def test_review_fixes_hold(db):
+    """Saturday counts on Monday; an empty reply Step flags instead of failing wake; a reply sent while Paused is
+    done; undoing a Step delete reopens the Enrollment it Completed; email Tasks complete only by sending."""
+    saturday = datetime(2026, 10, 24, 15, 0, tzinfo=timezone.utc)
+    assert sq.due_date(saturday, 1, None).astimezone(sq.LOCAL).date().isoformat() == "2026-10-26"
+    s, (one, call, again, li) = secret(db)
+    sq.save_step(db, again["id"], body="  ")
+    dana = person(db, "dana@harbourline.example", "Dana Roy", org="Harbourline")
+    sq.enroll(db, dana, s, MONDAY)
+    (t,) = sq.tasks_due(db, MONDAY)
+    with pytest.raises(sq.Refused, match="Draft sends"):
+        sq.complete_task(db, t["id"], MONDAY)
+    d = draft_of(db, t["id"])
+    sent = inbox.send_draft(db, d["id"], d["revision"], FakeSender("<one@example.test>"))
+    (c,) = sq.tasks_due(db, MONDAY + DAY)
+    sq.complete_task(db, c["id"], MONDAY + DAY)
+    inbox.wake(db, MONDAY + 5 * DAY)  # no exception: the empty reply Step is flagged
+    (r,) = sq.tasks_due(db, MONDAY + 5 * DAY)
+    assert r["flag"] == "Step has no text"
+    sq.save_step(db, again["id"], body="Following up")
+    with db:
+        db.execute("UPDATE tasks SET flag = NULL WHERE id = ?", (r["id"],))
+    inbox.wake(db, MONDAY + 5 * DAY)
+    inbox.ingest(db, inbox.Incoming(1, ME, "mailbox", "MESSAGE", "<dana-2@x>",
+                                    inbox.Identity("email", "dana@harbourline.example", "Dana Roy"),
+                                    MONDAY + 5 * DAY, "Busy this week", title="Re: Pilot"))
+    inbox.reply(db, sent.id, "Following up", FakeSender("<two@example.test>"), ["dana@harbourline.example"])
+    assert db.execute("SELECT state FROM tasks WHERE id = ?", (r["id"],)).fetchone()[0] == "DONE"
+    (e,) = sq.enrollments(db, dana)
+    sq.resume(db, e["id"], MONDAY + 6 * DAY)
+    assert [x["kind"] for x in sq.tasks_due(db, MONDAY + 6 * DAY)] == ["linkedin"]  # not the reply again
+    moved, undo = sq.delete_step(db, li["id"], MONDAY + 6 * DAY)
+    assert moved == 1 and sq.enrollments(db, dana)[0]["reason"] == "COMPLETED"
+    sq.restore_step(db, undo)
+    assert sq.enrollments(db, dana)[0]["state"] == "ACTIVE" and len(sq.tasks_due(db, MONDAY + 6 * DAY)) == 1

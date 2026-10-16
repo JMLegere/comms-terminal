@@ -118,7 +118,7 @@ def test_local_names_are_globally_unique_and_selected_by_exact_keys(database):
 def test_names_are_resolved_again_after_rename_and_new_ambiguity(database):
     _, db = database
     with db:
-        db.execute("INSERT INTO persons VALUES (1, 'Ana Silva', 'now')")
+        db.execute("INSERT INTO persons (id, display_name, created_at) VALUES (1, 'Ana Silva', 'now')")
         db.execute("INSERT INTO identities (person_id, kind, value) VALUES (1, 'email', 'ana@acme.com')")
         db.execute("INSERT INTO organizations VALUES (1, 'acme.com', 'Acme Inc', 'now')")
     context = Context()
@@ -131,7 +131,7 @@ def test_names_are_resolved_again_after_rename_and_new_ambiguity(database):
     serve.handle_linear(db, body, context)
     assert context.calls[-1][2:] == (["Ana Pereira"], ["Acme Group"])
     with db:
-        db.execute("INSERT INTO persons VALUES (2, ' ana  PEREIRA ', 'now')")
+        db.execute("INSERT INTO persons (id, display_name, created_at) VALUES (2, ' ana  PEREIRA ', 'now')")
         db.execute("INSERT INTO organizations VALUES (2, 'other.com', ' acme  GROUP ', 'now')")
     before, changes = tuple(db.iterdump()), db.total_changes
     serve.handle_linear(db, body, context)
@@ -175,7 +175,7 @@ def test_optional_synthetic_systemd_credential(database, tmp_path, monkeypatch):
 def test_linear_and_existing_routes_over_private_unix_socket(database, tmp_path):
     path, db = database
     with db:
-        db.execute("INSERT INTO persons VALUES (1, 'Ana Silva', 'now')")
+        db.execute("INSERT INTO persons (id, display_name, created_at) VALUES (1, 'Ana Silva', 'now')")
         db.execute("INSERT INTO identities (person_id, kind, value) VALUES (1, 'email', 'ana@acme.com')")
         db.execute("INSERT INTO organizations VALUES (1, 'acme.com', 'Acme Inc', 'now')")
         db.execute("INSERT INTO connections (id, platform, external_id, self_id, label, connected_at)"

@@ -1,5 +1,5 @@
 """universal-inbox: the console (default), `serve` (the systemd service), `init` (create Connections), and
-`threads`/`thread`/`drafts`/`draft` for a terminal agent (agent.py)."""
+`threads`/`thread`/`drafts`/`draft`/`tasks`/`enroll` for a terminal agent (agent.py)."""
 
 import argparse
 import os
@@ -66,7 +66,7 @@ def main(argv=None) -> None:
     a = p.parse_args(argv)
     Path(a.db).parent.mkdir(parents=True, exist_ok=True)
 
-    if a.cmd in ("threads", "thread", "drafts", "draft"):
+    if a.cmd in ("threads", "thread", "drafts", "draft", "tasks", "enroll"):
         from . import inbox
         db = inbox.connect(a.db)
         inbox.migrate(db)
