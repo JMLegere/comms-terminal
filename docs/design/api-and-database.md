@@ -210,6 +210,8 @@ Stored values are Plain's enum names. The console shows the product label.
 
 ### Rules (inside `inbox`)
 
+One pure function, `inbox.transition`, decides every rule below; each writer persists its result.
+
 **`ingest`**
 - New Thread from another person, sender not blocked → `TODO` / `CREATED` (FR-6a).
 - New Thread from another person, sender blocked → `DONE` / `IGNORED` (FR-7a).

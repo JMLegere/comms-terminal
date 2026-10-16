@@ -296,6 +296,22 @@ Action = Done | Snooze | Wait | Investigate | MarkTodo | Ignore | Unignore | Set
 
 
 @dataclass(frozen=True)
+class Arrived:
+    """An Activity reaching a Thread: a message, edit, deletion, or Phone call."""
+    kind: str = "MESSAGE"
+    from_jeremy: bool = False  # a Phone call never counts as Jeremy's: every one puts its Thread in Todo
+    blocked: bool = False  # the sender's Identity is Blocked
+
+
+@dataclass(frozen=True)
+class Woke: ...  # a timed snooze came due, or a wait ran out (#116)
+
+
+@dataclass(frozen=True)
+class Reopen: ...  # a one-time import touched the Thread
+
+
+@dataclass(frozen=True)
 class Staged:
     """A staged Attachment as a Sender sends it: its stored file and the name and type to give it."""
     path: Path
@@ -644,12 +660,8 @@ def send_draft(db, draft_id: int, revision: int, sender: Sender, *, again: bool 
             channel = mailbox["native_id"] if mailbox else connection["self_id"]
             channel_id = _channel_id(db, Incoming(connection["id"], channel, "mailbox", "MESSAGE",
                                                   native_id, None, now, d["body"]))
-            title = d["subject"].strip()[:80]
-            status = _initial_status(None)
-            thread_id = db.execute(
-                "INSERT INTO threads (channel_id, native_thread_id, title, status, status_detail,"
-                " status_changed_at, created_at, follow_up_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (channel_id, native_id, title, *status, _iso(now), _iso(now), _follow_up(status[1], now))).lastrowid
+            thread_id = _new_thread(db, channel_id, native_id, d["subject"].strip()[:80],
+                                    transition(None, Arrived(from_jeremy=True)), now)
             data = {"from": connection["self_id"], "to": to, "cc": cc, "subject": d["subject"]}
             if checkpoint is not None:
                 data["seen_through_activity_id"] = checkpoint[0]
@@ -665,7 +677,14 @@ def send_draft(db, draft_id: int, revision: int, sender: Sender, *, again: bool 
     return get_thread(db, thread_id)
 
 
-def _set_status(db, thread_id, status, detail, at, snoozed_until=None, before=None):
+def _new_thread(db, channel_id, native_id, title, status, at) -> int:
+    return db.execute(
+        "INSERT INTO threads (channel_id, native_thread_id, title, status, status_detail,"
+        " status_changed_at, created_at, follow_up_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (channel_id, native_id, title, *status, _iso(at), _iso(at), _follow_up(status[1], at))).lastrowid
+
+
+def _set_status(db, thread_id, at, status, detail, snoozed_until=None, before=None):
     follow_up = _follow_up(detail, at)
     db.execute(
         "UPDATE threads SET status = ?, status_detail = ?, status_changed_at = ?,"
@@ -681,11 +700,46 @@ def _has_replied(db, thread_id) -> bool:
 
 # --- status rules (design §4) -------------------------------------------------
 
-def _initial_status(identity) -> tuple[str, str]:
-    """A new Thread's Status: Jeremy started it (#61), a Blocked sender (FR-7a), or anyone else (FR-6a)."""
-    if identity is None:
-        return ("SNOOZED", "WAITING_FOR_CUSTOMER")
-    return ("DONE", "IGNORED") if identity["blocked"] else ("TODO", "CREATED")
+def transition(current: tuple[str, str] | None, event, *, has_replied: bool = False,
+               before: str | None = None) -> tuple | None:
+    """Every Status change: the next (status, detail) — plus (snoozed_until, detail_before_snooze) for a
+    Snooze — of a Thread at `current` (None for a new Thread) after an Action, Arrived, Woke, or Reopen;
+    None for unchanged. `before` is the Thread's detail_before_snooze. Pure."""
+    status, detail = current or (None, None)
+    fresh = ("TODO", "NEW_REPLY" if has_replied else "CREATED")  # by reply history [C]
+    match event:
+        case Arrived(from_jeremy=True) if current is None:
+            return ("SNOOZED", "WAITING_FOR_CUSTOMER")  # #61
+        case Arrived(blocked=blocked) if current is None:
+            return ("DONE", "IGNORED") if blocked else ("TODO", "CREATED")  # FR-7a, FR-6a
+        case Arrived() if detail == "IGNORED":
+            return None  # FR-6e
+        case Arrived(from_jeremy=True, kind=kind):
+            return ("SNOOZED", "WAITING_FOR_CUSTOMER") if kind == "MESSAGE" else None  # FR-6b
+        case Arrived():
+            return None if current == ("TODO", "CREATED") else ("TODO", "NEW_REPLY")  # FR-6c [C]
+        case Woke() if detail == "WAITING_FOR_CUSTOMER":
+            return ("TODO", "NEW_REPLY")  # #116
+        case Woke():
+            return ("TODO", before) if before else fresh  # FR-6d [C]
+        case Reopen():
+            return None if status == "TODO" else fresh
+        case Done():
+            return ("DONE", "DONE_MANUALLY_SET")
+        case Snooze(until=until):
+            return ("SNOOZED", "WAITING_INDEFINITELY" if until is None else "WAITING_FOR_DURATION",
+                    None if until is None else _iso(until), detail if status == "TODO" else None)
+        case Wait():
+            return ("SNOOZED", "WAITING_FOR_CUSTOMER")
+        case Investigate():
+            return ("TODO", "IN_PROGRESS")
+        case MarkTodo(detail=todo):
+            return ("TODO", todo)
+        case Ignore():
+            return ("DONE", "IGNORED")
+        case Unignore():
+            return fresh if detail == "IGNORED" else None  # [C]
+    return None  # SetCase
 
 
 def _follow_up(detail, at) -> str | None:
@@ -696,21 +750,7 @@ def _follow_up(detail, at) -> str | None:
 def reopen_imported(db, thread_id: int) -> Thread:
     """A one-time import leaves every touched Thread in Todo: Needs next response once Jeremy has replied,
     else Needs first response."""
-    t = get_thread(db, thread_id)
-    if t.status == "TODO":
-        return t
-    return act(db, t.id, MarkTodo("NEW_REPLY" if _has_replied(db, t.id) else "CREATED"))
-
-
-def _after_activity(status, detail, from_jeremy, kind):
-    """Status after an Activity on an existing Thread, or None for unchanged."""
-    if detail == "IGNORED":
-        return None
-    if from_jeremy:
-        return ("SNOOZED", "WAITING_FOR_CUSTOMER") if kind == "MESSAGE" else None
-    if status == "TODO":
-        return None if detail == "CREATED" else ("TODO", "NEW_REPLY")
-    return ("TODO", "NEW_REPLY")
+    return act(db, thread_id, Reopen())
 
 
 # --- people ----------------------------------------------------------------
@@ -1672,15 +1712,10 @@ def _ingest(db, inc: Incoming) -> Thread | None:
         target_id, thread_id = target["id"], target["thread_id"]
 
     created = thread_id is None
+    event = Arrived(inc.kind, identity is None and not call, bool(identity and identity["blocked"]))
     if thread_id is None:
-        status = (("DONE", "IGNORED") if identity and identity["blocked"] else ("TODO", "CREATED")) if call \
-            else _initial_status(identity)
         title = inc.title or (inc.content or "").strip()[:80] or "(no subject)"
-        until = _follow_up(status[1], at)
-        thread_id = db.execute(
-            "INSERT INTO threads (channel_id, native_thread_id, title, status, status_detail,"
-            " status_changed_at, created_at, follow_up_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (channel_id, inc.native_id, title, *status, _iso(at), _iso(at), until)).lastrowid
+        thread_id = _new_thread(db, channel_id, inc.native_id, title, transition(None, event), at)
     elif inc.kind == "MESSAGE" and identity is None and not call and _echo_of_sent(db, thread_id, inc):
         return None
 
@@ -1697,9 +1732,8 @@ def _ingest(db, inc: Incoming) -> Thread | None:
         _reconcile_email_threads(db, True, channel_id)
     t = get_thread(db, thread_id)
     if not created or t.id != thread_id:
-        nxt = _after_activity(t.status, t.status_detail, identity is None and not call, inc.kind)
-        if nxt:
-            _set_status(db, t.id, *nxt, at)
+        if nxt := transition((t.status, t.status_detail), event):
+            _set_status(db, t.id, at, *nxt)
     if inc.kind == "DELETE":  # FR-2a
         db.execute("UPDATE activities SET content = NULL WHERE id = ?"
                    " OR (kind = 'EDIT' AND target_id = ?)", (target_id, target_id))
@@ -1708,40 +1742,21 @@ def _ingest(db, inc: Incoming) -> Thread | None:
 
 # --- act, reply, wake ------------------------------------------------------
 
-def act(db, thread_id: int, action: Action) -> Thread:
+def act(db, thread_id: int, action: Action | Reopen) -> Thread:
     with db:
         if not db.in_transaction:
             db.execute("BEGIN IMMEDIATE")
         t = get_thread(db, thread_id)
         thread_id = t.id
         now = _now()
-        match action:
-            case Done():
-                _set_status(db, thread_id, "DONE", "DONE_MANUALLY_SET", now)
-            case Snooze(until=until):
-                before = t.status_detail if t.status == "TODO" else None
-                if until is None:
-                    _set_status(db, thread_id, "SNOOZED", "WAITING_INDEFINITELY", now, before=before)
-                else:
-                    _set_status(db, thread_id, "SNOOZED", "WAITING_FOR_DURATION", now,
-                                snoozed_until=_iso(until), before=before)
-            case Wait():
-                _set_status(db, thread_id, "SNOOZED", "WAITING_FOR_CUSTOMER", now)
-            case Investigate():
-                _set_status(db, thread_id, "TODO", "IN_PROGRESS", now)
-            case MarkTodo(detail=detail):
-                _set_status(db, thread_id, "TODO", detail, now)
-            case Ignore():
-                _set_status(db, thread_id, "DONE", "IGNORED", now)
-            case Unignore():
-                if t.status_detail == "IGNORED":
-                    detail = "NEW_REPLY" if _has_replied(db, thread_id) else "CREATED"
-                    _set_status(db, thread_id, "TODO", detail, now)
-            case SetCase(case_id=case_id, new_title=new_title):
-                if new_title is not None:
-                    case_id = db.execute("INSERT INTO cases (title, created_at) VALUES (?, ?)",
-                                         (new_title, _iso(now))).lastrowid
-                db.execute("UPDATE threads SET case_id = ? WHERE id = ?", (case_id, thread_id))
+        if isinstance(action, SetCase):
+            case_id = action.case_id
+            if action.new_title is not None:
+                case_id = db.execute("INSERT INTO cases (title, created_at) VALUES (?, ?)",
+                                     (action.new_title, _iso(now))).lastrowid
+            db.execute("UPDATE threads SET case_id = ? WHERE id = ?", (case_id, thread_id))
+        elif nxt := transition((t.status, t.status_detail), action, has_replied=_has_replied(db, thread_id)):
+            _set_status(db, thread_id, now, *nxt)
         return get_thread(db, thread_id)
 
 
@@ -1803,9 +1818,8 @@ def reply(db, thread_id: int, text: str, sender: Sender,
             t = get_thread(db, thread_id)
             thread_id = t.id
         if not _preserve_send_changes(db, thread_id, changes):
-            nxt = _after_activity(t.status, t.status_detail, True, "MESSAGE")
-            if nxt:
-                _set_status(db, thread_id, *nxt, now)
+            if nxt := transition((t.status, t.status_detail), Arrived(from_jeremy=True)):
+                _set_status(db, thread_id, now, *nxt)
     return get_thread(db, thread_id)
 
 
@@ -1815,17 +1829,15 @@ def wake(db, now: datetime) -> int:
     with db:
         if not db.in_transaction:
             db.execute("BEGIN IMMEDIATE")
-        due = db.execute("SELECT id, status_detail, detail_before_snooze FROM threads"
+        due = db.execute("SELECT id, status, status_detail, detail_before_snooze FROM threads"
                          " WHERE merged_into IS NULL AND"
                          " ((status_detail = 'WAITING_FOR_DURATION' AND snoozed_until <= ?)"
                          " OR (status_detail = 'WAITING_FOR_CUSTOMER' AND follow_up_at <= ?))",
                          (_iso(now), _iso(now))).fetchall()
         for r in due:
-            if r["status_detail"] == "WAITING_FOR_CUSTOMER":
-                detail = "NEW_REPLY"
-            else:
-                detail = r["detail_before_snooze"] or ("NEW_REPLY" if _has_replied(db, r["id"]) else "CREATED")
-            _set_status(db, r["id"], "TODO", detail, now)
+            _set_status(db, r["id"], now, *transition((r["status"], r["status_detail"]), Woke(),
+                                                      has_replied=_has_replied(db, r["id"]),
+                                                      before=r["detail_before_snooze"]))
     return len(due)
 
 
