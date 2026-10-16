@@ -62,3 +62,31 @@ def test_status_and_case_changes_are_logged_with_their_cause(monkeypatch):
     for sql in ("UPDATE audit_log SET cause = 'action'", "DELETE FROM audit_log"):
         with pytest.raises(sqlite3.DatabaseError, match="append-only"):
             db.execute(sql)
+
+
+def test_case_feed_shows_threads_joining_and_leaving_and_description_edits(monkeypatch):
+    db = inbox.connect()
+    inbox.migrate(db)
+    with db:
+        db.execute("INSERT INTO connections (platform, external_id, self_id, label, connected_at)"
+                   " VALUES ('gmail', 'me@x.io', 'me@x.io', 'Email', ?)", (NOW.isoformat(),))
+    minutes = iter(range(1, 1000))
+    monkeypatch.setattr(inbox, "_now", lambda: NOW + timedelta(minutes=next(minutes)))
+    a = inbox.ingest(db, mail("<a@acme.com>", NOW))
+    b = inbox.ingest(db, mail("<b@acme.com>", NOW, inbox.Identity("email", "bo@acme.com")))
+    renewal, other = inbox.create_case(db, "Renewal"), inbox.create_case(db, "Other")
+    inbox.act(db, a.id, inbox.SetCase(case_id=renewal))
+    inbox.act(db, b.id, inbox.SetCase(case_id=renewal))
+    inbox.set_case_description(db, renewal, "Close by Friday")
+    inbox.set_case_description(db, renewal, "Close by Friday")  # unchanged: no entry
+    snap = inbox.snapshot(db, b.id)
+    inbox.act(db, b.id, inbox.SetCase(case_id=other))  # moved: leaves Renewal, joins Other
+    inbox.restore(db, snap)
+    inbox.act(db, a.id, inbox.SetCase())
+    feed = lambda case_id: [(e["kind"], e.get("thread_id"), e.get("cause")) for e in inbox.case_feed(db, case_id)]  # noqa: E731
+    assert feed(renewal) == [("created", None, None), ("added", a.id, "action"), ("added", b.id, "action"),
+                             ("description", None, None), ("removed", b.id, "action"), ("added", b.id, "undo"),
+                             ("removed", a.id, "action")]
+    assert feed(other) == [("created", None, None), ("added", b.id, "action"), ("removed", b.id, "undo")]
+    with pytest.raises(sqlite3.DatabaseError, match="append-only"):
+        db.execute("DELETE FROM case_log")

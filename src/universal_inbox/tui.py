@@ -1689,6 +1689,14 @@ def audit_markup(e: dict) -> str:
     return f"[{dim}]{when(e['occurred_at']):<5} {what} · {why}[/]"
 
 
+def case_feed_markup(e: dict) -> str:
+    """One line of a Case's Activity: created, a Thread added or removed, or a description edit."""
+    what = {"created": "Case created", "description": "Description edited"}.get(e["kind"])
+    if what is None:
+        what = f"{'Added' if e['kind'] == 'added' else 'Removed'} {escape(e['title'])} · {AUDIT_CAUSE[e['cause']]}"
+    return f"[#928374]{ICON['case']} {what} · {ago(e['at'])}[/]"
+
+
 def message_action_id(native_id: str) -> str:
     """A Python string literal inside Rich markup: brackets must reach the action parser unchanged."""
     return repr(native_id).replace("[", r"\u005b").replace("]", r"\u005d")
@@ -3545,7 +3553,7 @@ class CasePage(Page, ThreadActions):
             f"[#928374] · {len(threads)} thread{'s' * (len(threads) != 1)}[/]")
         self.query_one(DescriptionBox).show(self.description)
         self.query_one(".activityhead").update(
-            f"[b]Activity[/]\n[#928374]{ICON['case']} Case created · {ago(case['created_at'])}[/]")
+            "[b]Activity[/]\n" + "\n".join(case_feed_markup(e) for e in inbox.case_feed(db, self.case_id)))
         self.query_one(".caseprops").update(self.props_markup())
         load_context(self, *thread_addresses(self.views))
         cards = self.query_one(".cards")

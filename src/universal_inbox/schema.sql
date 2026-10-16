@@ -142,7 +142,7 @@ CREATE TABLE resend_receipts (
 
 -- Audit log: each change to a Thread's Status or Case and its cause (action = Jeremy's key; message/edit/
 -- delete/call = the other side's Activity; reply = Jeremy's own message). old/new_detail are Status details;
--- a CASE entry's case_id is the Case joined, NULL = removed; data holds a timed snooze's until.
+-- a CASE entry's case_id is the Case joined, NULL = removed, and data.from the Case it left; data holds a timed snooze's until.
 CREATE TABLE audit_log (
   id          INTEGER PRIMARY KEY,
   thread_id   INTEGER NOT NULL REFERENCES threads (id),
@@ -164,6 +164,24 @@ END;
 CREATE TRIGGER audit_log_no_update BEFORE UPDATE ON audit_log
 BEGIN
   SELECT RAISE(ABORT, 'the audit log is append-only');
+END;
+
+-- Case log: changes to a Case itself, for its Activity feed; old is the description before the edit.
+CREATE TABLE case_log (
+  id          INTEGER PRIMARY KEY,
+  case_id     INTEGER NOT NULL REFERENCES cases (id),
+  occurred_at TEXT NOT NULL,
+  kind        TEXT NOT NULL CHECK (kind IN ('DESCRIPTION')),
+  old         TEXT NOT NULL
+) STRICT;
+CREATE INDEX case_log_case ON case_log (case_id, occurred_at);
+CREATE TRIGGER case_log_no_delete BEFORE DELETE ON case_log
+BEGIN
+  SELECT RAISE(ABORT, 'the case log is append-only');
+END;
+CREATE TRIGGER case_log_no_update BEFORE UPDATE ON case_log
+BEGIN
+  SELECT RAISE(ABORT, 'the case log is append-only');
 END;
 
 CREATE VIEW thread_activities AS

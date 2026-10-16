@@ -23,7 +23,7 @@ from typing import Protocol, Sequence
 
 from . import files, platforms
 
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 WAIT = timedelta(days=4)  # Waiting for them ends after this with no reply: back to Todo to follow up (#116)
 EMAIL_CONFIRMATION_PENDING = "Email confirmation pending; wait for its sent receipt before replying."
 MIGRATIONS = {  # version -> statement that upgrades an existing database to it
@@ -209,6 +209,22 @@ END;
 CREATE TRIGGER audit_log_no_update BEFORE UPDATE ON audit_log
 BEGIN
   SELECT RAISE(ABORT, 'the audit log is append-only');
+END;""",
+    16: """CREATE TABLE case_log (
+  id          INTEGER PRIMARY KEY,
+  case_id     INTEGER NOT NULL REFERENCES cases (id),
+  occurred_at TEXT NOT NULL,
+  kind        TEXT NOT NULL CHECK (kind IN ('DESCRIPTION')),
+  old         TEXT NOT NULL
+) STRICT;
+CREATE INDEX case_log_case ON case_log (case_id, occurred_at);
+CREATE TRIGGER case_log_no_delete BEFORE DELETE ON case_log
+BEGIN
+  SELECT RAISE(ABORT, 'the case log is append-only');
+END;
+CREATE TRIGGER case_log_no_update BEFORE UPDATE ON case_log
+BEGIN
+  SELECT RAISE(ABORT, 'the case log is append-only');
 END;""",
 }
 
@@ -794,6 +810,11 @@ def _set_status(db, thread_id, at, status, detail, snoozed_until=None, before=No
         (status, detail, _iso(at), snoozed_until, before, follow_up, thread_id))
     if detail != old or snoozed_until:  # same detail is no change, except a snooze to a new time
         _audit(db, thread_id, at, cause, old, detail, data={"until": snoozed_until} if snoozed_until else {})
+
+
+def _left(case_id) -> dict:
+    """A CASE entry's data: the Case the Thread left, so that Case's feed shows it going."""
+    return {"from": case_id} if case_id else {}
 
 
 def _audit(db, thread_id, at, cause, old=None, new=None, case_id=None, data=None):
@@ -1744,7 +1765,7 @@ def act(db, thread_id: int, action: Action | Reopen) -> Thread:
                                      (action.new_title, _iso(now))).lastrowid
             db.execute("UPDATE threads SET case_id = ? WHERE id = ?", (case_id, thread_id))
             if case_id != t.case_id:
-                _audit(db, thread_id, now, "action", case_id=case_id)
+                _audit(db, thread_id, now, "action", case_id=case_id, data=_left(t.case_id))
         elif nxt := transition((t.status, t.status_detail), action, has_replied=_has_replied(db, thread_id)):
             _set_status(db, thread_id, now, *nxt, cause="reopen" if isinstance(action, Reopen) else "action")
         return get_thread(db, thread_id)
@@ -1916,7 +1937,27 @@ def person_organizations(db, person_id: int) -> list[str]:
 
 def set_case_description(db, case_id: int, description: str) -> None:
     with db:
-        db.execute("UPDATE cases SET description = ? WHERE id = ?", (description, case_id))
+        old = db.execute("SELECT description FROM cases WHERE id = ?", (case_id,)).fetchone()[0]
+        if description != old:
+            db.execute("UPDATE cases SET description = ? WHERE id = ?", (description, case_id))
+            db.execute("INSERT INTO case_log (case_id, occurred_at, kind, old) VALUES (?, ?, 'DESCRIPTION', ?)",
+                       (case_id, _iso(_now()), old))
+
+
+def case_feed(db, case_id: int) -> list[dict]:
+    """A Case's Activity, oldest first: created, each Thread added or removed (with its cause from the audit
+    log), and each description edit."""
+    with _read_snapshot(db):
+        created = db.execute("SELECT created_at FROM cases WHERE id = ?", (case_id,)).fetchone()[0]
+        feed = [{"at": created, "kind": "created"}]
+        feed += [{"at": r["occurred_at"], "kind": "added" if r["case_id"] == case_id else "removed",
+                  "thread_id": r["thread_id"], "title": r["title"], "cause": r["cause"]} for r in db.execute(
+            "SELECT l.occurred_at, l.case_id, l.cause, COALESCE(t.merged_into, t.id) AS thread_id, t.title"
+            " FROM audit_log l JOIN threads t ON t.id = l.thread_id WHERE l.kind = 'CASE'"
+            " AND (l.case_id = ? OR json_extract(l.data, '$.from') = ?)", (case_id, case_id))]
+        feed += [{"at": r[0], "kind": "description"} for r in db.execute(
+            "SELECT occurred_at FROM case_log WHERE case_id = ? AND kind = 'DESCRIPTION'", (case_id,))]
+    return sorted(feed, key=lambda e: datetime.fromisoformat(e["at"]))
 
 
 def case_threads(db, case_id: int) -> list[Thread]:
@@ -2239,5 +2280,5 @@ def restore(db, snap: dict) -> Thread:
             _audit(db, thread_id, now, "undo", current["status_detail"], snap["status_detail"],
                    data={"until": snap["snoozed_until"]} if snap["snoozed_until"] else {})
         if snap["case_id"] != current["case_id"]:
-            _audit(db, thread_id, now, "undo", case_id=snap["case_id"])
+            _audit(db, thread_id, now, "undo", case_id=snap["case_id"], data=_left(current["case_id"]))
     return get_thread(db, thread_id)
