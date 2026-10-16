@@ -1466,7 +1466,7 @@
       },
       "docs": {
         "description": {
-          "story": "Kind filter on Call (f). An overdue call Task shows its age; the Task pane carries the number, the two-dial rule, the script and voicemail text. Jeremy dials in the Quo app; e marks it done and moves to the next row."
+          "story": "Filtered to Call Tasks (f, then Call). An overdue call Task shows its age; the Task pane carries the number, the two-dial rule, the script and voicemail text. Jeremy dials in the Quo app; e marks it done and moves to the next row."
         }
       }
     }
@@ -1542,6 +1542,28 @@
   },
   {
     "file": "sequencing-tasks.stories.js",
+    "exportName": "TasksFilter",
+    "title": "Sequencing/Tasks",
+    "id": "sequencing-tasks--tasks-filter",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-SEQ-15"
+        ],
+        "scenarios": [
+          "AS-SEQ-17"
+        ],
+        "change": "new"
+      },
+      "docs": {
+        "description": {
+          "story": "f opens one filter menu: all Tasks, one kind, or one Sequence. Each row names its Sequence, so Tasks from several Sequences share the list."
+        }
+      }
+    }
+  },
+  {
+    "file": "sequencing-tasks.stories.js",
     "exportName": "TasksPausedToast",
     "title": "Sequencing/Tasks",
     "id": "sequencing-tasks--tasks-paused-toast",
@@ -1588,6 +1610,52 @@
   },
   {
     "file": "sequencing-sequences.stories.js",
+    "exportName": "SequencesList",
+    "title": "Sequencing/Sequences",
+    "id": "sequencing-sequences--sequences-list",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-SEQ-18",
+          "FR-SEQ-23"
+        ],
+        "scenarios": [
+          "AS-SEQ-17"
+        ],
+        "change": "new"
+      },
+      "docs": {
+        "description": {
+          "story": "Sequences in the rail opens this list, like People. Each row shows Steps, Enrollments, Tasks due today and the last edit; archived Sequences fold under Archived. enter opens a Sequence's Steps; n makes a new one; a archives."
+        }
+      }
+    }
+  },
+  {
+    "file": "sequencing-sequences.stories.js",
+    "exportName": "SequenceNew",
+    "title": "Sequencing/Sequences",
+    "id": "sequencing-sequences--sequence-new",
+    "parameters": {
+      "prd": {
+        "requirements": [
+          "FR-SEQ-1",
+          "FR-SEQ-18"
+        ],
+        "scenarios": [
+          "AS-SEQ-17"
+        ],
+        "change": "new"
+      },
+      "docs": {
+        "description": {
+          "story": "n on the Sequences list asks for a name, then opens the empty Sequence. It sends from the only email Connection; n adds the first Step. esc returns to the list."
+        }
+      }
+    }
+  },
+  {
+    "file": "sequencing-sequences.stories.js",
     "exportName": "SequenceEditor",
     "title": "Sequencing/Sequences",
     "id": "sequencing-sequences--sequence-editor",
@@ -1607,7 +1675,7 @@
       },
       "docs": {
         "description": {
-          "story": "A Sequence is an ordered collection of Step rows. The selected day-9 email Step replies to Step 1; its detail pane edits kind, gap, time, reply-to and body, previews the text for Sam Lee, and states that edits apply to Tasks not yet due."
+          "story": "Opened from the Sequences list (enter on Secret Sequence; esc goes back). A Sequence is an ordered collection of Step rows. The selected day-9 email Step replies to Step 1; its detail pane edits kind, gap, time, reply-to and body, previews the text for Sam Lee, and states that edits apply to Tasks not yet due."
         }
       }
     }
@@ -1700,7 +1768,7 @@
       },
       "docs": {
         "description": {
-          "story": "The Person page's Sequence section: state Paused (Dana replied), current day, next Task, and the Tasks timeline. r resumes (the next Task is due immediately); f finishes as Completed, Unsubscribed or Canceled."
+          "story": "The Person page's Sequence section, one block per Enrollment: Dana is in two Sequences, and her reply paused both. Each block shows state, current day, next Task, and the Tasks timeline. r resumes and f finishes (Completed, Unsubscribed or Canceled); with two Enrollments, each asks which."
         }
       }
     }
@@ -1723,7 +1791,7 @@
       },
       "docs": {
         "description": {
-          "story": "Enroll one Person at a time from a People row (s): pick a Sequence; the first Task is due today."
+          "story": "Enroll one Person at a time from a People row (s). The menu lists every active Sequence; one the Person is already in is marked and refused. The first Task is due today."
         }
       }
     }

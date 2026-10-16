@@ -42,6 +42,22 @@ SEQUENCE = [
     ("email", 0, "", "", "New examples + meeting link"),
 ]
 
+# A second Sequence, so the Tasks page, Person page and enroll menu show more than one.
+EVENT = [
+    ("email", 0, "", "", "Good to meet you at the CCA breakfast"),
+    ("linkedin", 1, "", "", "Connect"),
+    ("call", 2, "", "", "Ask about the pilot"),
+    ("email", 3, "", "1", "Re: Good to meet you"),
+]
+STEPS = {"Secret Sequence": SEQUENCE, "Event follow-up": EVENT}
+# The Sequences list: name, Steps, days, active, paused, finished, Tasks due today, last edited, archived.
+SEQUENCES = [
+    ("Secret Sequence", 11, 15, 7, 1, 4, 7, "Oct 14", False),
+    ("Event follow-up", 4, 6, 2, 1, 0, 1, "Oct 9", False),
+    ("Partner intro", 3, 5, 0, 0, 0, 0, "Oct 15", False),
+    ("Spring 2026 outbound", 9, 12, 0, 0, 23, 0, "Jun 3", True),
+]
+
 PEOPLE = {  # id: name, email, phone, organization domain, organization name
     101: ("Dana Roy", "dana@harbourline.example", "+15065550101", "harbourline.example", "Harbourline Construction"),
     102: ("Sam Lee", "sam@bayviewbuilders.example", "+19025550102", "bayviewbuilders.example", "Bayview Builders"),
@@ -50,21 +66,24 @@ PEOPLE = {  # id: name, email, phone, organization domain, organization name
     105: ("Mark Bell", "mark@northlinebuild.example", "+19025550105", "northlinebuild.example", "Northline Build"),
     106: ("Lena Ford", "lena@coastalform.example", "+15065550106", "coastalform.example", "Coastal Form"),
     107: ("Omar Haddad", "omar@keystonemech.example", "+15065550107", "keystonemech.example", "Keystone Mechanical"),
+    108: ("Ken Doucet", "ken@doucetbuilds.example", "+15065550108", "doucetbuilds.example", "Doucet Builds"),
 }
 
 DAY1 = ("Hi {first_name},\n\nI run Agent Maple, a local AI company in Moncton. We build assistants that take "
         "site paperwork off foremen's plates: daily reports, safety forms, and RFIs dictated from the truck.\n\n"
         "{company} looks like a strong fit for a short pilot. Would a 15-minute call next week work?\n\nJeremy")
 
-# Due Tasks on the Tasks page: group, person, day, Step number (1-based), age or time, flag.
+# Due Tasks on the Tasks page: group, person, day, Step number (1-based), age or time, flag, Sequence.
+SECRET = "Secret Sequence"
 DUE = [
-    ("overdue", 101, 2, 2, "1d", ""),
-    ("today", 102, 1, 1, "", ""),
-    ("today", 103, 1, 1, "", "{company}"),
-    ("today", 104, 3, 3, "", ""),
-    ("today", 105, 9, 6, "", "reply target skipped"),
-    ("today", 106, 4, 5, "", ""),
-    ("later today", 107, 12, 9, "10:00", ""),
+    ("overdue", 101, 2, 2, "1d", "", SECRET),
+    ("today", 102, 1, 1, "", "", SECRET),
+    ("today", 103, 1, 1, "", "{company}", SECRET),
+    ("today", 104, 3, 3, "", "", SECRET),
+    ("today", 105, 9, 6, "", "reply target skipped", SECRET),
+    ("today", 108, 3, 3, "", "", "Event follow-up"),
+    ("today", 106, 4, 5, "", "", SECRET),
+    ("later today", 107, 12, 9, "10:00", "", SECRET),
 ]
 
 ATTIO = {101: dict(people=[dict(title="Dana Roy", fields=[("Job title", "Project Manager"), ("Primary location", "Saint John, NB")])],
@@ -84,7 +103,7 @@ STATES = {  # state: (story file, title, PRD requirements, PRD scenarios, descri
                       "Tasks page grouped Overdue, Today, Later today. The selected day-1 email Task opens its real Draft in the Task pane, with Task and Enrollment properties above the Draft's own and Attio and Tana context below. ctrl+enter sends; sending completes the Task and the next Step's Task becomes due by its gap."),
     "TasksCallBlock": ("tasks", dict(page="tasks", select=101, kind="call"),
                        ["FR-SEQ-15", "FR-SEQ-16", "FR-SEQ-17"], ["AS-SEQ-3"],
-                       "Kind filter on Call (f). An overdue call Task shows its age; the Task pane carries the number, the two-dial rule, the script and voicemail text. Jeremy dials in the Quo app; e marks it done and moves to the next row."),
+                       "Filtered to Call Tasks (f, then Call). An overdue call Task shows its age; the Task pane carries the number, the two-dial rule, the script and voicemail text. Jeremy dials in the Quo app; e marks it done and moves to the next row."),
     "TasksMissingFillIn": ("tasks", dict(page="tasks", select=103),
                            ["FR-SEQ-10", "FR-SEQ-16"], ["AS-SEQ-7"],
                            "Priya Shah has no Organization, so {company} stays in the Draft as a marker. The row is flagged and the Task pane states that sending is refused until the marker is replaced."),
@@ -94,15 +113,24 @@ STATES = {  # state: (story file, title, PRD requirements, PRD scenarios, descri
     "TasksLinkedIn": ("tasks", dict(page="tasks", select=104),
                       ["FR-SEQ-16", "FR-SEQ-17"], ["AS-SEQ-1"],
                       "LinkedIn Task: the action and the note text with fill-ins applied, ready to paste. Done is manual (e); LinkedIn replies are invisible to Inbox, so a reply there means pausing by hand on the Person page."),
+    "TasksFilter": ("tasks", dict(page="tasks", select=102, filter=True),
+                    ["FR-SEQ-15"], ["AS-SEQ-17"],
+                    "f opens one filter menu: all Tasks, one kind, or one Sequence. Each row names its Sequence, so Tasks from several Sequences share the list."),
     "TasksPausedToast": ("tasks", dict(page="tasks", select=102, paused=101),
                          ["FR-SEQ-12", "FR-SEQ-13", "FR-SEQ-20"], ["AS-SEQ-4"],
                          "Dana Roy replied, so her Enrollment paused: her overdue call Task left the list and the toast states the consequence and the way back."),
     "TasksEmpty": ("tasks", dict(page="tasks", empty=True),
                    ["FR-SEQ-15"], ["AS-SEQ-1"],
                    "No Due Tasks: the empty state says what empty means and where Tasks come from."),
+    "SequencesList": ("sequences", dict(page="sequences"),
+                      ["FR-SEQ-18", "FR-SEQ-23"], ["AS-SEQ-17"],
+                      "Sequences in the rail opens this list, like People. Each row shows Steps, Enrollments, Tasks due today and the last edit; archived Sequences fold under Archived. enter opens a Sequence's Steps; n makes a new one; a archives."),
+    "SequenceNew": ("sequences", dict(page="sequence", new=True),
+                    ["FR-SEQ-1", "FR-SEQ-18"], ["AS-SEQ-17"],
+                    "n on the Sequences list asks for a name, then opens the empty Sequence. It sends from the only email Connection; n adds the first Step. esc returns to the list."),
     "SequenceEditor": ("sequences", dict(page="sequence", select=6),
                        ["FR-SEQ-1", "FR-SEQ-2", "FR-SEQ-3", "FR-SEQ-5", "FR-SEQ-18"], ["AS-SEQ-10"],
-                       "A Sequence is an ordered collection of Step rows. The selected day-9 email Step replies to Step 1; its detail pane edits kind, gap, time, reply-to and body, previews the text for Sam Lee, and states that edits apply to Tasks not yet due."),
+                       "Opened from the Sequences list (enter on Secret Sequence; esc goes back). A Sequence is an ordered collection of Step rows. The selected day-9 email Step replies to Step 1; its detail pane edits kind, gap, time, reply-to and body, previews the text for Sam Lee, and states that edits apply to Tasks not yet due."),
     "SequenceEditorWarnings": ("sequences", dict(page="sequence", select=1, warnings=True),
                                ["FR-SEQ-4", "FR-SEQ-18"], ["AS-SEQ-10"],
                                "Validator warnings: an unknown {title} fill-in and a first Step set to reply. Both rows are flagged and the detail pane names each problem and its fix."),
@@ -114,10 +142,10 @@ STATES = {  # state: (story file, title, PRD requirements, PRD scenarios, descri
                             "Deleting a Step is live: the toast says how many Enrollments moved on and how to undo."),
     "PersonSequencePaused": ("people", dict(page="person", person=101),
                              ["FR-SEQ-13", "FR-SEQ-14", "FR-SEQ-19"], ["AS-SEQ-4", "AS-SEQ-5", "AS-SEQ-9"],
-                             "The Person page's Sequence section: state Paused (Dana replied), current day, next Task, and the Tasks timeline. r resumes (the next Task is due immediately); f finishes as Completed, Unsubscribed or Canceled."),
+                             "The Person page's Sequence section, one block per Enrollment: Dana is in two Sequences, and her reply paused both. Each block shows state, current day, next Task, and the Tasks timeline. r resumes and f finishes (Completed, Unsubscribed or Canceled); with two Enrollments, each asks which."),
     "EnrollFromPeople": ("people", dict(page="people", enroll=True),
                          ["FR-SEQ-6", "FR-SEQ-7"], ["AS-SEQ-1"],
-                         "Enroll one Person at a time from a People row (s): pick a Sequence; the first Task is due today."),
+                         "Enroll one Person at a time from a People row (s). The menu lists every active Sequence; one the Person is already in is marked and refused. The first Task is due today."),
     "EnrollRefusedUnsubscribed": ("people", dict(page="people", refused=True),
                                   ["FR-SEQ-6", "FR-SEQ-14"], ["AS-SEQ-8"],
                                   "Enrolling an Unsubscribed Person is refused, and the toast names the reason."),
@@ -135,8 +163,8 @@ def fill(text, pid, *, keep_missing=True):
     return out.replace("{company}", company) if company else out if keep_missing else out.replace("{company}", "")
 
 
-def step_label(day, number):
-    kind = SEQUENCE[number - 1][0]
+def step_label(day, number, sequence=SECRET):
+    kind = STEPS[sequence][number - 1][0]
     return f"Day {day} · {KIND[kind][1]}"
 
 
@@ -178,7 +206,7 @@ class SequencingRail(tui.Rail):
                     return Option(f"{mark}[#654735]{ICON[icon]}[/] {name}{' ' * max(1, 16 - len(label))}[#928374]{count:>3}[/]", id=oid)
                 due = self.app.capture_spec.get("due_count", 0)
                 options += [Option("", disabled=True), Option(f"[#928374]{ICON['sequence']} outreach[/]", disabled=True),
-                            item("tasks", "tasks", "Tasks", due or ""), item("sequences", "sequence", "Sequences", 1)]
+                            item("tasks", "tasks", "Tasks", due or ""), item("sequences", "sequence", "Sequences", sum(1 for q in SEQUENCES if not q[8]))]
         return super().add_options(options)
 
 
@@ -293,9 +321,9 @@ class TasksPage(tui.TablePage):
     TITLE = f"{ICON['tasks']} tasks · today"
     RAIL = "tasks"
     SIDE = f"{ICON['tasks']} task"
-    COLUMNS = ("", "Task", "Person", "When")
+    COLUMNS = ("", "Person", "Task", "Sequence", "When")
     BINDINGS = [*tui.TablePage.BINDINGS, Binding("e", "done", "done · next"), Binding("x", "skip", "skip · next"),
-                Binding("f", "kind", "kind"), Binding("p", "person", "person"), Binding("y", "copy", "copy for agent")]
+                Binding("f", "filter", "filter"), Binding("p", "person", "person"), Binding("y", "copy", "copy for agent")]
     EMPTY = "All caught up: no Tasks due. Tasks come due from Enrollments; enroll People from People (s)."
 
     def __init__(self, spec):
@@ -316,26 +344,27 @@ class TasksPage(tui.TablePage):
         spec, rows, group = self.spec, [], None
         if spec.get("empty"):
             return []
-        for g, pid, day, number, when, flag in DUE:
-            kind = SEQUENCE[number - 1][0]
+        for g, pid, day, number, when, flag, sequence in DUE:
+            kind = STEPS[sequence][number - 1][0]
             if pid == spec.get("paused") or (spec.get("kind") and kind != spec["kind"]):
                 continue
             if g != group:
                 group = g
-                rows.append((dict(header=g), ("", f"[b #7c6f64]{g.upper()}[/]", "", "")))
-            name, _, _, _, org = PEOPLE[pid]
-            # Rows fit the panel (console.md §7): the Organization drops first, then the name shortens.
+                rows.append((dict(header=g), ("", f"[b #7c6f64]{g.upper()}[/]", "", "", "")))
+            name = PEOPLE[pid][0]
+            # Rows fit the panel (console.md §7): the Organization lives in the Task pane; at 80 columns
+            # only the glyph and the name stay; the Task pane shows the rest.
             narrow = self.size.width < 50
-            room = max(6, self.size.width - (16 if narrow else 31))
-            who = name if narrow or len(name) >= room else f"{name} · {org or 'no organization'}"
-            who = who if len(who) <= room else who[:room - 1] + "…"
-            label = escape(who[:max(4, self.size.width - 12)] if narrow else step_label(day, number))
             mark = f"[#c14a4a]{ICON['warn']}[/] " if flag else ""
-            when = f"D{day}" if narrow else when
+            who = name[:max(4, self.size.width - 8 - 2 * bool(flag))]
+            label = f"Day {day}"  # the glyph carries the kind; the Task pane names it
+            room = max(4, self.size.width - 40)
+            short = sequence if len(sequence) <= room else sequence[:room - 1] + "…"
+            when = "" if narrow else when
             age = f"[#c14a4a]{when}[/]" if g == "overdue" else f"[#928374]{when}[/]"
             rows.append((dict(pid=pid, day=day, number=number, flag=flag),
-                         (f"[#654735]{ICON[KIND[kind][0]]}[/]", label, "" if narrow else mark + f"[b]{escape(who.split(' · ')[0])}[/]"
-                          + (f" [#928374]· {escape(who.split(' · ', 1)[1])}[/]" if " · " in who else ""), age)))
+                         (f"[#654735]{ICON[KIND[kind][0]]}[/]", mark + f"[b]{escape(who)}[/]", "" if narrow else escape(label),
+                          "" if narrow else f"[#928374]{escape(short)}[/]", age)))
         return rows
 
     def refresh_data(self):
@@ -345,7 +374,7 @@ class TasksPage(tui.TablePage):
         if target is not None:
             table.move_cursor(row=target)
         self.query_one("#below").update(f"[#928374]{sum(1 for r, _ in self.items if 'pid' in r)} due · "
-                                        "f filters by kind: all, email, call, LinkedIn, letter[/]" if self.items else "")
+                                        "f filters by kind or Sequence[/]" if self.items else "")
         self.show_selected()
 
     def show_selected(self):
@@ -428,8 +457,49 @@ class StepEditor(tui.ThreadView, inherit_bindings=False):
             f"{props_head('summary', 'fill-ins')}\n{{first_name}} {{last_name}}\n{{company}}")
 
 
+class SequencesPage(tui.TablePage):
+    """Every Sequence, like People: enter opens one; archived Sequences fold under their header."""
+    TITLE = f"{ICON['sequence']} sequences"
+    RAIL = "sequences"
+    COLUMNS = ("", "Sequence", "Steps", "Enrolled", "Due today", "Sends from", "Edited")
+    NARROW = ("", "Sequence", "Due")
+    BINDINGS = [*tui.TablePage.BINDINGS, Binding("n", "new", "new Sequence"), Binding("a", "archive", "archive")]
+
+    def on_resize(self, _):
+        self.call_after_refresh(self.refresh_data)
+
+    def rows(self):
+        narrow, out = self.size.width < 70, []
+        for archived in (False, True):
+            group = [q for q in SEQUENCES if q[8] == archived]
+            n = f"{len(group)} Sequence{'s' * (len(group) != 1)}"
+            head = f"[#928374]{ICON['collapsed' if archived else 'expanded']}[/]", f"[b #45707a]{'Archived' if archived else 'Active'}[/]"
+            out.append((dict(header=archived), (*head, f"[#928374]{n}[/]") if narrow else (*head, f"[#928374]{n}[/]", "", "", "", "")))
+            if archived:  # folded until enter on its header
+                continue
+            for name, steps, days, active, paused, finished, due, edited, _ in group:
+                enrolled = f"{active} active" + (f" · {paused} paused" if paused else "") if active or paused else "[#928374]never used[/]"
+                due_cell = f"[#45707a]{due}[/]" if due else "[#928374]·[/]"
+                icon = f"[#654735]{ICON['sequence']}[/]"
+                out.append((dict(name=name), (icon, f"[b]{escape(name)}[/]", due_cell) if narrow else
+                            (icon, f"[b]{escape(name)}[/]", f"{steps} Steps · {days} days", enrolled, due_cell, f"Gmail · {ME}",
+                             f"[#928374]{edited}[/]")))
+        return out
+
+    def refresh_data(self):
+        table = self.query_one(DataTable)
+        columns = self.NARROW if self.size.width < 70 else self.COLUMNS
+        if [str(c.label) for c in table.columns.values()] != list(columns):
+            table.clear(columns=True)
+            table.add_columns(*columns)
+        super().refresh_data()
+        table.move_cursor(row=1)
+        self.query_one("#below").update("[#928374]enter opens a Sequence's Steps · n new Sequence · a archive · "
+                                        "enter on Archived shows archived Sequences[/]")
+
+
 class SequencePage(tui.TablePage):
-    TITLE = f"{ICON['sequence']} sequences › Secret Sequence"
+    TITLE = f"{ICON['sequence']} sequence · Secret Sequence"
     RAIL = "sequences"
     SIDE = f"{ICON['sequence']} step"
     COLUMNS = ("#", "", "Step", "Gap", "Time", "What")
@@ -437,12 +507,18 @@ class SequencePage(tui.TablePage):
                 Binding("J", "move_down", "move down", key_display="J/K"), Binding("K", "move_up", show=False),
                 Binding("a", "archive", "archive")]
 
+    EMPTY = "No Steps yet. n adds the first Step: its kind, gap, time and text."
+
     def __init__(self, spec):
         super().__init__()
         self.spec = spec
+        if spec.get("new"):
+            self.TITLE = f"{ICON['sequence']} sequence · Trade show follow-up"
 
     def rows(self):
         rows = []
+        if self.spec.get("new"):
+            return rows
         steps = [s for i, s in enumerate(SEQUENCE, 1) if not (self.spec.get("deleted") and i == 4)]
         for i, (kind, gap, at, reply, summary) in enumerate(steps, 1):
             flag = f" [#c14a4a]{ICON['warn']} 2 problems[/]" if self.spec.get("warnings") and i == 1 else ""
@@ -455,11 +531,18 @@ class SequencePage(tui.TablePage):
 
     def refresh_data(self):
         super().refresh_data()
-        self.query_one(DataTable).move_cursor(row=self.spec["select"] - 1)
-        self.query_one("#below").update(f"[#928374]{len(self.items)} Steps · 7 active Enrollments · "
-                                        "edits apply to Tasks not yet due[/]")
         pane = self.app.main.query_one("#thread")
         pane.remove_children()
+        if self.spec.get("new"):
+            self.query_one("#below").update("[#928374]0 Steps · no Enrollments yet · esc back to Sequences[/]")
+            pane.mount(Static(f"{props_head('sequence', 'sequence')}\nTrade show follow-up\n[#928374]new · 0 Steps[/]\n\n"
+                              f"{props_head('connection', 'sends from')}\nGmail · {ME}\n[#928374]the only email Connection[/]\n\n"
+                              f"{props_head('people', 'enrollments')}\nnone\n[#928374]Enroll People from People (s) once it has Steps.[/]",
+                              classes="threadempty"))
+            return
+        self.query_one(DataTable).move_cursor(row=self.spec["select"] - 1)
+        self.query_one("#below").update(f"[#928374]{len(self.items)} Steps · 7 active Enrollments · "
+                                        "edits apply to Tasks not yet due · esc back to Sequences[/]")
         pane.mount(StepEditor(self.spec, self.spec["select"]))
 
 
@@ -471,12 +554,18 @@ class SequenceSection:
         done = lambda text: f"[#6c782e]{ICON['done']}[/] {text}"  # noqa: E731
         lines = [f"[#928374]{ICON['sequence']} sequence[/]",
                  "[b]Secret Sequence[/] · [#928374]Paused · Day 5 of 15[/]",
-                 f"[#928374]{ICON['pause']} paused: Dana replied 2h ago · r resume · f finish[/]", "",
+                 f"[#928374]{ICON['pause']} paused: Dana replied 2h ago[/]", "",
                  done("Day 1  Email · sent"), done("Day 2  Call · done"), done("Day 3  LinkedIn · done"),
                  done("Day 4  Call · done"), done("Day 4  Letter · done"),
                  f"[#c35e0a]▸[/] Day 9  Email · [#928374]next, due when resumed[/]",
                  "[#928374]· Day 10 Call[/]", "[#928374]· Day 11 LinkedIn[/]", "[#928374]· Day 12 Call · 10:00[/]",
-                 "[#928374]· Day 15 Call · Email[/]"]
+                 "[#928374]· Day 15 Call · Email[/]", "",
+                 "[b]Event follow-up[/] · [#928374]Paused · Day 2 of 6[/]",
+                 f"[#928374]{ICON['pause']} paused: Dana replied 2h ago[/]", "",
+                 done("Day 1  Email · sent"),
+                 f"[#c35e0a]▸[/] Day 2  LinkedIn · [#928374]next, due when resumed[/]",
+                 "[#928374]· Day 4  Call[/]", "[#928374]· Day 7  Email[/]", "",
+                 "[#928374]r resume · f finish: each asks which Enrollment[/]"]
         return "\n".join(lines)
 
 
@@ -530,9 +619,9 @@ async def capture(entry, output):
             await wait(pilot)
             main = app.main
             page = spec["page"]
-            factory = {"tasks": lambda: TasksPage(spec), "sequence": lambda: SequencePage(spec),
+            factory = {"tasks": lambda: TasksPage(spec), "sequence": lambda: SequencePage(spec), "sequences": SequencesPage,
                        "person": lambda: PersonSequencePage(spec["person"]), "people": lambda: EnrollPeoplePage()}[page]
-            main.stack = [factory]
+            main.stack = [SequencesPage, factory] if page == "sequence" else [factory]
             main._show()
             await wait(pilot, 10)
             if isinstance(main.current, EnrollPeoplePage):
@@ -549,8 +638,18 @@ async def capture(entry, output):
                     "Secret Sequence has been used, so it can be archived but not deleted. Archived Sequences take no new "
                     "Enrollments and can be restored."))
             if spec.get("enroll"):
-                app.push_screen(tui.Pick("Enroll Dana Roy", [("secret", "Secret Sequence · 11 Steps · first Task due today")],
-                                         "One live Enrollment per Person per Sequence."))
+                app.push_screen(tui.Pick("Enroll Dana Roy", [
+                    ("secret", f"[#928374]Secret Sequence · already in it, Paused · resume on Dana's page[/]"),
+                    ("event", "Event follow-up · 4 Steps · first Task due today"),
+                    ("partner", "Partner intro · 3 Steps · first Task due today")],
+                    "Every active Sequence. One live Enrollment per Person per Sequence."))
+            if spec.get("filter"):
+                app.push_screen(tui.Pick("Filter Tasks", [
+                    ("all", "All Tasks · 8"), ("email", f"{ICON['email']} Email · 4"), ("call", f"{ICON['call']} Call · 2"),
+                    ("linkedin", f"{ICON['linkedin']} LinkedIn · 1"), ("letter", f"{ICON['letter']} Letter · 1"),
+                    ("secret", f"{ICON['sequence']} Secret Sequence · 7"), ("event", f"{ICON['sequence']} Event follow-up · 1")]))
+            if spec.get("new"):
+                app.notify("Created Trade show follow-up. n adds the first Step.", timeout=600)
             if spec.get("paused"):
                 app.notify("Dana Roy replied: her Enrollment paused and its Tasks are hidden. Resume on Dana's page (p, then r).",
                            timeout=600)

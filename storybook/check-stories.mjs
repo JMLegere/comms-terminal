@@ -27,7 +27,7 @@ const sequencing = catalog.filter(scene => scene.file.startsWith('sequencing-'))
 const composition = catalog.filter(scene => !scene.file.startsWith('sequencing-'));
 assert.equal(composition.length, 56, 'Expected 56 preserved mock states');
 assert.equal(new Set(catalog.map(scene => scene.id)).size, catalog.length, 'Duplicate catalog IDs');
-assert.equal(sequencing.length, 14, 'Expected 14 Sequencing mock states');
+assert.equal(sequencing.length, 17, 'Expected 17 Sequencing mock states');
 const requirements = new Set();
 const scenarios = new Set();
 let count = 0;
@@ -220,7 +220,7 @@ for filename in sys.argv[2:]:
     conversation_rows = [row[:-36] for row in detail_rows] if columns == 187 else detail_rows
     rail, main, detail = map(plain, (rail_rows, main_rows, conversation_rows))
     if capture['id'].startswith('sequencing-'):
-        modal = capture['state'] in {'SequenceArchive', 'EnrollFromPeople'} and columns == 80  # a centred menu covers the rail
+        modal = capture['state'] in {'SequenceArchive', 'EnrollFromPeople', 'TasksFilter'} and columns == 80  # a centred menu covers the rail
         if not modal:
             assert rail_rows[0][0] == '╭' and rail_rows[-1] == '╰' + '─' * 28 + '╯', f'{filename}: missing native outer rail frame'
             assert all(row[0] == row[-1] == '│' for row in rail_rows[1:-1]), f'{filename}: native outer rail side borders changed'
@@ -230,12 +230,14 @@ for filename in sys.argv[2:]:
         assert len(outreach) == 1 and drafts and drafts[0][0] < outreach[0] < cases[0][0], f'{filename}: outreach section must sit after Drafts, before Cases'
         assert re.search(r'\bTasks\b', rail_rows[outreach[0] + 1]) and re.search(r'\bSequences\b', rail_rows[outreach[0] + 2]), f'{filename}: Tasks/Sequences rail rows missing'
         page = capture['id'].split('--')[0].removeprefix('sequencing-')
-        title = {'tasks': r'\btasks\b', 'sequences': r'\bsequences\b', 'people': r'\bpe(?:ople|rson)\b'}[page]
+        title = {'tasks': r'\btasks\b', 'sequences': r'\bsequences?\b', 'people': r'\bpe(?:ople|rson)\b'}[page]
         assert re.search(title, ''.join(rows[0]), re.I), f'{filename}: page title missing'
         everything = plain([''.join(row) for row in rows])
         for state, marker in {'TasksPausedToast': 'Enrollment paused', 'SequenceStepDeleted': 'moved to the next', 'EnrollRefusedUnsubscribed': 'unsubscribed',
                               'SequenceArchive': 'Archive Secret Sequence', 'EnrollFromPeople': 'Enroll Dana Roy', 'TasksEmpty': 'All caught up',
-                              'TasksMissingFillIn': 'Sending is refused', 'TasksReplyTargetSkipped': 'Reply target skipped'}.items():
+                              'TasksMissingFillIn': 'Sending is refused', 'TasksReplyTargetSkipped': 'Reply target skipped',
+                              'SequencesList': 'Event follow-up', 'SequenceNew': 'No Steps yet', 'TasksFilter': 'Filter Tasks',
+                              'PersonSequencePaused': 'Event follow-up'}.items():
             if capture['state'] == state and columns == 187:  # at 80 the markers wrap across interleaved panes
                 assert marker in everything, f'{filename}: {state} lost its marker {marker!r}'
         continue
@@ -309,4 +311,4 @@ for filename in sys.argv[2:]:
 print(json.dumps({'textual_version': version('textual')}))
 `, fileURLToPath(local('./')), ...svgPaths], { maxBuffer: 1024 * 1024 });
 assert.equal(manifest.source.textual_version, JSON.parse(stdout).textual_version, 'Capture Textual runtime version mismatch');
-console.log('56 preserved mock states + 14 Sequencing mock states + 3 current-app references; FR-17–29 / AS-21–32 covered; 146 safe native SVGs; single pencil Drafts row replaces All under Threads at page-row cells 3/5 with native active styling and outer rail frame, no special button; draft list/detail and accepted conversion checked; current source, runtime and local font hashes verified.');
+console.log('56 preserved mock states + 17 Sequencing mock states + 3 current-app references; FR-17–29 / AS-21–32 covered; 152 safe native SVGs; single pencil Drafts row replaces All under Threads at page-row cells 3/5 with native active styling and outer rail frame, no special button; draft list/detail and accepted conversion checked; current source, runtime and local font hashes verified.');
