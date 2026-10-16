@@ -17,6 +17,7 @@ from datetime import datetime, timedelta, timezone
 from email.errors import HeaderParseError
 from email.headerregistry import Address
 from email.utils import getaddresses
+from functools import partial
 from pathlib import Path
 
 from rich.markup import escape
@@ -1279,13 +1280,44 @@ class StagedList(OptionList):
             self.refresh_staged()
 
 
+class Composer:
+    """What a reply (ReplyBox) and a Draft (DraftView) share: ctrl+o attach, the .replyhint line, and the send
+    worker. A host supplies attach_owner(), not_sent(error, status), and its own sent() calling this one;
+    ReplyBox overrides send to keep the worker for its cancelled-send rule."""
+
+    def check_action(self, action, parameters):
+        return action != "attach" or self.attach_owner() is not None
+
+    def action_attach(self):
+        attach(self, self.attach_owner())
+
+    def hint(self, text, error=False):
+        h = self.query_one(".replyhint")
+        h.update(escape(text))
+        h.set_class(error, "error")
+
+    @work(thread=True, exclusive=True)
+    def send(self, deliver):
+        """`deliver()` off the UI thread; on a ReplyError the text and staged files stay for not_sent."""
+        try:
+            deliver()
+        except ReplyError as e:
+            self.app.call_from_thread(self.not_sent, str(e), e.status)
+            return
+        self.app.call_from_thread(self.sent)
+
+    def sent(self):
+        self.app.undo = None  # a sent message cannot be unsent
+        self.app.notify("Sent · Waiting for them: back to Todo when they reply, or in 4 days to follow up.")
+
+
 class ComposeArea(PagedTextArea):
     """A reply or Draft body. Pasting one path to an image file, which is what Herdr's Ctrl+V sends, stages a
     copy of the image instead of inserting the path (FR-A10)."""
 
     async def _on_paste(self, event):
         text = event.text.strip()
-        host = next((a for a in self.ancestors if isinstance(a, (ReplyBox, DraftView))), None)
+        host = next((a for a in self.ancestors if isinstance(a, Composer)), None)
         owner = host.attach_owner() if host is not None else None
         if owner and "\n" not in text and text.startswith("/") and Path(text).is_file() \
                 and (mimetypes.guess_type(text)[0] or "").startswith("image/"):
@@ -1294,7 +1326,7 @@ class ComposeArea(PagedTextArea):
             stage_file(host, owner, text)
 
 
-class ReplyBox(Vertical):
+class ReplyBox(Composer, Vertical):
     """Inline reply for one Thread, laid out like an email composer.
 
     Email (Plain's composer): From, To, Cc, and Subject; To and Cc are editable, and Reply / Reply all
@@ -1341,12 +1373,6 @@ class ReplyBox(Vertical):
         if self.view is None or not self.has_class("open") or not attachable(self.view["channel"]["platform"]):
             return None
         return ("thread", self.draft_key)
-
-    def check_action(self, action, parameters):
-        return action != "attach" or self.attach_owner() is not None
-
-    def action_attach(self):
-        attach(self, self.attach_owner())
 
     def parent_confirmed(self):
         return bool(self.view and self.view["channel"]["platform"] == "gmail" and self.view["messages"]
@@ -1475,7 +1501,7 @@ class ReplyBox(Vertical):
         self.send(text, to, cc)
 
     @work(thread=True, exclusive=True)
-    def send(self, text, to, cc):
+    def send(self, text, to, cc):  # its own worker: send_result needs the worker to drop a cancelled send
         worker = get_current_worker()
         try:
             self.app.send_reply(self.draft_key, text, to, cc)
@@ -1496,12 +1522,11 @@ class ReplyBox(Vertical):
             self.sent()
 
     def sent(self):
+        super().sent()
         self.app.drafts.pop(self.draft_key, None)
         self.remove_class("open")
         self.query_one(StagedList).show(None)
         self.show_idle(self.view)
-        self.app.undo = None  # a sent message cannot be unsent
-        self.app.notify("Sent. Waiting for them: back to Todo when they reply, or in 4 days to follow up.")
         page = self.app.main.page
         if page is not None:
             page.after_change()
@@ -2217,7 +2242,7 @@ class DraftEditor(Vertical):
         yield Static(DRAFT_HINT, classes="replyhint")
 
 
-class DraftView(Horizontal):
+class DraftView(Composer, Horizontal):
     """Selected local draft plus exact captured history; no Thread ID or reply callback."""
     # The Drafts list keys work here too; text fields consume printable keys before these fire.
     BINDINGS = [Binding("j", "page('down')", "move", key_display="j/k"), Binding("k", "page('up')", show=False),
@@ -2307,7 +2332,7 @@ class DraftView(Horizontal):
         if not self.query(".toinput"):
             return
         values, connection = self.values(), self.connection()
-        label = f"{PLATFORMS[connection['platform']].title} · {conn_name(connection)}" if connection else (
+        label = connection_label(connection) if connection else (
             "Connection unavailable" if self.connection_id is not None else "Choose Connection")
         self.query_one(DraftConnection).update(escape(label))
         for row in self.query(".field.cc, .field.subject"):
@@ -2328,13 +2353,12 @@ class DraftView(Horizontal):
         notice = self.query_one(".savenotice")
         notice.update(escape(SEND_UNKNOWN if locked and not self.notice else self.notice))
         notice.set_class(self.save_error or locked, "error")
-        hint = self.query_one(".replyhint")
-        hint.update("Save conflict · edits kept" if self.save_error and self.notice.startswith("Save conflict") else
-                    "Not sent · edits kept" if self.save_error and self.notice.startswith("Not sent") else
-                    "Save failed · edits kept" if self.save_error else
-                    "Locked · send outcome unknown" if locked else
-                    DRAFT_HINT if self.attach_owner() else DRAFT_HINT.replace(" · ctrl+o attach", ""))
-        hint.set_class(self.save_error or locked, "error")
+        self.hint("Save conflict · edits kept" if self.save_error and self.notice.startswith("Save conflict") else
+                  "Not sent · edits kept" if self.save_error and self.notice.startswith("Not sent") else
+                  "Save failed · edits kept" if self.save_error else
+                  "Locked · send outcome unknown" if locked else
+                  DRAFT_HINT if self.attach_owner() else DRAFT_HINT.replace(" · ctrl+o attach", ""),
+                  self.save_error or locked)
         note = "none captured" if self.history_note.startswith("No captured match") else self.history_note
         history = "\n".join(escape(v["thread"].title) for v in self.history_views) or escape(note)
         self.query_one(".historynotice").display = self.has_class("narrow") or self.history_note.startswith("Captured history unavailable")
@@ -2519,17 +2543,12 @@ class DraftView(Horizontal):
     def check_action(self, action, parameters):
         if action == "reload":
             return self.save_error and self.notice.startswith("Save conflict")
-        if action == "attach":
-            return self.attach_owner() is not None
-        return True
+        return super().check_action(action, parameters)
 
     def attach_owner(self):
         """This Draft (FR-A8); None for SMS and Fastmail (FR-A16) or while its send outcome is unknown."""
         c = self.connection()
         return ("draft", self.draft_id) if attachable(c and c["platform"]) and not self.draft.get("sending_at") else None
-
-    def action_attach(self):
-        attach(self, self.attach_owner())
 
     def action_send(self):
         if self.app.send_draft is None:
@@ -2548,7 +2567,7 @@ class DraftView(Horizontal):
             self.paint()
             return
         v, connection = self.values(), self.connection()
-        lines = [("Connection", f"{PLATFORMS[connection['platform']].title} · {conn_name(connection)}" if connection else ""),
+        lines = [("Connection", connection_label(connection) if connection else ""),
                  ("From", self.sender_label(v, connection)), ("To", v["to"])] + (
                 [("Cc", v["cc"]), ("Subject", v["subject"])] if FORMATS[self.kind].cc_subject else [])
         body = "\n".join(f"[#928374]{k:<11}[/]{escape(val)}" for k, val in lines if val)
@@ -2573,17 +2592,8 @@ class DraftView(Horizontal):
 
     def dispatch_send(self, again=False):
         self.notice, self.save_error = "", False
-        self.query_one(".replyhint").update("sending…")
-        self.send(self.draft["revision"], again)
-
-    @work(thread=True, exclusive=True)
-    def send(self, revision, again):
-        try:
-            self.app.send_draft(self.draft_id, revision, again)
-        except DraftSendError as e:
-            self.app.call_from_thread(self.not_sent, str(e), e.status)
-            return
-        self.app.call_from_thread(self.sent)
+        self.hint("sending…")
+        self.send(partial(self.app.send_draft, self.draft_id, self.draft["revision"], again))
 
     def not_sent(self, error, status):
         try:
@@ -2601,8 +2611,7 @@ class DraftView(Horizontal):
                 self.query_one(".timeline").focus()
 
     def sent(self):
-        self.app.undo = None  # a sent message cannot be unsent
-        self.app.notify("Sent · Waiting for them.")
+        super().sent()
         page = self.app.main.current
         if isinstance(page, DraftsPage):
             page.refresh_data(select_id=page.neighbor(self.draft_id))
