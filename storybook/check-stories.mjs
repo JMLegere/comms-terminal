@@ -24,10 +24,14 @@ const catalog = JSON.parse(await text('./scene-catalog.json'));
 // Sequencing P0 mocks (.agents/prd/2026-10-16-sequencing.md) live beside the 56 composition states.
 const sequencingFiles = { 'sequencing-tasks': 'Sequencing/Tasks', 'sequencing-sequences': 'Sequencing/Sequences', 'sequencing-people': 'Sequencing/People' };
 const sequencing = catalog.filter(scene => scene.file.startsWith('sequencing-'));
-const composition = catalog.filter(scene => !scene.file.startsWith('sequencing-'));
+// Today (.agents/prd/2026-10-17-today-view.md) is captured from the real page, beside the mocks.
+const todayFiles = { today: 'Today' };
+const today = catalog.filter(scene => scene.file === 'today.stories.js');
+const composition = catalog.filter(scene => !scene.file.startsWith('sequencing-') && scene.file !== 'today.stories.js');
 assert.equal(composition.length, 56, 'Expected 56 preserved mock states');
 assert.equal(new Set(catalog.map(scene => scene.id)).size, catalog.length, 'Duplicate catalog IDs');
 assert.equal(sequencing.length, 17, 'Expected 17 Sequencing mock states');
+assert.equal(today.length, 3, 'Expected 3 Today states');
 const requirements = new Set();
 const scenarios = new Set();
 let count = 0;
@@ -79,6 +83,18 @@ for (const [file, title] of Object.entries(sequencingFiles)) {
 // Visual requirements only: FR-SEQ-9/11/22 (completion rules, reply-Draft storage, agent CLI) have no screen of their own.
 for (const n of [1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 13, 14, 15, 16, 17, 18, 19, 20, 23, 24]) assert(sequencingRequirements.has(`FR-SEQ-${n}`), `FR-SEQ-${n}: no Sequencing mock`);
 for (let n = 21; n <= 32; n++) assert(scenarios.has(`AS-${n}`), `AS-${n}: not covered`);
+for (const [file, title] of Object.entries(todayFiles)) {
+  const stories = await import(`./src/${file}.stories.js`);
+  const names = today.filter(scene => scene.file === `${file}.stories.js`).map(scene => scene.exportName);
+  assert.equal(stories.default.title, title, `${file}: group title changed`);
+  assert.deepEqual(Object.keys(stories).filter(name => name !== 'default').sort(), [...names].sort(), `${file}: named states changed`);
+  for (const name of names) {
+    const scene = today.find(entry => entry.exportName === name);
+    assert.equal(`${slug(title)}--${slug(name)}`, scene.id, `${file}/${name}: Storybook ID changed`);
+    assert.deepEqual(stories[name].parameters.nativeCapture, { id: scene.id, kind: 'mock', columns: [187, 80] });
+    assert.deepEqual(stories[name].parameters.prd, scene.parameters.prd, `${file}/${name}: PRD metadata changed`);
+  }
+}
 const referenceStories = await import('./src/reference.stories.js');
 assert.equal(referenceStories.default.title, 'Reference current app');
 assert.deepEqual(Object.keys(referenceStories).filter(name => name !== 'default').sort(), ['EmailReply', 'People', 'Queue']);
@@ -92,7 +108,7 @@ for (const scene of references) {
   assert.deepEqual(referenceStories[scene.state].parameters.nativeCapture, { id: scene.id, kind: 'reference', columns: [187, 80] });
   assert.match(referenceStories[scene.state].parameters.docs.description.story, /synthetic data.*Static capture/);
 }
-const expectedFiles = [...Object.keys(required).map(file => `${file}.stories.js`), ...Object.keys(sequencingFiles).map(file => `${file}.stories.js`), 'reference.stories.js', 'snapshot.js', 'styles.css'].sort();
+const expectedFiles = [...Object.keys(required).map(file => `${file}.stories.js`), ...Object.keys(sequencingFiles).map(file => `${file}.stories.js`), ...Object.keys(todayFiles).map(file => `${file}.stories.js`), 'reference.stories.js', 'snapshot.js', 'styles.css'].sort();
 assert.deepEqual((await readdir(local('./src/'))).sort(), expectedFiles, 'Retired HTML renderers or unexpected UI implementation remain');
 const snapshotSource = await text('./src/snapshot.js');
 assert(!/\b(?:XMLHttpRequest|WebSocket|localStorage|sessionStorage|indexedDB)\b|innerHTML|<(?:form|input|textarea|table|main|nav)\b/.test(snapshotSource), 'Viewer must not recreate app UI or touch providers/storage');
@@ -219,6 +235,12 @@ for filename in sys.argv[2:]:
     # Exclude the native properties column before joining wrapped conversation text.
     conversation_rows = [row[:-36] for row in detail_rows] if columns == 187 else detail_rows
     rail, main, detail = map(plain, (rail_rows, main_rows, conversation_rows))
+    if capture['id'].startswith('today--'):
+        assert re.search(r'\bToday\b', ''.join(rail_rows[:3])), f'{filename}: Today must be the first rail line'
+        everything = plain([''.join(row) for row in rows])
+        marker = {'TodayLists': 'overdue', 'TodayTasks': 'Call twice', 'TodayAllClear': 'All clear'}[capture['state']]
+        assert columns == 80 or marker in everything, f'{filename}: {capture["state"]} lost its marker {marker!r}'  # 80 truncates
+        continue
     if capture['id'].startswith('sequencing-'):
         modal = capture['state'] in {'SequenceArchive', 'EnrollFromPeople', 'TasksFilter'} and columns == 80  # a centred menu covers the rail
         if not modal:

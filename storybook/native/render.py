@@ -672,15 +672,15 @@ def assert_native_workspace(app, spec):
     assert rail.styles.background.hex.lower() == "#f5edca" and rail.region.right <= listing.region.x
     options = [rail.get_option_at_index(i) for i in range(rail.option_count)]
     ids = [option.id for option in options if option.id is not None]
-    assert [option.id for option in options[:12]] == [None, "view:0", "view:1", "view:2", "view:3", "drafts", None, None, "tasks",
-                                                     "sequences", None, None], "Drafts must replace All after Ignored, then outreach (Tasks, Sequences), then Cases"
-    assert options[12].id == "cases:0"
-    assert options[0].disabled and Text.from_markup(options[0].prompt).plain.endswith("threads")
-    assert options[6].disabled and not options[6].prompt and options[7].disabled
-    assert Text.from_markup(options[7].prompt).plain.endswith("outreach")
-    assert options[10].disabled and not options[10].prompt and Text.from_markup(options[11].prompt).plain.endswith("cases")
+    assert [option.id for option in options[:18]] == ["today", None, None, "view:0", "view:1", "view:2", "view:3", "drafts", None, None,
+                                                     "cases:0", "cases:1", "cases:2", "cases:3", None, None, "tasks", "sequences"], \
+        "Today first, then threads with Drafts replacing All after Ignored, then Cases, then outreach (Tasks, Sequences)"
+    assert options[1].disabled and not options[1].prompt
+    assert options[2].disabled and Text.from_markup(options[2].prompt).plain.endswith("threads")
+    assert options[8].disabled and not options[8].prompt and Text.from_markup(options[9].prompt).plain.endswith("cases")
+    assert options[14].disabled and not options[14].prompt and Text.from_markup(options[15].prompt).plain.endswith("outreach")
     assert "compose" not in ids and "view:4" not in ids and ids.count("drafts") == 1 and len(ids) == len(set(ids))
-    assert not any(re.search(r"\bAll\b", Text.from_markup(option.prompt).plain) for option in options[1:6]), "Mock rail must not retain All navigation"
+    assert not any(re.search(r"\bAll\b", Text.from_markup(option.prompt).plain) for option in options[3:8]), "Mock rail must not retain All navigation"
     draft = rail.get_option("drafts")
     active = main.section == "drafts"
     # The product rail now shows the Drafts count (4e50c42), so the native row may end with one.
@@ -799,13 +799,16 @@ async def capture(entry, output):
 
 async def main():
     import sequencing  # Sequencing P0 mocks (.agents/prd/2026-10-16-sequencing.md); imports this module
+    import today  # Today, the real page (.agents/prd/2026-10-17-today-view.md)
     everything = json.loads((STORYBOOK / "scene-catalog.json").read_text())
-    catalog = [entry for entry in everything if not entry["file"].startswith("sequencing-")]
+    catalog = [entry for entry in everything if not entry["file"].startswith(("sequencing-", "today."))]
     sequencing_catalog = [entry for entry in everything if entry["file"].startswith("sequencing-")]
+    today_catalog = [entry for entry in everything if entry["file"] == "today.stories.js"]
     expected = set(COMPOSE) | set(ADMISSION) | set(RECIPIENTS) | set(OUTCOMES) | set(THREADS) | set(PEOPLE) | {"EmptyDrafts", "SavedAndUnresolvedDrafts"}
     assert len(catalog) == 56 and {entry["exportName"] for entry in catalog} == expected
     assert len({entry["id"] for entry in catalog}) == 56
     assert sequencing_catalog == sequencing.catalog_entries(), "scene-catalog.json is stale: rewrite it from sequencing.catalog_entries()"
+    assert today_catalog == today.catalog_entries(), "scene-catalog.json is stale: rewrite it from today.catalog_entries()"
     assert FONT_PATH.is_file(), "Copy verified public terminal font before generating captures"
     output = STORYBOOK / "public/native"
     output.mkdir(parents=True, exist_ok=True)
@@ -824,6 +827,12 @@ async def main():
     for columns in COLUMNS:
         mocks = [capture for capture in captures if capture["id"].startswith("sequencing-") and capture["columns"] == columns]
         assert len({capture["sha256"] for capture in mocks}) == len(sequencing_catalog), "Every Sequencing state must remain visually distinct"
+    for entry in today_catalog:
+        captures.extend(await today.capture(entry, output))
+        print(f"Textual · {entry['id']} · {COLUMNS[0]}/{COLUMNS[1]}", flush=True)
+    for columns in COLUMNS:
+        mocks = [capture for capture in captures if capture["id"].startswith("today--") and capture["columns"] == columns]
+        assert len({capture["sha256"] for capture in mocks}) == len(today_catalog), "Every Today state must remain visually distinct"
     manifest = dict(renderer="Textual", columns=list(COLUMNS), font=dict(family="VictorMono Nerd Font", path="/fonts/" + FONT_PATH.name,
                     sha256=hashlib.sha256(FONT_PATH.read_bytes()).hexdigest()), source=dict(tui_sha256=hashlib.sha256((ROOT / "src/universal_inbox/tui.py").read_bytes()).hexdigest(),
                     textual_version=TEXTUAL_VERSION), scenes=captures)
