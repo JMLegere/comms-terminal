@@ -819,9 +819,32 @@ class Page(Vertical):
     TITLE = ""
     SIDE = ""
     RAIL = ""  # the rail item this page belongs to; the rail and statusline read it from the current page
+    host = None  # the page that stacks this one as one of its lists (Today); None when it is the page itself
 
     def _on_mount(self):  # runs alongside subclasses' on_mount: focus once this page's widgets exist
-        self.call_after_refresh(self.focus_first)
+        if self.host is None:
+            self.call_after_refresh(self.focus_first)
+
+    @property
+    def lists(self) -> list:
+        """The lists this page shows: itself, or for a page that stacks lists (Today), each of them."""
+        return [self]
+
+    @property
+    def active_list(self):
+        """The list in use: this page, or for a page that stacks lists, the one holding the cursor."""
+        return self
+
+    @property
+    def on_screen(self) -> bool:
+        """The current page, or one of the lists it stacks: it may refresh."""
+        current = self.app.main.current
+        return current is self or (self.host is not None and current is self.host)
+
+    @property
+    def active(self) -> bool:
+        """On screen and the list in use: only it fills the right pane."""
+        return self.on_screen and self.app.main.current.active_list is self
 
     def check_action(self, action, parameters):
         if action == "back":
@@ -851,9 +874,15 @@ THREAD_KEYS = [  # Thread actions, Gmail-style (decision #93); shared by the Thr
 class ThreadsPage(Page, ThreadActions):
     """The Status view's list. The selected Thread shows beside it; arrows move focus between panes."""
 
+    fixed_view = None  # a Status view index that stays put (Today's Todo list); else the app's current view
+
+    @property
+    def view_index(self) -> int:
+        return self.app.view if self.fixed_view is None else self.fixed_view
+
     @property
     def RAIL(self):
-        return f"view:{self.app.view}"
+        return f"view:{self.view_index}"
 
     BINDINGS = [
         Binding("j", "down", "move", key_display="j/k"), Binding("k", "up", show=False),
@@ -873,12 +902,12 @@ class ThreadsPage(Page, ThreadActions):
 
     @property
     def TITLE(self):
-        name = VIEW_NAMES[self.app.view]
+        name = VIEW_NAMES[self.view_index]
         return f"{ICON[VIEW_ICON[name][0]]} threads · {name.lower()}"
 
     def compose(self) -> ComposeResult:
         yield ClickTable(id="table", cursor_type="row", show_header=False)
-        yield Static(LEGEND[VIEW_NAMES[self.app.view]], id="legend")
+        yield Static(LEGEND[VIEW_NAMES[self.view_index]], id="legend")
 
     def on_mount(self):
         self.rows = []
@@ -887,7 +916,7 @@ class ThreadsPage(Page, ThreadActions):
 
     def tick(self):
         """Snoozed rows count down every second; only their time cells change."""
-        if self.app.main.current is not self or not self.query(DataTable):
+        if not self.on_screen or not self.query(DataTable):
             return
         table = self.query_one(DataTable)
         for i, r in enumerate(self.rows):
@@ -903,15 +932,15 @@ class ThreadsPage(Page, ThreadActions):
         self.focus_first()
 
     def refresh_data(self):
-        if not self.query(DataTable) or self.app.main.current is not self:  # not composed yet, or being replaced
+        if not self.query(DataTable) or not self.on_screen:  # not composed yet, or being replaced
             return
-        db, view = self.app.db, self.app.view
+        db, view = self.app.db, self.view_index
         keep = self.current_thread_id()  # selection follows the Thread, not the row number
         old_id = self.rows[min(self.query_one(DataTable).cursor_row, len(self.rows) - 1)]["id"] if self.rows else None
         tv = self.app.main.thread_view
         members = inbox.snapshot(db, keep)["_members"] if keep is not None else None
         membership_changed = tv is not None and keep is not None and inbox.get_thread(db, tv.thread_id).id == keep and tv.members != members
-        if keep is not None and (old_id != keep or membership_changed):
+        if self.fixed_view is None and keep is not None and (old_id != keep or membership_changed):
             detail = inbox.get_thread(db, keep).status_detail
             if detail not in inbox.VIEWS[VIEW_NAMES[view]]:
                 view = self.app.view = next(i for i, name in enumerate(VIEW_NAMES) if detail in inbox.VIEWS[name])
@@ -954,6 +983,8 @@ class ThreadsPage(Page, ThreadActions):
             if main.pending_select in ids:
                 table.move_cursor(row=ids.index(main.pending_select))
             main.pending_select = None
+        if not self.active:  # another of Today's lists fills the right pane
+            return
         selected = self.current_thread_id()
         main.show_thread(selected)
         tv = main.thread_view
@@ -994,9 +1025,9 @@ class ThreadsPage(Page, ThreadActions):
         event.data_table.clicked = False
 
     def on_data_table_row_highlighted(self, event):
-        if self.app.main.current is not self:  # a page being replaced must not repaint the thread pane
+        if not self.active:  # a page being replaced, or another of Today's lists, must not repaint the thread pane
             return
-        self.app.cursor[self.app.view] = event.cursor_row
+        self.app.cursor[self.view_index] = event.cursor_row
         self.app.main.show_thread(self.current_thread_id())
 
     def action_down(self):
@@ -2564,8 +2595,8 @@ class DraftView(Composer, Horizontal):
         else:
             self.draft, self.notice, self.save_error = dict(draft), "", False
             self.paint()
-            if refresh and isinstance(self.app.main.current, DraftsPage):
-                self.app.main.current.refresh_data()
+            if refresh and isinstance(self.app.main.list, DraftsPage):
+                self.app.main.list.refresh_data()
             return True
         self.save_error = True
         self.paint()
@@ -2576,10 +2607,10 @@ class DraftView(Composer, Horizontal):
         self.save()
 
     def action_page(self, action):
-        if isinstance(self.app.main.current, DraftsPage):
-            getattr(self.app.main.current, f"action_{action}")()
-        elif isinstance(self.app.main.current, TasksPage):  # an email Task's Draft: x skips, y copies
-            self.app.main.current.action_page(action)
+        if isinstance(self.app.main.list, DraftsPage):
+            getattr(self.app.main.list, f"action_{action}")()
+        elif isinstance(self.app.main.list, TasksPage):  # an email Task's Draft: x skips, y copies
+            self.app.main.list.action_page(action)
 
     def action_close(self):
         if self.save():
@@ -2649,7 +2680,7 @@ class DraftView(Composer, Horizontal):
         if choice == "again":
             self.dispatch_send(again=True)
         elif choice == "sent":
-            page = self.app.main.current
+            page = self.app.main.list
             neighbor = page.neighbor(self.draft_id) if isinstance(page, DraftsPage) else None
             try:
                 inbox.delete_draft(self.app.db, self.draft_id)
@@ -2681,7 +2712,7 @@ class DraftView(Composer, Horizontal):
 
     def sent(self):
         super().sent()
-        page = self.app.main.current
+        page = self.app.main.list
         if isinstance(page, DraftsPage):
             page.refresh_data(select_id=page.neighbor(self.draft_id))
         elif isinstance(page, TasksPage):  # the Task is done; the next one shows
@@ -2699,9 +2730,10 @@ class DraftsPage(Page):
                 Binding("ctrl+s", "save", "save draft"), Binding("ctrl+enter", "send", show=False),
                 Binding("ctrl+r", "reload", show=False)]
 
-    def __init__(self):
+    def __init__(self, include=None):
         super().__init__()
         self.items = []
+        self.include = include  # which Drafts to list (Today's rule); every Draft when None
 
     def compose(self):
         yield ClickTable(id="table", cursor_type="row", show_header=False)
@@ -2713,10 +2745,10 @@ class DraftsPage(Page):
         self.call_after_refresh(self.refresh_data)
 
     def refresh_data(self, select_id=None):
-        if not self.query(DataTable) or self.app.main.current is not self:
+        if not self.query(DataTable) or not self.on_screen:
             return
         try:
-            items = inbox.list_drafts(self.app.db)
+            items = [d for d in inbox.list_drafts(self.app.db) if self.include is None or self.include(d)]
         except Exception:
             self.app.notify("Draft list unavailable · current edits kept.", severity="error")
             return
@@ -2734,7 +2766,8 @@ class DraftsPage(Page):
             table.move_cursor(row=ids.index(wanted) if wanted in ids else 0)
         else:
             table.add_row("[#928374]No drafts · n new[/]", "", *(("", "") if not narrow else ()))
-        self.show_selected()
+        if self.active:
+            self.show_selected()
         self.app.main.refresh_chrome()
 
     def cells(self, draft):
@@ -2811,7 +2844,7 @@ class DraftsPage(Page):
 
     def on_data_table_row_highlighted(self, event):
         event.stop()
-        if self.app.main.current is self:
+        if self.active:
             self.show_selected()
 
     def on_data_table_row_selected(self, event):
@@ -3961,7 +3994,7 @@ class TasksPage(Page):
         return ts
 
     def refresh_data(self, select_id=None):
-        if not self.query(DataTable) or self.app.main.current is not self:
+        if not self.query(DataTable) or not self.on_screen:
             return
         table = self.query_one(DataTable)
         keep = select_id or (self.selected() or {}).get("id")
@@ -3995,10 +4028,12 @@ class TasksPage(Page):
         label = {None: "due"} | {k: KIND_LABEL[k].lower() for k in KIND_LABEL}
         self.TITLE = f"{ICON['tasks']} tasks · " + (label.get(self.filter) if not isinstance(self.filter, tuple) else
                                                      escape(sequences.get_sequence(self.app.db, self.filter[1])["name"]))
-        self.app.main.query_one("#main").border_title = pill(self.TITLE, "blue")
+        if self.host is None:
+            self.app.main.query_one("#main").border_title = pill(self.TITLE, "blue")
         count = sum(1 for t in self.items if t)
         self.query_one("#below").update(f"[#928374]{count} due · / filters by kind or Sequence[/]" if count else "")
-        self.show_selected()
+        if self.active:
+            self.show_selected()
         self.app.main.refresh_chrome()
 
     def selected(self):
@@ -4037,7 +4072,7 @@ class TasksPage(Page):
                 self.query_one(DataTable).move_cursor(row=target)
                 return
         self.last_row = row
-        if self.app.main.current is self:
+        if self.active:
             self.show_selected()
 
     def on_data_table_row_selected(self, event):
@@ -4589,6 +4624,11 @@ class MainScreen(Screen):
         return self.current
 
     @property
+    def list(self) -> Page | None:
+        """The list in use: the current page, or the one of Today's lists holding the cursor."""
+        return self.current.active_list if self.current is not None else None
+
+    @property
     def thread_view(self) -> ThreadView | None:
         views = self.query("#thread ThreadView")
         return views.first() if views else None
@@ -4598,7 +4638,8 @@ class MainScreen(Screen):
         return next((v for v in self.query("#thread DraftView") if v.draft_id == self.app.selected_draft), None)
 
     def save_draft(self):
-        view = self.draft_view if isinstance(self.current, (DraftsPage, TasksPage)) else None
+        lists = self.current.lists if self.current is not None else []
+        view = self.draft_view if any(isinstance(x, (DraftsPage, TasksPage)) for x in lists) else None
         return view.save(refresh=False) if view is not None else True
 
     def on_mount(self):
@@ -4627,7 +4668,7 @@ class MainScreen(Screen):
                 self.focus_list()
         elif direction < 0:
             self.rail.focus()
-        elif isinstance(self.current, (ThreadsPage, DraftsPage)) and tv is not None:
+        elif isinstance(self.list, (ThreadsPage, DraftsPage)) and tv is not None:
             timelines = tv.query(".timeline")
             if timelines:
                 timeline = timelines.first()
@@ -4955,7 +4996,7 @@ class Console(App):
 
     async def action_thread(self, name):
         """Run a Thread action from the focused thread pane or a properties link."""
-        page = self.main.page
+        page = self.main.list
         if isinstance(page, (ThreadsPage, CasePage)):
             await self.run_action(name, page)
 
