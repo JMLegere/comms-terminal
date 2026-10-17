@@ -97,6 +97,13 @@ ModalScreen { background: #7c6f64 25%; align: center middle; }
 .threadempty, .sidetext { padding: 1 1; }
 Page { height: 1fr; }
 #legend { color: #a89984; height: auto; }
+/* Today (FR-T6): Tasks and Drafts fit their rows up to a third of the height; Todo Threads take the rest */
+#todaythreads { height: 1fr; }
+#todaytasks, #todaydrafts { height: auto; }
+#todaytasks Page, #todaydrafts Page { height: auto; }
+#todaytasks DataTable, #todaydrafts DataTable { height: auto; max-height: 30vh; }
+.todaypane #legend, .todaypane #below { display: none; }
+#allclear { display: none; height: 1fr; padding: 1 2; }
 #table { margin-top: 1; }
 DataTable { background: #f9f5d7; color: #654735; height: 1fr; scrollbar-size-horizontal: 0; }
 #ids { height: auto; }
@@ -478,8 +485,9 @@ HELP = [  # (group, [(keys, what it does)]) — the full key map; Gmail-style wh
                      ("space", "scroll the thread (pgup / pgdn)"),
                      ("← / →", "focus previous / next pane (no item opens)"),
                      ("enter", "sidebar: open the item · list row: move into it (a case header opens the case)"),
-                     ("1 – 5", "Todo, Snoozed, Done, Ignored, Drafts"),
-                     ("6 – 9", "People, Organizations, Cases (Todo), Channels"), ("u", "back (esc also works)")]),
+                     ("1", "Today: Todo threads, due tasks, and drafts (tab: the next list)"),
+                     ("2 – 6", "Todo, Snoozed, Done, Ignored, Drafts"),
+                     ("7 – 0", "People, Organizations, Cases (Todo), Channels"), ("u", "back (esc also works)")]),
     ("Thread", [("r", "reply to the sender   ctrl+enter sends now or later · esc keeps the draft"), ("a", "reply all"),
                 ("e", "done: it returns if they write again"), ("b", "snooze until a time (it also returns when they write)"),
 ("m", "ignore: it stays out of Todo (m again un-ignores)"), ("x", "ignore, as m does"),
@@ -719,7 +727,12 @@ class Rail(OptionList):
             return Option(f"[#928374]{ICON[icon_name]} {text}[/]", disabled=True)
 
         gap = Option("", disabled=True)
-        opts = [header("threads", "threads")]
+        try:
+            today = inbox.today(db)
+            waiting = len(today["threads"]) + len(today["tasks"]) + len(today["drafts"])
+        except Exception:  # a failed Draft read must not take the rail down; the Drafts list says why
+            waiting = ""
+        opts = [item("today", "today", "Today", waiting), gap, header("threads", "threads")]
         for i, name in enumerate(VIEW_NAMES):
             if name == "All":
                 opts.append(item("drafts", "edited", "Drafts", db.execute("SELECT count(*) FROM composition_drafts").fetchone()[0]))
@@ -781,7 +794,20 @@ class Rail(OptionList):
 
 
 class ClickTable(DataTable):
-    """Mouse: a click on a row selects it; a click on the selected row, or a double click, opens it."""
+    """Mouse: a click on a row selects it; a click on the selected row, or a double click, opens it.
+    Keys: in a list Today stacks, moving past the last (or first) row runs on into the next (or previous) list."""
+
+    def action_cursor_down(self):
+        if not self._run_on(1):
+            super().action_cursor_down()
+
+    def action_cursor_up(self):
+        if not self._run_on(-1):
+            super().action_cursor_up()
+
+    def _run_on(self, step) -> bool:
+        page = next((a for a in self.ancestors if isinstance(a, Page)), None)
+        return page is not None and page.host is not None and page.at_edge(step) and page.host.run_on(page, step)
 
     async def _on_click(self, event) -> None:
         # Textual also calls DataTable._on_click (base handlers run too); prevent it and decide here.
@@ -867,6 +893,21 @@ class Page(Vertical):
         """On screen and the list in use: only it fills the right pane."""
         return self.on_screen and self.app.main.current.active_list is self
 
+    KIND = ""  # what a list holds, for Today's statusline (threads, tasks, drafts)
+
+    def selectable_rows(self) -> list[int]:
+        """Rows the cursor may rest on (group headers excluded where the list skips them)."""
+        return list(range(len(getattr(self, "items", []))))
+
+    def at_edge(self, step) -> bool:
+        rows = self.selectable_rows()
+        row = self.query_one(DataTable).cursor_row
+        return not rows or (row >= rows[-1] if step > 0 else row <= rows[0])
+
+    def show_current(self):
+        """Fill the right pane with the selected item (a list becoming the one in use)."""
+        getattr(self, "show_selected", lambda: None)()
+
     def check_action(self, action, parameters):
         if action == "back":
             return len(self.app.main.stack) > 1
@@ -896,6 +937,13 @@ class ThreadsPage(Page, ThreadActions):
     """The Status view's list. The selected Thread shows beside it; arrows move focus between panes."""
 
     fixed_view = None  # a Status view index that stays put (Today's Todo list); else the app's current view
+    KIND = "threads"
+
+    def selectable_rows(self):
+        return [i for i, r in enumerate(getattr(self, "rows", [])) if not r.get("header")]
+
+    def show_current(self):
+        self.app.main.show_thread(self.current_thread_id())
 
     @property
     def view_index(self) -> int:
@@ -1004,6 +1052,8 @@ class ThreadsPage(Page, ThreadActions):
             if main.pending_select in ids:
                 table.move_cursor(row=ids.index(main.pending_select))
             main.pending_select = None
+        if self.host is not None:
+            self.host.list_changed(self)
         if not self.active:  # another of Today's lists fills the right pane
             return
         selected = self.current_thread_id()
@@ -2781,6 +2831,7 @@ class DraftView(Composer, Horizontal):
 class DraftsPage(Page):
     TITLE = f"{ICON['edited']} drafts"
     RAIL = "drafts"
+    KIND = "drafts"
     SIDE = f"{ICON['edited']} draft"
     BINDINGS = [Binding("j", "down", "move", key_display="j/k"), Binding("k", "up", show=False),
                 Binding("n", "new", "new draft"), Binding("x", "delete", "delete draft"),
@@ -2824,6 +2875,8 @@ class DraftsPage(Page):
             table.move_cursor(row=ids.index(wanted) if wanted in ids else 0)
         else:
             table.add_row("[#928374]No drafts · n new[/]", "", *(("", "") if not narrow else ()))
+        if self.host is not None:
+            self.host.list_changed(self)
         if self.active:
             self.show_selected()
         self.app.main.refresh_chrome()
@@ -3499,6 +3552,8 @@ class StatusLine(Static):
         mode = VIEW_NAMES[app.view].upper() if sec.startswith("view:") else (
             f"CASES · {inbox.CASE_VIEWS[app.case_view].upper()}" if sec.startswith("cases:") else
             "CONNECTION" if sec.startswith("conn:") else sec.upper())
+        if sec == "today" and main.list is not None and main.list.KIND:
+            mode += f" › {main.list.KIND.upper()}"
         if len(main.stack) > 1 and main.page is not None:  # deeper than the rail section: say where
             mode += f" › {main.page.TITLE.split(' ', 1)[-1].upper()}"
         left = f"[b {b['bg0']} on {b['grey2']}] {mode} [/][{b['grey2']}]\ue0bc[/] "
@@ -4028,8 +4083,12 @@ class TaskDraftView(DraftView):
 
 class TasksPage(Page):
     """Due Tasks (FR-SEQ-15): Overdue, Due today, Later today; the selected one in the side pane."""
-    TITLE = f"{ICON['tasks']} tasks · today"
+    TITLE = f"{ICON['tasks']} tasks · due"
     RAIL = "tasks"
+    KIND = "tasks"
+
+    def selectable_rows(self):
+        return [i for i, t in enumerate(self.items) if t]
     SIDE = f"{ICON['tasks']} task"
     BINDINGS = [Binding("j", "down", "move", key_display="j/k"), Binding("k", "up", show=False),
                 Binding("e", "done", "done · next"), Binding("x", "skip", "skip · next"),
@@ -4097,6 +4156,8 @@ class TasksPage(Page):
             self.app.main.query_one("#main").border_title = pill(self.TITLE, "blue")
         count = sum(1 for t in self.items if t)
         self.query_one("#below").update(f"[#928374]{count} due · / filters by kind or Sequence[/]" if count else "")
+        if self.host is not None:
+            self.host.list_changed(self)
         if self.active:
             self.show_selected()
         self.app.main.refresh_chrome()
@@ -4648,7 +4709,144 @@ class StepEditor(Vertical):
             + escape(text if len(text) <= 300 else text[:299] + "…"))
 
 
-SECTIONS = {"threads": ThreadsPage, "people": PeoplePage, "organizations": OrganizationsPage,
+class TodayPage(Page):
+    """Today (GLOSSARY; .agents/prd/2026-10-17-today-view.md): Todo Threads, Due Tasks, and the Drafts not shown
+    through them, stacked in that order; a list with nothing in it hides. The list holding the cursor fills the
+    right pane; ↓/↑ run on from one list into the next, and tab jumps to the next list."""
+    TITLE = f"{ICON['today']} today"
+    RAIL = "today"
+    BINDINGS = [Binding("tab", "next_list", show=False)]
+    PANES = ("todaythreads", "todaytasks", "todaydrafts")
+
+    def __init__(self):
+        super().__init__()
+        threads = ThreadsPage()
+        threads.fixed_view = 0
+        self.threads, self.tasks = threads, TasksPage()
+        self.drafts = DraftsPage(include=lambda d: inbox.today_draft(self.app.db, d))
+        for page in self.lists:
+            page.host = self
+        self.current_list = threads
+
+    @property
+    def lists(self):
+        return [self.threads, self.tasks, self.drafts]
+
+    @property
+    def active_list(self):
+        return self.current_list
+
+    @property
+    def SIDE(self):  # the right pane's title follows the list in use
+        return self.current_list.SIDE
+
+    def compose(self):
+        for page, pane in zip(self.lists, self.PANES):
+            with Vertical(id=pane, classes="stackpane todaypane"):
+                yield page
+        yield Static(id="allclear")
+
+    def on_mount(self):
+        self.app.main.query_one("#main").add_class("stacked")
+
+    def on_unmount(self):
+        self.app.main.query_one("#main").remove_class("stacked")
+
+    @staticmethod
+    def count(page) -> int:
+        return len(page.selectable_rows())
+
+    def refresh_data(self):
+        for page in self.lists:
+            page.refresh_data()
+
+    def after_change(self):  # undo
+        self.refresh_data()
+        self.app.main.refresh_chrome()
+
+    def list_changed(self, page):
+        """A list rebuilt (FR-T3–T9): retitle it, hide it when empty, show All clear when every list is empty,
+        and move the cursor on when the list in use has emptied."""
+        n = self.count(page)
+        if page is self.threads:
+            title = pill(f"{ICON['TODO']} threads · {n}", "blue")
+        elif page is self.tasks:
+            late = sum(1 for t in page.items if t and t["group"] == "overdue")
+            title = pill(f"{ICON['tasks']} tasks · {n}", "blue") + (f" [b #c14a4a]{late} overdue[/]" if late else "")
+        else:
+            title = pill(f"{ICON['edited']} drafts · {n}", "blue")
+        page.parent.border_title = title
+        page.parent.display = n > 0
+        if not self.query("#allclear"):
+            return
+        empty = not any(self.count(p) for p in self.lists)
+        clear = self.query_one("#allclear", Static)
+        clear.display = empty
+        if empty:
+            t = inbox.today(self.app.db)
+            when = lambda at: sequences._at(at).astimezone(sequences.LOCAL).strftime("%a %d %b %H:%M")  # noqa: E731
+            clear.update("\n".join([f"[b #6c782e]{ICON['done']} All clear[/]: nothing needs you now."]
+                                   + ([f"[#928374]{ICON['SNOOZED']} Next wake · {when(t['next_wake'])}[/]"] if t["next_wake"] else [])
+                                   + ([f"[#928374]{ICON['tasks']} Next Task · {when(t['next_task'])}[/]"] if t["next_task"] else [])))
+        elif not self.count(self.current_list):  # the list in use emptied: on to the next list, else the one before
+            i = self.lists.index(self.current_list)
+            target = next((p for p in self.lists[i + 1:] + self.lists[:i][::-1] if self.count(p)), None)
+            if target is not None and self.current_list.has_focus_within:
+                self.call_after_refresh(lambda: self.enter(target, 1))
+            elif target is not None:
+                self.current_list = target
+
+    def run_on(self, page, step) -> bool:
+        i = self.lists.index(page)
+        later = self.lists[i + 1:] if step > 0 else self.lists[:i][::-1]
+        target = next((p for p in later if self.count(p)), None)
+        return target is not None and self.enter(target, step)
+
+    def enter(self, target, step) -> bool:
+        """Make `target` the list in use: the Draft being edited saves first (kept on a failed save); the cursor
+        lands on its first row going down, its last going up, and stays put for tab."""
+        if target is not self.current_list and not self.app.main.save_draft():
+            return False
+        self.current_list = target
+        rows, table = target.selectable_rows(), target.query_one(DataTable)
+        if rows and step:
+            table.move_cursor(row=rows[0] if step > 0 else rows[-1])
+        table.focus()
+        self.show_list()
+        return True
+
+    def show_list(self):
+        self.current_list.show_current()
+        self.app.main.query_one("#thread").border_title = pill(self.SIDE, "green")
+        self.app.main.query_one(StatusLine).refresh_line()
+
+    def on_descendant_focus(self, event):
+        """A click (or ←/→) into another list makes it the list in use."""
+        page = next((p for p in self.lists if p in event.widget.ancestors_with_self), None)
+        if page is not None and page is not self.current_list:
+            if not self.app.main.save_draft():
+                return
+            self.current_list = page
+            self.show_list()
+
+    def action_next_list(self):
+        i = self.lists.index(self.current_list)
+        target = next((p for p in self.lists[i + 1:] + self.lists[:i] if self.count(p)), None)
+        if target is not None:
+            self.enter(target, 0)
+
+    def focus_first(self):
+        target = self.current_list if self.count(self.current_list) else next(
+            (p for p in self.lists if self.count(p)), None)
+        if target is None:
+            return
+        if target is self.current_list:
+            target.query_one(DataTable).focus()
+        else:
+            self.enter(target, 1)
+
+
+SECTIONS = {"today": TodayPage, "threads": ThreadsPage, "people": PeoplePage, "organizations": OrganizationsPage,
             "cases": CasesPage, "channels": ChannelsPage, "tasks": TasksPage, "sequences": SequencesPage}
 
 
@@ -4659,10 +4857,11 @@ class MainScreen(Screen):
         Binding("q", "app.quit", "quit"), Binding("u", "back", show=False),
         Binding("left", "focus_pane(-1)", show=False, priority=True),
         Binding("right", "focus_pane(1)", show=False, priority=True),
-        *[Binding(str(i + 1), f"go('view:{i}')", show=False) for i in range(4)],
-        Binding("5", "go('drafts')", show=False),
-        Binding("6", "go('people')", show=False), Binding("7", "go('organizations')", show=False),
-        Binding("8", "go('cases:0')", show=False), Binding("9", "go('channels')", show=False),
+        Binding("1", "go('today')", show=False),  # Today first, the rest in rail order (FR-T13)
+        *[Binding(str(i + 2), f"go('view:{i}')", show=False) for i in range(4)],
+        Binding("6", "go('drafts')", show=False),
+        Binding("7", "go('people')", show=False), Binding("8", "go('organizations')", show=False),
+        Binding("9", "go('cases:0')", show=False), Binding("0", "go('channels')", show=False),
         Binding("semicolon", "app.expand_all(True)", show=False), Binding("colon", "app.expand_all(False)", show=False),
     ]
 
@@ -4708,7 +4907,7 @@ class MainScreen(Screen):
         return view.save(refresh=False) if view is not None else True
 
     def on_mount(self):
-        self.go(f"view:{self.app.view}")
+        self.go(self.app.home)
 
     def action_go(self, target):
         self.go(target)
@@ -4905,12 +5104,14 @@ class ReplyDrafts(MutableMapping):
 class Console(App):
     CSS = CSS
     TITLE = "Universal Inbox"
+    HOME = "today"  # where the console opens (FR-T2)
     ENABLE_COMMAND_PALETTE = False
 
     def __init__(self, db_path: str, reply=None, sources=None, send_draft=None, slack_conversations=None,
                  files=FILE_SERVER):
         super().__init__()
         self.db_path, self.send_reply, self.view, self.cursor = db_path, reply, 0, {}
+        self.home = self.HOME
         self.drafts = ReplyDrafts(self)
         self.files = files  # the service's LAN file server (host, port): Attachment links and upload pages
         self.send_draft, self.slack_conversations = send_draft, slack_conversations
@@ -4938,11 +5139,18 @@ class Console(App):
         self.install_screen(MainScreen(), "main")
         self.push_screen("main")
         self.set_interval(2, self.check_changes)
-        self.set_interval(60, lambda: self.main.refresh_chrome())  # health goes stale with no write to notice
+        self.set_interval(60, self.minute)
         self.set_interval(1, self.tick_countdowns)
         mine = [c["self_id"] for c in inbox.connections(self.db) if "@" in (c["self_id"] or "")]
         for key in self.sources:
             self.check_source(key, mine)
+
+    def minute(self):
+        """Health goes stale with no write to notice; on Today, a Task can come due by the clock alone (FR-T11)."""
+        if isinstance(self.main.current, TodayPage):
+            self.main.refresh_all()
+        else:
+            self.main.refresh_chrome()
 
     async def action_quit(self):
         if self.main.save_draft():

@@ -140,3 +140,31 @@ def wake_twice(outreach, day):
 def counts(outreach, tasks, drafts):
     assert outreach.db.execute("SELECT count(*) FROM tasks").fetchone()[0] == tasks
     assert outreach.db.execute("SELECT count(*) FROM composition_drafts").fetchone()[0] == drafts
+
+
+def thread_titled(outreach, title):
+    return outreach.db.execute("SELECT id FROM threads WHERE title = ? AND merged_into IS NULL", (title,)).fetchone()[0]
+
+
+@given(parsers.parse('Save Reply Draft keeps Body "{body}" on the Thread "{title}"'))
+def reply_draft(outreach, body, title):
+    inbox.save_reply_draft(outreach.db, thread_titled(outreach, title), body)
+
+
+@given(parsers.parse('Save Draft keeps a new email Draft with Body "{body}"'))
+def new_draft(outreach, body):
+    inbox.save_draft(outreach.db, {"connection_id": 1, "kind": "email", "sender": ME, "to": "ana@acme.example",
+                                   "cc": "", "subject": "", "body": body})
+
+
+@when(parsers.parse('Act snoozes the Thread "{title}" until {day}'))
+def snooze(outreach, title, day):
+    inbox.act(outreach.db, thread_titled(outreach, title), inbox.Snooze(until=DAYS[day]))
+
+
+@then(parsers.re(r"Today on (?P<day>\w+) lists (?P<threads>\d+) Todo Threads?, (?P<tasks>\d+) Due Tasks?, "
+                 r"and Drafts with Body:"))
+def today_lists(outreach, day, threads, tasks, datatable):
+    t = inbox.today(outreach.db, DAYS[day])
+    assert (len(t["threads"]), len(t["tasks"])) == (int(threads), int(tasks))
+    assert sorted(d["body"] for d in t["drafts"]) == sorted(row[0] for row in datatable[1:])

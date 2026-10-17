@@ -65,6 +65,7 @@ ICON = {
     "pause": "\U000f03e4",          # md-pause
     "wait": "\U000f051f",           # md-timer_sand
     # Sequences (.agents/prd/2026-10-16-sequencing.md); present in the bundled VictorMono
+    "today": "\U000f05a8",          # md-white_balance_sunny: Today, the console's home
     "tasks": "\U000f05c7",          # md-format_list_checks
     "sequence": "\U000f027b",       # md-format_list_numbered
     "call": "\U000f0df0",           # md-phone_outgoing_outline

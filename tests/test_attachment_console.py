@@ -172,7 +172,7 @@ def test_pasting_an_image_path_into_a_draft_stages_it_and_other_text_is_typed(tm
     app, seen = Console(path), {}
 
     async def paste(app, pilot):
-        await pilot.press("5")
+        await pilot.press("6")
         await pilot.pause()
         area = app.main.draft_view.query_one(".body-editor")
         area.focus()

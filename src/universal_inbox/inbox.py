@@ -2201,6 +2201,34 @@ def _where(channel, identity) -> str:
     return _org(domain) if domain and domain not in FREE_MAIL else "email"
 
 
+def today_draft(db, draft: dict) -> bool:
+    """Whether Today lists this Draft itself: not a Task's (it shows through its Task once due), and not a reply
+    on a Todo Thread (it shows through that Thread)."""
+    if draft["task_id"] is not None:
+        return False
+    return draft["thread_id"] is None or get_thread(db, draft["thread_id"]).status_detail not in VIEWS["Todo"]
+
+
+def today(db, now: datetime | None = None) -> dict:
+    """Today (GLOSSARY): Todo Threads, Due Tasks, and the Drafts not shown through them, each once; and, for an
+    empty Today, when the next Snoozed Thread wakes and the next Task comes due (None when nothing is coming)."""
+    from . import sequences
+    now = now or _now()
+    snoozed = ",".join("?" * len(VIEWS["Snoozed"]))
+    wake = db.execute(
+        f"SELECT min(at) FROM (SELECT snoozed_until AS at FROM threads WHERE merged_into IS NULL"
+        f" AND status_detail IN ({snoozed}) UNION ALL SELECT follow_up_at FROM threads WHERE merged_into IS NULL"
+        f" AND status_detail IN ({snoozed})) WHERE at IS NOT NULL", VIEWS["Snoozed"] * 2).fetchone()[0]
+    day = now.astimezone(sequences.LOCAL).date()
+    later = [r[0] for r in db.execute(
+        "SELECT t.due_at FROM tasks t JOIN enrollments e ON e.id = t.enrollment_id"
+        " WHERE t.state = 'DUE' AND e.state = 'ACTIVE' ORDER BY t.due_at")
+        if sequences._at(r[0]).astimezone(sequences.LOCAL).date() > day]
+    return {"threads": queue(db, "Todo"), "tasks": sequences.tasks_due(db, now),
+            "drafts": [d for d in list_drafts(db) if today_draft(db, d)],
+            "next_wake": wake, "next_task": later[0] if later else None}
+
+
 def queue(db, view: str) -> list[dict]:
     """Rows for a Status view. Todo: longest-waiting first; others: most recent first."""
     details = VIEWS[view]

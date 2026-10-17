@@ -33,7 +33,7 @@ def test_drafts_rail_count_tracks_local_lifecycle(tmp_path, width):
 
     async def lifecycle(app, pilot):
         check(0)
-        await pilot.press("5")
+        await pilot.press("6")
         await pilot.pause()
         assert app.main.section == "drafts"
         check(0)  # Opening Drafts must not create a blank row.
@@ -72,11 +72,11 @@ def test_drafts_rail_count_tracks_local_lifecycle(tmp_path, width):
         await pilot.pause()
         check(2, first, second)
 
-        await pilot.press("1")
+        await pilot.press("2")
         await pilot.pause()
         assert app.main.section == "view:0"
         check(2, first, second)
-        await pilot.press("5")
+        await pilot.press("6")
         await pilot.pause()
         assert app.main.section == "drafts"
         check(2, first, second)

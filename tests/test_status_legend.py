@@ -43,11 +43,11 @@ def test_status_legend_follows_native_queue_navigation(tmp_path, columns, popula
 
     async def scenario(app, pilot):
         check_legend(app, "Todo")  # initial mount, before any navigation
-        for key, name in (("2", "Snoozed"), ("3", "Done"), ("4", "Ignored"), ("1", "Todo")):
+        for key, name in (("3", "Snoozed"), ("4", "Done"), ("5", "Ignored"), ("2", "Todo")):
             await pilot.press(key)
             await pilot.pause()
             check_legend(app, name)
-            assert app.view == int(key) - 1 and app.main.section == f"view:{int(key) - 1}"
+            assert app.view == int(key) - 2 and app.main.section == f"view:{int(key) - 2}"
             assert bool(app.main.page.rows) is populated
             assert app.focused is app.main.page.query_one(DataTable)
         await pilot.press("left")

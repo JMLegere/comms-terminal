@@ -62,7 +62,7 @@ def test_status_tabs_by_key_and_click(tmp_path):
     async def after_click(app, pilot):
         seen["click"] = app.view
 
-    run(app, ["2", after_key, click_todo, after_click])
+    run(app, ["3", after_key, click_todo, after_click])
     assert seen["key"][0] == 1 and seen["key"][1] <= set(inbox.VIEWS["Snoozed"])
     assert seen["click"] == 0
 
@@ -80,7 +80,7 @@ def test_click_selects_and_shows_the_thread_beside_the_list(tmp_path):
         seen["focus"] = app.focused.id
 
     async def click_rail(app, pilot):
-        await pilot.click("#rail", offset=(5, 4))  # Snoozed
+        await pilot.click("#rail", offset=(5, 6))  # Snoozed, below Today and a gap
 
     async def after_rail(app, pilot):
         seen["view"], seen["focus_after_rail"] = app.view, app.focused.id
@@ -494,7 +494,7 @@ def test_cases_views_group_threads_and_start_an_empty_case(tmp_path):
         for ch in "Get Ana to respond":
             await pilot.press("space" if ch == " " else ch)
 
-    run(app, ["1", grouped, "enter", opened, "8", cases_todo, "n", typed, "enter"])
+    run(app, ["2", grouped, "enter", opened, "9", cases_todo, "n", typed, "enter"])
     assert seen["heads"][0] == (None, "") and seen["heads"][1] == (acme, "Acme rollout")
     assert len(seen["acme"]) == 2 and seen["case_page"]
     assert seen["cases"] == (True, 0, ["Acme rollout"])
@@ -518,7 +518,7 @@ def test_drag_one_person_onto_another_previews_then_merges(tmp_path):
     async def kept_both(app, pilot):
         seen["after_cancel"] = sum("id" in p for p, _ in page(app).items)
 
-    run(app, ["6", drag, "escape", kept_both, "6", drag, "enter"])
+    run(app, ["7", drag, "escape", kept_both, "7", drag, "enter"])
     assert seen["drop"]["name"] in seen["preview"] and seen["keep"]["name"] in seen["preview"]
     db = inbox.connect(path)
     assert seen["after_cancel"] == len(inbox.people(db)) + 1  # Cancel changed nothing; Accept removed one
@@ -549,7 +549,7 @@ def test_snoozed_countdown_ticks_in_the_list(tmp_path):
     async def wait(app, pilot):
         await pilot.pause(1.2)
 
-    run(app, ["2", read, wait, read])
+    run(app, ["3", read, wait, read])
     assert seen[0] != seen[1] and seen[1].endswith("s[/]")
 
 
@@ -574,7 +574,7 @@ def test_snoozed_status_counts_down_on_case_cards_and_thread_header(tmp_path):
     async def wait(app, pilot):
         await pilot.pause(1.2)
 
-    run(app, ["2", head, wait, head, open_case, card, wait, card])
+    run(app, ["3", head, wait, head, open_case, card, wait, card])
     for a, b in (seen["head"], seen["card"]):
         assert a != b and re.search(r"· (\d+[dhm])*\d+s", b)
 

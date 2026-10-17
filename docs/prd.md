@@ -178,6 +178,7 @@ Status key in brackets:
   - [P] R opens the inline reply box on the Thread; Ctrl+S sends (decision #75; terminals cannot tell Ctrl+Enter from Enter).
   - [D] I Ignore; C add to Case. Reason: Plain ignores through status changes and workflows, and has no Case.
   - [D] Enter opens the Thread in the console; O shows a Ctrl-clickable link to it in Gmail or Slack. Reason: reading full context in the native app; Attachments open from their chips (#130). Other console keys: `docs/design/console.md` §4.
+- **FR-14b** [C]: **Today** is where the console opens: one page stacking Todo Threads (grouped by Case), Due Tasks, and the Drafts not shown through them (Today (`inbox.today`) lists a Task's Draft only through its due Task, and a reply Draft only when its Thread is not Todo). Key `1` opens it. Requirements FR-T1–16 and acceptance scenarios AS-T1–10 are in the Today PRD (`.agents/prd/2026-10-17-today-view.md`).
 - **FR-15** [C]: The console sends only replies Jeremy writes. It never edits, deletes, archives, or marks read anything in Gmail or Slack.
 
 ### Sequences

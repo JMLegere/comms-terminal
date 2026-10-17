@@ -73,7 +73,7 @@ def test_drafts_entry_creation_native_focus_and_status_navigation(tmp_path, colu
         counts = tuple(app.db.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
                        for table in ("threads", "activities"))
         all_threads = inbox.queue(app.db, "All")
-        await pilot.press("5")
+        await pilot.press("6")
         await pilot.pause()
         page = app.main.page
         assert isinstance(page, DraftsPage) and app.main.section == "drafts"
@@ -81,7 +81,7 @@ def test_drafts_entry_creation_native_focus_and_status_navigation(tmp_path, colu
         assert rail_ids.count("drafts") == 1 and "view:4" not in rail_ids
         assert app.main.rail.region.width == 30 and VIEW_NAMES == list(inbox.VIEWS)
         assert inbox.list_drafts(app.db) == [] and app.main.thread_view is None
-        await pilot.press("5")
+        await pilot.press("6")
         await pilot.pause()
         assert app.main.page is page and inbox.list_drafts(app.db) == []
         await pilot.press("n")
@@ -116,10 +116,10 @@ def test_drafts_entry_creation_native_focus_and_status_navigation(tmp_path, colu
         assert app.main.page is page and app.main.draft_view is view and view.dirty
         did = view.draft_id
         for index in range(4):
-            await pilot.press(str(index + 1))
+            await pilot.press(str(index + 2))
             await pilot.pause()
             assert isinstance(app.main.page, ThreadsPage) and app.view == index
-        await pilot.press("5")
+        await pilot.press("6")
         await pilot.pause()
         assert app.main.draft_view.draft_id == did
         assert app.main.draft_view.query_one(TextArea).text == "unsent words"
@@ -140,7 +140,7 @@ def test_full_envelope_save_restart_and_explicit_format_switch(tmp_path):
     saved = {}
 
     async def edit(app, pilot):
-        await pilot.press("5", "n")
+        await pilot.press("6", "n")
         await pilot.pause()
         view = app.main.draft_view
         view.query_one(DraftConnection).focus()
@@ -168,7 +168,7 @@ def test_full_envelope_save_restart_and_explicit_format_switch(tmp_path):
     run(Console(path), [edit])
 
     async def resume(app, pilot):
-        await pilot.press("5")
+        await pilot.press("6")
         await pilot.pause()
         view = app.main.draft_view
         assert view.draft_id == saved["id"] and view.values() == saved["values"]
@@ -200,7 +200,7 @@ def test_full_envelope_save_restart_and_explicit_format_switch(tmp_path):
     run(Console(path), [resume])
 
     async def resume_sms(app, pilot):
-        await pilot.press("5")
+        await pilot.press("6")
         await pilot.pause()
         view = app.main.draft_view
         assert view.draft_id == saved["id"] and view.kind == "sms"
@@ -218,7 +218,7 @@ def test_failed_stale_save_and_history_failure_preserve_editor_and_selection(tmp
     latest = inbox.save_draft(db, values)
 
     async def scenario(app, pilot):
-        await pilot.press("5")
+        await pilot.press("6")
         await pilot.pause()
         page, view = app.main.page, app.main.draft_view
         assert view.draft_id == latest["id"]
@@ -300,7 +300,7 @@ def test_failed_creation_refresh_still_saves_visible_editor(tmp_path, monkeypatc
     db.close()
 
     async def scenario(app, pilot):
-        await pilot.press("5")
+        await pilot.press("6")
         await pilot.pause()
         view = app.main.draft_view
         with monkeypatch.context() as patch:
@@ -337,7 +337,7 @@ def test_untouched_mixed_newline_body_survives_field_save_and_navigation(tmp_pat
     db.close()
 
     async def scenario(app, pilot):
-        await pilot.press("5")
+        await pilot.press("6")
         await pilot.pause()
         view = app.main.draft_view
         assert view.values()["body"] == body and not view.dirty
@@ -347,7 +347,7 @@ def test_untouched_mixed_newline_body_survives_field_save_and_navigation(tmp_pat
         app.main.go("view:0")
         await pilot.pause()
         assert inbox.get_draft(app.db, saved["id"])["body"] == body
-        await pilot.press("5")
+        await pilot.press("6")
         await pilot.pause()
         assert app.main.draft_view.values()["body"] == body and not app.main.draft_view.dirty
 
@@ -359,7 +359,7 @@ def test_draft_address_ghosts_complete_exact_suffix_and_save_only_on_request(tmp
     sent = []
 
     async def scenario(app, pilot):
-        await pilot.press("5", "n")
+        await pilot.press("6", "n")
         await pilot.pause()
         view = app.main.draft_view
         before = inbox.get_draft(app.db, view.draft_id)
@@ -427,7 +427,7 @@ def test_connection_switch_recomputes_sms_destination_suggestions(tmp_path):
     sent = []
 
     async def scenario(app, pilot):
-        await pilot.press("5", "n")
+        await pilot.press("6", "n")
         await pilot.pause()
         view = app.main.draft_view
         before = inbox.get_draft(app.db, view.draft_id)
@@ -505,7 +505,7 @@ def test_address_tab_keeps_native_traversal_when_completion_is_ineligible(tmp_pa
     path, _ = seeded(tmp_path)
 
     async def scenario(app, pilot):
-        await pilot.press("5", "n")
+        await pilot.press("6", "n")
         await pilot.pause()
         view = app.main.draft_view
         field = view.query_one(".toinput", Input)
@@ -535,7 +535,7 @@ def test_address_storage_failure_clears_ghost_and_preserves_tab_focus(tmp_path):
     path, _ = seeded(tmp_path)
 
     async def scenario(app, pilot):
-        await pilot.press("5", "n")
+        await pilot.press("6", "n")
         await pilot.pause()
         view = app.main.draft_view
         field = view.query_one(".toinput", Input)
@@ -573,7 +573,7 @@ def test_delete_draft_saves_edits_selects_neighbor_and_undo_restores(tmp_path):
     app = Console(path)
 
     async def scenario(app, pilot):
-        await pilot.press("5")
+        await pilot.press("6")
         await pilot.pause()
         page = app.main.page
         page.focus_first()
@@ -600,7 +600,7 @@ def test_drafts_list_keys_work_from_open_draft_but_text_fields_still_type(tmp_pa
     app = Console(path)
 
     async def scenario(app, pilot):
-        await pilot.press("5", "n")
+        await pilot.press("6", "n")
         await pilot.pause()
         app.main.draft_view.query_one(DraftConnection).focus()
         await pilot.pause()
@@ -634,7 +634,7 @@ def test_switching_drafts_repaints_the_saved_row(tmp_path):
     app = Console(path)
 
     async def scenario(app, pilot):
-        await pilot.press("5", "n")
+        await pilot.press("6", "n")
         await pilot.pause()
         await pilot.press("n")
         await pilot.pause()
@@ -674,7 +674,7 @@ def test_send_confirms_envelope_then_removes_draft_or_locks_on_unknown(tmp_path)
     app = Console(path, send_draft=send)
 
     async def scenario(app, pilot):
-        await pilot.press("5")
+        await pilot.press("6")
         await pilot.pause()
         view = app.main.draft_view
         assert view.draft_id == second["id"] and "Sending unavailable" not in str([n.render() for n in view.query(".draftnotice")])
@@ -721,7 +721,7 @@ def test_slack_draft_picks_a_conversation_by_tab_and_saves_it(tmp_path, columns)
         return SLACK_CONVERSATIONS
 
     async def scenario(app, pilot):
-        await pilot.press("5", "n")
+        await pilot.press("6", "n")
         await pilot.pause()
         view = app.main.draft_view
         view.query_one(".subjectinput", Input).value = "Old subject"
@@ -773,7 +773,7 @@ def test_slack_conversation_fetch_failure_keeps_the_draft_editable(tmp_path):
         raise ReplyError("Slack is not connected")
 
     async def scenario(app, pilot):
-        await pilot.press("5", "n")
+        await pilot.press("6", "n")
         await pilot.pause()
         view = app.main.draft_view
         view.query_one(DraftConnection).focus()

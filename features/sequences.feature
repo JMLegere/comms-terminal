@@ -4,6 +4,8 @@ Feature: Sequences
   (sequences.enroll) starts an Enrollment; Due Tasks (sequences.tasks_due) lists what is due; Wake
   (inbox.wake) makes Tasks and their Drafts; Ingest (inbox.ingest) receives the Person's messages;
   Send Draft (inbox.send_draft) sends a Task's Draft; Finish (sequences.finish) ends an Enrollment.
+  Today (inbox.today) lists Todo Threads, Due Tasks, and the Drafts not shown through them; Save Draft
+  (inbox.save_draft) and Save Reply Draft (inbox.save_reply_draft) keep Drafts; Act (inbox.act) snoozes.
   Kind maps to a Step's kind, Gap to gap_days, Subject and Body to its text. Times are Jeremy's (Halifax);
   "Monday" is 2026-10-19 at 10:00.
 
@@ -51,3 +53,17 @@ Feature: Sequences
     Given "Dana Roy" is enrolled in "Secret Sequence" on Monday
     When Wake runs twice on Monday
     Then there is 1 Task and 1 Draft
+
+  @AS-T1 @AS-T9 @AS-T10 @FR-T5
+  Scenario: Today lists each Draft once, a Task's Draft only through its Task
+    Given "Dana Roy" is enrolled in "Secret Sequence" on Monday
+    And Save Reply Draft keeps Body "Thanks" on the Thread "Hello"
+    And Save Draft keeps a new email Draft with Body "Hi there"
+    Then Today on Monday lists 1 Todo Thread, 1 Due Task, and Drafts with Body:
+      | Body     |
+      | Hi there |
+    When Act snoozes the Thread "Hello" until Wednesday
+    Then Today on Monday lists 0 Todo Threads, 1 Due Task, and Drafts with Body:
+      | Body     |
+      | Hi there |
+      | Thanks   |

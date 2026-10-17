@@ -17,7 +17,7 @@ def test_draft_body_page_keys_overlap_without_editing(tmp_path, wrapped):
                      for i in range(8 if wrapped else 50))
 
     async def scenario(app, pilot):
-        await pilot.press("5", "n")
+        await pilot.press("6", "n")
         await pilot.pause()
         view = app.main.draft_view
         area = view.query_one(TextArea)

@@ -46,7 +46,7 @@ def named_seeded(tmp_path):
 
 
 async def new_draft(app, pilot, kind):
-    await pilot.press("5", "n")
+    await pilot.press("6", "n")
     await pilot.pause()
     view = app.main.draft_view
     if kind == "sms":

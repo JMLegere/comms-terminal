@@ -42,7 +42,7 @@ def test_y_copies_the_draft_as_edited(tmp_path):
 
     async def go(app, pilot):
         seen["out"] = copied(app)
-        await pilot.press("5")
+        await pilot.press("6")
         await pilot.pause()
         await pilot.press("y")
         await pilot.pause()
