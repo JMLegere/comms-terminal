@@ -7,6 +7,7 @@ import os
 import shutil
 import subprocess
 import threading
+import tomllib
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -71,3 +72,23 @@ def test_the_envelope_recipient_picks_the_fastmail_connection(hook, tmp_path):
     assert run_worker(url, secret, tmp_path, "fastmail@inbox.agentmaple.com") == "accepted"
     row = db.execute("SELECT ch.connection_id FROM threads t JOIN channels ch ON ch.id = t.channel_id").fetchone()
     assert row["connection_id"] == fm
+
+
+def test_dual_delivery_availability_and_signed_http_boundaries():
+    out = subprocess.run(["node", str(ROOT / "tests/email_worker_harness.mjs"), "--check"],
+                         capture_output=True, text=True, timeout=30, cwd=ROOT)
+    assert out.returncode == 0, out.stdout + out.stderr
+    assert out.stdout.strip() == "checked"
+
+
+def test_worker_routes_preserve_legacy_hooks_and_add_resend():
+    config = tomllib.loads((ROOT / "deploy/email-worker/wrangler.toml").read_text())
+    assert config["name"] == "universal-inbox-email"
+    assert config["routes"] == [
+        {"pattern": f"https://hooks.agentmaple.com/hooks/{name}*", "zone_name": "agentmaple.com"}
+        for name in ("email", "slack", "quo", "resend")
+    ]
+    assert config["vars"] == {
+        "HOOK_URL": "https://hooks.agentmaple.com/hooks/email",
+        "MIRROR_HOOK_URL": "https://hooks-inbox.jmlegere.com/hooks/email",
+    }

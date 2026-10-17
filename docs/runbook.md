@@ -1,6 +1,6 @@
 # Runbook
 
-Operating Universal Inbox on Workbox (Debian 12, systemd 252). Phase 6 of `docs/prd.md`. Steps marked **You** need Jeremy (a browser, an account, or `sudo`); the agent can run the rest.
+Sections 1–7 cover Workbox (Debian 12, systemd 252), Phase 6 of `docs/prd.md`. The managed Oracle installation uses the separate container and event-driven update path in section 8; reserve Workbox's package/reinstall/rollback commands for Workbox. Steps marked **You** need Jeremy (a browser, an account, or `sudo`); the agent can run the rest.
 
 Secrets are staged as 0600 files in `~/.config/universal-inbox/`, read in-process, and never printed. `deploy/install.sh` encrypts each into systemd's credential store (`LoadCredentialEncrypted=`) and shreds the clear copy (NFR-5).
 
@@ -10,7 +10,7 @@ Secrets are staged as 0600 files in `~/.config/universal-inbox/`, read in-proces
 uv tool install --force --reinstall /home/jerry/workspace/universal-inbox
 ```
 
-Puts `universal-inbox` in `~/.local/bin`, which the unit runs. Re-run after pulling changes, then `sudo systemctl restart universal-inbox`. Keep `--reinstall`: the version stays 0.1.0, and without it uv reuses its cached build of the old code.
+Puts `universal-inbox` in `~/.local/bin`, which the Workbox unit runs. Re-run after pulling changes, then `sudo systemctl restart universal-inbox`. Keep `--reinstall`: the version stays 0.1.0, and without it uv reuses its cached build of the old code. On managed Oracle, use section 8 to preserve the update launcher and locking.
 
 Deploy a release from a clean checkout of it, since the main checkout often holds other agents' uncommitted work: `uv tool install --force --reinstall <clean checkout>` (for example a worktree at `origin/dev` with no local changes).
 
@@ -211,3 +211,16 @@ sudo systemctl daemon-reload
 ```
 
 Then turn off Gmail forwarding, delete the Email Routing rule for `jeremy@inbox.agentmaple.com`, and turn off the Slack app's event subscriptions. For Quo, delete webhook `43687` in Quo (or `DELETE /webhooks/43687`). Gmail and Slack keep every message; the database stays at `~/.local/share/universal-inbox/inbox.db`. Remove the secrets with `sudo rm /etc/credstore.encrypted/universal-inbox.*` and the package with `uv tool uninstall universal-inbox`.
+
+## 8. Oracle automatic updates
+
+Oracle runs Universal Inbox as UID/GID10001 in a Docker container with durable home `/var/lib/universal-inbox/home`, a private reply socket, and loopback-published HTTP8787. GitHub pushes to this repository's `main` reach an independent signed-webhook receiver through a dedicated Cloudflare Tunnel. A persisted notification triggers `universal-inbox-update.path` and its fixed updater; GitHub delivery is the sole source of update work, with no timer, polling fallback, unconditional startup fetch, or GitHub Actions dependency.
+
+- Push committed application changes to `main`; the updater fetches the authoritative branch head, builds an immutable image with frozen dependencies, validates it against a disposable database backup, then coordinates the version switch.
+- Use the installed `commsterminal` launcher for Oracle. It enters the running container through the native CLI and holds the shared update lock. Quit the console normally (`Ctrl+Q`) to let a queued update apply, then reopen; open consoles intentionally defer switching, preserving unsaved sessions.
+- The installed app unit is `universal-inbox.service`, using the `deploy/universal-inbox-container.service` template. Its eight required credentials and three optional bindings (independent Tana, Linear, Resend receipts) enter as read-only runtime files. The updater preserves daemon activity state and accepted notifications.
+- Status: `systemctl status universal-inbox-deploy universal-inbox-update.path universal-inbox-update`. Private root-only phase/checkpoint records are under `/var/lib/universal-inbox-deploy/status/`; logs contain fixed failure labels.
+- If GitHub failed to deliver, use repository Settings → Webhooks → Recent Deliveries → Redeliver. A fresh delivery supplies the update trigger.
+- Keep the receiver/updater independent of the app's release environment. Runtime/image code is in `Dockerfile` and `deploy/{container_runtime,github_deploy}.py`; updater templates are `deploy/universal-inbox-{deploy.service,update.service,update.path}`. The two connector units are `deploy/cloudflared-universal-inbox-{deploy,ingest}.service`. The native updater's launcher and `release.conf` remain available for native installations.
+- Routine Oracle releases use the managed updater. Reserve section 1's `uv tool install` and `deploy/install.sh` for Workbox; preserve Oracle's managed launcher. Host-specific configuration stays in root-owned `/etc/universal-inbox-deploy/config.json`, with credential files kept private.
+- A prior code environment does not undo a SQLite migration. Recovery may restore a checkpoint only while writers remain blocked and no new writer has run; otherwise preserve current data and resolve the failed release forward. Close consoles before separately restoring/migrating real inbox data.

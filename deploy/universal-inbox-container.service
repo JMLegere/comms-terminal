@@ -1,0 +1,55 @@
+# Install as universal-inbox.service, replacing the native app unit/drop-ins on the target only.
+[Unit]
+Description=Universal Inbox container (hooks, reply socket, wake)
+After=network-online.target docker.service
+Wants=network-online.target docker.service
+PartOf=docker.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=root
+Group=root
+UMask=0077
+ExecCondition=/usr/bin/test ! -e /var/lib/universal-inbox-deploy/writers-blocked
+ExecStart=/usr/bin/python3 -I /opt/universal-inbox-deploy/container_runtime.py serve
+# Runs even if the wrapper/client was killed. Success requires no container or exec writers.
+ExecStopPost=/usr/bin/python3 -I /opt/universal-inbox-deploy/container_runtime.py stop
+Restart=always
+RestartPreventExitStatus=75
+RestartSec=5
+TimeoutStopSec=90
+KillMode=control-group
+RuntimeDirectory=universal-inbox universal-inbox-secrets
+RuntimeDirectoryMode=0700
+
+# The root wrapper stages only these names to UID/GID10001 runtime files, mounted read-only.
+# Optional bindings are opt-in; never load the copied rotating universal-inbox.tana-oauth.
+LoadCredentialEncrypted=email-hook-secret:/etc/credstore.encrypted/universal-inbox.email-hook-secret
+LoadCredentialEncrypted=resend-api-key:/etc/credstore.encrypted/universal-inbox.resend-api-key
+LoadCredentialEncrypted=attio-token:/etc/credstore.encrypted/universal-inbox.attio-token
+LoadCredentialEncrypted=fastmail-oauth:/etc/credstore.encrypted/universal-inbox.fastmail-oauth
+LoadCredentialEncrypted=quo-webhook-secret:/etc/credstore.encrypted/universal-inbox.quo-webhook-secret
+LoadCredentialEncrypted=quo-api-key:/etc/credstore.encrypted/universal-inbox.quo-api-key
+LoadCredentialEncrypted=slack-signing-secret:/etc/credstore.encrypted/universal-inbox.slack-signing-secret
+LoadCredentialEncrypted=slack-user-token:/etc/credstore.encrypted/universal-inbox.slack-user-token
+# Named-source lookup (not an absolute path) makes an absent grant non-fatal in systemd.
+# Encrypt with the destination ID, not the source-store filename.
+LoadCredentialEncrypted=tana-oauth:universal-inbox.independent-tana-oauth
+LoadCredentialEncrypted=linear-token:universal-inbox.linear-token
+LoadCredentialEncrypted=resend-webhook-secret:universal-inbox.resend-webhook-secret
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/universal-inbox-deploy /run/universal-inbox /run/universal-inbox-secrets
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

@@ -2,7 +2,15 @@
 name = "universal-inbox-email"
 main = "worker.js"
 compatibility_date = "2026-10-01"
-workers_dev = false  # email-only Worker: no public URL
+workers_dev = false
+routes = [
+  { pattern = "https://hooks.agentmaple.com/hooks/email*", zone_name = "agentmaple.com" },
+  { pattern = "https://hooks.agentmaple.com/hooks/slack*", zone_name = "agentmaple.com" },
+  { pattern = "https://hooks.agentmaple.com/hooks/quo*", zone_name = "agentmaple.com" },
+  { pattern = "https://hooks.agentmaple.com/hooks/resend*", zone_name = "agentmaple.com" },
+]
 
 [vars]
 HOOK_URL = "https://hooks.agentmaple.com/hooks/email"
+# Temporary independent copy during the Oracle migration; remove to restore source-only delivery.
+MIRROR_HOOK_URL = "https://hooks-inbox.jmlegere.com/hooks/email"

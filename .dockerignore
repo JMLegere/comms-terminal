@@ -1,0 +1,9 @@
+# Everything is private unless it is an explicit build input.
+**
+!pyproject.toml
+!uv.lock
+!README.md
+!src/
+!src/universal_inbox/
+!src/universal_inbox/*.py
+!src/universal_inbox/schema.sql
