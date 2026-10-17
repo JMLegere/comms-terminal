@@ -1,11 +1,24 @@
 """Sequences in the console (.agents/prd/2026-10-16-sequencing.md): the Sequences page, enrolling, the Tasks page,
 and the Person page's Sequence section, driven through Textual's test pilot."""
 
+from datetime import datetime, timedelta, timezone
+
+import pytest
 from textual.widgets import DataTable, Input, OptionList, TextArea
 
 from test_console import run, seeded
 from universal_inbox import inbox, sequences as sq
 from universal_inbox.tui import Ask, Console, PeoplePage, Pick, PersonPage, SequencesPage, StepEditor, TasksPage
+
+
+@pytest.fixture(autouse=True)
+def weekday(monkeypatch):
+    """Enrolling on a Saturday or Sunday makes the first Task due Monday, so on a weekend these tests run as if it
+    were Monday. The clock still moves (the pause toast compares times), only shifted by whole days."""
+    day = datetime.now(sq.LOCAL).weekday()
+    shift = timedelta(days=7 - day if day >= 5 else 0)
+    monkeypatch.setattr(inbox, "_now", lambda: datetime.now(timezone.utc) + shift)
+    monkeypatch.setattr(sq, "_now", lambda: datetime.now(timezone.utc) + shift)
 
 
 def choose(app, option_id):
