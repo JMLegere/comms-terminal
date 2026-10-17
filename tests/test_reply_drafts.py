@@ -153,7 +153,8 @@ def test_version_18_moves_files_staged_on_a_reply_draft_to_its_thread(seeded):
             db.execute("INSERT INTO staged_attachments (draft_id, sha, name, type, size, added_at)"
                        " VALUES (?, ?, 'pkg.pdf', 'application/pdf', ?, '2026-10-16T21:10:06+00:00')",
                        (draft_id, sha, len(PDF)))
-    db.execute("PRAGMA user_version = 17")
+    from schema_history import downgrade
+    downgrade(db, 17)
     inbox.migrate(db)
     rows = db.execute("SELECT draft_id, thread_id FROM staged_attachments ORDER BY id").fetchall()
     assert [tuple(r) for r in rows] == [(None, ids["ana"]), (new["id"], None)]

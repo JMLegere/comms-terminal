@@ -228,6 +228,8 @@ CREATE TABLE composition_drafts (
   sending_at TEXT,
   thread_id INTEGER REFERENCES threads (id),  -- a reply Draft: its Thread's reply box text (FR-SEQ-11)
   task_id INTEGER REFERENCES tasks (id),  -- an email Task's Draft (Sequences)
+  send_at TEXT,  -- send later: when the service sends it
+  send_error TEXT,  -- why a scheduled send did not go out
   CHECK ((kind = 'email' AND subject IS NOT NULL)
          OR (kind IN ('sms', 'slack') AND subject IS NULL AND cc = ''))
 ) STRICT;

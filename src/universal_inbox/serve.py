@@ -202,6 +202,33 @@ def handle_send_draft(db, body: bytes, senders: Senders) -> tuple[int, dict]:
     return 200, {"thread_id": t.id}
 
 
+def send_due(db, senders: Senders, now: datetime) -> int:
+    """Send each Draft whose send-later time has come: a reply Draft into its Thread, any other as a new one.
+    Its time is cleared first, so a refused send, or one whose outcome is unknown, is never repeated; the
+    reason stays on the Draft as send_error. Returns how many went out."""
+    import logging
+    sent = 0
+    split = lambda s: [a.strip() for a in s.split(",") if a.strip()]  # noqa: E731
+    for d in inbox.claim_due_drafts(db, now):
+        try:
+            r = db.execute("SELECT * FROM connections WHERE id = ?", (d["connection_id"],)).fetchone()
+            sender = senders.get(r) if r else None
+            if sender is None:
+                name = (r["label"] or r["platform"]) if r else "No Connection"
+                raise inbox.SendFailed(f"{name} is not connected for sending")
+            if d["thread_id"] is None:
+                inbox.send_draft(db, d["id"], inbox.get_draft(db, d["id"])["revision"], sender)
+            else:
+                email_reply = d["kind"] == "email"
+                inbox.reply(db, d["thread_id"], d["body"], sender, split(d["to"]) if email_reply else [],
+                            split(d["cc"]) if email_reply else [])
+            sent += 1
+        except Exception as e:  # noqa: BLE001 - one failed Draft must not stop the others
+            inbox.set_send_error(db, d["id"], str(e) or type(e).__name__)
+            logging.getLogger("universal_inbox.send_later").info("scheduled send of draft %s failed: %s", d["id"], e)
+    return sent
+
+
 def handle_slack_conversations(db, body: bytes, senders: Senders) -> tuple[int, dict]:
     """POST /slack-conversations: {"connection_id"} -> {"conversations": [{id, kind, label}]} for the Slack Draft picker."""
     try:
@@ -642,9 +669,9 @@ def files_server(db_path: str, host: str, port: int) -> ThreadingHTTPServer:
 
 
 def wake_loop(db_path: str, stop: threading.Event, every: float = 60, kick: threading.Event | None = None,
-              get: dict | None = None) -> None:
-    """wake() each minute; reconcile durable receipts before slow file downloads. Hook `kick` also wakes this
-    pass (after acknowledgement, NFR-A5); old files expire once a day (NFR-A6)."""
+              get: dict | None = None, senders: Senders | None = None) -> None:
+    """wake() each minute and send the scheduled Drafts that are due; reconcile durable receipts before slow file
+    downloads. Hook `kick` also wakes this pass (after acknowledgement, NFR-A5); old files expire once a day (NFR-A6)."""
     import logging
     kick, expired = kick or threading.Event(), None
     while True:
@@ -656,6 +683,8 @@ def wake_loop(db_path: str, stop: threading.Event, every: float = 60, kick: thre
         try:
             now = datetime.now(timezone.utc)
             inbox.wake(db, now)
+            if senders is not None:
+                send_due(db, senders, now)
             inbox.reconcile_resend_receipts(db)
             fetch_pending(db, get or {})
             if expired is None or now - expired >= timedelta(days=1):
@@ -711,7 +740,7 @@ def run(db_path: str, socket_path: str, host: str, port: int, files_host: str | 
         servers.append(files_server(db_path, files_host, files_port))
     threads = [threading.Thread(target=s.serve_forever, daemon=True) for s in servers]
     threads.append(threading.Thread(target=wake_loop, args=(db_path, stop, 60, kick,
-                                                      files.getters(credential("slack-user-token"))), daemon=True))
+                                                      files.getters(credential("slack-user-token")), senders), daemon=True))
     threads.append(threading.Thread(target=probe_loop, args=(db_path, senders.shared, stop), daemon=True))
     if fm is not None:
         threads.append(threading.Thread(target=fastmail.poll_loop, args=(db_path, fm, stop), daemon=True))

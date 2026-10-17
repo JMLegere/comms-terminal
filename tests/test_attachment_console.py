@@ -282,7 +282,7 @@ def test_selected_alias_reply_attaches_and_sends_only_its_original_files_and_tex
         await pilot.pause()
         assert box.query_one(TextArea).text == "Selected text"
         assert [r["name"] for r in inbox.staged(db, thread_id=ids["old"])] == ["selected.txt", shot.name]
-        await pilot.press("ctrl+enter")
+        await pilot.press("ctrl+enter", "enter")
         await app.workers.wait_for_complete()
         await pilot.pause()
         assert app.drafts == {ids["keep"]: "Unchosen text"}

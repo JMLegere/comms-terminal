@@ -145,7 +145,7 @@ def test_inline_reply_sends_and_returns_to_threads(tmp_path):
     async def check(app, pilot):
         sent.append(type(page(app)))
 
-    run(app, [open_ana, "a", *"Tuesday works.", "ctrl+enter", check])
+    run(app, [open_ana, "a", *"Tuesday works.", "ctrl+enter", "enter", check])
     assert sent[0] == (ids["ana"], "Tuesday works.", ["ana@acme.com"], ["ops@acme.com"])
     assert sent[1] is ThreadsPage
     assert detail(path, ids["ana"]) == "WAITING_FOR_CUSTOMER"
@@ -159,7 +159,7 @@ def test_reply_to_sender_only_drops_the_cc(tmp_path):
     async def open_ana(app, pilot):
         app.main.open_thread(ids["ana"])
 
-    run(app, [open_ana, "r", *"ok", "ctrl+enter"])
+    run(app, [open_ana, "r", *"ok", "ctrl+enter", "enter"])
     assert sent == [(["ana@acme.com"], [])]
 
 
@@ -180,7 +180,7 @@ def test_send_failure_keeps_text_and_shows_error(tmp_path):
         seen["text"] = box.query_one(".reply").text
         seen["hint"] = str(box.query_one(".replyhint").render())
 
-    run(app, [open_logan, "r", *"deploying", "ctrl+enter", inspect])
+    run(app, [open_logan, "r", *"deploying", "ctrl+enter", "enter", inspect])
     assert seen["page"] is ThreadsPage and seen["text"] == "deploying"
     assert "Send error" in seen["hint"]
     assert detail(path, ids["logan"]) == "NEW_REPLY"
@@ -202,7 +202,7 @@ def test_reply_with_unknown_outcome_keeps_text_and_says_to_check_the_thread(tmp_
         seen["text"] = box.query_one(".reply").text
         seen["hint"] = str(box.query_one(".replyhint").render())
 
-    run(app, [open_logan, "r", *"deploying", "ctrl+enter", inspect])
+    run(app, [open_logan, "r", *"deploying", "ctrl+enter", "enter", inspect])
     assert seen["text"] == "deploying"
     assert "Send outcome unknown: check the Thread before sending again." in seen["hint"]
     assert "Not sent" not in seen["hint"]
@@ -352,7 +352,7 @@ def test_case_shows_threads_as_cards_and_replies_in_one(tmp_path):
         seen["focus"] = app.focused is page(app)
         page(app).select([c.thread_id for c in cs].index(ids["ana"]))
 
-    run(app, [open_case, cards, "r", *"on it", "ctrl+enter"])
+    run(app, [open_case, cards, "r", *"on it", "ctrl+enter", "enter"])
     assert seen["order"] and seen["focus"]
     assert seen["collapsed"] == {ids["ana"]: False, ids["spec"]: True}  # Done threads collapse, like resolved
     assert sent == [ids["ana"]]

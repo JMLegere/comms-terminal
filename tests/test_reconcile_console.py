@@ -100,7 +100,7 @@ def test_old_link_selects_survivor_and_reply_uses_its_connection(tmp_path):
         await open_old(app, pilot, ids["old"])
         assert app.main.page.current_thread_id() == ids["keep"]
         assert app.main.thread_view.thread_id == ids["keep"]
-        await pilot.press("r", *"Correct account", "ctrl+enter")
+        await pilot.press("r", *"Correct account", "ctrl+enter", "enter")
         await app.workers.wait_for_complete()
         await pilot.pause()
 
@@ -148,7 +148,7 @@ def test_multiple_drafts_use_existing_picker_and_send_only_chosen_text(tmp_path)
         assert app.main.thread_view.query_one(TextArea).text == "Second saved text"
         await pilot.press("ctrl+end", "!", "escape")
         assert app.drafts == {ids["keep"]: "First saved text", ids["old"]: "Second saved text!"}
-        await pilot.press("r", "down", "enter", "ctrl+enter")
+        await pilot.press("r", "down", "enter", "ctrl+enter", "enter")
         await app.workers.wait_for_complete()
         await pilot.pause()
         assert app.drafts == {ids["keep"]: "First saved text"}
@@ -168,7 +168,7 @@ def test_identical_saved_drafts_keep_other_original_key_after_send(tmp_path):
         await open_old(app, pilot, ids["old"])
         await pilot.press("r")
         assert not isinstance(app.screen, Pick)
-        await pilot.press("ctrl+enter")
+        await pilot.press("ctrl+enter", "enter")
         await app.workers.wait_for_complete()
         await pilot.pause()
         assert app.drafts == {ids["old"]: "Same saved text"}

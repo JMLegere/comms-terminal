@@ -381,6 +381,27 @@ def stamp(iso: str | None) -> str:
     return datetime.fromisoformat(iso).astimezone().strftime("%a %b %-d, %H:%M") if iso else ""
 
 
+def send_menu(draft: dict | None) -> tuple[list[tuple[str, str]], dict]:
+    """ctrl+enter's choices: send now, or later at a random minute from 7 to 9 am tomorrow or next Monday.
+    Returns the options and each later choice's time."""
+    now = datetime.now(timezone.utc)
+    later = {k: inbox.send_time(k, now) for k in ("tomorrow", "monday")}
+    options = [("send", "Send now"), ("tomorrow", f"Send tomorrow · {stamp(later['tomorrow'].isoformat())}"),
+               ("monday", f"Send next Monday · {stamp(later['monday'].isoformat())}")]
+    if draft and draft.get("send_at"):
+        options.append(("unschedule", f"Unschedule · keep the draft (now sends {stamp(draft['send_at'])})"))
+    return options + [("keep", "Keep editing")], later | {"unschedule": None}
+
+
+def scheduled_note(draft: dict | None) -> str:
+    """A Draft's send-later state for its editor or reply box; empty when it is not scheduled."""
+    if draft and draft.get("send_error"):
+        return f"Scheduled send failed · {draft['send_error']}"
+    if draft and draft.get("send_at"):
+        return f"{ICON['time']} Sends {stamp(draft['send_at'])}"
+    return ""
+
+
 def glyph(detail: str) -> str:
     g, color, _ = GLYPH[detail]
     return f"[{color}]{g}[/]"
@@ -459,7 +480,7 @@ HELP = [  # (group, [(keys, what it does)]) — the full key map; Gmail-style wh
                      ("enter", "sidebar: open the item · list row: move into it (a case header opens the case)"),
                      ("1 – 5", "Todo, Snoozed, Done, Ignored, Drafts"),
                      ("6 – 9", "People, Organizations, Cases (Todo), Channels"), ("u", "back (esc also works)")]),
-    ("Thread", [("r", "reply to the sender   ctrl+enter sends · esc keeps the draft"), ("a", "reply all"),
+    ("Thread", [("r", "reply to the sender   ctrl+enter sends now or later · esc keeps the draft"), ("a", "reply all"),
                 ("e", "done: it returns if they write again"), ("b", "snooze until a time (it also returns when they write)"),
 ("m", "ignore: it stays out of Todo (m again un-ignores)"), ("x", "ignore, as m does"),
                 ("l", "add to a case"), ("s", "change status: needs a response, investigating"),
@@ -1440,7 +1461,9 @@ class ReplyBox(Composer, Vertical):
                     and self.view["messages"][-1].get("wire_id"))
 
     def ready_hint(self):
-        return "ctrl+enter send · " + ("ctrl+o attach · " if self.attach_owner() else "") + "esc close (keeps draft)"
+        note = scheduled_note(inbox.reply_draft(self.app.db, self.draft_key))
+        return (f"{note} · " if note else "") + "ctrl+enter send · " + (
+            "ctrl+o attach · " if self.attach_owner() else "") + "esc close (keeps draft)"
 
     def set_view(self, view):
         """Refresh conversation state while preserving an open reply's selected draft and fields."""
@@ -1460,7 +1483,9 @@ class ReplyBox(Composer, Vertical):
             text = f"[#b47109]{ICON['edited']} {len(drafts)} saved drafts[/]  {keys}"
         elif draft:
             first = draft.splitlines()[0]
-            text = f"[#b47109]{ICON['edited']} Draft[/]  [#654735]{escape(first[:80])}{'…' if len(draft) > len(first[:80]) else ''}[/]  {keys}"
+            note = scheduled_note(inbox.reply_draft(self.app.db, drafts[0][0]))
+            note = f" [{'#c14a4a' if note.startswith('Scheduled send failed') else '#45707a'}]{escape(note)}[/]" if note else ""
+            text = f"[#b47109]{ICON['edited']} Draft[/]{note}  [#654735]{escape(first[:80])}{'…' if len(draft) > len(first[:80]) else ''}[/]  {keys}"
         else:
             text = f"{ICON['reply']} Leave a reply…  {keys}"
         self.query_one(".idle").update(text)
@@ -1558,8 +1583,24 @@ class ReplyBox(Composer, Vertical):
         if self.email and not to:
             self.hint("Not sent: add at least one recipient in To.", error=True)
             return
-        self.hint("sending…")
-        self.send(text, to, cc)
+        options, later = send_menu(inbox.reply_draft(self.app.db, self.draft_key))
+
+        def chosen(choice):
+            if not self.is_attached or choice in (None, "keep"):
+                return
+            if choice == "send":
+                self.hint("sending…")
+                self.send(text, to, cc)
+                return
+            try:
+                inbox.schedule_reply(self.app.db, self.draft_key, text, to, cc, later[choice])
+            except (ValueError, inbox.SendUnknown) as e:
+                self.hint(f"Not scheduled: {e}", True)
+                return
+            self.app.notify(f"Sends {stamp(later[choice].isoformat())}." if later[choice] else "Unscheduled · kept as a draft.")
+            self.action_close()
+
+        self.app.push_screen(Pick("Send", options), chosen)
 
     @work(thread=True, exclusive=True)
     def send(self, text, to, cc):  # its own worker: send_result needs the worker to drop a cancelled send
@@ -2449,8 +2490,8 @@ class DraftView(Composer, Horizontal):
         for field in self.query(".fields Input, TextArea, DraftConnection"):
             field.disabled = locked
         notice = self.query_one(".savenotice")
-        notice.update(escape(SEND_UNKNOWN if locked and not self.notice else self.notice))
-        notice.set_class(self.save_error or locked, "error")
+        notice.update(escape(SEND_UNKNOWN if locked and not self.notice else self.notice or scheduled_note(self.draft)))
+        notice.set_class(self.save_error or locked or bool(not self.notice and self.draft.get("send_error")), "error")
         self.hint("Save conflict · edits kept" if self.save_error and self.notice.startswith("Save conflict") else
                   "Not sent · edits kept" if self.save_error and self.notice.startswith("Not sent") else
                   "Save failed · edits kept" if self.save_error else
@@ -2495,6 +2536,7 @@ class DraftView(Composer, Horizontal):
         """A storage refresh may update a clean editor, never replace current unsaved words."""
         if not self.is_mounted:  # queued list refresh can run before editor fields mount
             return
+        self.draft.update(send_at=draft.get("send_at"), send_error=draft.get("send_error"))  # no revision of its own
         if not self.dirty and draft["revision"] > self.draft["revision"]:
             self.draft = dict(draft)
             self.connection_id, self.kind, self.from_address = draft["connection_id"], draft["kind"], draft["sender"]
@@ -2671,8 +2713,24 @@ class DraftView(Composer, Horizontal):
                  ("From", self.sender_label(v, connection)), ("To", v["to"])] + (
                 [("Cc", v["cc"]), ("Subject", v["subject"])] if FORMATS[self.kind].cc_subject else [])
         body = "\n".join(f"[#928374]{k:<11}[/]{escape(val)}" for k, val in lines if val)
-        self.app.push_screen(Pick("Send", [("send", "Send"), ("keep", "Keep editing")], body),
-                             lambda choice: self.dispatch_send() if choice == "send" and self.is_attached else None)
+        options, later = send_menu(self.draft)
+        self.app.push_screen(Pick("Send", options, body),
+                             lambda choice: self.chose_send(choice, later) if self.is_attached else None)
+
+    def chose_send(self, choice, later):
+        if choice == "send":
+            self.dispatch_send()
+        elif choice in later:
+            try:
+                self.draft = dict(inbox.schedule_draft(self.app.db, self.draft_id, later[choice]))
+            except inbox.SendUnknown as e:
+                self.notice, self.save_error = f"Not scheduled · {e}", True
+            else:
+                self.notice, self.save_error = "", False
+            self.paint()
+            page = self.app.main.current
+            if isinstance(page, DraftsPage):
+                page.refresh_data(select_id=self.draft_id)
 
     def resolve_unknown(self, choice):
         if not self.is_attached:
@@ -2776,8 +2834,15 @@ class DraftsPage(Page):
         cut = lambda text, width: text if len(text) <= width else text[:max(0, width - 1)] + "…"  # noqa: E731
         title = (draft["subject"] or draft["body"] or "New draft").replace("\r", "↵").replace("\n", " ")
         view = self.app.main.draft_view
-        state = "unsaved" if view and view.draft_id == draft["id"] and view.dirty else "saved"
-        status = f"[#928374]{state:7}[/]"
+        if view and view.draft_id == draft["id"] and view.dirty:
+            state = "unsaved"
+        elif draft.get("send_error"):
+            state = "failed"  # a scheduled send did not go out
+        elif draft.get("send_at"):
+            state = f"{ICON['time']} {datetime.fromisoformat(draft['send_at']).astimezone():%a}"
+        else:
+            state = "saved"
+        status = f"[{'#c14a4a' if state == 'failed' else '#928374'}]{state:7}[/]"
         shown = cut(("reply · " if draft["thread_id"] else "") + title, room)
         shown = f"[#45707a]{shown[:5]}[/]{escape(shown[5:])}" if draft["thread_id"] else escape(shown)
         return (status, shown) if len(self.columns) == 2 else (

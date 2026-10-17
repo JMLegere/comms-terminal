@@ -1,12 +1,13 @@
 """The inbox module: Threads, Status, Activities, Persons, Organizations, Blocks, Cases, and Drafts.
 
-Interface: ingest, act, reply, wake, reopen_imported, reconcile_email_threads; people operations block, add_identity, remove_identity; save_draft, save_reply_draft, reply_drafts, get_draft, delete_draft, restore_draft, list_drafts, recipient_names, recipient_threads.
+Interface: ingest, act, reply, wake, reopen_imported, reconcile_email_threads; people operations block, add_identity, remove_identity; save_draft, save_reply_draft, schedule_draft, schedule_reply, claim_due_drafts, reply_drafts, get_draft, delete_draft, restore_draft, list_drafts, recipient_names, recipient_threads.
 Design: docs/design/api-and-database.md.
 """
 
 import hashlib
 import json
 import os
+import random
 import re
 from collections import Counter
 import sqlite3
@@ -14,7 +15,7 @@ import urllib.parse
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 from email import policy
 from email.parser import BytesHeaderParser
@@ -23,7 +24,7 @@ from typing import Protocol, Sequence
 
 from . import files, platforms
 
-SCHEMA_VERSION = 18
+SCHEMA_VERSION = 19
 WAIT = timedelta(days=4)  # Waiting for them ends after this with no reply: back to Todo to follow up (#116)
 EMAIL_CONFIRMATION_PENDING = "Email confirmation pending; wait for its sent receipt before replying."
 MIGRATIONS = {  # version -> statement that upgrades an existing database to it
@@ -285,6 +286,9 @@ CREATE INDEX tasks_due ON tasks (state, due_at);""",
     18: """UPDATE staged_attachments SET draft_id = NULL, thread_id = (
   SELECT d.thread_id FROM composition_drafts d WHERE d.id = staged_attachments.draft_id)
 WHERE draft_id IN (SELECT id FROM composition_drafts WHERE thread_id IS NOT NULL);""",
+    # Send later: a Draft's scheduled send time, and why a scheduled send did not go out.
+    19: """ALTER TABLE composition_drafts ADD COLUMN send_at TEXT;
+ALTER TABLE composition_drafts ADD COLUMN send_error TEXT;""",
 }
 
 # ponytail: fixed list; extend when a free-mail sender forms an Organization by mistake.
@@ -585,7 +589,8 @@ def save_reply_draft(db, thread_id: int, body: str, task_id: int | None = None) 
     with db:
         if not db.in_transaction:
             db.execute("BEGIN IMMEDIATE")
-        row = db.execute("SELECT id, revision, task_id FROM composition_drafts WHERE thread_id = ?", (thread_id,)).fetchone()
+        row = db.execute('SELECT id, revision, task_id, send_at, "to", cc FROM composition_drafts WHERE thread_id = ?',
+                         (thread_id,)).fetchone()
         if not body.strip():
             if row:
                 db.execute("DELETE FROM composition_drafts WHERE id = ?", (row["id"],))
@@ -603,14 +608,73 @@ def save_reply_draft(db, thread_id: int, body: str, task_id: int | None = None) 
                                ch["external_id"])
             values |= dict(to=", ".join(to), cc=", ".join(cc), subject=title if title.lower().startswith("re:")
                            else f"Re: {title}")
+        if row and row["send_at"]:  # a scheduled reply keeps the To and Cc its reply box scheduled it with
+            values |= dict(to=row["to"], cc=row["cc"])
         if row:
             return save_draft(db, values, draft_id=row["id"], expected_revision=row["revision"])
         return save_draft(db, values, thread_id=thread_id, task_id=task_id)
 
 
+def send_time(choice: str, now: datetime, rand=random.random) -> datetime:
+    """Send later: "tomorrow", or "monday" (the next one; a week out on a Monday), at a random minute from 7 to
+    9 am in Jeremy's time, so scheduled mail does not all land on the hour."""
+    from .sequences import LOCAL
+    day = now.astimezone(LOCAL).date()
+    day += timedelta(days=1 if choice == "tomorrow" else 7 - day.weekday())
+    return (datetime.combine(day, time(7), LOCAL) + timedelta(minutes=int(rand() * 120))).astimezone(timezone.utc)
+
+
+def schedule_draft(db, draft_id: int, send_at: datetime | None) -> dict:
+    """Set when the service sends this Draft (None: only when Jeremy sends it); clears any failed send. The
+    revision stays, so an open editor's next save does not conflict."""
+    with db:
+        if not db.in_transaction:
+            db.execute("BEGIN IMMEDIATE")
+        if get_draft(db, draft_id)["sending_at"]:
+            raise SendUnknown("Send outcome unknown; check before scheduling it.")
+        db.execute("UPDATE composition_drafts SET send_at = ?, send_error = NULL WHERE id = ?",
+                   (_iso(send_at) if send_at else None, draft_id))
+    return get_draft(db, draft_id)
+
+
+def schedule_reply(db, thread_id: int, body: str, to: list[str], cc: list[str], send_at: datetime | None) -> dict:
+    """Save a reply box as its Thread's reply Draft, with the box's To and Cc, to send at `send_at`."""
+    with db:
+        if not db.in_transaction:
+            db.execute("BEGIN IMMEDIATE")
+        d = save_reply_draft(db, thread_id, body)
+        if d is None:
+            raise ValueError("Nothing to send.")
+        db.execute('UPDATE composition_drafts SET "to" = ?, cc = ? WHERE id = ?', (", ".join(to), ", ".join(cc), d["id"]))
+        return schedule_draft(db, d["id"], send_at)
+
+
+def claim_due_drafts(db, now: datetime) -> list[dict]:
+    """The Drafts whose send time has come, with that time cleared so each is tried once."""
+    # ponytail: a service crash between this claim and the send leaves an unscheduled Draft with no send_error
+    with db:
+        if not db.in_transaction:
+            db.execute("BEGIN IMMEDIATE")
+        due = [dict(r) for r in db.execute("SELECT * FROM composition_drafts WHERE send_at <= ? AND sending_at IS NULL"
+                                           " ORDER BY send_at, id", (_iso(now),))]
+        db.executemany("UPDATE composition_drafts SET send_at = NULL WHERE id = ?", [(d["id"],) for d in due])
+    return due
+
+
+def set_send_error(db, draft_id: int, error: str) -> None:
+    with db:
+        db.execute("UPDATE composition_drafts SET send_error = ? WHERE id = ?", (error, draft_id))
+
+
 def reply_drafts(db) -> dict[int, str]:
     """Every reply Draft's text, by the Thread id it was saved under."""
     return {r[0]: r[1] for r in db.execute("SELECT thread_id, body FROM composition_drafts WHERE thread_id IS NOT NULL")}
+
+
+def reply_draft(db, thread_id: int) -> dict | None:
+    """The reply Draft saved under this Thread id, or None."""
+    r = db.execute("SELECT * FROM composition_drafts WHERE thread_id = ?", (thread_id,)).fetchone()
+    return dict(r) if r else None
 
 
 def get_draft(db, draft_id: int) -> dict:

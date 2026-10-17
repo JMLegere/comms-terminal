@@ -855,7 +855,7 @@ def test_selected_alias_reply_errors_keep_text_and_each_owners_files(tmp_path, o
         box.query_one(".ccinput", Input).value = "copy@example.test"
         area.text = "Selected revised text"
         area.focus()
-        await pilot.press("ctrl+enter")
+        await pilot.press("ctrl+enter", "enter")
         await app.workers.wait_for_complete()
         await pilot.pause()
         hint = str(box.query_one(".replyhint").render())
@@ -969,9 +969,9 @@ def test_cancelled_reply_callbacks_preserve_material_warning_and_draft(tmp_path,
 
         box.send_result = observe_result
         try:
-            await pilot.press("ctrl+enter")
+            await pilot.press("ctrl+enter", "enter")
             assert await asyncio.to_thread(started.wait, 5)
-            await pilot.press("ctrl+enter")
+            await pilot.press("ctrl+enter", "enter")
             await asyncio.wait_for(new_done.wait(), 5)
             assert workers[0].is_cancelled and not workers[1].is_cancelled
             hint = str(box.query_one(".replyhint").render())
