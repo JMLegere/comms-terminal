@@ -178,3 +178,26 @@ def test_number_keys_open_today_then_the_rail_in_order(tmp_path):
     run(Console(path), [scenario])
     assert seen["2"] == (ThreadsPage, "view:0") and seen["6"][0] is DraftsPage
     assert seen["0"][0] is ChannelsPage and seen["1"][0] is TodayPage
+
+
+def test_drafts_group_failed_then_unsent_then_scheduled(tmp_path):
+    path = with_work(tmp_path)
+    db = inbox.connect(path)
+    new = lambda subject: inbox.save_draft(db, {"connection_id": 1, "kind": "email", "sender": "me@x.io",  # noqa: E731
+                                                "to": "ana@acme.com", "cc": "", "subject": subject, "body": "b"})["id"]
+    later, sooner, failed = new("later"), new("sooner"), new("failed")
+    inbox.schedule_draft(db, later, MONDAY + timedelta(days=7))
+    inbox.schedule_draft(db, sooner, MONDAY + timedelta(days=1))
+    inbox.schedule_draft(db, failed, MONDAY + timedelta(days=1))
+    with db:
+        db.execute("UPDATE composition_drafts SET send_error = 'refused' WHERE id = ?", (failed,))
+    seen = {}
+
+    async def scenario(app, pilot):
+        seen["today"] = [d["subject"] for d in app.main.current.drafts.items]
+        await pilot.press("6")
+        await pilot.pause()
+        seen["drafts"] = [d["subject"] for d in app.main.current.items]
+
+    run(Console(path), [scenario])
+    assert seen["today"] == seen["drafts"] == ["failed", "Hello", "sooner", "later"]

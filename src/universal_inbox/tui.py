@@ -2859,6 +2859,9 @@ class DraftsPage(Page):
             return
         try:
             items = [d for d in inbox.list_drafts(self.app.db) if self.include is None or self.include(d)]
+            # grouped by status (Jeremy, 2026-10-17): failed sends first, then unsent, then scheduled by send time
+            items.sort(key=lambda d: (2, d["send_at"]) if d.get("send_at") and not d.get("send_error") else
+                       (0 if d.get("send_error") else 1, ""))
         except Exception:
             self.app.notify("Draft list unavailable · current edits kept.", severity="error")
             return
