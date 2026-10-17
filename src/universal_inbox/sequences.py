@@ -573,11 +573,11 @@ def tasks_due(db, now: datetime | None = None) -> list[dict]:
         day = due.astimezone(LOCAL).date()
         if day > today:
             continue
-        group = "overdue" if day < today else "later today" if r["at_time"] and due > now else "today"
+        group = "overdue" if day < today else "later today" if r["at_time"] and due > now else "due today"
         org = person_fill(db, r["person_id"])["company"]
         out.append(dict(r) | dict(group=group, organization=org, day=day_number(_at(r["enrolled_at"]), due),
                                   age=(today - day).days))
-    order = {"overdue": 0, "today": 1, "later today": 2}
+    order = {"overdue": 0, "due today": 1, "later today": 2}
     return sorted(out, key=lambda t: (order[t["group"]], t["due_at"], t["id"]))
 
 

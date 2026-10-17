@@ -115,14 +115,14 @@ def test_enroll_send_skip_and_finish_completed(db):  # AS-SEQ-1, 2, 3, 9
     dana = person(db, "dana@harbourline.example", "Dana Roy", org="Harbourline")
     sq.enroll(db, dana, s, MONDAY)
     (t,) = sq.tasks_due(db, MONDAY)
-    assert (t["kind"], t["group"], t["day"], t["sequence"]) == ("email", "today", 1, "Secret Sequence")
+    assert (t["kind"], t["group"], t["day"], t["sequence"]) == ("email", "due today", 1, "Secret Sequence")
     d = draft_of(db, t["id"])
     assert (d["to"], d["subject"], d["body"]) == ("dana@harbourline.example", "Pilot with Harbourline",
                                                   "Hi Dana, a pilot at Harbourline?")
     sent = inbox.send_draft(db, d["id"], d["revision"], FakeSender("<day1@example.test>"))
     assert db.execute("SELECT state, thread_id FROM tasks WHERE id = ?", (t["id"],)).fetchone()[:] == ("DONE", sent.id)
     assert due(db, MONDAY) == []
-    assert due(db, MONDAY + DAY) == [("Dana Roy", "call", "today", 2)]
+    assert due(db, MONDAY + DAY) == [("Dana Roy", "call", "due today", 2)]
     assert due(db, MONDAY + 2 * DAY) == [("Dana Roy", "call", "overdue", 2)]  # skipped a day: shows its age
     (call,) = sq.tasks_due(db, MONDAY + 2 * DAY)
     assert call["age"] == 1
@@ -195,7 +195,7 @@ def test_inbound_reply_pauses_and_resume_makes_the_next_task_due(db):  # AS-SEQ-
     sq.resume(db, e["id"], MONDAY + 3 * DAY)
     assert due(db, MONDAY + 3 * DAY) == [("Dana Roy", "email", "overdue", 1)]
     sq.skip_task(db, t["id"], MONDAY + 3 * DAY)
-    assert due(db, MONDAY + 4 * DAY) == [("Dana Roy", "call", "today", 5)]
+    assert due(db, MONDAY + 4 * DAY) == [("Dana Roy", "call", "due today", 5)]
     inbox.ingest(db, inbox.Incoming(1, ME, "mailbox", "MESSAGE", "<jeremy@x>", None, MONDAY + 3 * DAY, "from me",
                                     title="Note"))
     assert sq.enrollments(db, dana)[0]["state"] == "ACTIVE"  # Jeremy's own messages do not pause

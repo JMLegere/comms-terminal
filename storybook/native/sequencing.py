@@ -77,12 +77,12 @@ DAY1 = ("Hi {first_name},\n\nI run Agent Maple, a local AI company in Moncton. W
 SECRET = "Secret Sequence"
 DUE = [
     ("overdue", 101, 2, 2, "1d", "", SECRET),
-    ("today", 102, 1, 1, "", "", SECRET),
-    ("today", 103, 1, 1, "", "{company}", SECRET),
-    ("today", 104, 3, 3, "", "", SECRET),
-    ("today", 105, 9, 6, "", "reply target skipped", SECRET),
-    ("today", 108, 3, 3, "", "", "Event follow-up"),
-    ("today", 106, 4, 5, "", "", SECRET),
+    ("due today", 102, 1, 1, "", "", SECRET),
+    ("due today", 103, 1, 1, "", "{company}", SECRET),
+    ("due today", 104, 3, 3, "", "", SECRET),
+    ("due today", 105, 9, 6, "", "reply target skipped", SECRET),
+    ("due today", 108, 3, 3, "", "", "Event follow-up"),
+    ("due today", 106, 4, 5, "", "", SECRET),
     ("later today", 107, 12, 9, "10:00", "", SECRET),
 ]
 
@@ -100,7 +100,7 @@ TANA = {101: dict(people=[dict(title="Dana Roy", url="https://app.tana.inc/synth
 STATES = {  # state: (story file, title, PRD requirements, PRD scenarios, description)
     "TasksEmailDue": ("tasks", dict(page="tasks", select=102),
                       ["FR-SEQ-8", "FR-SEQ-15", "FR-SEQ-16", "FR-SEQ-17"], ["AS-SEQ-1", "AS-SEQ-2"],
-                      "Tasks page grouped Overdue, Today, Later today. The selected day-1 email Task opens its real Draft in the Task pane, with Task and Enrollment properties above the Draft's own and Attio and Tana context below. ctrl+enter sends; sending completes the Task and the next Step's Task becomes due by its gap."),
+                      "Tasks page grouped Overdue, Due today, Later today. The selected day-1 email Task opens its real Draft in the Task pane, with Task and Enrollment properties above the Draft's own and Attio and Tana context below. ctrl+enter sends; sending completes the Task and the next Step's Task becomes due by its gap."),
     "TasksCallBlock": ("tasks", dict(page="tasks", select=101, kind="call"),
                        ["FR-SEQ-15", "FR-SEQ-16", "FR-SEQ-17"], ["AS-SEQ-3"],
                        "Filtered to Call Tasks (f, then Call). An overdue call Task shows its age; the Task pane carries the number, the two-dial rule, the script and voicemail text. Jeremy dials in the Quo app; e marks it done and moves to the next row."),
@@ -322,7 +322,7 @@ class TaskPane(tui.ThreadView, inherit_bindings=False):
 
 
 class TasksPage(tui.TablePage):
-    TITLE = f"{ICON['tasks']} tasks · today"
+    TITLE = f"{ICON['tasks']} tasks · due"
     RAIL = "tasks"
     SIDE = f"{ICON['tasks']} task"
     COLUMNS = ("", "Person", "Task", "Sequence", "When")

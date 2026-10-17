@@ -3924,7 +3924,7 @@ class TaskDraftView(DraftView):
 
 
 class TasksPage(Page):
-    """Due Tasks (FR-SEQ-15): Overdue, Today, Later today; the selected one in the side pane."""
+    """Due Tasks (FR-SEQ-15): Overdue, Due today, Later today; the selected one in the side pane."""
     TITLE = f"{ICON['tasks']} tasks · today"
     RAIL = "tasks"
     SIDE = f"{ICON['tasks']} task"
@@ -3987,7 +3987,7 @@ class TasksPage(Page):
         ids = [t and t["id"] for t in self.items]
         row = ids.index(keep) if keep is not None and keep in ids else next((i for i, t in enumerate(self.items) if t), 0)
         table.move_cursor(row=row)
-        label = {None: "today"} | {k: KIND_LABEL[k].lower() for k in KIND_LABEL}
+        label = {None: "due"} | {k: KIND_LABEL[k].lower() for k in KIND_LABEL}
         self.TITLE = f"{ICON['tasks']} tasks · " + (label.get(self.filter) if not isinstance(self.filter, tuple) else
                                                      escape(sequences.get_sequence(self.app.db, self.filter[1])["name"]))
         self.app.main.query_one("#main").border_title = pill(self.TITLE, "blue")
