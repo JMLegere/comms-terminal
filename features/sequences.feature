@@ -18,8 +18,8 @@ Feature: Sequences
   Scenario: Enrolling makes the first Task due today with its Draft
     When Enroll is called for "Dana Roy" in "Secret Sequence" on Monday
     Then Due Tasks on Monday are:
-      | Person   | Kind  | Group | Day |
-      | Dana Roy | email | today | 1   |
+      | Person   | Kind  | Group     | Day |
+      | Dana Roy | email | due today | 1   |
     And the email Task's Draft has Subject "Pilot with Harbourline" and Body "Hi Dana"
 
   @AS-SEQ-2 @AS-SEQ-3 @FR-SEQ-7 @FR-SEQ-8
