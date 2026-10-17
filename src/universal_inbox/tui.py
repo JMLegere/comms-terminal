@@ -103,6 +103,7 @@ Page { height: 1fr; }
 #todaytasks Page, #todaydrafts Page { height: auto; }
 #todaytasks DataTable, #todaydrafts DataTable { height: auto; max-height: 30vh; }
 .todaypane #legend, .todaypane #below { display: none; }
+.todaypane #table { margin-top: 0; }
 #allclear { display: none; height: 1fr; padding: 1 2; }
 #table { margin-top: 1; }
 DataTable { background: #f9f5d7; color: #654735; height: 1fr; scrollbar-size-horizontal: 0; }
@@ -3552,7 +3553,7 @@ class StatusLine(Static):
         mode = VIEW_NAMES[app.view].upper() if sec.startswith("view:") else (
             f"CASES · {inbox.CASE_VIEWS[app.case_view].upper()}" if sec.startswith("cases:") else
             "CONNECTION" if sec.startswith("conn:") else sec.upper())
-        if sec == "today" and main.list is not None and main.list.KIND:
+        if sec == "today" and main.list is not None and main.list.KIND and main.list.selectable_rows():
             mode += f" › {main.list.KIND.upper()}"
         if len(main.stack) > 1 and main.page is not None:  # deeper than the rail section: say where
             mode += f" › {main.page.TITLE.split(' ', 1)[-1].upper()}"
@@ -4744,7 +4745,9 @@ class TodayPage(Page):
         for page, pane in zip(self.lists, self.PANES):
             with Vertical(id=pane, classes="stackpane todaypane"):
                 yield page
-        yield Static(id="allclear")
+        clear = Static(id="allclear", classes="stackpane")
+        clear.border_title = pill(self.TITLE, "blue")
+        yield clear
 
     def on_mount(self):
         self.app.main.query_one("#main").add_class("stacked")
