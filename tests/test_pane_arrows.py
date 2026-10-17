@@ -194,3 +194,30 @@ def test_case_pane_focus_and_editors_preserve_selected_card_and_stack(tmp_path):
         assert (current.current_thread_id(), app.view, tuple(app.main.stack)) == (tid, view, stack)
 
     run(app, [edit])
+
+
+def test_enter_on_a_thread_row_moves_into_the_thread_and_x_ignores(tmp_path):
+    path, _ = seeded(tmp_path)
+    seen = {}
+
+    async def scenario(app, pilot):
+        await pilot.press("j")
+        await pilot.pause()
+        current = page(app)
+        tid = current.current_thread_id()
+        await pilot.press("enter")
+        await pilot.pause()
+        seen["focus"] = app.focused is app.main.thread_view.query_one(".timeline")
+        await pilot.press("left")
+        await pilot.pause()
+        await pilot.press("x")
+        await pilot.pause()
+        seen["ignored"] = inbox.get_thread(app.db, tid).status_detail
+        await pilot.press("z")
+        await pilot.pause()
+        seen["restored"] = inbox.get_thread(app.db, tid).status_detail
+
+    run(Console(path), [scenario])
+    assert seen["focus"] is True
+    assert seen["ignored"] == "IGNORED"
+    assert seen["restored"] != "IGNORED"

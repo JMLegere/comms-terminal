@@ -191,7 +191,7 @@ def test_tasks_filter_menu_and_copy_for_agent(tmp_path, monkeypatch):
         app.main.go("tasks")
         await pilot.pause()
         seen["all"] = sorted(t["kind"] for t in app.main.current.items if t)
-        await pilot.press("f")
+        await pilot.press("slash")
         await pilot.pause()
         choose(app, f"seq:{other}")
         await pilot.press("enter")

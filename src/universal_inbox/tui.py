@@ -456,12 +456,12 @@ HELP = [  # (group, [(keys, what it does)]) — the full key map; Gmail-style wh
     ("Move around", [("j / k", "main page: move down / up (↑/↓ also work; or click a row)"),
                      ("space", "scroll the thread (pgup / pgdn)"),
                      ("← / →", "focus previous / next pane (no item opens)"),
-                     ("enter", "open the highlighted sidebar item"),
+                     ("enter", "sidebar: open the item · list row: move into it (a case header opens the case)"),
                      ("1 – 5", "Todo, Snoozed, Done, Ignored, Drafts"),
                      ("6 – 9", "People, Organizations, Cases (Todo), Channels"), ("u", "back (esc also works)")]),
     ("Thread", [("r", "reply to the sender   ctrl+enter sends · esc keeps the draft"), ("a", "reply all"),
                 ("e", "done: it returns if they write again"), ("b", "snooze until a time (it also returns when they write)"),
-("m", "ignore: it stays out of Todo (m again un-ignores)"),
+("m", "ignore: it stays out of Todo (m again un-ignores)"), ("x", "ignore, as m does"),
                 ("l", "add to a case"), ("s", "change status: needs a response, investigating"),
                 ("p", "open the person"), ("o", "open in Gmail, Fastmail, or Slack"), ("z", "undo the last change"),
                 ("y", "copy the thread, its people, and Attio/Tana context as Markdown for an agent (file paths too)"),
@@ -478,7 +478,7 @@ HELP = [  # (group, [(keys, what it does)]) — the full key map; Gmail-style wh
                 ("delete", "in the draft's file list: remove the highlighted file"),
                 ("Connection", "choose email or SMS; sending unavailable")]),
     ("Tasks", [("e", "done: the next Step's Task comes due by its gap (email Tasks are done when their Draft sends)"),
-               ("x", "skip: the next Step counts from today (z undoes)"), ("f", "filter by kind or Sequence"),
+               ("x", "skip: the next Step counts from today (z undoes)"), ("/", "filter by kind or Sequence"),
                ("n", "a reply Task whose email was skipped: start a new Thread instead"),
                ("enter", "an email Task: edit its Draft, or open its Thread's reply box"),
                ("p", "open the person"), ("y", "copy the Task and its person as Markdown for an agent")]),
@@ -772,6 +772,7 @@ class ClickTable(DataTable):
         if row != self.cursor_row:
             self.move_cursor(row=row)
         else:
+            self.clicked = True  # the page may treat a click unlike enter (a Thread row keeps list focus)
             self._post_selected_message()
 
 
@@ -843,7 +844,7 @@ THREAD_KEYS = [  # Thread actions, Gmail-style (decision #93); shared by the Thr
     Binding("e", "done", "done"), Binding("b", "pause", "snooze"),
     Binding("m", "ignore", "ignore"), Binding("l", "case", "case"), Binding("s", "status", "status"),
     Binding("p", "person", show=False), Binding("o", "link", show=False), Binding("y", "copy", "copy for agent"),
-    Binding("f", "forward", show=False),
+    Binding("f", "forward", show=False), Binding("x", "ignore", show=False),  # x drops: Ignore, as m does
 ]
 
 
@@ -983,10 +984,14 @@ class ThreadsPage(Page, ThreadActions):
         return inbox.get_thread(self.app.db, tid).id if tid is not None else None
 
     def on_data_table_row_selected(self, event):
-        """Enter (or a second click) on a Case header row opens the Case."""
+        """Enter (or a second click) selects: a Case header row opens the Case; a Thread row moves focus into
+        the Thread beside it."""
         r = self.rows[event.cursor_row] if self.rows and event.cursor_row < len(self.rows) else None
         if r is not None and r.get("header") and r["case_id"]:
             self.app.main.open(lambda: CasePage(r["case_id"], r["title"]))
+        elif r is not None and not r.get("header") and not getattr(event.data_table, "clicked", False):
+            self.app.main.action_focus_pane(1)
+        event.data_table.clicked = False
 
     def on_data_table_row_highlighted(self, event):
         if self.app.main.current is not self:  # a page being replaced must not repaint the thread pane
@@ -3930,7 +3935,7 @@ class TasksPage(Page):
     SIDE = f"{ICON['tasks']} task"
     BINDINGS = [Binding("j", "down", "move", key_display="j/k"), Binding("k", "up", show=False),
                 Binding("e", "done", "done · next"), Binding("x", "skip", "skip · next"),
-                Binding("n", "new_thread", show=False), Binding("f", "filter", "filter"),
+                Binding("n", "new_thread", show=False), Binding("slash", "filter", "filter", key_display="/"),
                 Binding("p", "person", "person"), Binding("y", "copy", "copy for agent")]
 
     def __init__(self):
@@ -3992,7 +3997,7 @@ class TasksPage(Page):
                                                      escape(sequences.get_sequence(self.app.db, self.filter[1])["name"]))
         self.app.main.query_one("#main").border_title = pill(self.TITLE, "blue")
         count = sum(1 for t in self.items if t)
-        self.query_one("#below").update(f"[#928374]{count} due · f filters by kind or Sequence[/]" if count else "")
+        self.query_one("#below").update(f"[#928374]{count} due · / filters by kind or Sequence[/]" if count else "")
         self.show_selected()
         self.app.main.refresh_chrome()
 
