@@ -13,6 +13,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from universal_inbox import inbox
+
 from test_github_deploy import (A, B, C, ROOT, config, deploy, post, producer, read_data, receiver)
 
 
@@ -389,6 +391,34 @@ def test_container_stop_detects_orphan_app_writer_despite_inactive_unit(containe
     updater.stop()
 
 
+def test_container_deployment_lock_runs_native_quiesce_before_lock_and_resumes_after_unlock(container_config, monkeypatch):
+    updater = deploy.ContainerUpdater(container_config)
+    barrier = updater.state / "console-update"
+    calls, trusts = [], []
+    monkeypatch.setattr(deploy, "trusted_path", lambda path: trusts.append(path))
+
+    def command(args, timeout=120):
+        calls.append((args, timeout))
+        # The native probe and resume must both run outside the updater's actual exclusive lock.
+        with open(container_config.lock, "r+") as probe:
+            fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if args[-1] == "quiesce":
+            deploy.atomic_json(barrier, {"blocked": True})
+        else:
+            assert args[-1] == "resume-consoles" and not updater.gate.exists()
+            barrier.unlink()
+
+    updater.command = command
+    with updater.deployment_lock():
+        assert barrier.exists()
+        with open(container_config.lock, "r+") as probe, pytest.raises(BlockingIOError):
+            fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    runtime = "/opt/universal-inbox-deploy/container_runtime.py"
+    assert calls == [(["/usr/bin/python3", "-I", runtime, operation], 65)
+                     for operation in ("quiesce", "resume-consoles")]
+    assert trusts == [runtime, runtime] and not barrier.exists()
+
+
 class LocalContainerUpdater(deploy.ContainerUpdater):
     """Real orchestration and DB migration; replace only Docker/Git/systemd boundaries."""
 
@@ -396,6 +426,8 @@ class LocalContainerUpdater(deploy.ContainerUpdater):
         super().__init__(config)
         self.sha, self.running, self.fail = sha, active, fail
         self.calls = []
+        self.console_calls = []
+        self.quiesce = lambda: None
         self.staged = threading.Event()
         self.candidate = image_release(config, sha, image=IMAGE_C if sha == C else IMAGE_B)
 
@@ -405,6 +437,21 @@ class LocalContainerUpdater(deploy.ContainerUpdater):
 
     def remove_check(self):
         pass
+
+    def console_runtime(self, operation):
+        self.console_calls.append(operation)
+        barrier = self.state / "console-update"
+        if operation == "quiesce":
+            deploy.atomic_json(barrier, {"blocked": True})
+            self.quiesce()  # Simulated frontend signal/ack for the still-open frontend.
+            try:
+                with open(self.config.lock, "r+") as probe:
+                    fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as error:
+                raise deploy.DeploymentError("console quiescence failed") from error
+        else:
+            assert operation == "resume-consoles" and not self.gate.exists()
+            barrier.unlink(missing_ok=True)
 
     def stage(self, sha):
         self.staged.set()
@@ -428,6 +475,7 @@ class LocalContainerUpdater(deploy.ContainerUpdater):
 
     def check(self, environment, database):
         assert self.gate.exists() and not self.running
+        assert (self.state / "console-update").exists()
         subprocess.run([sys.executable, "-c", deploy.CHECK_DATABASE + "\ncheck_database(sys.argv[1])", str(database)],
                        check=True, capture_output=True, env={**os.environ, "PYTHONPATH": str(ROOT / "src")}, timeout=10)
         if Path(environment) == self.candidate and self.fail:
@@ -441,30 +489,82 @@ class LocalContainerUpdater(deploy.ContainerUpdater):
 
 
 @pytest.mark.parametrize("initially_active", [False, True])
-def test_container_activation_waits_for_console_and_preserves_inactivity(container_config, initially_active):
+def test_container_activation_quiesces_open_console_saves_draft_and_preserves_inactivity(container_config, initially_active):
     updater = LocalContainerUpdater(container_config, active=initially_active)
     queue = deploy.Queue(container_config.state)
     queue.accept(B)
-    failures = []
-
-    def run():
-        try:
-            updater.deploy(queue.claim())
-        except Exception as error:
-            failures.append(error)
+    with closing(inbox.connect(container_config.db)) as db:
+        thread_id = db.execute("SELECT id FROM threads").fetchone()[0]
+        saved = inbox.save_reply_draft(db, thread_id, "previously saved draft")
+    console_state = {"restart_required": False}
 
     with open(container_config.lock, "r+") as console:
         fcntl.flock(console, fcntl.LOCK_SH)
-        thread = threading.Thread(target=run)
-        thread.start()
-        assert updater.staged.wait(5) and thread.is_alive()
-        assert updater.calls == ["fetch"] and not updater.gate.exists()
-        fcntl.flock(console, fcntl.LOCK_UN)
-    thread.join(10)
-    assert not thread.is_alive() and not failures
+
+        def quiesce():
+            assert updater.staged.is_set() and updater.calls == ["fetch"]
+            assert not updater.gate.exists()  # Build first; backend stays running during frontend save.
+            with closing(inbox.connect(container_config.db)) as db:
+                inbox.save_reply_draft(db, thread_id, "unsaved editor text")
+            console_state["restart_required"] = True
+            fcntl.flock(console, fcntl.LOCK_UN)
+
+        updater.quiesce = quiesce
+        updater.deploy(queue.claim())  # The still-open frontend acknowledges automatically.
+
+    with closing(inbox.connect(container_config.db)) as db:
+        assert inbox.get_draft(db, saved["id"])["body"] == "unsaved editor text"
+    assert console_state["restart_required"]
+    assert updater.console_calls == ["quiesce", "resume-consoles"]
+    assert not (updater.state / "console-update").exists()
     assert Path(container_config.current).resolve() == updater.candidate
     assert updater.calls == (["fetch", "stop", "start", "ready"] if initially_active else ["fetch"])
     assert updater.running is initially_active
+
+
+def test_container_failed_frontend_save_never_waits_for_lock_or_stops_backend(container_config, monkeypatch):
+    updater = LocalContainerUpdater(container_config, active=True)
+    original = read_data(container_config)
+    queue = deploy.Queue(container_config.state)
+    queue.accept(B)
+    original_locked = deploy.locked
+
+    def lock(path, **kwargs):
+        if str(path) == container_config.lock:
+            pytest.fail("failed frontend acknowledgment must not enter the application lock wait")
+        return original_locked(path, **kwargs)
+
+    def failed_save():
+        raise deploy.DeploymentError("console quiescence failed")
+
+    updater.quiesce = failed_save
+    monkeypatch.setattr(deploy, "locked", lock)
+    monkeypatch.setattr(deploy, "make_updater", lambda _: updater)
+    with open(container_config.lock, "r+") as console:
+        fcntl.flock(console, fcntl.LOCK_SH)
+        assert deploy.update(container_config) == 1
+        with open(container_config.lock, "r+") as probe, pytest.raises(BlockingIOError):
+            fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    assert updater.calls == ["fetch"] and updater.running
+    assert updater.console_calls == ["quiesce", "resume-consoles"]
+    assert updater.installed_sha() == A and read_data(container_config) == original
+    assert not updater.gate.exists() and not (updater.state / "console-update").exists()
+    assert deploy.read_json(updater.status / "last-failure.json")["phase"] == "failed-staging"
+    assert queue.claim() is None and deploy.update(container_config) == 0
+
+
+def test_container_same_sha_clears_consistent_barrier_left_after_worker_completion(container_config):
+    updater = LocalContainerUpdater(container_config, sha=A)
+    updater.stage = lambda _: pytest.fail("an installed SHA needs only launch-barrier cleanup")
+    queue = deploy.Queue(container_config.state)
+    queue.accept(A)
+    notification = queue.claim()
+    updater.save({"job": notification["id"], "restart_pending": False}, "complete")
+    deploy.atomic_json(updater.state / "console-update", {"blocked": True})
+    updater.deploy(notification)
+    assert updater.calls == ["fetch"] and updater.console_calls == ["resume-consoles"]
+    assert deploy.read_json(updater.journal)["phase"] == "unchanged"
+    assert not (updater.state / "console-update").exists()
 
 
 def test_container_recovery_restores_only_before_writers_and_keeps_live_writes(container_config):
@@ -477,6 +577,7 @@ def test_container_recovery_restores_only_before_writers_and_keeps_live_writes(c
     assert read_data(container_config) == original
     assert broken.installed_sha() == A
     assert deploy.read_json(broken.journal)["phase"] == "failed-restored"
+    assert broken.console_calls == ["quiesce", "resume-consoles"]
     queue.complete()
     fixed = LocalContainerUpdater(container_config, active=True)
 
@@ -494,6 +595,7 @@ def test_container_recovery_restores_only_before_writers_and_keeps_live_writes(c
     assert read_data(container_config)[1][0][1] == "new writer data"
     assert fixed.installed_sha() == B
     assert deploy.read_json(fixed.journal)["phase"] == "failed-post-writer"
+    assert fixed.console_calls == ["quiesce", "resume-consoles"]
     queue.complete()
     retried = LocalContainerUpdater(container_config)
     retried.stage = lambda _: pytest.fail("same installed SHA must not rebuild")
@@ -503,6 +605,39 @@ def test_container_recovery_restores_only_before_writers_and_keeps_live_writes(c
     assert read_data(container_config)[1][0][1] == "new writer data"
     assert deploy.read_json(retried.journal)["restart_pending"] is False
     assert not retried.gate.exists()
+    assert retried.console_calls == ["quiesce", "resume-consoles"]
+
+
+@pytest.mark.parametrize("missing_writer_gate", [False, True])
+def test_container_incomplete_recovery_retains_console_barrier_until_consistent(container_config, monkeypatch, missing_writer_gate):
+    original = read_data(container_config)
+    broken = LocalContainerUpdater(container_config, fail=True)
+    queue = deploy.Queue(container_config.state)
+    queue.accept(B)
+    original_restore = deploy.restore
+
+    def failed_restore(*args):
+        raise deploy.DeploymentError("checkpoint restoration failed")
+
+    monkeypatch.setattr(deploy, "restore", failed_restore)
+    with pytest.raises(deploy.DeploymentError, match="restoration"):
+        broken.deploy(queue.claim())
+    assert broken.gate.exists() and (broken.state / "console-update").exists()
+    assert broken.console_calls == ["quiesce"]
+    assert deploy.read_json(broken.journal)["phase"] == "migrating"
+    fresh = LocalContainerUpdater(container_config, sha=C)
+    monkeypatch.setattr(deploy, "restore", original_restore)
+    if missing_writer_gate:
+        broken.gate.unlink()
+        with pytest.raises(deploy.DeploymentError, match="exclusion checkpoint"):
+            fresh.deploy(queue.claim())
+        assert fresh.console_calls == ["quiesce"]
+        assert (fresh.state / "console-update").exists()
+    else:
+        fresh.deploy(queue.claim())
+        assert read_data(container_config) == original and fresh.installed_sha() == C
+        assert fresh.console_calls == ["quiesce", "resume-consoles", "quiesce", "resume-consoles"]
+        assert not fresh.gate.exists() and not (fresh.state / "console-update").exists()
 
 
 def test_container_fresh_worker_recovers_persisted_switch_before_new_authoritative_main(container_config):
@@ -565,7 +700,8 @@ def test_container_queue_only_fetches_accepted_events_retries_and_force_pushes(c
     assert deploy.update(container_config) == 0 and updater.installed_sha() == B
 
 
-def test_container_retention_only_managed_images_releases_and_three_completed_checkpoints(container_config):
+@pytest.mark.parametrize("console_image", ["", IMAGE_A])
+def test_container_retention_only_managed_images_releases_and_three_completed_checkpoints(container_config, console_image):
     updater = deploy.ContainerUpdater(container_config)
     releases, checkpoints = [], []
     for index in range(5):
@@ -591,6 +727,9 @@ def test_container_retention_only_managed_images_releases_and_three_completed_ch
 
     def command(args, timeout=120):
         commands.append(args)
+        if args[-1] == "console-images":
+            assert args == ["/usr/bin/python3", "-I", deploy.CONTAINER_RUNTIME, "console-images"]
+            return console_image
         if "ls" in args:
             assert args[-1] == "label=" + deploy.MANAGED_LABEL
             return "\n".join("sha256:" + str(index + 1) * 64 for index in range(5))
@@ -607,5 +746,15 @@ def test_container_retention_only_managed_images_releases_and_three_completed_ch
     assert [path.exists() for path in releases] == [False, False, False, True, True]
     assert [path.exists() for path in checkpoints] == [False, False, True, True, True]
     assert removed_worktrees == [path.name for path in releases[:3]]
-    assert {args[-1] for args in commands if "rm" in args} == {"sha256:" + str(i) * 64 for i in (1, 2, 3)}
+    assert {args[-1] for args in commands if "rm" in args} == {
+        "sha256:" + str(i) * 64 for i in (1, 2, 3)} - {console_image}
     assert (unrelated / "preserve").exists()
+
+
+def test_container_retention_refuses_invalid_console_image_inventory(container_config):
+    updater = deploy.ContainerUpdater(container_config)
+    current = Path(container_config.current).resolve()
+    updater.console_runtime = lambda _: "latest"
+    with pytest.raises(deploy.DeploymentError, match="console image inventory"):
+        updater.retain_releases({current})
+    assert (current / "image.json").exists()

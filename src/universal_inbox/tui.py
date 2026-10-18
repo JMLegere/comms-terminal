@@ -3,13 +3,18 @@
 It reads and writes the SQLite file through `inbox`; replies go through the service's local socket.
 """
 
+import asyncio
+import fcntl
 import hashlib
 import http.client
 import json
 import mimetypes
+import os
 import re
+import signal
 import socket
 import sqlite3
+import stat
 import textwrap
 import unicodedata
 from collections import Counter
@@ -24,7 +29,7 @@ from pathlib import Path
 
 from rich.markup import escape
 from rich.style import Style
-from textual import work
+from textual import events, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
@@ -35,7 +40,7 @@ from textual.screen import ModalScreen, Screen
 from textual.suggester import Suggester
 from textual.widgets import DataTable, DirectoryTree, Input, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
-from textual.worker import get_current_worker
+from textual.worker import WorkerCancelled, get_current_worker
 
 from . import files, inbox, render, sequences
 from .health import problem
@@ -1605,6 +1610,11 @@ class ReplyBox(Composer, Vertical):
             title = view["thread"].title
             self.query_one(".subjectvalue").update(escape(title if title.lower().startswith("re:") else f"Re: {title}"))
             self.set_mode(mode)
+            if self.app._managed_console:
+                draft = inbox.reply_draft(self.app.db, draft_key)
+                if draft is not None:
+                    self.query_one(".toinput", Input).value = draft["to"]
+                    self.query_one(".ccinput", Input).value = draft["cc"]
         else:
             self.query_one(".flabel").update("To")
             self.query_one(".fromvalue").update(f"{escape(view['where'])} [#928374]· in thread[/]")
@@ -1640,6 +1650,8 @@ class ReplyBox(Composer, Vertical):
         h.set_class(error, "error")
 
     def keep_draft(self):
+        if getattr(self.app, "_console_editors_saved", False):
+            return
         if self.has_class("open") and self.query(TextArea):
             self.app.drafts[self.draft_key] = self.query_one(TextArea).text
 
@@ -4734,7 +4746,8 @@ class StepEditor(Vertical):
             table.focus()
 
     def on_descendant_blur(self, _):
-        self.save()
+        if not self.app._console_stopping and not self.app._console_closed:
+            self.save()
 
     def paint(self):
         st = self.step
@@ -5150,11 +5163,46 @@ class ReplyDrafts(MutableMapping):
         return len(inbox.reply_drafts(self.db))
 
 
+APP_LOCK_PATH = Path("/run/universal-inbox-deploy/app.lock")
+
+
+def inherited_app_lock_fd():
+    """Only adopt the helper's actual, already-shared-locked deployment file."""
+    value = os.environ.get("UNIVERSAL_INBOX_APP_LOCK_FD")
+    if value is None:
+        return None
+    try:
+        if not re.fullmatch(r"[0-9]+", value) or int(value) < 3:
+            raise ValueError
+        fd = int(value)
+        actual, expected = os.fstat(fd), APP_LOCK_PATH.lstat()
+        if (not stat.S_ISREG(expected.st_mode) or not stat.S_ISREG(actual.st_mode)
+                or (actual.st_dev, actual.st_ino) != (expected.st_dev, expected.st_ino)
+                or fcntl.fcntl(fd, fcntl.F_GETFL) & os.O_ACCMODE != os.O_RDONLY):
+            raise ValueError
+        lock = Path(f"/proc/self/fdinfo/{fd}").read_text()
+        if not re.search(r"^lock:\s+\d+:\s+FLOCK\s+ADVISORY\s+READ\s+", lock, re.M):
+            raise ValueError
+    except (OSError, ValueError, OverflowError):
+        # Never close an arbitrary descriptor selected by an untrusted environment.
+        raise RuntimeError("Invalid managed console application lock.") from None
+    os.set_inheritable(fd, False)
+    return fd
+
+
+class ConsoleUpdateScreen(Screen):
+    def compose(self) -> ComposeResult:
+        yield Static("[b]Restart required[/b]\n\nYour drafts are saved. The inbox is updating.\n"
+                     "Quit with ctrl+q, then restart the app to load the new version.",
+                     classes="threadempty")
+
+
 class Console(App):
     CSS = CSS
     TITLE = "Universal Inbox"
     HOME = "today"  # where the console opens (FR-T2)
     ENABLE_COMMAND_PALETTE = False
+    CONSOLE_UPDATE_PROTOCOL = 1
 
     def __init__(self, db_path: str, reply=None, sources=None, send_draft=None, slack_conversations=None,
                  files=FILE_SERVER):
@@ -5174,6 +5222,11 @@ class Console(App):
         self.people_collapsed = set()  # People list letters folded shut
         self.undo = None  # (message, restore) for the last change
         self.msg_states = {}  # thread id -> which messages, quotes, and recipient lines are open (#107)
+        self._app_lock_fd = inherited_app_lock_fd()
+        self._managed_console = self._app_lock_fd is not None
+        self._console_stopping = self._console_closed = self._console_editors_saved = False
+        self._console_exit_requested = False
+        self._console_signals = {}
 
     @property
     def main(self) -> MainScreen:
@@ -5187,22 +5240,133 @@ class Console(App):
         self.data_version = self.db.execute("PRAGMA data_version").fetchone()[0]
         self.install_screen(MainScreen(), "main")
         self.push_screen("main")
-        self.set_interval(2, self.check_changes)
-        self.set_interval(60, self.minute)
-        self.set_interval(1, self.tick_countdowns)
+        self._refresh_timers = [self.set_interval(2, self.check_changes),
+                                self.set_interval(60, self.minute),
+                                self.set_interval(1, self.tick_countdowns)]
+        if self._managed_console:
+            loop = asyncio.get_running_loop()
+            for sig in (signal.SIGUSR1, signal.SIGTERM, signal.SIGHUP):
+                self._console_signals[sig] = signal.getsignal(sig)
+                loop.add_signal_handler(sig, self._request_console_stop, sig != signal.SIGUSR1)
         mine = [c["self_id"] for c in inbox.connections(self.db) if "@" in (c["self_id"] or "")]
         for key in self.sources:
             self.check_source(key, mine)
 
+    def on_unmount(self):
+        for sig, previous in self._console_signals.items():
+            asyncio.get_running_loop().remove_signal_handler(sig)
+            signal.signal(sig, previous)
+
+    async def on_event(self, event):
+        if self._console_stopping or self._console_closed:
+            if isinstance(event, events.InputEvent):
+                if isinstance(event, events.Key) and event.key in ("ctrl+q", "q"):
+                    await self.action_quit()
+                event.stop()
+                event.prevent_default()
+                return
+        await super().on_event(event)
+
+    async def run_action(self, action, default_namespace=None, namespaces=None):
+        if (self._console_stopping or self._console_closed) and action not in ("quit", "app.quit"):
+            return False
+        return await super().run_action(action, default_namespace, namespaces)
+
+    def call_from_thread(self, callback, *args, **kwargs):
+        if not self._managed_console:
+            return super().call_from_thread(callback, *args, **kwargs)
+        if self._console_editors_saved:
+            return None
+        def guarded():
+            if not self._console_editors_saved:
+                return callback(*args, **kwargs)
+        return super().call_from_thread(guarded)
+
+    def _request_console_stop(self, exit_requested=False):
+        self._console_exit_requested |= exit_requested
+        if self._console_closed:
+            if self._console_exit_requested:
+                self.exit()
+        elif not self._console_stopping:
+            self._console_stopping = True
+            self.call_later(self._stop_console)
+
+    def _save_console_drafts(self):
+        if not self.main.save_draft():
+            return False
+        for editor in self.main.query(DraftView):
+            if not editor.save(refresh=False):
+                return False
+        for reply in self.main.query(ReplyBox):
+            reply.keep_draft()
+            if reply.has_class("open") and reply.email:
+                draft = inbox.reply_draft(self.db, reply.draft_key)
+                if draft is not None:
+                    values = {key: draft[key] for key in DRAFT_FIELDS}
+                    values.update(to=reply.query_one(".toinput", Input).value,
+                                  cc=reply.query_one(".ccinput", Input).value)
+                    inbox.save_draft(self.db, values, draft_id=draft["id"], expected_revision=draft["revision"])
+        for editor in self.main.query(DescriptionBox):
+            if editor.has_class("open"):
+                page = next(parent for parent in editor.ancestors if isinstance(parent, CasePage))
+                text = editor.query_one(TextArea).text.strip()
+                if text != editor.text:
+                    inbox.set_case_description(self.db, page.case_id, text)
+                    editor.text = text
+        return all(editor.save() for editor in self.main.query(StepEditor))
+
+    async def _stop_console(self):
+        if self._console_closed:
+            if self._console_exit_requested:
+                self.exit()
+            return
+        try:
+            if not self._save_console_drafts():
+                raise RuntimeError("Draft save failed")
+            # Do not cancel thread workers: cancellation does not stop their callbacks or socket requests.
+            async with asyncio.timeout(40):
+                results = await asyncio.shield(asyncio.gather(
+                    *(worker.wait() for worker in self.workers), return_exceptions=True))
+                if any(isinstance(result, BaseException) and not isinstance(result, WorkerCancelled)
+                       for result in results):
+                    raise RuntimeError("Background work did not settle")
+            if not self._save_console_drafts():
+                raise RuntimeError("Draft save failed")
+        except Exception:
+            self._console_stopping = False
+            self.notify("Could not pause safely · drafts and update lock kept. "
+                        "Resolve any save error, then retry quit or the update.", severity="error", timeout=60)
+            return
+        self._console_editors_saved = True
+        for timer in self._refresh_timers:
+            timer.stop()
+        while self.screen is not self.main:
+            await self.pop_screen()
+        await self.switch_screen(ConsoleUpdateScreen())
+        # Remove every old widget and its timers/message queue before SQLite or the shared lock is closed.
+        await self.main.remove()
+        self.db.close()
+        if self.drafts.own is not None:
+            self.drafts.own.close()
+        os.close(self._app_lock_fd)
+        self._app_lock_fd = None
+        self._console_closed = True
+        if self._console_exit_requested:
+            self.exit()
+
     def minute(self):
         """Health goes stale with no write to notice; on Today, a Task can come due by the clock alone (FR-T11)."""
+        if self._console_stopping or self._console_closed:
+            return
         if isinstance(self.main.current, TodayPage):
             self.main.refresh_all()
         else:
             self.main.refresh_chrome()
 
     async def action_quit(self):
-        if self.main.save_draft():
+        if self._managed_console:
+            self._request_console_stop(exit_requested=True)
+        elif self.main.save_draft():
             self.exit()
 
     @work(thread=True)
@@ -5220,6 +5384,8 @@ class Console(App):
 
     def tick_countdowns(self):
         """Snoozed Threads count down beside their status every second (the lists tick on their own)."""
+        if self._console_stopping or self._console_closed:
+            return
         # ponytail: a Snoozed ThreadView repaints its properties each second; cache them if that gets slow
         for tv in self.screen.query(ThreadView):
             if getattr(tv, "view", None) is not None and tv.view["thread"].status == "SNOOZED":
@@ -5364,6 +5530,8 @@ class Console(App):
 
     def check_changes(self):
         """Refresh when the service has written (new mail, Slack messages, wake)."""
+        if self._console_stopping or self._console_closed:
+            return
         v = self.db.execute("PRAGMA data_version").fetchone()[0]
         if v != self.data_version:
             self.data_version = v
