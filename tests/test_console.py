@@ -72,7 +72,7 @@ def test_click_selects_and_shows_the_thread_beside_the_list(tmp_path):
     app, seen = Console(path), {}
 
     async def click_row(app, pilot):
-        await pilot.click("#table", offset=(10, 1))  # second row
+        await pilot.click("#table", offset=(10, page(app).selectable_rows()[1]))  # second Thread row
 
     async def after_click(app, pilot):
         seen["page"], seen["selected"] = type(page(app)), page(app).current_thread_id()
@@ -479,7 +479,7 @@ def test_cases_views_group_threads_and_start_an_empty_case(tmp_path):
 
     async def grouped(app, pilot):
         rows = page(app).rows
-        seen["heads"] = [(r["case_id"], r["title"]) for r in rows if r.get("header")]
+        seen["heads"] = [(r["case_id"], r["title"]) for r in rows if r.get("header") and not r.get("detail")]
         seen["acme"] = [r["id"] for r in rows if not r.get("header") and r["case_id"] == acme]
         table = page(app).query_one("DataTable")
         table.move_cursor(row=next(i for i, r in enumerate(rows) if r.get("header") and r["case_id"] == acme))
@@ -601,3 +601,29 @@ def test_chrome_refresh_with_no_change_does_not_redraw(tmp_path):
         assert calls == ["rail", "line"]  # counts moved: both repaint once
 
     run(app, [spy, idle_tick, real_change])
+
+
+def test_thread_views_group_by_status_then_case(tmp_path):
+    """Todo and the other many-Status views list Threads under Status headers, in the legend's order."""
+    from universal_inbox.tui import GLYPH
+    path, _ = seeded(tmp_path)
+    app, seen = Console(path), {}
+
+    async def grouped(app, pilot):
+        seen[app.view] = [(r.get("header"), r.get("detail"), r["depth"]) for r in page(app).rows]
+
+    async def ignored(app, pilot):
+        app.action_status_tab(3)
+
+    run(app, [grouped, ignored, grouped])
+    todo = seen[0]
+    heads = [d for h, d, depth in todo if h and d]
+    order = list(dict.fromkeys(GLYPH[d][2] for d in inbox.VIEWS["Todo"]))
+    assert heads and [GLYPH[d][2] for d in heads] == [x for x in order if x in {GLYPH[d][2] for d in heads}]
+    label = None
+    for header, detail, depth in todo:
+        if header and detail:
+            label = GLYPH[detail][2]
+        elif not header:
+            assert GLYPH[detail][2] == label and depth >= 1
+    assert all(not (h and d) for h, d, _ in seen[3])  # Ignored holds one Status: no Status header
