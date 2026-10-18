@@ -1021,23 +1021,35 @@ class ThreadsPage(Page, ThreadActions):
         self.rows = self.grouped(inbox.queue(db, VIEW_NAMES[view]))
         threads = [r for r in self.rows if not r.get("header")]
         table = self.query_one(DataTable)
-        row = self.app.cursor.get(view, 1 if len(threads) < len(self.rows) else 0)  # past the first header
+        first = next((i for i, r in enumerate(self.rows) if not r.get("header")), 0)
+        row = self.app.cursor.get(view, first)  # past the headers above the first Thread
         table.clear(columns=True)  # columns too: clear() keeps old widths, which pushed the age column off-screen
         table.add_columns("s", "from", "title", "time")
         # Fit the row to the panel so the time column stays visible: the title keeps 12 columns, then
         # "· where" drops, then the name shortens. 10 = glyph and cell padding; then the widest time.
-        indent = "  " if len(threads) < len(self.rows) else ""  # Threads sit under their Case header
+        deepest = max((r["depth"] for r in threads), default=0)  # Threads sit under their Status and Case headers
         times = {r["id"]: thread_time(r) for r in threads}
-        room = self.size.width - 3 - 10 - max(5, *map(len, times.values()), 0) - 2 * len(indent)
+        room = self.size.width - 3 - 10 - max(5, *map(len, times.values()), 0) - 4 * deepest
         with_where = max((len(r["who"]) + len(r["where"]) + 3 for r in threads), default=0)
         show_where = with_where <= room - 12
         who_w = with_where if show_where else min(max((len(r["who"]) for r in threads), default=0), max(6, room - 12))
         title_w = max(6, room - who_w)
         cut = lambda text, n: text if len(text) <= n else text[:n - 1] + "…"  # noqa: E731
         for r in self.rows:
+            indent = "  " * r["depth"]
+            if r.get("header") and r.get("detail"):  # a Status header: its words run on into the title column
+                color, head = GLYPH[r["detail"]][1], ""
+                for word in r["title"].split():
+                    if len(head) + bool(head) + len(word) > who_w + 2 * deepest:
+                        break
+                    head += " " * bool(head) + word
+                rest = cut(r["title"][len(head):].strip(), title_w)
+                table.add_row(glyph(r["detail"]), f"[b {color}]{escape(head)}[/]", f"[b {color}]{escape(rest)}[/]",
+                              f"[#928374]{r['count']}[/]")
+                continue
             if r.get("header"):
-                icon = f"[#654735]{ICON['case']}[/]" if r["case_id"] else ""
-                name = f"[b #45707a]{escape(cut(r['title'], who_w + len(indent)))}[/]" if r["case_id"] else "[b #928374]No case[/]"
+                icon = f"{indent}[#654735]{ICON['case']}[/]" if r["case_id"] else indent
+                name = f"{indent}[b #45707a]{escape(cut(r['title'], who_w + 2 * deepest))}[/]" if r["case_id"] else f"{indent}[b #928374]No case[/]"
                 table.add_row(icon, name, f"[#928374]{escape(cut(r['summary'], title_w))}[/]", "")
                 continue
             who = f"{indent}[b]{escape(cut(r['who'], who_w))}[/]" + (f" [#928374]· {escape(r['where'])}[/]" if show_where else "")
@@ -1065,10 +1077,27 @@ class ThreadsPage(Page, ThreadActions):
             tv.members = tv.view["members"]
 
     def grouped(self, rows) -> list[dict]:
+        """Status header rows in the legend's order, when the view holds more than one Status; inside each, Case
+        header rows (#120). Every header row has a `depth`; each Thread row's depth is its headers' count."""
+        details = inbox.VIEWS[VIEW_NAMES[self.view_index]]
+        labels = list(dict.fromkeys(GLYPH[d][2] for d in details))
+        if len(labels) == 1:
+            return self.by_case(rows, 0)
+        out = []
+        for label in labels:
+            group = [r for r in rows if GLYPH[r["detail"]][2] == label]
+            if group:
+                detail = next(d for d in details if GLYPH[d][2] == label)
+                out += [{"header": True, "id": None, "case_id": None, "detail": detail, "title": label,
+                         "count": len(group), "depth": 0},
+                        *self.by_case(group, 1)]
+        return out
+
+    def by_case(self, rows, depth) -> list[dict]:
         """Case header rows (#120): "No case" first, then each Case by its oldest listed Thread; the view's own
-        order inside each group. A flat list when no listed Thread is in a Case."""
+        order inside each group. No Case headers when none of these Threads is in a Case."""
         if not any(r["case_id"] for r in rows):
-            return rows
+            return [r | {"depth": depth} for r in rows]
         cases = {c["id"]: c for c in inbox.case_queue(self.app.db)}
         groups = {}
         for r in rows:
@@ -1078,7 +1107,7 @@ class ThreadsPage(Page, ThreadActions):
             n = len(groups[cid])
             summary = case_counts(cases[cid]["counts"]) if cid else f"{n} thread{'s' * (n != 1)}"
             out += [{"header": True, "id": None, "case_id": cid, "title": cases[cid]["title"] if cid else "",
-                     "summary": summary}, *groups[cid]]
+                     "summary": summary, "depth": depth}, *[r | {"depth": depth + 1} for r in groups[cid]]]
         return out
 
     def current_thread_id(self):

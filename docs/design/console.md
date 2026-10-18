@@ -155,7 +155,7 @@ Text-first, like a terminal mail client with Gmail's habits. Images show in the 
 
 - **Cases** (#120): the rail's `cases` views list Cases by rolled-up Status (Todo oldest first, others most recently changed first), each with its Thread counts per Status; `n` creates a Case with no Threads yet; `enter` opens it. Key `8` opens Cases › Todo.
 - **Time column**: a Thread's age since its last message; a Snoozed Thread instead shows the time left on its snooze or follow-up to the second, ticking (`5m24s`, `3h32m12s`), `—` when paused with no end.
-- **Grouped Thread views** (#120): in a Thread Status view, when any listed Thread is in a Case, rows group under header rows: "No case" first, then each Case by its oldest listed Thread. A header shows the Case title and its Thread counts per Status; `enter` on it opens the Case.
+- **Grouped Thread views** (#120): a Status view that holds more than one Status (Todo, Snoozed, All) groups rows under a Status header per Status, in the legend's order, each with its Thread count. Inside each Status (or the whole view, for Done and Ignored), when any listed Thread is in a Case, rows group under Case header rows: "No case" first, then each Case by its oldest listed Thread. A Case header shows the Case title and its Thread counts per Status; `enter` on it opens the Case.
 - **Channels**: Slack Channel rules (`a` add `channel` / `prefix` / `suffix` rule, `x` delete) and the Channels seen so far with whether each is selected.
 - **Health**: one line per Connection in the sidebar; `h` shows each Connection's last error.
 
