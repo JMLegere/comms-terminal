@@ -35,6 +35,7 @@ MAX_BODY = 25 * 1024 * 1024
 REQUEST_SECONDS = 10
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 IMAGE = re.compile(r"sha256:[0-9a-f]{64}\Z")
+STAMP = re.compile(r"[0-9]{1,12} [0-9a-f]{7,40}\Z")
 RELEASE = re.compile(r"[0-9a-f]{40}-[0-9a-f]{12}\Z")
 DOCKER = "/usr/bin/docker"
 DOCKERFILE = "/opt/universal-inbox-deploy/Dockerfile"
@@ -764,9 +765,12 @@ class ContainerUpdater(Updater):
         name = sha + "-" + uuid.uuid4().hex[:12]
         worktree = self.state / "builds" / name
         self.git("--git-dir=" + self.config.repo, "worktree", "add", "--detach", str(worktree), sha)
+        # The statusline's version; the build context has no .git to read it from (build_hook.py).
+        stamp = self.git("--git-dir=" + self.config.repo, "log", "-1", "--format=%ct %h", sha).strip()
+        build_arg = ["--build-arg", "UNIVERSAL_INBOX_BUILD=" + stamp] if STAMP.fullmatch(stamp) else []
         with tempfile.TemporaryDirectory(prefix="image-", dir=self.status) as output:
             iidfile = Path(output) / "image.id"
-            self.command([DOCKER, "build", "--file", DOCKERFILE, "--iidfile", str(iidfile),
+            self.command([DOCKER, "build", "--file", DOCKERFILE, "--iidfile", str(iidfile), *build_arg,
                           "--label", MANAGED_LABEL, "--label", "io.universal-inbox.sha=" + sha,
                           str(worktree)], timeout=900)
             image = iidfile.read_text().strip()

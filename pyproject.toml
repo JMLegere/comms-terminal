@@ -18,6 +18,10 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/universal_inbox"]
+exclude = ["src/universal_inbox/build_hook.py"]
+
+[tool.hatch.build.targets.wheel.hooks.custom]
+path = "src/universal_inbox/build_hook.py"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

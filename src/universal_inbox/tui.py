@@ -18,7 +18,8 @@ from datetime import datetime, timedelta, timezone
 from email.errors import HeaderParseError
 from email.headerregistry import Address
 from email.utils import getaddresses
-from functools import partial
+from functools import cache, partial
+from importlib import resources
 from pathlib import Path
 
 from rich.markup import escape
@@ -3527,6 +3528,17 @@ KEY_GROUP = {  # bottom bar order: move · reply · triage · organize · genera
 }
 
 
+@cache
+def build_version() -> str:
+    """YYYY-MM-DD-HHMM-commit, in local time, from the BUILD file baked in at install (build_hook.py); '' when
+    running from source."""
+    try:
+        stamp, sha = (resources.files("universal_inbox") / "BUILD").read_text().split()
+        return datetime.fromtimestamp(int(stamp)).strftime("%Y-%m-%d-%H%M") + "-" + sha
+    except (OSError, ValueError):
+        return ""
+
+
 class StatusLine(Static):
     """The one bottom bar (#97): mode on the left, then the page's keys grouped by task, then counts and
     Connection health on the right. Keys are clickable. Flat, like the reference vim/tmux bars."""
@@ -3575,6 +3587,8 @@ class StatusLine(Static):
                 parts.append(f"[{b['grey1']}]{ICON[icon]}[/] [{b['green']}]{ICON['ok']}[/]")
             elif st not in (None, "checking"):
                 parts.append(f"[b {b['bg0']} on {b['red']}] {ICON['broken']} {title} broken [/]")
+        if build_version():
+            parts.append(f"[{b['grey1']}]{build_version()}[/]")
         right = sep.join(parts) + " "
         from rich.text import Text
         width = self.size.width or self.app.size.width

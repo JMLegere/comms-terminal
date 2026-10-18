@@ -192,7 +192,7 @@ def test_container_stage_uses_fetched_worktree_host_dockerfile_and_online_snapsh
             worktree = Path(args[-2])
             worktree.mkdir()
             (worktree / "Dockerfile").write_text("RUN touch /candidate-must-not-run\n")
-        return B if "rev-parse" in args else ""
+        return B if "rev-parse" in args else "1760800000 abc1234\n" if "log" in args else ""
 
     def command(args, timeout=120):
         commands.append((args, timeout))
@@ -214,6 +214,8 @@ def test_container_stage_uses_fetched_worktree_host_dockerfile_and_online_snapsh
     candidate = updater.stage(B)
     build, timeout = next((args, timeout) for args, timeout in commands if "build" in args)
     assert timeout == 900 and build[build.index("--file") + 1] == deploy.DOCKERFILE
+    assert build[build.index("--build-arg") + 1] == "UNIVERSAL_INBOX_BUILD=1760800000 abc1234"
+    assert any(args[-1] == B and "log" in args for args in git_calls)
     assert Path(build[-1]).parent == Path(container_config.state) / "builds"
     assert Path(build[-1]).name == candidate.name and candidate.parent == Path(container_config.releases)
     assert any(args[-1] == B and "add" in args for args in git_calls)

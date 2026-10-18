@@ -6,6 +6,8 @@ ENV UV_PYTHON_DOWNLOADS=never UV_PROJECT_ENVIRONMENT=/opt/venv UV_LINK_MODE=copy
 WORKDIR /build
 COPY pyproject.toml uv.lock ./
 COPY src/ ./src/
+# Commit time and short SHA from the updater; this context has no .git (src/universal_inbox/build_hook.py).
+ARG UNIVERSAL_INBOX_BUILD=
 RUN uv sync --frozen --no-dev --no-editable --python /usr/local/bin/python3.12 \
     && uv pip check --python /opt/venv/bin/python
 
