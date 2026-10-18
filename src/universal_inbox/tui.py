@@ -103,11 +103,13 @@ ModalScreen { background: #7c6f64 25%; align: center middle; }
 .threadempty, .sidetext { padding: 1 1; }
 Page { height: 1fr; }
 #legend { color: #a89984; height: auto; }
-/* Today (FR-T6): Tasks and Drafts fit their rows up to a third of the height; Todo Threads take the rest */
-#todaythreads { height: 1fr; }
-#todaytasks, #todaydrafts { height: auto; }
-#todaytasks Page, #todaydrafts Page { height: auto; }
-#todaytasks DataTable, #todaydrafts DataTable { height: auto; max-height: 30vh; }
+/* Today (FR-T6): each list fits its rows, Threads up to half the height and Tasks and Drafts a third; the bottom
+   list shown takes the rest (.fill, TodayPage.list_changed) */
+.todaypane, .todaypane Page { height: auto; }
+.todaypane DataTable { height: auto; max-height: 30vh; }
+#todaythreads DataTable { max-height: 50vh; }
+.todaypane.fill, .todaypane.fill Page { height: 1fr; }
+#todaythreads.fill DataTable, #todaytasks.fill DataTable, #todaydrafts.fill DataTable { height: 1fr; max-height: 100%; }
 .todaypane #legend, .todaypane #below { display: none; }
 .todaypane #table { margin-top: 0; }
 #allclear { display: none; height: 1fr; padding: 1 2; }
@@ -4839,6 +4841,9 @@ class TodayPage(Page):
             title = pill(f"{ICON['edited']} drafts · {n}", "blue")
         page.parent.border_title = title
         page.parent.display = n > 0
+        shown = [p.parent for p in self.lists if p.parent.display]
+        for p in self.lists:  # the bottom list shown takes the spare height
+            p.parent.set_class(bool(shown) and p.parent is shown[-1], "fill")
         if not self.query("#allclear"):
             return
         empty = not any(self.count(p) for p in self.lists)

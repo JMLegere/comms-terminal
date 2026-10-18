@@ -24,7 +24,8 @@ STATES = {  # state: (spec, PRD requirements, PRD scenarios, description)
     "TodayLists": (dict(),
                    ["FR-T1", "FR-T2", "FR-T3", "FR-T4", "FR-T5", "FR-T6", "FR-T12", "FR-T13"], ["AS-T1", "AS-T2"],
                    "The console opens on Today, the rail's first line with the count of what it lists. Todo Threads "
-                   "(grouped by Case) take the room the Due Tasks and Drafts lists leave; the Tasks title counts the "
+                   "(grouped by Case), Due Tasks, and Drafts each fit their rows, and the bottom list takes the spare "
+                   "height; the Tasks title counts the "
                    "overdue in red. Drafts list failed sends first, then unsent, then scheduled by send time; a Task's "
                    "Draft shows only through its Task. The statusline reads TODAY › THREADS with the Thread keys."),
     "TodayTasks": (dict(list="tasks"),
