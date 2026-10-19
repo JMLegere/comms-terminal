@@ -1,4 +1,5 @@
-"""The service: public hooks (/hooks/email, /hooks/slack, /hooks/quo, /hooks/resend), the local reply socket (POST /reply), wake(),
+"""The service: public hooks (/hooks/email, /hooks/slack, /hooks/quo, /hooks/resend), the local reply socket (POST /reply;
+/call, /sync and /raw for CommsTerminal's laptop copy, remote.py), wake(),
 and a health check of every Connection each 30 minutes.
 
 Credentials come from systemd's $CREDENTIALS_DIRECTORY (LoadCredentialEncrypted=):
@@ -389,12 +390,24 @@ def reply_server(db_path: str, socket_path: str, senders: Senders, contexts: dic
             return status, "application/json", json.dumps(out).encode()
         return route
 
+    from . import remote  # CommsTerminal's laptop copy writes and syncs through these (ADR 0004)
+    changes = remote.Changes(db_path)
+
+    def json_route(handle):
+        def route(headers, body):
+            status, out = handle(body)
+            return status, "application/json", json.dumps(out).encode()
+        return route
+
     if os.path.exists(socket_path):
         os.unlink(socket_path)
     old = os.umask(0o177)  # socket created 0600 (NFR-4)
     try:
         return UnixHTTPServer(socket_path, _handler({"/reply": reply, "/send-draft": send_draft,
-                                                         "/slack-conversations": slack_conversations, "/attio-people": attio_people, "/tana": context_route("tana"), "/attio": context_route("attio"), "/linear": linear_route}))
+                                                         "/slack-conversations": slack_conversations, "/attio-people": attio_people, "/tana": context_route("tana"), "/attio": context_route("attio"), "/linear": linear_route,
+                                                         "/call": json_route(lambda b: remote.handle_call(db_path, b)),
+                                                         "/sync": json_route(lambda b: remote.handle_sync(db_path, changes, b)),
+                                                         "/raw": json_route(lambda b: remote.handle_raw(db_path, b))}))
     finally:
         os.umask(old)
 

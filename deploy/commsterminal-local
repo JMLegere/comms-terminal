@@ -1,0 +1,33 @@
+#!/bin/sh
+# CommsTerminal on Jeremy's laptop (ADR 0004): the console runs here on a copy of the Oracle ARM inbox; every write
+# goes to its service over SSH. Installed as ~/.local/bin/commsterminal-local; the desktop entry runs it in Ghostty.
+# The console installs here the release the service runs: when the service reported a different build at the last
+# sync, this installs that commit from the local checkout (COMMSTERMINAL_REPO) before opening.
+set -eu
+
+SSH_ARGS="-i $HOME/.ssh/oracle-dev -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UpdateHostKeys=no \
+-o HostKeyAlias=universal-inbox-existing-arm -o BatchMode=yes -o ConnectTimeout=10 -o LogLevel=ERROR \
+ubuntu@168.138.69.153"
+DATA="${XDG_DATA_HOME:-$HOME/.local/share}/commsterminal"
+REPO="${COMMSTERMINAL_REPO:-$HOME/Workspace/universal-inbox}"
+export UV_TOOL_DIR="$DATA/tools" UV_TOOL_BIN_DIR="$DATA/bin"
+mkdir -p "$DATA"
+chmod 700 "$DATA"
+
+installed() {  # the short commit baked into the installed console (build_hook.py), or nothing
+    for f in "$DATA"/tools/universal-inbox/lib/python*/site-packages/universal_inbox/BUILD; do
+        [ -f "$f" ] && cut -d' ' -f2 "$f"
+    done
+    return 0
+}
+
+want=$(cat "$DATA/service-build" 2>/dev/null || true)
+have=$(installed)
+if [ -z "$have" ] || { [ -n "$want" ] && [ "$want" != "$have" ]; }; then
+    echo "CommsTerminal: installing the service's version ${want:-(latest main)}…"
+    git -C "$REPO" fetch -q origin
+    rev=$(git -C "$REPO" rev-parse --verify -q "${want:-origin/main}^{commit}")
+    uv tool install -q --reinstall --python 3.12 "universal-inbox @ git+file://$REPO@$rev"
+fi
+
+exec "$DATA/bin/universal-inbox" --db "$DATA/inbox.db" --remote "$SSH_ARGS"

@@ -627,3 +627,27 @@ def test_thread_views_group_by_status_then_case(tmp_path):
         elif not header:
             assert GLYPH[detail][2] == label and depth >= 1
     assert all(not (h and d) for h, d, _ in seen[3])  # Ignored holds one Status: no Status header
+
+
+def test_held_j_shows_the_thread_it_lands_on(tmp_path, monkeypatch):
+    from universal_inbox import tui
+    monkeypatch.setattr(tui, "PREVIEW_GAP", 0.5)  # wide, so the second move always falls inside it
+    path, _ = seeded(tmp_path)
+    app, seen = Console(path), {}
+
+    async def hold(app, pilot):
+        await pilot.pause(0.6)
+        table = page(app).query_one("#table")
+        rows = page(app).selectable_rows()
+        assert len(rows) >= 3
+        table.move_cursor(row=rows[1])  # two moves inside PREVIEW_GAP, as key repeat sends them
+        await pilot.pause()
+        table.move_cursor(row=rows[2])
+        await pilot.pause()
+        shown = lambda: getattr(app.main.thread_view, "thread_id", None)  # noqa: E731 - a header row shows none
+        seen["during"] = shown()
+        await pilot.pause(0.7)
+        seen["landed"], seen["selected"] = shown(), page(app).current_thread_id()
+
+    run(app, [hold])
+    assert seen["landed"] == seen["selected"] != seen["during"]  # the row passed showed, then where it stopped

@@ -21,13 +21,26 @@ COPY --from=build /opt/venv /opt/venv
 COPY <<'PY' /opt/universal-inbox-console.py
 import fcntl
 import os
+import re
 import sys
 
 fd = os.open('/run/universal-inbox-deploy/app.lock', os.O_RDONLY | os.O_NOFOLLOW)
 fcntl.flock(fd, fcntl.LOCK_SH)
 os.set_inheritable(fd, True)
+os.environ['UNIVERSAL_INBOX_APP_LOCK_FD'] = str(fd)
 if os.path.lexists('/run/universal-inbox-deploy/writers-blocked'):
     print('Universal Inbox update recovery is pending; try again after recovery.', file=sys.stderr)
+    sys.exit(75)
+if os.path.lexists('/run/universal-inbox-deploy/console-update'):
+    print('Universal Inbox is updating; try again after the update.', file=sys.stderr)
+    sys.exit(75)
+expected = os.environ.get('UNIVERSAL_INBOX_EXPECTED_SHA', '')
+try:
+    current = os.path.basename(os.readlink('/run/universal-inbox-deploy/current'))
+except OSError:
+    current = ''
+if not re.fullmatch(r'[0-9a-f]{40}', expected) or not re.fullmatch(expected + r'-[0-9a-f]{12}', current):
+    print('Universal Inbox release changed; restart the app to try again.', file=sys.stderr)
     sys.exit(75)
 os.execv('/opt/venv/bin/universal-inbox', ['universal-inbox', *sys.argv[1:]])
 PY

@@ -8,9 +8,11 @@ import json
 import os
 from pathlib import Path
 import pty
+import signal
 import stat
 import subprocess
 import sys
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -23,6 +25,24 @@ SPEC.loader.exec_module(runtime)
 A = "a" * 40
 IMAGE = "sha256:" + "b" * 64
 ID = "c" * 64
+CONSOLE = "universal-inbox-console-" + "e" * 32
+CID = "d" * 64
+
+
+def console_info(**changes):
+    return {"running": True, "pid": 101, "execs": None, "image": IMAGE, "owner": "true",
+            "name": "/" + CONSOLE, "user": "10001:10001", "role": "console", "sha": A, **changes}
+
+
+@pytest.fixture
+def root_files(monkeypatch):
+    original = os.fstat
+
+    def owned(fd):
+        info = original(fd)
+        return SimpleNamespace(st_uid=0, st_mode=info.st_mode)
+
+    monkeypatch.setattr(runtime.os, "fstat", owned)
 
 
 @pytest.fixture
@@ -102,13 +122,32 @@ class FakeDocker:
         self.stop_timeout = False
         self.leave_running = False
         self.wait_failure = False
+        self.consoles = {}
+        self.signal_hook = None
+        self.keep_console = False
+        self.protocol = runtime.CONSOLE_PROTOCOL
 
     def __call__(self, args, timeout=15):
         self.calls.append(args)
+        if args[:2] == ["container", "run"]:
+            assert args[-2:] == ["-c", runtime.CONSOLE_PROBE]
+            assert "--network=none" in args and "--mount" not in args
+            return self.protocol
         if args[:2] == ["container", "ls"]:
-            return ID if self.info is not None else ""
+            if "label=io.universal-inbox.role=console" in args:
+                return "\n".join(self.consoles)
+            if "name=^/universal-inbox$" in args:
+                return ID if self.info is not None else ""
+            return CID if any("name=^/" + name + "$" in args for name in self.consoles) else ""
         if args[:2] == ["container", "inspect"]:
-            return json.dumps(self.info)
+            return json.dumps(self.info if args[-1] == ID else next(iter(self.consoles.values())))
+        if args[:2] == ["container", "kill"]:
+            assert args[-1] == CID
+            if self.signal_hook:
+                self.signal_hook(args[2])
+            if args[2] == "--signal=TERM" and not self.keep_console:
+                next(iter(self.consoles.values())).update(running=False, pid=0)
+            return CID
         if args[:2] == ["container", "stop"]:
             if not self.leave_running:
                 self.info.update(running=False, pid=0, execs=None)
@@ -116,6 +155,10 @@ class FakeDocker:
                 raise runtime.RuntimeError("transport timed out after side effects")
             return ID
         if args[:2] == ["container", "rm"]:
+            if args[-1] == CID:
+                assert not next(iter(self.consoles.values()))["running"]
+                self.consoles.clear()
+                return CID
             assert not self.info["running"] and not self.info["execs"]
             self.info = None
             return ID
@@ -302,7 +345,7 @@ class TTY(io.StringIO):
         return True
 
 
-def test_console_exec_preserves_argv_terminal_and_nonroot_actual_helper(config, monkeypatch):
+def test_console_supervises_independent_nonroot_helper_with_native_argv(config, monkeypatch):
     engine = FakeDocker()
     monkeypatch.setattr(runtime, "release", lambda c: {"image": IMAGE, "sha": A})
     monkeypatch.setattr(runtime, "docker", engine)
@@ -310,23 +353,34 @@ def test_console_exec_preserves_argv_terminal_and_nonroot_actual_helper(config, 
     monkeypatch.setattr(runtime.sys, "stdout", TTY())
     monkeypatch.setenv("TERM", "xterm-ghostty")
     monkeypatch.setenv("COLORTERM", "truecolor")
+    monkeypatch.setenv("UNIVERSAL_INBOX_EXPECTED_SHA", "untrusted-caller-value")
+    monkeypatch.setattr(runtime, "parent_death", lambda *a: None)
+    monkeypatch.setattr(runtime.uuid, "uuid4", lambda: SimpleNamespace(hex="e" * 32))
     recorded = {}
 
-    def execute(binary, args, environment):
-        recorded.update(binary=binary, args=args, environment=environment)
-        raise ExecCalled()
+    def launch(args, **kwargs):
+        recorded.update(args=args, **kwargs)
+        return SimpleNamespace(wait=lambda timeout: 23, poll=lambda: 23)
 
-    monkeypatch.setattr(runtime.os, "execve", execute)
+    monkeypatch.setattr(runtime.subprocess, "Popen", launch)
     native = ["--db", "a path with spaces", "--socket", "literal;not-a-shell"]
-    with pytest.raises(ExecCalled):
-        runtime.console(config, native)
+    assert runtime.console(config, native) == 23
     args = recorded["args"]
     assert args[-len(native):] == native
-    assert [ID, "/opt/venv/bin/python", runtime.HELPER] == args[-len(native)-3:-len(native)]
+    assert args[-len(native)-2:-len(native)] == [IMAGE, runtime.HELPER]
+    assert "exec" not in args and "--rm" in args and "--sig-proxy=true" in args
+    assert args[args.index("--name") + 1] == CONSOLE
+    assert "io.universal-inbox.role=console" in args and "io.universal-inbox.sha=" + A in args
+    assert "UNIVERSAL_INBOX_EXPECTED_SHA=" + A in args
+    assert "UNIVERSAL_INBOX_EXPECTED_SHA=untrusted-caller-value" not in args
     assert "--interactive" in args and "--tty" in args
     assert "TERM=xterm-ghostty" in args and "COLORTERM=truecolor" in args
     assert args[args.index("--user") + 1] == "10001:10001"
-    assert recorded["environment"] == runtime.DOCKER_ENV
+    assert recorded["env"] == runtime.DOCKER_ENV and recorded["start_new_session"] is True
+    mounts = [args[i + 1] for i, arg in enumerate(args) if arg == "--mount"]
+    assert len(mounts) == 4 and not any("docker.sock" in m for m in mounts)
+    assert any(m.endswith("dst=" + runtime.STATE + ",readonly") for m in mounts)
+    assert any(m.endswith("dst=/run/secrets,readonly") for m in mounts)
 
 
 def test_root_dispatch_unwraps_terminal_transport_without_sudo_env_policy(config, monkeypatch):
@@ -352,13 +406,13 @@ def test_non_tty_help_has_no_data_secrets_or_network_and_default_refuses(config,
     monkeypatch.setattr(runtime, "container", lambda c: pytest.fail("must not open the live container"))
     recorded = []
 
-    def execute(binary, args, environment):
+    def execute(args, **kwargs):
         recorded.extend(args)
-        raise ExecCalled()
+        assert kwargs["env"] == runtime.DOCKER_ENV
+        return 23
 
-    monkeypatch.setattr(runtime.os, "execve", execute)
-    with pytest.raises(ExecCalled):
-        runtime.console(config, ["--help"])
+    monkeypatch.setattr(runtime.subprocess, "call", execute)
+    assert runtime.console(config, ["--help"]) == 23
     assert "--network=none" in recorded and "--mount" not in recorded
     assert recorded[-2:] == [IMAGE, "--help"]
     with pytest.raises(runtime.RuntimeError):
@@ -366,14 +420,293 @@ def test_non_tty_help_has_no_data_secrets_or_network_and_default_refuses(config,
     assert runtime.main(["--help"]) == 0
 
 
+@pytest.mark.parametrize("signum", [signal.SIGTERM, signal.SIGHUP])
+def test_console_disconnect_saves_stops_and_removes_only_its_frontend(config, monkeypatch, signum):
+    engine = FakeDocker()
+    engine.consoles[CONSOLE] = console_info()
+    monkeypatch.setattr(runtime, "docker", engine)
+    monkeypatch.setattr(runtime, "release", lambda c: {"image": IMAGE, "sha": A})
+    monkeypatch.setattr(runtime, "parent_death", lambda *a: None)
+    monkeypatch.setattr(runtime.uuid, "uuid4", lambda: SimpleNamespace(hex="e" * 32))
+    monkeypatch.setattr(runtime.sys, "stdin", TTY())
+    monkeypatch.setattr(runtime.sys, "stdout", TTY())
+
+    def disconnected(timeout):
+        signal.getsignal(signum)(signum, None)
+        raise subprocess.TimeoutExpired("synthetic Docker client", timeout)
+
+    monkeypatch.setattr(runtime.subprocess, "Popen", lambda *a, **k:
+                        SimpleNamespace(wait=disconnected, poll=lambda: None))
+    assert runtime.console(config, []) == 0
+    assert engine.consoles == {} and engine.info["running"]
+    assert ["container", "kill", "--signal=TERM", CID] in engine.calls
+    assert not any("KILL" in part or part == "--force" for call in engine.calls for part in call)
+
+
+def test_disconnect_preserves_failed_save_instead_of_killing_or_removing(config, monkeypatch):
+    engine = FakeDocker()
+    engine.consoles[CONSOLE] = console_info()
+    engine.keep_console = True
+    monkeypatch.setattr(runtime, "docker", engine)
+    now = [0.0]
+    monkeypatch.setattr(runtime.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(runtime.time, "sleep", lambda seconds: now.__setitem__(0, now[0] + seconds))
+    with pytest.raises(runtime.RuntimeError, match="deadline"):
+        runtime.close_console(CONSOLE, SimpleNamespace(poll=lambda: None), timeout=0.2)
+    assert engine.consoles[CONSOLE]["running"]
+    assert [call for call in engine.calls if call[:2] == ["container", "kill"]] == [
+        ["container", "kill", "--signal=TERM", CID]]
+    assert not any(call[:2] in (["container", "rm"], ["container", "stop"]) for call in engine.calls)
+
+
+def test_backend_stop_never_removes_independent_frontend(config, monkeypatch):
+    engine = FakeDocker()
+    engine.consoles[CONSOLE] = console_info()
+    monkeypatch.setattr(runtime, "docker", engine)
+    monkeypatch.setattr(runtime, "clear_secrets", lambda c: None)
+    runtime.stop(config)
+    assert engine.info is None and engine.consoles[CONSOLE]["running"]
+    assert all(CID not in call for call in engine.calls)
+
+
+@pytest.mark.parametrize("changes", [
+    {"owner": "false"}, {"role": "backend"}, {"name": "/other"}, {"user": "0:0"},
+    {"sha": "mutable"}, {"image": "latest"}, {"running": "true"}, {"pid": "101"},
+    {"execs": ["unrecognized-writer"]},
+])
+def test_console_ownership_must_be_exact_before_any_signal(config, monkeypatch, changes):
+    engine = FakeDocker()
+    engine.consoles[CONSOLE] = console_info(**changes)
+    monkeypatch.setattr(runtime, "docker", engine)
+    with pytest.raises(runtime.RuntimeError):
+        runtime.close_console(CONSOLE, SimpleNamespace(poll=lambda: None))
+    assert not any(call[:2] in (["container", "kill"], ["container", "rm"]) for call in engine.calls)
+
+
+def test_quiesce_releases_real_lock_without_ending_frontend(config, monkeypatch, root_files):
+    holder = subprocess.Popen([sys.executable, "-c",
+        "import fcntl,os,signal,sys,time\n"
+        "fd=os.open(sys.argv[1],os.O_RDONLY)\nfcntl.flock(fd,fcntl.LOCK_SH)\n"
+        "signal.signal(signal.SIGUSR1,lambda *_:os.close(fd))\n"
+        "print('ready',flush=True)\ntime.sleep(20)\n", config["lock"]],
+        stdout=subprocess.PIPE, text=True)
+    engine = FakeDocker()
+    engine.consoles[CONSOLE] = console_info()
+
+    def release_lock(value):
+        assert (Path(config["state"]) / "console-update").read_bytes() == runtime.BARRIER
+        assert value == "--signal=USR1"
+        holder.send_signal(signal.SIGUSR1)
+
+    engine.signal_hook = release_lock
+    monkeypatch.setattr(runtime, "docker", engine)
+    try:
+        assert holder.stdout.readline().strip() == "ready"
+        runtime.quiesce(config, timeout=5)
+        assert holder.poll() is None and engine.consoles[CONSOLE]["running"]
+        with Path(config["lock"]).open("rb") as stream:
+            fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        runtime.resume_consoles(config)
+        runtime.resume_consoles(config)
+        assert not (Path(config["state"]) / "console-update").exists()
+    finally:
+        holder.terminate()
+        holder.wait(5)
+
+
+def test_quiesce_refuses_legacy_execs_and_leaves_launch_barrier(config, monkeypatch, root_files):
+    engine = FakeDocker()
+    engine.info["execs"] = ["legacy-console"]
+    monkeypatch.setattr(runtime, "docker", engine)
+    with pytest.raises(runtime.RuntimeError, match="legacy"):
+        runtime.quiesce(config)
+    assert (Path(config["state"]) / "console-update").read_bytes() == runtime.BARRIER
+    assert not any(call[:2] in (["container", "kill"], ["container", "stop"]) for call in engine.calls)
+    with pytest.raises(runtime.RuntimeError, match="legacy"):
+        runtime.stop(config)
+    assert not any(call[:2] == ["container", "stop"] for call in engine.calls)
+
+
+def test_incompatible_installed_ui_is_not_signaled_or_falsely_quiesced(config, monkeypatch, root_files):
+    engine = FakeDocker()
+    engine.consoles[CONSOLE] = console_info()
+    engine.protocol = ""  # Host helper/role label exists, but installed old Console has no protocol.
+    monkeypatch.setattr(runtime, "docker", engine)
+    with Path(config["lock"]).open("rb") as writer:
+        fcntl.flock(writer, fcntl.LOCK_SH)
+        with pytest.raises(runtime.RuntimeError, match="preserve drafts"):
+            runtime.quiesce(config)
+        with Path(config["lock"]).open("rb") as probe:
+            with pytest.raises(BlockingIOError):
+                fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    assert engine.consoles[CONSOLE]["running"]
+    assert (Path(config["state"]) / "console-update").exists()
+    with pytest.raises(runtime.RuntimeError, match="preserve drafts"):
+        runtime.close_console(CONSOLE, SimpleNamespace(poll=lambda: None))
+    assert not any(call[:2] in (["container", "kill"], ["container", "rm"], ["container", "stop"])
+                   for call in engine.calls)
+
+
+def test_incompatible_image_is_refused_before_starting_managed_frontend(config, monkeypatch):
+    engine = FakeDocker()
+    engine.protocol = ""
+    monkeypatch.setattr(runtime, "docker", engine)
+    monkeypatch.setattr(runtime, "release", lambda c: {"image": IMAGE, "sha": A})
+    monkeypatch.setattr(runtime.sys, "stdin", TTY())
+    monkeypatch.setattr(runtime.sys, "stdout", TTY())
+    monkeypatch.setattr(runtime.subprocess, "Popen", lambda *a, **k: pytest.fail("old UI must not start"))
+    with pytest.raises(runtime.RuntimeError, match="preserve drafts"):
+        runtime.console(config, [])
+
+
+@pytest.mark.parametrize("compatible", [False, True])
+def test_image_probe_checks_actual_installed_console_not_host_helper(tmp_path, compatible):
+    package = tmp_path / "universal_inbox"
+    package.mkdir()
+    (package / "__init__.py").write_text("")
+    source = "class Console:\n    pass\n"
+    if compatible:
+        source = ("class Console:\n    CONSOLE_UPDATE_PROTOCOL = 1\n"
+                  "    def _request_console_stop(self): pass\n"
+                  "    def _save_console_drafts(self): pass\n"
+                  "    def _stop_console(self): pass\n")
+    (package / "tui.py").write_text(source)
+    result = subprocess.run([sys.executable, "-c", runtime.CONSOLE_PROBE], cwd=tmp_path,
+                            env={"PATH": "/usr/bin:/bin"}, capture_output=True, text=True, timeout=5)
+    assert (result.returncode == 0) is compatible
+    assert result.stdout.strip() == (runtime.CONSOLE_PROTOCOL if compatible else "")
+
+
+def test_quiesce_timeout_retains_barrier_and_shared_writer(config, monkeypatch, root_files):
+    engine = FakeDocker()
+    engine.consoles[CONSOLE] = console_info()
+    monkeypatch.setattr(runtime, "docker", engine)
+    now = [0.0]
+    monkeypatch.setattr(runtime.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(runtime.time, "sleep", lambda seconds: now.__setitem__(0, now[0] + seconds))
+    with Path(config["lock"]).open("rb") as stream:
+        fcntl.flock(stream, fcntl.LOCK_SH)
+        with pytest.raises(runtime.RuntimeError, match="deadline"):
+            runtime.quiesce(config, timeout=0.2)
+        assert engine.consoles[CONSOLE]["running"] and (Path(config["state"]) / "console-update").exists()
+    assert not any(call[:2] == ["container", "rm"] for call in engine.calls)
+
+
+def test_resume_refuses_writer_recovery_and_unowned_barriers(config, root_files):
+    barrier = runtime.console_barrier(config, create=True)
+    gate = Path(config["state"]) / "writers-blocked"
+    gate.touch()
+    with pytest.raises(runtime.WritersBlocked):
+        runtime.resume_consoles(config)
+    assert barrier.exists()
+    gate.unlink()
+    barrier.write_bytes(b"not owned by this runtime")
+    with pytest.raises(runtime.RuntimeError):
+        runtime.resume_consoles(config)
+    assert barrier.exists()
+    barrier.unlink()
+    barrier.symlink_to(Path(config["lock"]))
+    with pytest.raises(OSError):
+        runtime.resume_consoles(config)
+    assert barrier.is_symlink()
+
+
+def test_console_launch_barrier_fails_closed_before_backend_or_client(config, monkeypatch):
+    (Path(config["state"]) / "console-update").symlink_to("/not-present")
+    monkeypatch.setattr(runtime, "release", lambda c: {"image": IMAGE, "sha": A})
+    monkeypatch.setattr(runtime.sys, "stdin", TTY())
+    monkeypatch.setattr(runtime.sys, "stdout", TTY())
+    monkeypatch.setattr(runtime, "container", lambda c: pytest.fail("launch must remain blocked"))
+    with pytest.raises(runtime.WritersBlocked):
+        runtime.console(config, [])
+
+
+@pytest.mark.parametrize("operation", ["quiesce", "resume-consoles"])
+def test_fixed_root_dispatch_exposes_console_lifecycle(config, monkeypatch, operation):
+    monkeypatch.setattr(runtime.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(runtime, "load_config", lambda: config)
+    called = []
+    monkeypatch.setattr(runtime, operation.replace("-", "_"), lambda c: called.append(c))
+    assert runtime.main([operation]) == 0 and called == [config]
+    assert runtime.main([operation, "--config", "/untrusted"]) == 2
+
+
+def test_console_image_retention_uses_same_validator_and_safe_output(config, monkeypatch, capsys):
+    engine = FakeDocker()
+    engine.consoles[CONSOLE] = console_info(running=False, pid=0)
+    monkeypatch.setattr(runtime, "docker", engine)
+    monkeypatch.setattr(runtime.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(runtime, "load_config", lambda: config)
+    assert runtime.console_images(config) == [IMAGE]
+    assert runtime.main(["console-images"]) == 0
+    assert capsys.readouterr().out == IMAGE + "\n"
+    engine.consoles[CONSOLE]["owner"] = "other"
+    with pytest.raises(runtime.RuntimeError):
+        runtime.console_images(config)
+    assert not any(call[:2] == ["container", "kill"] for call in engine.calls)
+
+
+def test_unowned_barrier_cannot_admit_or_signal_any_writer(config, monkeypatch):
+    barrier = Path(config["state"]) / "console-update"
+    barrier.write_bytes(runtime.BARRIER)
+    barrier.chmod(0o600)
+    monkeypatch.setattr(runtime.os, "fstat", lambda fd: SimpleNamespace(st_uid=10001, st_mode=stat.S_IFREG | 0o600))
+    monkeypatch.setattr(runtime, "docker", lambda *a, **k: pytest.fail("unowned barrier must fail first"))
+    with pytest.raises(runtime.RuntimeError):
+        runtime.quiesce(config)
+    assert barrier.exists()
+
+
+def test_abrupt_wrapper_death_reaches_app_through_signal_proxy(tmp_path):
+    saved = tmp_path / "saved"
+    app = tmp_path / "app.py"
+    app.write_text(
+        "import signal,sys,time\nfrom pathlib import Path\n"
+        f"def save(*_):\n Path({str(saved)!r}).write_text('saved')\n sys.exit(0)\n"
+        "signal.signal(signal.SIGTERM,save)\nprint('app-ready',flush=True)\ntime.sleep(15)\n")
+    proxy = tmp_path / "docker-proxy.py"
+    proxy.write_text(
+        "import signal,subprocess,sys\nchild=None\npending=False\n"
+        "def forward(*_):\n global pending\n pending=True\n"
+        " if child is not None: child.send_signal(signal.SIGTERM)\n"
+        "signal.signal(signal.SIGTERM,forward)\n"
+        f"child=subprocess.Popen([sys.executable,{str(app)!r}])\n"
+        "if pending: child.send_signal(signal.SIGTERM)\nchild.wait()\n")
+    wrapper = tmp_path / "wrapper.py"
+    wrapper.write_text(
+        "import importlib.util,os,subprocess,sys\n"
+        f"s=importlib.util.spec_from_file_location('runtime',{str(ROOT / 'deploy/container_runtime.py')!r})\n"
+        "runtime=importlib.util.module_from_spec(s)\ns.loader.exec_module(runtime)\nparent=os.getpid()\n"
+        f"child=subprocess.Popen([sys.executable,{str(proxy)!r}],start_new_session=True,"
+        "preexec_fn=lambda:runtime.docker_parent_death(parent))\n"
+        "child.wait()\n")
+    process = subprocess.Popen([sys.executable, str(wrapper)], stdout=subprocess.PIPE, text=True)
+    try:
+        assert process.stdout.readline().strip() == "app-ready"
+        process.kill()  # Only our synthetic wrapper; its Docker proxy must forward TERM.
+        process.wait(5)
+        deadline = time.monotonic() + 5
+        while not saved.exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert saved.read_text() == "saved"
+        assert process.stdout.read() == ""  # Proxy and app both exited, closing inherited stdout.
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            process.wait(5)
+
+
 def helper_fixture(tmp_path):
     text = (ROOT / "Dockerfile").read_text().split("COPY <<'PY' /opt/universal-inbox-console.py\n", 1)[1].split("\nPY\n", 1)[0]
     lock, gate, app, helper = (tmp_path / n for n in ("app.lock", "writers-blocked", "app", "helper.py"))
     lock.touch(mode=0o640)
+    (tmp_path / "current").symlink_to("/host/releases/" + A + "-" + "d" * 12)
     app.write_text("#!/usr/bin/python3\nimport sys\nprint('actual-tui-ready', flush=True)\ninput()\nsys.exit(23)\n")
     app.chmod(0o755)
     helper.write_text(text.replace("/run/universal-inbox-deploy/app.lock", str(lock))
                       .replace("/run/universal-inbox-deploy/writers-blocked", str(gate))
+                      .replace("/run/universal-inbox-deploy/console-update", str(tmp_path / "console-update"))
+                      .replace("/run/universal-inbox-deploy/current", str(tmp_path / "current"))
                       .replace("/opt/venv/bin/universal-inbox", str(app)))
     return lock, gate, helper
 
@@ -381,7 +714,8 @@ def helper_fixture(tmp_path):
 def test_embedded_lock_fd_survives_exec_in_actual_tui(tmp_path):
     lock, gate, helper = helper_fixture(tmp_path)
     process = subprocess.Popen([sys.executable, "-I", str(helper)], stdin=subprocess.PIPE,
-                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                               env={"UNIVERSAL_INBOX_EXPECTED_SHA": A})
     try:
         assert process.stdout.readline().strip() == "actual-tui-ready"
         with lock.open("rb") as stream:
@@ -397,17 +731,40 @@ def test_embedded_lock_fd_survives_exec_in_actual_tui(tmp_path):
             process.communicate(timeout=5)
 
 
-def test_embedded_gate_is_checked_after_exclusive_update_lock_releases(tmp_path):
+@pytest.mark.parametrize("gate_name", ["writers-blocked", "console-update"])
+def test_embedded_gate_is_checked_after_exclusive_update_lock_releases(tmp_path, gate_name):
     lock, gate, helper = helper_fixture(tmp_path)
+    gate = tmp_path / gate_name
     with lock.open("rb") as stream:
         fcntl.flock(stream, fcntl.LOCK_EX)
         process = subprocess.Popen([sys.executable, "-I", str(helper)], stdin=subprocess.PIPE,
-                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                   env={"UNIVERSAL_INBOX_EXPECTED_SHA": A})
         gate.touch()
         fcntl.flock(stream, fcntl.LOCK_UN)
     try:
         output, error = process.communicate(timeout=5)
-        assert process.returncode == 75 and output == "" and "recovery is pending" in error
+        assert process.returncode == 75 and output == "" and "Universal Inbox" in error
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.communicate(timeout=5)
+
+
+def test_embedded_helper_rejects_old_selected_image_after_waiting_for_update_lock(tmp_path):
+    lock, _, helper = helper_fixture(tmp_path)
+    with lock.open("rb") as stream:
+        fcntl.flock(stream, fcntl.LOCK_EX)
+        process = subprocess.Popen([sys.executable, "-I", str(helper)], stdin=subprocess.PIPE,
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                   env={"UNIVERSAL_INBOX_EXPECTED_SHA": A})
+        current = tmp_path / "current"
+        current.unlink()
+        current.symlink_to("/host/releases/" + "f" * 40 + "-" + "1" * 12)
+        fcntl.flock(stream, fcntl.LOCK_UN)
+    try:
+        output, error = process.communicate(timeout=5)
+        assert process.returncode == 75 and output == "" and "Universal Inbox" in error
     finally:
         if process.poll() is None:
             process.kill()

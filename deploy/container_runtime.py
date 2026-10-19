@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 """Root-owned, fixed Docker lifecycle; no application imports or provider calls."""
 
+import ctypes
 import fcntl
 import json
 import os
@@ -10,6 +11,8 @@ import signal
 import stat
 import subprocess
 import sys
+import time
+import uuid
 
 
 CONFIG = "/etc/universal-inbox-deploy/config.json"
@@ -35,6 +38,19 @@ ADMITTED_CREDENTIALS = CREDENTIALS + OPTIONAL_CREDENTIALS
 INSPECT = ('{"running":{{json .State.Running}},"pid":{{json .State.Pid}},'
            '"execs":{{json .ExecIDs}},"image":{{json .Image}},'
            '"owner":{{json (index .Config.Labels "io.universal-inbox.managed")}}}')
+CONSOLE_NAME = re.compile(r"universal-inbox-console-[0-9a-f]{32}\Z")
+CONSOLE_INSPECT = (INSPECT[:-1] + ',"name":{{json .Name}},"user":{{json .Config.User}},'
+                   '"role":{{json (index .Config.Labels "io.universal-inbox.role")}},'
+                   '"sha":{{json (index .Config.Labels "io.universal-inbox.sha")}}}')
+BARRIER = b"universal-inbox-console-update-v1\n"
+CONSOLE_PROTOCOL = "console-update-v1"
+CONSOLE_PROBE = (
+    "from universal_inbox.tui import Console; "
+    "assert getattr(Console, 'CONSOLE_UPDATE_PROTOCOL', None) == 1; "
+    "assert all(callable(getattr(Console, name, None)) for name in "
+    "('_request_console_stop', '_save_console_drafts', '_stop_console')); "
+    "print('console-update-v1')"
+)
 
 
 class RuntimeError(Exception):
@@ -124,18 +140,18 @@ def docker(args, timeout=15):
     return result.stdout.strip()
 
 
-def container(config):
+def container(config, timeout=15):
     args = ["container", "ls", "--all", "--no-trunc", "--filter",
             "name=^/" + config["container_name"] + "$", "--format", "{{.ID}}"]
-    identifier = docker(args)
+    identifier = docker(args, timeout=timeout)
     if not identifier:
         return None
     if not re.fullmatch(r"[0-9a-f]{64}", identifier):
         raise RuntimeError("ambiguous container identity")
     try:
-        info = json.loads(docker(["container", "inspect", "--format", INSPECT, identifier]))
+        info = json.loads(docker(["container", "inspect", "--format", INSPECT, identifier], timeout=timeout))
     except RuntimeError:
-        if not docker(args):  # Concurrent systemd/finally cleanup already removed it.
+        if not docker(args, timeout=timeout):  # Concurrent systemd/finally cleanup already removed it.
             return None
         raise
     if (not isinstance(info, dict) or info.get("owner") != "true" or
@@ -144,6 +160,127 @@ def container(config):
             (info.get("execs") is not None and not isinstance(info["execs"], list))):
         raise RuntimeError("refusing an unmanaged or invalid container")
     return {**info, "id": identifier}
+
+
+def console_container(name, timeout=15):
+    if not CONSOLE_NAME.fullmatch(name):
+        raise RuntimeError("invalid managed console name")
+    args = ["container", "ls", "--all", "--no-trunc", "--filter", "name=^/" + name + "$",
+            "--format", "{{.ID}}"]
+    identifier = docker(args, timeout=timeout)
+    if not identifier:
+        return None
+    if not re.fullmatch(r"[0-9a-f]{64}", identifier):
+        raise RuntimeError("ambiguous console identity")
+    try:
+        info = json.loads(docker(["container", "inspect", "--format", CONSOLE_INSPECT, identifier],
+                                 timeout=timeout))
+    except RuntimeError:
+        if not docker(args, timeout=timeout):
+            return None
+        raise
+    if (not isinstance(info, dict) or info.get("owner") != "true" or info.get("role") != "console" or
+            info.get("name") != "/" + name or info.get("user") != "10001:10001" or
+            not isinstance(info.get("sha"), str) or not SHA.fullmatch(info["sha"]) or
+            not isinstance(info.get("image"), str) or not IMAGE.fullmatch(info["image"]) or
+            type(info.get("running")) is not bool or type(info.get("pid")) is not int or
+            info.get("execs")):
+        raise RuntimeError("refusing an unmanaged or invalid console")
+    return {**info, "id": identifier}
+
+
+def console_barrier(config, create=False):
+    path = trusted(config["state"]) / "console-update"
+    if create:
+        try:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        except FileExistsError:
+            pass
+        else:
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(BARRIER)
+                stream.flush()
+                os.fsync(stream.fileno())
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, "rb") as stream:
+        info = os.fstat(stream.fileno())
+        if (info.st_uid != 0 or not stat.S_ISREG(info.st_mode) or info.st_mode & 0o777 != 0o600 or
+                stream.read(len(BARRIER) + 1) != BARRIER):
+            raise RuntimeError("unsafe console update barrier")
+    return path
+
+
+def remaining(deadline):
+    value = deadline - time.monotonic()
+    if value <= 0:
+        raise RuntimeError("console writers did not finish safely before the deadline")
+    return min(15, value)
+
+
+def console_names(timeout=15):
+    return docker(["container", "ls", "--all", "--filter", "label=" + OWNER + "=true",
+                   "--filter", "label=io.universal-inbox.role=console", "--format", "{{.Names}}"],
+                  timeout=timeout).splitlines()
+
+
+def console_images(config):
+    return sorted({info["image"] for name in console_names()
+                   if (info := console_container(name)) is not None})
+
+
+def require_console_protocol(image, timeout=15):
+    if not isinstance(image, str) or not IMAGE.fullmatch(image):
+        raise RuntimeError("invalid console image")
+    result = docker(["container", "run", "--rm", *common(), "--network=none",
+                     "--entrypoint", "/opt/venv/bin/python", image, "-I", "-c", CONSOLE_PROBE], timeout=timeout)
+    if result != CONSOLE_PROTOCOL:
+        raise RuntimeError("console image cannot preserve drafts during live updates")
+
+
+def quiesce(config, timeout=60):
+    if not 0 < timeout <= 60:
+        raise RuntimeError("invalid console quiescence deadline")
+    deadline = time.monotonic() + timeout
+    console_barrier(config, create=True)  # Admission closes before discovery or signaling.
+    backend = container(config, timeout=remaining(deadline) / 3)
+    if backend is not None and backend["execs"]:
+        raise RuntimeError("legacy backend exec writers require draft-preserving recovery")
+    consoles, images = [], set()
+    for name in console_names(timeout=remaining(deadline)):
+        info = console_container(name, timeout=remaining(deadline) / 3)
+        if info is not None and info["running"]:
+            if info["image"] not in images:
+                require_console_protocol(info["image"], timeout=remaining(deadline))
+                images.add(info["image"])
+            consoles.append((name, info))
+    for name, info in consoles:
+        try:
+            docker(["container", "kill", "--signal=USR1", info["id"]], timeout=remaining(deadline))
+        except RuntimeError:
+            actual = console_container(name, timeout=remaining(deadline) / 3)
+            if actual is not None and actual["running"]:
+                raise
+    fd = os.open(trusted(config["lock"]), os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        info = os.fstat(fd)
+        if info.st_uid != 0 or not stat.S_ISREG(info.st_mode):
+            raise RuntimeError("unsafe application lock")
+        while True:
+            remaining(deadline)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return  # Closing the probe releases it; updater acquires its own exclusive lock.
+            except BlockingIOError:
+                time.sleep(min(0.1, remaining(deadline)))
+    finally:
+        os.close(fd)
+
+
+def resume_consoles(config):
+    blocked(config)
+    path = Path(config["state"]) / "console-update"
+    if os.path.lexists(path):
+        console_barrier(config).unlink()
 
 
 def runtime_directory(path):
@@ -213,6 +350,8 @@ def prepare(config):
 def stop(config):
     info = container(config)
     if info is not None:
+        if info["execs"]:
+            raise RuntimeError("legacy backend exec writers require draft-preserving recovery")
         if info["running"]:
             try:
                 docker(["container", "stop", "--time", "30", info["id"]], timeout=45)
@@ -286,28 +425,106 @@ def serve(config):
         os.close(fd)
 
 
+def parent_death(signum, parent):
+    # Linux delivers this to the Docker client, whose --sig-proxy forwards TERM to the app.
+    if ctypes.CDLL(None, use_errno=True).prctl(1, signum, 0, 0, 0) != 0:
+        raise OSError(ctypes.get_errno(), "cannot supervise parent lifetime")
+    if os.getppid() != parent:
+        os.kill(os.getpid(), signum)
+
+
+def docker_parent_death(parent):
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
+    parent_death(signal.SIGTERM, parent)
+
+
+def close_console(name, client, timeout=60):
+    deadline = time.monotonic() + timeout
+    signaled = False
+    while True:
+        info = console_container(name, timeout=remaining(deadline) / 3)
+        if info is None:
+            if client.poll() is not None:
+                return
+        elif not info["running"] and not info["pid"]:
+            try:
+                docker(["container", "rm", info["id"]], timeout=remaining(deadline))
+            except RuntimeError:
+                if console_container(name, timeout=remaining(deadline) / 3) is not None:
+                    raise
+            if console_container(name, timeout=remaining(deadline) / 3) is not None:
+                raise RuntimeError("console removal was not confirmed")
+            return
+        elif not signaled:
+            require_console_protocol(info["image"], timeout=remaining(deadline))
+            try:
+                docker(["container", "kill", "--signal=TERM", info["id"]], timeout=remaining(deadline))
+            except RuntimeError:
+                actual = console_container(name, timeout=remaining(deadline) / 3)
+                if actual is not None and actual["running"]:
+                    raise
+            signaled = True
+        time.sleep(min(0.1, remaining(deadline)))
+
+
 def console(config, args, terminal=None):
     image = release(config)
     if "--help" in args or "-h" in args:
         command = ["container", "run", "--rm", *common(), "--network=none", "--entrypoint", CLI,
                    image["image"], *args]
-    else:
-        if not (sys.stdin.isatty() and sys.stdout.isatty()):
-            raise RuntimeError("console requires a terminal; --help is available without opening app data")
-        blocked(config)
-        info = container(config)
-        if info is None or not info["running"] or info["image"] != image["image"]:
-            raise RuntimeError("the selected inbox backend is not running")
-        command = ["container", "exec", "--interactive", "--tty", "--user", "10001:10001",
-                   "--workdir", HOME]
-        for name in ("TERM", "COLORTERM"):
-            value = terminal.get(name, "") if terminal is not None else os.environ.get(name)
-            if value:
-                if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9+_.:-]{0,127}", value):
-                    raise RuntimeError("invalid terminal environment")
-                command += ["--env", name + "=" + value]
-        command += [info["id"], "/opt/venv/bin/python", HELPER, *args]
-    os.execve(DOCKER, [*DOCKER_PREFIX, *command], DOCKER_ENV)
+        return subprocess.call([*DOCKER_PREFIX, *command], env=DOCKER_ENV)
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        raise RuntimeError("console requires a terminal; --help is available without opening app data")
+    blocked(config)
+    if os.path.lexists(Path(config["state"]) / "console-update"):
+        raise WritersBlocked("Universal Inbox is updating; restart the app after the update.")
+    info = container(config)
+    if info is None or not info["running"] or info["image"] != image["image"]:
+        raise RuntimeError("the selected inbox backend is not running")
+    require_console_protocol(image["image"])
+    name = "universal-inbox-console-" + uuid.uuid4().hex
+    command = ["container", "run", "--rm", *common(), "--name", name, "--interactive", "--tty",
+               "--sig-proxy=true", "--label", OWNER + "=true",
+               "--label", "io.universal-inbox.role=console", "--label", "io.universal-inbox.sha=" + image["sha"],
+               "--log-driver=none", "--workdir", HOME,
+               "--env", "UNIVERSAL_INBOX_EXPECTED_SHA=" + image["sha"],
+               "--mount", "type=bind,src=" + config["home"] + ",dst=" + HOME,
+               "--mount", "type=bind,src=" + str(Path(config["socket"]).parent) + ",dst=/run/universal-inbox",
+               "--mount", "type=bind,src=" + config["container_secrets"] + ",dst=/run/secrets,readonly",
+               "--mount", "type=bind,src=" + config["state"] + ",dst=" + STATE + ",readonly"]
+    for key in ("TERM", "COLORTERM"):
+        value = terminal.get(key, "") if terminal is not None else os.environ.get(key)
+        if value:
+            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9+_.:-]{0,127}", value):
+                raise RuntimeError("invalid terminal environment")
+            command += ["--env", key + "=" + value]
+    command += ["--entrypoint", "/opt/venv/bin/python", image["image"], HELPER, *args]
+    shutdown = []
+
+    def disconnect(signum, _frame):
+        shutdown.append(signum)
+
+    handlers = {s: signal.signal(s, disconnect) for s in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)}
+    client = None
+    try:
+        parent_death(signal.SIGHUP, os.getppid())
+        parent = os.getpid()
+        client = subprocess.Popen([*DOCKER_PREFIX, *command], env=DOCKER_ENV,
+                                  stderr=subprocess.DEVNULL, start_new_session=True,
+                                  preexec_fn=lambda: docker_parent_death(parent))
+        while not shutdown:
+            try:
+                return client.wait(timeout=0.1)
+            except subprocess.TimeoutExpired:
+                pass
+        return 0
+    finally:
+        try:
+            if client is not None:
+                close_console(name, client)
+        finally:
+            for signum, handler in handlers.items():
+                signal.signal(signum, handler)
 
 
 def interrupted(_signum, _frame):
@@ -317,10 +534,10 @@ def interrupted(_signum, _frame):
 def main(argv=None):
     args = list(sys.argv[1:] if argv is None else argv)
     if args in (["--help"], ["-h"]):
-        print("usage: container_runtime.py {serve|stop|console [APP_ARGS...]}\nconsole --help runs offline without app data or credentials")
+        print("usage: container_runtime.py {serve|stop|quiesce|resume-consoles|console-images|console [APP_ARGS...]}\nconsole --help runs offline without app data or credentials")
         return 0
-    if not args or args[0] not in ("serve", "stop", "console") or (args[0] != "console" and len(args) != 1):
-        print("expected serve, stop, or console [APP_ARGS...]", file=sys.stderr)
+    if not args or args[0] not in ("serve", "stop", "quiesce", "resume-consoles", "console-images", "console") or (args[0] != "console" and len(args) != 1):
+        print("expected serve, stop, quiesce, resume-consoles, console-images, or console [APP_ARGS...]", file=sys.stderr)
         return 2
     try:
         if os.geteuid() != 0:
@@ -332,9 +549,13 @@ def main(argv=None):
             if len(native) >= 5 and native[0] == "--terminal" and native[2] == "--colorterm" and native[4] == "--":
                 terminal = {"TERM": native[1], "COLORTERM": native[3]}
                 native = native[5:]
-            console(config, native, terminal)
-        if args[0] == "stop":
-            stop(config)
+            return console(config, native, terminal)
+        if args[0] == "console-images":
+            for image in console_images(config):
+                print(image)
+            return 0
+        if args[0] in ("stop", "quiesce", "resume-consoles"):
+            {"stop": stop, "quiesce": quiesce, "resume-consoles": resume_consoles}[args[0]](config)
             return 0
         signal.signal(signal.SIGTERM, interrupted)
         signal.signal(signal.SIGINT, interrupted)

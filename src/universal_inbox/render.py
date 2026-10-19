@@ -91,7 +91,7 @@ def link(href: str, label: str = "") -> str:
     return f"[link='{safe}'][underline]{label}[/underline][/link]{hint}"
 
 
-URL = re.compile(r"https?://[^\s<>()\"']+[^\s<>()\"'.,;:!?]")
+URL = re.compile(r"https?://[^\s<>()\"']+[^\s<>()\"'.,;:!?\]]")  # "[https://x]": the bracket stays text
 LABELLED = re.compile(r"(?P<label>[^\s()<>][^\n()<>]{0,60}?)\s*[(<]\s*(?P<url>https?://[^\s()<>]+)\s*[)>]")
 
 
@@ -106,7 +106,12 @@ def text_markup(text: str) -> str:
             out.append(link(m.group("url"), escape(m.group("label").strip())))
         pos = m.end()
     out.append(escape(text[pos:]))
-    return "".join(out)
+    return open_brackets("".join(out))
+
+
+def open_brackets(markup: str) -> str:
+    """Escape a literal "[" right before a link tag: "[[link=…]" is markup Rich reads and Textual refuses."""
+    return re.sub(r"(?<!\\)\[(?=\[link=)", r"\\[", markup)
 
 
 # --- trimming ----------------------------------------------------------------------------------------
@@ -162,6 +167,7 @@ def split_footer(markup: str) -> tuple[str, str]:
 
 
 def finish(markup: str, trimmed: str, forward: bool) -> tuple[str, str]:
+    markup, trimmed = open_brackets(markup), open_brackets(trimmed)
     markup = re.sub(r"\n{3,}", "\n\n", markup).strip()
     markup, quote = split_quote(markup, forward)
     markup, footer = split_footer(markup)

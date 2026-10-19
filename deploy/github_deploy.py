@@ -39,6 +39,7 @@ STAMP = re.compile(r"[0-9]{1,12} [0-9a-f]{7,40}\Z")
 RELEASE = re.compile(r"[0-9a-f]{40}-[0-9a-f]{12}\Z")
 DOCKER = "/usr/bin/docker"
 DOCKERFILE = "/opt/universal-inbox-deploy/Dockerfile"
+CONTAINER_RUNTIME = "/opt/universal-inbox-deploy/container_runtime.py"
 MANAGED_LABEL = "io.universal-inbox.managed=true"
 CHECK_LABEL = "io.universal-inbox.migration-check=true"
 
@@ -498,6 +499,11 @@ class Updater:
         os.replace(temporary, current)
         sync_directory(current.parent)
 
+    @contextmanager
+    def deployment_lock(self):
+        with locked(self.config.lock):
+            yield
+
     def unblock(self):
         self.gate.unlink(missing_ok=True)
         sync_directory(self.state)
@@ -535,7 +541,7 @@ class Updater:
             self.save(record, "recovered-backup")
 
     def retry_restart(self, record):
-        with locked(self.config.lock):
+        with self.deployment_lock():
             self.check(Path(self.config.current).resolve(strict=True), self.config.db)
             record["was_active"] = self.active()
             self.release_writers(record)
@@ -581,7 +587,7 @@ class Updater:
             raise DeploymentError("invalid queued notification")
         previous = read_json(self.journal, {})
         if previous.get("phase") in ("locked", "checkpointed", "migrating", "switched", "writers-started"):
-            with locked(self.config.lock):
+            with self.deployment_lock():
                 self.recover_locked(previous)
         history_path = self.status / "successful.json"
         if not history_path.exists():
@@ -601,8 +607,8 @@ class Updater:
         self.save(record, "staging", sha=sha)
         candidate = self.stage(sha)
         self.save(record, "waiting", sha=sha, candidate=str(candidate))
-        with locked(self.config.lock):
-            # Wait for all consoles/imports BEFORE stopping the daemon; never terminate their processes.
+        with self.deployment_lock():
+            # All consoles/imports have released DB ownership before the daemon is stopped.
             was_active = self.active()
             self.save(record, "locked", was_active=was_active,
                       previous=str(Path(self.config.current).resolve(strict=True)))
@@ -642,6 +648,36 @@ class ContainerUpdater(Updater):
                     "DOCKER_CONFIG=" + str(client), "DOCKER_HOST=unix:///var/run/docker.sock",
                     "DOCKER_BUILDKIT=1", *args]
         return super().command(args, timeout)
+
+    def console_runtime(self, operation):
+        trusted_path(CONTAINER_RUNTIME)
+        return self.command(["/usr/bin/python3", "-I", CONTAINER_RUNTIME, operation], timeout=65)
+
+    @contextmanager
+    def deployment_lock(self):
+        try:
+            # The native runtime closes frontend writers and gates launches before probing app.lock.
+            self.console_runtime("quiesce")
+            with locked(self.config.lock):
+                yield
+        finally:
+            self.resume_consoles()
+
+    def resume_consoles(self):
+        # Reopening frontends requires a pre-mutation phase or a persisted first-writer handoff.
+        record = read_json(self.journal, {})
+        consistent = record.get("writers_started") or record.get("phase") in (
+            None, "staging", "waiting", "failed-staging", "complete", "unchanged")
+        if (consistent and not os.path.lexists(self.gate)
+                and os.path.lexists(self.state / "console-update")):
+            self.console_runtime("resume-consoles")
+
+    def deploy(self, notification):
+        try:
+            super().deploy(notification)
+        finally:
+            # Recover a worker death after completion but before its console launch barrier was removed.
+            self.resume_consoles()
 
     def as_user(self, args, **kwargs):
         account = pwd.getpwnam(self.config.user)
@@ -702,7 +738,7 @@ class ContainerUpdater(Updater):
 
     def stop(self):
         super().stop()
-        # The runtime ExecStop removes the container, including every surviving docker-exec writer.
+        # Only backend writers are proved stopped here; deployment_lock quiesces independent frontends.
         if self.container_state(self.config.container_name):
             raise DeploymentError("application container was not removed")
 
@@ -794,7 +830,7 @@ class ContainerUpdater(Updater):
 
     def retry_restart(self, record):
         # Native retries predate containers. Container DB access always needs the same stopped gate.
-        with locked(self.config.lock):
+        with self.deployment_lock():
             current = str(Path(self.config.current).resolve(strict=True))
             self.save(record, "locked", previous=current, was_active=self.active())
             atomic_json(self.gate, {"blocked": True})
@@ -818,6 +854,10 @@ class ContainerUpdater(Updater):
         releases = Path(self.config.releases)
         trusted_path(releases)
         images = {self.metadata(path)["image"] for path in keep}
+        console_images = self.console_runtime("console-images").splitlines()
+        if any(not IMAGE.fullmatch(image) for image in console_images):
+            raise DeploymentError("invalid managed console image inventory")
+        images.update(console_images)  # Quiesced frontends retain their own image until exit.
         for path in releases.iterdir():
             if not RELEASE.fullmatch(path.name) or path in keep:
                 continue

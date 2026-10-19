@@ -3,14 +3,20 @@
 It reads and writes the SQLite file through `inbox`; replies go through the service's local socket.
 """
 
+import asyncio
+import fcntl
 import hashlib
 import http.client
 import json
 import mimetypes
+import os
 import re
+import signal
 import socket
 import sqlite3
+import stat
 import textwrap
+import time
 import unicodedata
 from collections import Counter
 from collections.abc import MutableMapping
@@ -24,7 +30,7 @@ from pathlib import Path
 
 from rich.markup import escape
 from rich.style import Style
-from textual import work
+from textual import events, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
@@ -35,7 +41,7 @@ from textual.screen import ModalScreen, Screen
 from textual.suggester import Suggester
 from textual.widgets import DataTable, DirectoryTree, Input, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
-from textual.worker import get_current_worker
+from textual.worker import WorkerCancelled, get_current_worker
 
 from . import files, inbox, render, sequences
 from .health import problem
@@ -264,8 +270,39 @@ class _UnixConnection(http.client.HTTPConnection):
         self.sock.connect(self.unix_path)
 
 
+class _CommandConnection(http.client.HTTPConnection):
+    """HTTP over a command's stdin/stdout: CommsTerminal's SSH relay to the service socket (remote.Link)."""
+
+    def __init__(self, command):
+        super().__init__("localhost", timeout=30)
+        self.command, self.proc = command, None
+
+    def connect(self):
+        import subprocess
+        mine, theirs = socket.socketpair()
+        try:
+            self.proc = subprocess.Popen(self.command, stdin=theirs, stdout=theirs, stderr=subprocess.DEVNULL,
+                                         start_new_session=True)
+        finally:
+            theirs.close()
+        mine.settimeout(self.timeout)
+        self.sock = mine
+
+    def reap(self):
+        """After the body is read (http.client closes an HTTP/1.0 connection before that, so close() must not
+        wait on the relay still writing it)."""
+        if self.proc is not None:
+            try:
+                self.proc.wait(5)
+            except Exception:  # noqa: BLE001 - never leave a relay running
+                self.proc.kill()
+                self.proc.wait()
+            self.proc = None
+
+
 def _post(socket_path, path, payload, timeout=30) -> tuple[int, dict]:
-    conn = _UnixConnection(socket_path)
+    """POST JSON to the service: `socket_path` is its Unix socket, or a relay command (a list) to run."""
+    conn = _CommandConnection(socket_path) if isinstance(socket_path, list) else _UnixConnection(socket_path)
     conn.timeout = timeout
     try:
         conn.connect()
@@ -275,8 +312,12 @@ def _post(socket_path, path, payload, timeout=30) -> tuple[int, dict]:
         conn.request("POST", path, json.dumps(payload), {"Content-Type": "application/json"})
         r = conn.getresponse()
         raw = r.read()
-    except OSError as e:  # the request may have reached the service
+    except (OSError, http.client.HTTPException) as e:  # the request may have reached the service
         raise ReplyError(f"no response from the service: {e}", 504) from e
+    finally:
+        conn.close()
+        if isinstance(conn, _CommandConnection):
+            conn.reap()
     try:
         return r.status, json.loads(raw or b"{}")
     except ValueError:  # an error page, not JSON (an older service has no such route)
@@ -756,8 +797,9 @@ class Rail(OptionList):
         opts += [gap, header("sequence", "outreach"), item("tasks", "tasks", "Tasks", due or ""),
                  item("sequences", "sequence", "Sequences", sum(1 for q in sequences.sequences(db) if not q["archived_at"]))]
         opts += [gap, header("inbox", "browse"),
-                 item("people", "people", "People", len(inbox.people(db))),
-                 item("organizations", "organizations", "Organizations", len(inbox.organizations(db))),
+                 item("people", "people", "People", inbox.people_count(db)),
+                 item("organizations", "organizations", "Organizations",
+                      db.execute("SELECT COUNT(*) FROM organizations").fetchone()[0]),
                  item("channels", "channels", "Channels",
                       db.execute("SELECT count(*) FROM channels WHERE kind != 'mailbox'").fetchone()[0]),
                  gap, header("connections", "connections")]
@@ -939,6 +981,9 @@ THREAD_KEYS = [  # Thread actions, Gmail-style (decision #93); shared by the Thr
     Binding("p", "person", show=False), Binding("o", "link", show=False), Binding("y", "copy", "copy for agent"),
     Binding("f", "forward", show=False), Binding("x", "ignore", show=False),  # x drops: Ignore, as m does
 ]
+
+
+PREVIEW_GAP = 0.08  # seconds: moves closer together than this (key repeat) skip the rows passed
 
 
 class ThreadsPage(Page, ThreadActions):
@@ -1141,10 +1186,23 @@ class ThreadsPage(Page, ThreadActions):
         event.data_table.clicked = False
 
     def on_data_table_row_highlighted(self, event):
+        """The highlighted Thread shows beside the list. Held j/k shows where it lands: a move paints at once
+        unless the last one painted under PREVIEW_GAP ago; then only the row it stops on paints."""
         if not self.active:  # a page being replaced, or another of Today's lists, must not repaint the thread pane
             return
         self.app.cursor[self.view_index] = event.cursor_row
-        self.app.main.show_thread(self.current_thread_id())
+        if getattr(self, "_preview_timer", None) is not None:
+            self._preview_timer.stop()
+            self._preview_timer = None
+        if time.monotonic() - getattr(self, "_previewed", 0) >= PREVIEW_GAP:
+            self._preview()
+        else:
+            self._preview_timer = self.set_timer(PREVIEW_GAP, self._preview)
+
+    def _preview(self):
+        self._preview_timer, self._previewed = None, time.monotonic()
+        if self.active and self.is_attached:
+            self.app.main.show_thread(self.current_thread_id())
 
     def action_down(self):
         self.query_one(DataTable).action_cursor_down()
@@ -1619,6 +1677,11 @@ class ReplyBox(Composer, Vertical):
             title = view["thread"].title
             self.query_one(".subjectvalue").update(escape(title if title.lower().startswith("re:") else f"Re: {title}"))
             self.set_mode(mode)
+            if self.app._managed_console:
+                draft = inbox.reply_draft(self.app.db, draft_key)
+                if draft is not None:
+                    self.query_one(".toinput", Input).value = draft["to"]
+                    self.query_one(".ccinput", Input).value = draft["cc"]
         else:
             self.query_one(".flabel").update("To")
             self.query_one(".fromvalue").update(f"{escape(view['where'])} [#928374]· in thread[/]")
@@ -1654,6 +1717,8 @@ class ReplyBox(Composer, Vertical):
         h.set_class(error, "error")
 
     def keep_draft(self):
+        if getattr(self.app, "_console_editors_saved", False):
+            return
         if self.has_class("open") and self.query(TextArea):
             self.app.drafts[self.draft_key] = self.query_one(TextArea).text
 
@@ -2011,7 +2076,7 @@ def related_markup(db, v, limit: int = 6) -> list[str]:
     return out
 
 
-def details_markup(v, db) -> str:
+def details_markup(v, db, related=None) -> str:
     """The Thread's properties, Linear-style: Status, Person, Organization, Case, Channel; then the
     other Threads with the same Person and Organization."""
     t, p = v["thread"], v["person"]
@@ -2039,7 +2104,7 @@ def details_markup(v, db) -> str:
     lines += ["", head("case", "case"), case, "", f"[#928374]{ICON.get(kind, ICON['channel'])} channel[/]", escape(v["where"])]
     if p and (section := sequence_section(db, p["id"], keys=False)):  # FR-SEQ-19; its keys are on the Person page
         lines += ["", section]
-    return "\n".join(lines + related_markup(db, v))
+    return "\n".join(lines + (related_markup(db, v) if related is None else related))
 
 
 def thread_head(v) -> str:
@@ -2280,6 +2345,21 @@ class ThreadView(Horizontal):
     def on_mount(self):
         self.refresh_data()
 
+    def retarget(self, thread_id) -> bool:
+        """Show another Thread in this pane without remounting it (opening a Thread stays fast); False when
+        the reply box is open, so the pane is rebuilt and the reply kept."""
+        box = self.query(ReplyBox)
+        if not box or box.first().has_class("open") or not self.query(".thead"):
+            return False
+        box = box.first()
+        box.thread_id = box.draft_key = thread_id
+        box.view, box.pending_confirmation = None, False
+        self.thread_id, self.members, self.related, self.view = thread_id, None, None, None
+        for scroller in self.query(TextScroll):
+            scroller.scroll_home(animate=False)
+        self.refresh_data()
+        return True
+
     def refresh_data(self):
         if not self.query(".thead"):  # not composed yet; on_mount fills it
             return
@@ -2294,10 +2374,11 @@ class ThreadView(Horizontal):
                       self.query_one(".timeline"))
         self.query_one(ReplyBox).set_view(v)
 
-    def paint_status(self):
-        """Header and properties: they carry the status, and a Snoozed Thread's countdown."""
-        if len(self.query(".thead, .detailtext")) != 2:  # countdown may tick while this pane is being removed
-            return
+    def paint_status(self, details=True):
+        """Header and properties: they carry the status, and a Snoozed Thread's countdown (each second,
+        `details=False` reuses the other-Threads list instead of querying it again)."""
+        if len(self.query(".thead, .detailtext")) != 2 or getattr(self, "view", None) is None:
+            return  # countdown may tick while this pane is being removed
         v = self.view
         head = thread_head(v)
         if self.has_class("narrow"):  # properties column hidden: keep who, where, and case under the title
@@ -2305,13 +2386,15 @@ class ThreadView(Horizontal):
             bits = [escape(p["name"]) if p else "", escape(v["where"]), escape(v["case"]) if v["thread"].case_id else "no case (l)"]
             head += "\n[#928374]" + " · ".join(b for b in bits if b) + "[/]"
         self.query_one(".thead").update(head + "\n")
-        self.query_one(".detailtext").update(details_markup(v, self.app.db))
+        if details or getattr(self, "related", None) is None:
+            self.related = related_markup(self.app.db, v)
+        self.query_one(".detailtext").update(details_markup(v, self.app.db, self.related))
 
     def on_resize(self, event):
         narrow = event.size.width < 84
         if narrow != self.has_class("narrow"):
             self.set_class(narrow, "narrow")
-            self.refresh_data()
+            self.paint_status(details=False)  # only the header follows the width
 
     def reply(self, mode="all"):
         self.query_one(ReplyBox).open(self.view, mode)
@@ -3616,6 +3699,8 @@ class StatusLine(Static):
         if len(main.stack) > 1 and main.page is not None:  # deeper than the rail section: say where
             mode += f" › {main.page.TITLE.split(' ', 1)[-1].upper()}"
         left = f"[b {b['bg0']} on {b['grey2']}] {mode} [/][{b['grey2']}]\ue0bc[/] "
+        if app.remote is not None and not app.remote.online:
+            left += f"[b {b['bg0']} on {b['red']}] READ-ONLY [/] "
         sep = f" [{b['grey0']}]/[/] "
         counts = inbox.view_counts(app.db)
         parts = [f"[{b['grey1']}]{ICON['TODO']}[/] {counts['Todo']} todo",
@@ -4748,7 +4833,8 @@ class StepEditor(Vertical):
             table.focus()
 
     def on_descendant_blur(self, _):
-        self.save()
+        if not self.app._console_stopping and not self.app._console_closed:
+            self.save()
 
     def paint(self):
         st = self.step
@@ -5084,6 +5170,9 @@ class MainScreen(Screen):
             self.showing = thread_id
             tv.refresh_data()
             return
+        if thread_id is not None and tv is not None and tv.retarget(thread_id):
+            self.showing = thread_id
+            return
         pane.remove_children()
         self.showing = thread_id
         if thread_id is None:
@@ -5149,22 +5238,73 @@ class ReplyDrafts(MutableMapping):
             inbox.migrate(self.own)
         return self.own
 
+    held: dict  # texts a read-only laptop copy could not save yet (remote.Offline); saved when back online
+
+    def _all(self):
+        return inbox.reply_drafts(self.db) | {k: v for k, v in self.__dict__.get("held", {}).items() if v.strip()}
+
     def __getitem__(self, thread_id):
-        return inbox.reply_drafts(self.db)[thread_id]
+        return self._all()[thread_id]
 
     def __setitem__(self, thread_id, text):
-        inbox.save_reply_draft(self.db, thread_id, text)
+        from .remote import Offline
+        try:
+            inbox.save_reply_draft(self.db, thread_id, text)
+        except Offline:
+            self.__dict__.setdefault("held", {})[thread_id] = text
+            self.app.notify("Read-only · this reply stays open here and is saved once the service answers.",
+                            severity="warning")
+        else:
+            self.__dict__.get("held", {}).pop(thread_id, None)
 
     def __delitem__(self, thread_id):
-        if thread_id not in inbox.reply_drafts(self.db):
+        if thread_id not in self._all():
             raise KeyError(thread_id)
-        inbox.save_reply_draft(self.db, thread_id, "")
+        self[thread_id] = ""
 
     def __iter__(self):
-        return iter(inbox.reply_drafts(self.db))
+        return iter(self._all())
 
     def __len__(self):
-        return len(inbox.reply_drafts(self.db))
+        return len(self._all())
+
+    def save_held(self):
+        for thread_id, text in list(self.__dict__.get("held", {}).items()):
+            self[thread_id] = text
+
+
+APP_LOCK_PATH = Path("/run/universal-inbox-deploy/app.lock")
+
+
+def inherited_app_lock_fd():
+    """Only adopt the helper's actual, already-shared-locked deployment file."""
+    value = os.environ.get("UNIVERSAL_INBOX_APP_LOCK_FD")
+    if value is None:
+        return None
+    try:
+        if not re.fullmatch(r"[0-9]+", value) or int(value) < 3:
+            raise ValueError
+        fd = int(value)
+        actual, expected = os.fstat(fd), APP_LOCK_PATH.lstat()
+        if (not stat.S_ISREG(expected.st_mode) or not stat.S_ISREG(actual.st_mode)
+                or (actual.st_dev, actual.st_ino) != (expected.st_dev, expected.st_ino)
+                or fcntl.fcntl(fd, fcntl.F_GETFL) & os.O_ACCMODE != os.O_RDONLY):
+            raise ValueError
+        lock = Path(f"/proc/self/fdinfo/{fd}").read_text()
+        if not re.search(r"^lock:\s+\d+:\s+FLOCK\s+ADVISORY\s+READ\s+", lock, re.M):
+            raise ValueError
+    except (OSError, ValueError, OverflowError):
+        # Never close an arbitrary descriptor selected by an untrusted environment.
+        raise RuntimeError("Invalid managed console application lock.") from None
+    os.set_inheritable(fd, False)
+    return fd
+
+
+class ConsoleUpdateScreen(Screen):
+    def compose(self) -> ComposeResult:
+        yield Static("[b]Restart required[/b]\n\nYour drafts are saved. The inbox is updating.\n"
+                     "Quit with ctrl+q, then restart the app to load the new version.",
+                     classes="threadempty")
 
 
 class Console(App):
@@ -5172,10 +5312,12 @@ class Console(App):
     TITLE = "Universal Inbox"
     HOME = "today"  # where the console opens (FR-T2)
     ENABLE_COMMAND_PALETTE = False
+    CONSOLE_UPDATE_PROTOCOL = 1
 
     def __init__(self, db_path: str, reply=None, sources=None, send_draft=None, slack_conversations=None,
-                 files=FILE_SERVER):
+                 files=FILE_SERVER, remote=None, syncer=None):
         super().__init__()
+        self.remote, self.syncer = remote, syncer  # CommsTerminal's laptop copy (remote.py, ADR 0004)
         self.db_path, self.send_reply, self.view, self.cursor = db_path, reply, 0, {}
         self.home = self.HOME
         self.drafts = ReplyDrafts(self)
@@ -5191,6 +5333,11 @@ class Console(App):
         self.people_collapsed = set()  # People list letters folded shut
         self.undo = None  # (message, restore) for the last change
         self.msg_states = {}  # thread id -> which messages, quotes, and recipient lines are open (#107)
+        self._app_lock_fd = inherited_app_lock_fd()
+        self._managed_console = self._app_lock_fd is not None
+        self._console_stopping = self._console_closed = self._console_editors_saved = False
+        self._console_exit_requested = False
+        self._console_signals = {}
 
     @property
     def main(self) -> MainScreen:
@@ -5199,27 +5346,160 @@ class Console(App):
     def on_mount(self):
         self.theme = "textual-light"  # toasts and built-in widgets match the light palette
         self.db = inbox.connect(self.db_path)
-        inbox.migrate(self.db)
+        if self.remote is None:
+            inbox.migrate(self.db)
+        else:  # the copy is the service's database: only its snapshots change the schema
+            self.remote.app = self
+            self.check_copy()
+            self.syncer.start()
         self.raw = files.raw_dir(self.db)
         self.data_version = self.db.execute("PRAGMA data_version").fetchone()[0]
         self.install_screen(MainScreen(), "main")
         self.push_screen("main")
-        self.set_interval(2, self.check_changes)
-        self.set_interval(60, self.minute)
-        self.set_interval(1, self.tick_countdowns)
+        self._refresh_timers = [self.set_interval(2, self.check_changes),
+                                self.set_interval(60, self.minute),
+                                self.set_interval(1, self.tick_countdowns)]
+        if self._managed_console:
+            loop = asyncio.get_running_loop()
+            for sig in (signal.SIGUSR1, signal.SIGTERM, signal.SIGHUP):
+                self._console_signals[sig] = signal.getsignal(sig)
+                loop.add_signal_handler(sig, self._request_console_stop, sig != signal.SIGUSR1)
         mine = [c["self_id"] for c in inbox.connections(self.db) if "@" in (c["self_id"] or "")]
         for key in self.sources:
             self.check_source(key, mine)
 
+    def on_unmount(self):
+        for sig, previous in self._console_signals.items():
+            asyncio.get_running_loop().remove_signal_handler(sig)
+            signal.signal(sig, previous)
+
+    async def on_event(self, event):
+        if self._console_stopping or self._console_closed:
+            if isinstance(event, events.InputEvent):
+                if isinstance(event, events.Key) and event.key in ("ctrl+q", "q"):
+                    await self.action_quit()
+                event.stop()
+                event.prevent_default()
+                return
+        await super().on_event(event)
+
+    async def run_action(self, action, default_namespace=None, namespaces=None):
+        if (self._console_stopping or self._console_closed) and action not in ("quit", "app.quit"):
+            return False
+        from .remote import Offline
+        try:
+            return await super().run_action(action, default_namespace, namespaces)
+        except Offline as e:  # a write while the laptop copy is read-only: say so, keep running
+            self.notify(str(e), severity="warning")
+            return False
+
+    def push_screen(self, screen, callback=None, *args, **kwargs):
+        if callback is not None and self.remote is not None:
+            from .remote import Offline
+            chosen = callback
+
+            def callback(result):
+                try:
+                    return chosen(result)
+                except Offline as e:
+                    self.notify(str(e), severity="warning")
+        return super().push_screen(screen, callback, *args, **kwargs)
+
+    def call_from_thread(self, callback, *args, **kwargs):
+        if not self._managed_console:
+            return super().call_from_thread(callback, *args, **kwargs)
+        if self._console_editors_saved:
+            return None
+        def guarded():
+            if not self._console_editors_saved:
+                return callback(*args, **kwargs)
+        return super().call_from_thread(guarded)
+
+    def _request_console_stop(self, exit_requested=False):
+        self._console_exit_requested |= exit_requested
+        if self._console_closed:
+            if self._console_exit_requested:
+                self.exit()
+        elif not self._console_stopping:
+            self._console_stopping = True
+            self.call_later(self._stop_console)
+
+    def _save_console_drafts(self):
+        if not self.main.save_draft():
+            return False
+        for editor in self.main.query(DraftView):
+            if not editor.save(refresh=False):
+                return False
+        for reply in self.main.query(ReplyBox):
+            reply.keep_draft()
+            if reply.has_class("open") and reply.email:
+                draft = inbox.reply_draft(self.db, reply.draft_key)
+                if draft is not None:
+                    values = {key: draft[key] for key in DRAFT_FIELDS}
+                    values.update(to=reply.query_one(".toinput", Input).value,
+                                  cc=reply.query_one(".ccinput", Input).value)
+                    inbox.save_draft(self.db, values, draft_id=draft["id"], expected_revision=draft["revision"])
+        for editor in self.main.query(DescriptionBox):
+            if editor.has_class("open"):
+                page = next(parent for parent in editor.ancestors if isinstance(parent, CasePage))
+                text = editor.query_one(TextArea).text.strip()
+                if text != editor.text:
+                    inbox.set_case_description(self.db, page.case_id, text)
+                    editor.text = text
+        return all(editor.save() for editor in self.main.query(StepEditor))
+
+    async def _stop_console(self):
+        if self._console_closed:
+            if self._console_exit_requested:
+                self.exit()
+            return
+        try:
+            if not self._save_console_drafts():
+                raise RuntimeError("Draft save failed")
+            # Do not cancel thread workers: cancellation does not stop their callbacks or socket requests.
+            async with asyncio.timeout(40):
+                results = await asyncio.shield(asyncio.gather(
+                    *(worker.wait() for worker in self.workers), return_exceptions=True))
+                if any(isinstance(result, BaseException) and not isinstance(result, WorkerCancelled)
+                       for result in results):
+                    raise RuntimeError("Background work did not settle")
+            if not self._save_console_drafts():
+                raise RuntimeError("Draft save failed")
+        except Exception:
+            self._console_stopping = False
+            self.notify("Could not pause safely · drafts and update lock kept. "
+                        "Resolve any save error, then retry quit or the update.", severity="error", timeout=60)
+            return
+        self._console_editors_saved = True
+        for timer in self._refresh_timers:
+            timer.stop()
+        while self.screen is not self.main:
+            await self.pop_screen()
+        await self.switch_screen(ConsoleUpdateScreen())
+        # Remove every old widget and its timers/message queue before SQLite or the shared lock is closed.
+        await self.main.remove()
+        self.db.close()
+        if self.drafts.own is not None:
+            self.drafts.own.close()
+        os.close(self._app_lock_fd)
+        self._app_lock_fd = None
+        self._console_closed = True
+        if self._console_exit_requested:
+            self.exit()
+
     def minute(self):
         """Health goes stale with no write to notice; on Today, a Task can come due by the clock alone (FR-T11)."""
+        if self._console_stopping or self._console_closed:
+            return
         if isinstance(self.main.current, TodayPage):
             self.main.refresh_all()
         else:
             self.main.refresh_chrome()
 
     async def action_quit(self):
-        if self.main.save_draft():
+        if self._managed_console:
+            self._request_console_stop(exit_requested=True)
+        elif self.main.save_draft():
             self.exit()
 
     @work(thread=True)
@@ -5237,10 +5517,11 @@ class Console(App):
 
     def tick_countdowns(self):
         """Snoozed Threads count down beside their status every second (the lists tick on their own)."""
-        # ponytail: a Snoozed ThreadView repaints its properties each second; cache them if that gets slow
+        if self._console_stopping or self._console_closed:
+            return
         for tv in self.screen.query(ThreadView):
             if getattr(tv, "view", None) is not None and tv.view["thread"].status == "SNOOZED":
-                tv.paint_status()
+                tv.paint_status(details=False)
         for card in self.screen.query(CaseCard):
             t = getattr(card, "thread", None)
             if t is not None and card.thread_id is not None and t.status == "SNOOZED":
@@ -5381,6 +5662,8 @@ class Console(App):
 
     def check_changes(self):
         """Refresh when the service has written (new mail, Slack messages, wake)."""
+        if self._console_stopping or self._console_closed:
+            return
         v = self.db.execute("PRAGMA data_version").fetchone()[0]
         if v != self.data_version:
             self.data_version = v
@@ -5389,9 +5672,44 @@ class Console(App):
                 self.outdated = True  # the service migrated the database past this console's code
                 self.notify("The inbox was upgraded while this console ran · quit (q) and start it again.",
                             severity="error", timeout=24 * 3600)
-            self.undo = None  # new activity may have moved the Thread; restoring would hide it
+            if self.remote is None:  # the laptop copy keeps undo: a stale target is refused when undone
+                self.undo = None  # new activity may have moved the Thread; restoring would hide it
             self.main.refresh_all()
             self.toast_pauses()
+
+    def apply_snapshot(self, syncer, body):
+        """A newer copy of the service's database arrived (remote.Syncer): swap it in and repaint."""
+        if self._console_stopping or self._console_closed or not syncer.apply(self.db, body):
+            return
+        self.check_copy()
+        self.data_version = self.db.execute("PRAGMA data_version").fetchone()[0]
+        self.main.refresh_all()
+        self.toast_pauses()
+
+    def check_copy(self):
+        """Writes stay off while the copy's schema or the service's build differ from this console's code."""
+        version = self.db.execute("PRAGMA user_version").fetchone()[0]
+        service = getattr(self.syncer, "service_build", None)
+        mine = build_version().rsplit("-", 1)[-1] if build_version() else ""
+        if version != inbox.SCHEMA_VERSION or (service and mine and service != mine):
+            self.set_online("Update ready · restart CommsTerminal to load the service's version; read-only.")
+        elif self.syncer is not None and self.syncer.confirmed:
+            self.set_online(None)
+
+    def set_online(self, problem):
+        """None: the service answers and writes are on; else why the console is read-only (status bar)."""
+        remote = self.remote
+        if remote is None or (remote.problem == problem and remote.online == (problem is None)):
+            return
+        remote.online, remote.problem = problem is None, problem
+        if problem is not None:
+            self.notify(problem, severity="warning", timeout=10)
+        else:
+            self.drafts.save_held()
+        if self.is_screen_installed("main"):  # off, once the console has stopped
+            for line in self.main.query(StatusLine):
+                line.refresh_line()
+
 
     def toast_pauses(self):
         """A pause during a session says what it means and the way back (FR-SEQ-20)."""
