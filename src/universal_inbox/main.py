@@ -171,6 +171,7 @@ def start_remote(ssh_args: str, db_path: str):
         deadline = time.monotonic() + 30
         while not link.ready() and time.monotonic() < deadline:
             time.sleep(0.05)
+        syncer.since = None  # no copy yet: whatever an old sync-token says
         try:
             body = syncer.once(timeout=120)
         except (ReplyError, remote.Offline) as e:

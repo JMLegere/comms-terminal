@@ -445,8 +445,13 @@ class Syncer:
 
     def __init__(self, remote: Remote, db_path: str, caps: dict, build_file: Path | None = None):
         self.remote, self.db_path, self.caps, self.build_file = remote, db_path, caps, build_file
-        self.since = None
-        self.service_build = None
+        self.token_file = Path(db_path).parent / "sync-token"  # the copy's snapshot: unchanged, no new download
+        try:
+            self.since, caps_json, self.service_build = json.loads(self.token_file.read_text())
+            caps.update(caps_json)
+        except (OSError, ValueError, TypeError):
+            self.since, self.service_build = None, None
+        self.confirmed = False  # the service answered a /sync in this session
         self.lock = threading.Lock()  # the loop and a create's resync both store what a /sync returned
         remote.resync = self.now
 
@@ -470,13 +475,15 @@ class Syncer:
         self.remote.fresh.clear()
         status, body = self.remote.post(self.remote.link.command(), "/sync",
                                         {"since": None if fresh else self.since,
-                                         "wait": 0 if fresh else max(0, timeout - 5)}, timeout)
+                                         "wait": 0 if fresh or not self.confirmed else max(0, timeout - 5)},
+                                        timeout)  # the session's first answer at once: writes wait on it
         with self.lock:  # not around the request: the loop's long poll must not hold up a create's resync
             return self._received(status, body)
 
     def _received(self, status, body):
         if status != 200:
             raise Offline(body.get("error", f"HTTP {status}"))
+        self.confirmed = True
         if "db" not in body:
             self.since = body["since"]
             return None
@@ -517,6 +524,9 @@ class Syncer:
         finally:
             mem.close()
         self.since = body["since"]
+        tmp = self.token_file.with_name(".sync-token.part")
+        tmp.write_text(json.dumps([self.since, self.caps, self.service_build]))
+        tmp.replace(self.token_file)
         return True
 
     def run(self):

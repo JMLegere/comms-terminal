@@ -5,6 +5,7 @@ import os
 import sys
 from pathlib import Path
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -219,3 +220,12 @@ def test_a_large_answer_arrives_whole_through_the_relay(service, laptop, monkeyp
     assert status == 200 and len(body["raw"]) >= 20  # one batch of about RAW_BATCH
     syncer.fetch_raw(names)
     assert sorted(p.name for p in (Path(syncer.db_path).parent / "raw").iterdir()) == names
+
+
+def test_a_relaunch_on_an_unchanged_copy_needs_no_new_snapshot(service, laptop):
+    rem, syncer, db, _ = laptop
+    again = remote.Syncer(rem, syncer.db_path, {})
+    assert again.since == syncer.since and not again.confirmed
+    started = time.monotonic()
+    assert again.once(timeout=30) is None and again.confirmed  # nothing new, and at once
+    assert time.monotonic() - started < 5

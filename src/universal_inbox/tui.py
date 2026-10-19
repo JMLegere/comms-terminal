@@ -5701,7 +5701,7 @@ class Console(App):
         mine = build_version().rsplit("-", 1)[-1] if build_version() else ""
         if version != inbox.SCHEMA_VERSION or (service and mine and service != mine):
             self.set_online("Update ready · restart CommsTerminal to load the service's version; read-only.")
-        elif self.syncer is not None and self.syncer.since is not None:
+        elif self.syncer is not None and self.syncer.confirmed:
             self.set_online(None)
 
     def set_online(self, problem):
