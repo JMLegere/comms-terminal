@@ -27,7 +27,14 @@ if [ -z "$have" ] || { [ -n "$want" ] && [ "$want" != "$have" ]; }; then
     echo "CommsTerminal: installing the service's version ${want:-(latest main)}…"
     git -C "$REPO" fetch -q origin
     rev=$(git -C "$REPO" rev-parse --verify -q "${want:-origin/main}^{commit}")
-    uv tool install -q --reinstall --python 3.12 "universal-inbox @ git+file://$REPO@$rev"
+    # From an export of that commit: uv's git+file:// clone copies only branches and tags, so a commit that only
+    # origin/main reaches is missing there. The export has no .git, so the build stamp comes in as the service's.
+    src="$DATA/src"
+    rm -rf "$src"
+    mkdir -p "$src"
+    git -C "$REPO" archive "$rev" | tar -x -C "$src"
+    UNIVERSAL_INBOX_BUILD="$(git -C "$REPO" log -1 --format=%ct "$rev") ${want:-$(git -C "$REPO" rev-parse --short "$rev")}" \
+        uv tool install -q --reinstall --python 3.12 "$src"
 fi
 
 exec "$DATA/bin/universal-inbox" --db "$DATA/inbox.db" --remote "$SSH_ARGS"
