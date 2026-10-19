@@ -1,7 +1,9 @@
 """CommsTerminal's laptop copy (remote.py, ADR 0004): the service's /call, /sync and /raw over its real socket,
 reached through the same relay script SSH runs, with the console module's writes proxied."""
 
+import os
 import sys
+from pathlib import Path
 import threading
 from datetime import datetime, timedelta, timezone
 
@@ -205,3 +207,15 @@ def test_a_create_the_copy_cannot_reproduce_resyncs_before_returning(service, la
     case_id = tui.inbox.create_case(db, "From the laptop")
     assert {c["title"] for c in inbox.cases(db)} == {"Made on the service", "From the laptop"}
     assert inbox.cases(db) == inbox.cases(sdb) and case_id in {c["id"] for c in inbox.cases(db)}
+
+
+def test_a_large_answer_arrives_whole_through_the_relay(service, laptop, monkeypatch):
+    _, sdb, _, _ = service
+    rem, syncer, _, _ = laptop
+    for i in range(40):  # about 8 MB of raw messages: far beyond the socket buffers
+        files.store_raw(sdb, b"Subject: big\r\n\r\n" + os.urandom(100_000).hex().encode() + str(i).encode())
+    names = sorted(p.name for p in files.raw_dir(sdb).iterdir())
+    status, body = tui._post(rem.link.command(), "/raw", {"names": names}, 60)
+    assert status == 200 and len(body["raw"]) >= 20  # one batch of about RAW_BATCH
+    syncer.fetch_raw(names)
+    assert sorted(p.name for p in (Path(syncer.db_path).parent / "raw").iterdir()) == names

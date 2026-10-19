@@ -287,8 +287,9 @@ class _CommandConnection(http.client.HTTPConnection):
         mine.settimeout(self.timeout)
         self.sock = mine
 
-    def close(self):
-        super().close()
+    def reap(self):
+        """After the body is read (http.client closes an HTTP/1.0 connection before that, so close() must not
+        wait on the relay still writing it)."""
         if self.proc is not None:
             try:
                 self.proc.wait(5)
@@ -314,6 +315,8 @@ def _post(socket_path, path, payload, timeout=30) -> tuple[int, dict]:
         raise ReplyError(f"no response from the service: {e}", 504) from e
     finally:
         conn.close()
+        if isinstance(conn, _CommandConnection):
+            conn.reap()
     try:
         return r.status, json.loads(raw or b"{}")
     except ValueError:  # an error page, not JSON (an older service has no such route)
