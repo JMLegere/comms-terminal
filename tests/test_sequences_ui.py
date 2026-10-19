@@ -105,6 +105,9 @@ def test_enroll_from_people_then_do_skip_and_undo_tasks(tmp_path):
         assert isinstance(app.screen, Pick)
         await pilot.press("enter")
         await pilot.pause()
+        assert isinstance(app.screen, Pick)  # Start today is first
+        await pilot.press("enter")
+        await pilot.pause()
         app.main.go("tasks")
         await pilot.pause()
         tasks = app.main.current
@@ -126,6 +129,34 @@ def test_enroll_from_people_then_do_skip_and_undo_tasks(tmp_path):
     assert seen["after done"] == []  # the email follows on the next business day
     assert seen["after undo"] == ["call"]
     assert [r[0] for r in seen["after skip"]] == ["SKIPPED", "DUE"]
+
+
+def test_enroll_with_a_later_start_date(tmp_path):  # FR-SEQ-25
+    path, ids = seeded(tmp_path)
+    db, s = calls(path)
+    ana = next(p["id"] for p in inbox.people(db) if p["name"] == "Ana Ruiz")
+    seen = {}
+
+    async def scenario(app, pilot):
+        app.main.go("people")
+        await pilot.pause()
+        page = app.main.current
+        page.query_one(DataTable).move_cursor(row=next(i for i, (p, _) in enumerate(page.items) if p.get("id") == ana))
+        for key in ("s", "enter"):  # the Sequence
+            await pilot.press(key)
+            await pilot.pause()
+        choose(app, "later")
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, Ask)
+        app.screen.query_one(Input).value = "2099-01-05"
+        await pilot.press("enter")
+        await pilot.pause()
+        seen["toasts"] = [str(n.message) for n in app._notifications]
+
+    run(Console(path), [scenario], size=(187, 40))
+    assert sq.tasks_due(db) == [] and db.execute("SELECT starts_at FROM enrollments").fetchone()[0]
+    assert any("Enrolled Ana Ruiz in Call first: the first Task is due on Jan 5" in m for m in seen["toasts"])
 
 
 def test_person_page_shows_both_enrollments_resumes_and_finishes(tmp_path):

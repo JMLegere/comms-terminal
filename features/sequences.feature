@@ -7,7 +7,7 @@ Feature: Sequences
   Today (inbox.today) lists Todo Threads, Due Tasks, and the Drafts not shown through them; Save Draft
   (inbox.save_draft) and Save Reply Draft (inbox.save_reply_draft) keep Drafts; Act (inbox.act) snoozes.
   Kind maps to a Step's kind, Gap to gap_days, Subject and Body to its text. Times are Jeremy's (Halifax);
-  "Monday" is 2026-10-19 at 10:00.
+  "Monday" is 2026-10-19 at 10:00 and "November 2" is 2026-11-02 at 10:00.
 
   Background:
     Given a Sequence "Secret Sequence" with Steps:
@@ -67,3 +67,14 @@ Feature: Sequences
       | Body     |
       | Hi there |
       | Thanks   |
+
+  @AS-SEQ-18 @FR-SEQ-25
+  Scenario: Enrolling with a Start date makes the first Task due on that day
+    When Enroll with Start date "2026-11-02" is called for "Dana Roy" in "Secret Sequence" on Monday
+    Then Due Tasks on Monday are empty
+    And there is 1 Task and 0 Draft
+    When Wake runs twice on November 2
+    Then Due Tasks on November 2 are:
+      | Person   | Kind  | Group     | Day |
+      | Dana Roy | email | due today | 1   |
+    And the email Task's Draft has Subject "Pilot with Harbourline" and Body "Hi Dana"

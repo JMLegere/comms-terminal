@@ -23,9 +23,10 @@ def add_parsers(sub):
         d.add_argument(f"--{field}")
     d.add_argument("--body", help="the body, or - to read it from stdin")
     sub.add_parser("tasks", help="Due Tasks as Markdown, each with its Person and Draft (Sequences)")
-    e = sub.add_parser("enroll", help="enroll one Person in a Sequence; its first Task is due today")
+    e = sub.add_parser("enroll", help="enroll one Person in a Sequence; its first Task is due today, or from --start")
     e.add_argument("person", help="a Person id, email address, or exact name")
     e.add_argument("sequence", help="a Sequence id or exact name")
+    e.add_argument("--start", help="a later Start date: YYYY-MM-DD, or a number of days from today")
 
 
 def run(a, db):
@@ -46,7 +47,7 @@ def run(a, db):
             due = sequences.tasks_due(db)
             print("".join(task_markdown(db, t) + "\n" for t in due) or "No Tasks due.\n", end="")
         elif a.cmd == "enroll":
-            print(enroll(db, a.person, a.sequence))
+            print(enroll(db, a.person, a.sequence, getattr(a, "start", None)))
         else:
             changes = {k: getattr(a, k) for k in ("to", "cc", "subject", "body") if getattr(a, k) is not None}
             if changes.get("body") == "-":
@@ -90,7 +91,7 @@ def draft(db, ref, changes, revision, connection_id) -> str:
                       staged_files(db, ("draft", d["id"])))
 
 
-def enroll(db, person: str, sequence: str) -> str:
+def enroll(db, person: str, sequence: str, start: str | None = None) -> str:
     rows = db.execute("SELECT p.id FROM persons p WHERE CAST(p.id AS TEXT) = ? OR lower(p.display_name) = lower(?)"
                       " UNION SELECT person_id FROM identities WHERE lower(value) = lower(?) AND person_id IS NOT NULL",
                       (person, person, person)).fetchall()
@@ -99,5 +100,9 @@ def enroll(db, person: str, sequence: str) -> str:
     match = [q for q in sequences.sequences(db) if str(q["id"]) == sequence or q["name"].lower() == sequence.lower()]
     if len(match) != 1:
         raise ValueError(f"no Sequence matches {sequence!r}")
-    sequences.enroll(db, rows[0][0], match[0]["id"])
-    return f"Enrolled in {match[0]['name']}: the first Task is due today."
+    now = sequences._now()
+    day = sequences.parse_start(start, now) if start else None
+    if start and day is None:
+        raise ValueError(f"--start {start!r} is neither YYYY-MM-DD nor a number of days")
+    eid = sequences.enroll(db, rows[0][0], match[0]["id"], now, start=day)
+    return f"Enrolled in {match[0]['name']}: the first Task is due {sequences.first_due(db, eid, now)}."

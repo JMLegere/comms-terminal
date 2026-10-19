@@ -24,7 +24,7 @@ from typing import Protocol, Sequence
 
 from . import files, platforms
 
-SCHEMA_VERSION = 19
+SCHEMA_VERSION = 20
 WAIT = timedelta(days=4)  # Waiting for them ends after this with no reply: back to Todo to follow up (#116)
 EMAIL_CONFIRMATION_PENDING = "Email confirmation pending; wait for its sent receipt before replying."
 MIGRATIONS = {  # version -> statement that upgrades an existing database to it
@@ -289,6 +289,7 @@ WHERE draft_id IN (SELECT id FROM composition_drafts WHERE thread_id IS NOT NULL
     # Send later: a Draft's scheduled send time, and why a scheduled send did not go out.
     19: """ALTER TABLE composition_drafts ADD COLUMN send_at TEXT;
 ALTER TABLE composition_drafts ADD COLUMN send_error TEXT;""",
+    20: "ALTER TABLE enrollments ADD COLUMN starts_at TEXT;",
 }
 
 # ponytail: fixed list; extend when a free-mail sender forms an Organization by mistake.

@@ -1,7 +1,7 @@
 """Sequences (.agents/prd/2026-10-16-sequencing.md P2-P4): editor rules, Enrollments, Tasks, pause and finish.
 Times are fixed: Monday 2026-10-19, 10:00 in Halifax."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
@@ -285,6 +285,33 @@ def test_agent_lists_due_tasks_and_enrolls_but_never_sends(db, capsys):  # AS-SE
     with pytest.raises(SystemExit, match="unsubscribed"):
         agent.run(SimpleNamespace(cmd="enroll", person="Priya Shah", sequence=str(s)), db)
     assert db.execute("SELECT count(*) FROM activities WHERE identity_id IS NULL").fetchone()[0] == 0
+
+
+def test_start_date_holds_the_first_task_until_that_day(db, capsys):  # AS-SEQ-18, FR-SEQ-25
+    from types import SimpleNamespace
+    from universal_inbox import agent
+    s, _ = secret(db)
+    dana = person(db, "dana@harbourline.example", "Dana Roy", org="Harbourline")
+    assert (sq.parse_start("2026-12-01", MONDAY), sq.parse_start("14", MONDAY), sq.parse_start("soon", MONDAY)) == (
+        date(2026, 12, 1), date(2026, 11, 2), None)
+    with pytest.raises(sq.Refused, match="before today"):
+        sq.enroll(db, dana, s, MONDAY, start=date(2026, 10, 16))
+    sq.enroll(db, dana, s, MONDAY, start=date(2026, 10, 31))  # a Saturday rolls to Monday
+    nov2 = datetime(2026, 11, 2, 14, 0, tzinfo=timezone.utc)  # 10:00 AST
+    inbox.wake(db, nov2 - DAY)
+    assert due(db, nov2 - DAY) == [] and db.execute("SELECT count(*) FROM composition_drafts").fetchone()[0] == 0
+    (e,) = sq.enrollments(db, dana, MONDAY)
+    assert (e["state"], e["day"], e["next"]["day"]) == ("ACTIVE", 1, 1)
+    inbox.wake(db, nov2)
+    assert due(db, nov2) == [("Dana Roy", "email", "due today", 1)]
+    assert sq.tasks_due(db, nov2)[0]["draft_id"]
+    priya = person(db, "priya@gmail.com", "Priya Shah")
+    agent.run(SimpleNamespace(cmd="enroll", person="priya@gmail.com", sequence="secret sequence", start="14"), db)
+    assert "the first Task is due on Nov 2" in capsys.readouterr().out
+    inbox.ingest(db, inbox.Incoming(1, ME, "mailbox", "MESSAGE", "<priya-reply@x>",
+                                    inbox.Identity("email", "priya@gmail.com", "Priya Shah"),
+                                    MONDAY + timedelta(hours=1), "Can we start sooner?", title="Re: Pilot"))
+    assert sq.enrollments(db, priya)[0]["state"] == "PAUSED"  # a reply before the Start date still pauses
 
 
 def test_review_fixes_hold(db):
