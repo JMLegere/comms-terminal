@@ -90,18 +90,21 @@ def test_click_selects_and_shows_the_thread_beside_the_list(tmp_path):
     assert seen["focus"] == "table" and seen["view"] == 1 and seen["focus_after_rail"] == "table"
 
 
-def test_thread_pane_follows_the_keyboard(tmp_path):
+def test_j_k_only_highlight_and_enter_opens_the_thread(tmp_path):
     path, _ = seeded(tmp_path)
     app, seen = Console(path), {}
 
-    async def first(app, pilot):
-        seen["a"] = app.main.thread_view.thread_id
+    def shown(key):
+        async def look(app, pilot):
+            tv = app.main.thread_view
+            seen[key] = (tv.thread_id if tv else None, page(app).current_thread_id(), app.focused.id)
+        return look
 
-    async def second(app, pilot):
-        seen["b"] = app.main.thread_view.thread_id
-
-    run(app, [first, "j", second])
-    assert seen["a"] is not None and seen["b"] is not None and seen["a"] != seen["b"]
+    run(app, [shown("start"), "enter", shown("a"), "j", shown("moved"), "enter", shown("b")])
+    assert seen["start"][0] is None  # nothing opens until Enter
+    assert seen["a"][0] == seen["a"][1] is not None and seen["a"][2] == "table"  # focus stays in the list
+    assert seen["moved"][0] == seen["a"][0] != seen["moved"][1]  # j moved the highlight, not the pane
+    assert seen["b"][0] == seen["moved"][1]
 
 
 def test_rail_browses_people_and_organizations(tmp_path):
@@ -318,7 +321,7 @@ def test_empty_view_says_what_it_means(tmp_path):
     assert "All caught up" in seen["text"]
 
 
-def test_action_shows_the_next_thread(tmp_path):
+def test_an_action_on_the_open_thread_highlights_the_next_and_clears_the_pane(tmp_path):
     path, _ = seeded(tmp_path)
     app, seen = Console(path), {}
 
@@ -326,10 +329,10 @@ def test_action_shows_the_next_thread(tmp_path):
         seen["first"] = page(app).current_thread_id()
 
     async def after(app, pilot):
-        seen["shown"], seen["selected"] = app.main.thread_view.thread_id, page(app).current_thread_id()
+        seen["shown"], seen["selected"] = app.main.thread_view, page(app).current_thread_id()
 
-    run(app, [before, "e", after])
-    assert seen["shown"] == seen["selected"] != seen["first"]
+    run(app, ["enter", before, "e", after])
+    assert seen["shown"] is None and seen["selected"] not in (None, seen["first"])
 
 
 def test_case_shows_threads_as_cards_and_replies_in_one(tmp_path):
@@ -574,7 +577,7 @@ def test_snoozed_status_counts_down_on_case_cards_and_thread_header(tmp_path):
     async def wait(app, pilot):
         await pilot.pause(1.2)
 
-    run(app, ["3", head, wait, head, open_case, card, wait, card])
+    run(app, ["3", "enter", head, wait, head, open_case, card, wait, card])
     for a, b in (seen["head"], seen["card"]):
         assert a != b and re.search(r"· (\d+[dhm])*\d+s", b)
 

@@ -41,6 +41,8 @@ def main(argv=None) -> None:
     p.add_argument("--socket", default=default_socket())
     p.add_argument("--files-host", help="console: the file server's LAN address in Attachment links (192.168.0.107)")
     p.add_argument("--files-port", type=int, help="console: the file server's port (8789)")
+    p.add_argument("--remote", metavar="SSH_ARGS",
+                   help="console: work on a local copy (--db) of the service reached by `ssh SSH_ARGS` (ADR 0004)")
     sub = p.add_subparsers(dest="cmd")
     s = sub.add_parser("serve", help="run the hooks server, reply socket, and wake timer")
     s.add_argument("--host", default="127.0.0.1")
@@ -138,9 +140,48 @@ def main(argv=None) -> None:
         import textual_image.widget  # noqa: F401 - asks the terminal about Kitty graphics before Textual owns it
         from .tui import (CONTEXT_SOURCES, FILE_SERVER, Console, socket_context, socket_reply, socket_send_draft,
                           socket_slack_conversations)
-        Console(a.db, socket_reply(a.socket), {k: socket_context(a.socket, k) for k in CONTEXT_SOURCES},
-                socket_send_draft(a.socket), socket_slack_conversations(a.socket),
-                (a.files_host or FILE_SERVER[0], a.files_port or FILE_SERVER[1])).run()
+        link = remote = syncer = None
+        if a.remote:
+            link, remote, syncer = start_remote(a.remote, a.db)
+            a.socket = link.command()
+        try:
+            Console(a.db, socket_reply(a.socket), {k: socket_context(a.socket, k) for k in CONTEXT_SOURCES},
+                    socket_send_draft(a.socket), socket_slack_conversations(a.socket),
+                    (a.files_host or FILE_SERVER[0], a.files_port or FILE_SERVER[1]), remote, syncer).run()
+        finally:
+            if link is not None:
+                link.stop()
+
+
+def start_remote(ssh_args: str, db_path: str):
+    """CommsTerminal's laptop copy (remote.py): start the SSH master, point the console at the service, and on
+    the first run wait for a first copy of the database."""
+    import shlex
+    from . import inbox, remote, tui
+    from .tui import ReplyError
+    Path(db_path).parent.chmod(0o700)
+    control = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / f"commsterminal-{os.getpid()}.ssh"
+    link = remote.Link(shlex.split(ssh_args), str(control))
+    rem, caps = remote.Remote(link, tui._post), {}
+    remote.install(tui, rem, caps)
+    syncer = remote.Syncer(rem, db_path, caps, Path(db_path).parent / "service-build")
+    link.start()
+    if not Path(db_path).exists():
+        print("CommsTerminal: copying the inbox from the service (first run)…", flush=True)
+        deadline = time.monotonic() + 30
+        while not link.ready() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        try:
+            body = syncer.once(timeout=120)
+        except (ReplyError, remote.Offline) as e:
+            link.stop()
+            raise SystemExit(f"CommsTerminal: cannot reach the inbox service: {e}")
+        db = inbox.connect(db_path)
+        try:
+            syncer.apply(db, body)
+        finally:
+            db.close()
+    return link, rem, syncer
 
 
 if __name__ == "__main__":

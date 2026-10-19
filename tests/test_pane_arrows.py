@@ -37,7 +37,7 @@ def test_arrows_move_between_panes_without_activating_or_changing_threads(tmp_pa
     app = Console(path)
 
     async def navigate(app, pilot):
-        await pilot.press("j")
+        await pilot.press("j", "enter")  # Enter opens the highlighted Thread beside the list
         await pilot.pause()
         current, rail, thread = page(app), app.main.rail, app.main.thread_view
         table, timeline = current.query_one("#table"), thread.query_one(".timeline")
@@ -205,7 +205,10 @@ def test_enter_on_a_thread_row_moves_into_the_thread_and_x_ignores(tmp_path):
         await pilot.pause()
         current = page(app)
         tid = current.current_thread_id()
-        await pilot.press("enter")
+        await pilot.press("enter")  # opens it; focus stays in the list
+        await pilot.pause()
+        seen["stayed"] = app.focused is current.query_one("#table")
+        await pilot.press("enter")  # Enter on the open Thread moves into it
         await pilot.pause()
         seen["focus"] = app.focused is app.main.thread_view.query_one(".timeline")
         await pilot.press("left")
@@ -218,6 +221,6 @@ def test_enter_on_a_thread_row_moves_into_the_thread_and_x_ignores(tmp_path):
         seen["restored"] = inbox.get_thread(app.db, tid).status_detail
 
     run(Console(path), [scenario])
-    assert seen["focus"] is True
+    assert seen["stayed"] is True and seen["focus"] is True
     assert seen["ignored"] == "IGNORED"
     assert seen["restored"] != "IGNORED"

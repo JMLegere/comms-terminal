@@ -269,8 +269,38 @@ class _UnixConnection(http.client.HTTPConnection):
         self.sock.connect(self.unix_path)
 
 
+class _CommandConnection(http.client.HTTPConnection):
+    """HTTP over a command's stdin/stdout: CommsTerminal's SSH relay to the service socket (remote.Link)."""
+
+    def __init__(self, command):
+        super().__init__("localhost", timeout=30)
+        self.command, self.proc = command, None
+
+    def connect(self):
+        import subprocess
+        mine, theirs = socket.socketpair()
+        try:
+            self.proc = subprocess.Popen(self.command, stdin=theirs, stdout=theirs, stderr=subprocess.DEVNULL,
+                                         start_new_session=True)
+        finally:
+            theirs.close()
+        mine.settimeout(self.timeout)
+        self.sock = mine
+
+    def close(self):
+        super().close()
+        if self.proc is not None:
+            try:
+                self.proc.wait(5)
+            except Exception:  # noqa: BLE001 - never leave a relay running
+                self.proc.kill()
+                self.proc.wait()
+            self.proc = None
+
+
 def _post(socket_path, path, payload, timeout=30) -> tuple[int, dict]:
-    conn = _UnixConnection(socket_path)
+    """POST JSON to the service: `socket_path` is its Unix socket, or a relay command (a list) to run."""
+    conn = _CommandConnection(socket_path) if isinstance(socket_path, list) else _UnixConnection(socket_path)
     conn.timeout = timeout
     try:
         conn.connect()
@@ -282,6 +312,8 @@ def _post(socket_path, path, payload, timeout=30) -> tuple[int, dict]:
         raw = r.read()
     except OSError as e:  # the request may have reached the service
         raise ReplyError(f"no response from the service: {e}", 504) from e
+    finally:
+        conn.close()
     try:
         return r.status, json.loads(raw or b"{}")
     except ValueError:  # an error page, not JSON (an older service has no such route)
@@ -493,7 +525,7 @@ HELP = [  # (group, [(keys, what it does)]) — the full key map; Gmail-style wh
     ("Move around", [("j / k", "main page: move down / up (↑/↓ also work; or click a row)"),
                      ("space", "scroll the thread (pgup / pgdn)"),
                      ("← / →", "focus previous / next pane (no item opens)"),
-                     ("enter", "sidebar: open the item · list row: move into it (a case header opens the case)"),
+                     ("enter", "sidebar: open the item · thread row: open it beside the list, again to move into it (a case header opens the case)"),
                      ("1", "Today: Todo threads, due tasks, and drafts (tab: the next list)"),
                      ("2 – 6", "Todo, Snoozed, Done, Ignored, Drafts"),
                      ("7 – 0", "People, Organizations, Cases (Todo), Channels"), ("u", "back (esc also works)")]),
@@ -757,8 +789,9 @@ class Rail(OptionList):
         opts += [gap, header("sequence", "outreach"), item("tasks", "tasks", "Tasks", due or ""),
                  item("sequences", "sequence", "Sequences", sum(1 for q in sequences.sequences(db) if not q["archived_at"]))]
         opts += [gap, header("inbox", "browse"),
-                 item("people", "people", "People", len(inbox.people(db))),
-                 item("organizations", "organizations", "Organizations", len(inbox.organizations(db))),
+                 item("people", "people", "People", inbox.people_count(db)),
+                 item("organizations", "organizations", "Organizations",
+                      db.execute("SELECT COUNT(*) FROM organizations").fetchone()[0]),
                  item("channels", "channels", "Channels",
                       db.execute("SELECT count(*) FROM channels WHERE kind != 'mailbox'").fetchone()[0]),
                  gap, header("connections", "connections")]
@@ -826,6 +859,7 @@ class ClickTable(DataTable):
             return
         event.stop()
         if row != self.cursor_row:
+            self.click_moved = True  # a Thread list opens a clicked row; j/k only highlight
             self.move_cursor(row=row)
         else:
             self.clicked = True  # the page may treat a click unlike enter (a Thread row keeps list focus)
@@ -943,16 +977,30 @@ THREAD_KEYS = [  # Thread actions, Gmail-style (decision #93); shared by the Thr
 
 
 class ThreadsPage(Page, ThreadActions):
-    """The Status view's list. The selected Thread shows beside it; arrows move focus between panes."""
+    """The Status view's list. j/k move the highlight; Enter (or a click) opens that Thread beside the list, and
+    Thread keys act on the highlighted row. Arrows move focus between panes."""
 
     fixed_view = None  # a Status view index that stays put (Today's Todo list); else the app's current view
     KIND = "threads"
+
+    @property
+    def opened(self):
+        """The Thread Enter opened in the pane (kept per view across page rebuilds); j/k only move the highlight."""
+        return self.app.opened.get(self.view_index)
+
+    @opened.setter
+    def opened(self, thread_id):
+        self.app.opened[self.view_index] = thread_id
 
     def selectable_rows(self):
         return [i for i, r in enumerate(getattr(self, "rows", [])) if not r.get("header")]
 
     def show_current(self):
-        self.app.main.show_thread(self.current_thread_id())
+        self.app.main.show_thread(self.opened)
+
+    def open_current(self):
+        self.opened = self.highlighted_id()
+        self.app.main.show_thread(self.opened)
 
     @property
     def view_index(self) -> int:
@@ -1014,6 +1062,9 @@ class ThreadsPage(Page, ThreadActions):
             return
         db, view = self.app.db, self.view_index
         keep = self.current_thread_id()  # selection follows the Thread, not the row number
+        if self.app.main.pending_select is not None:  # open_thread: open the Thread it names
+            self.opened = self.app.main.pending_select
+        opened = self.opened
         old_id = self.rows[min(self.query_one(DataTable).cursor_row, len(self.rows) - 1)]["id"] if self.rows else None
         tv = self.app.main.thread_view
         members = inbox.snapshot(db, keep)["_members"] if keep is not None else None
@@ -1022,6 +1073,7 @@ class ThreadsPage(Page, ThreadActions):
             detail = inbox.get_thread(db, keep).status_detail
             if detail not in inbox.VIEWS[VIEW_NAMES[view]]:
                 view = self.app.view = next(i for i, name in enumerate(VIEW_NAMES) if detail in inbox.VIEWS[name])
+                self.opened = opened  # the open Thread goes with its row to the view it moved to
                 self.app.main.query_one("#main").border_title = pill(self.TITLE, "blue")
                 self.app.main.refresh_chrome()
         self.query_one("#legend", Static).update(LEGEND[VIEW_NAMES[view]])
@@ -1075,9 +1127,13 @@ class ThreadsPage(Page, ThreadActions):
             main.pending_select = None
         if self.host is not None:
             self.host.list_changed(self)
+        if self.opened is not None and inbox.get_thread(db, self.opened).id not in ids and not (
+                tv is not None and tv.query(ReplyBox) and tv.query_one(ReplyBox).has_class("open")):
+            self.opened = None  # it left this view (Done, Snoozed…): the pane clears, unless a reply is open
         if not self.active:  # another of Today's lists fills the right pane
             return
-        selected = self.current_thread_id()
+        selected = self.opened if self.opened is None else inbox.get_thread(db, self.opened).id
+        self.opened = selected
         main.show_thread(selected)
         tv = main.thread_view
         if tv is not None and getattr(tv, "view", None) is not None and tv.view["thread"].id == selected:
@@ -1117,27 +1173,39 @@ class ThreadsPage(Page, ThreadActions):
                      "summary": summary, "depth": depth}, *[r | {"depth": depth + 1} for r in groups[cid]]]
         return out
 
-    def current_thread_id(self):
+    def highlighted_id(self):
         if not getattr(self, "rows", None):
             return None
         tid = self.rows[min(self.query_one(DataTable).cursor_row, len(self.rows) - 1)]["id"]
         return inbox.get_thread(self.app.db, tid).id if tid is not None else None
 
+    def current_thread_id(self):
+        """What keys act on: the highlighted row, or the opened Thread while focus is inside it."""
+        if self.opened is not None and self.app.main.query_one("#thread").has_focus_within:
+            return inbox.get_thread(self.app.db, self.opened).id
+        return self.highlighted_id()
+
     def on_data_table_row_selected(self, event):
-        """Enter (or a second click) selects: a Case header row opens the Case; a Thread row moves focus into
-        the Thread beside it."""
+        """Enter (or a second click) selects: a Case header row opens the Case; a Thread row opens in the pane
+        beside the list, and Enter on the open Thread moves focus into it."""
         r = self.rows[event.cursor_row] if self.rows and event.cursor_row < len(self.rows) else None
         if r is not None and r.get("header") and r["case_id"]:
             self.app.main.open(lambda: CasePage(r["case_id"], r["title"]))
-        elif r is not None and not r.get("header") and not getattr(event.data_table, "clicked", False):
-            self.app.main.action_focus_pane(1)
+        elif r is not None and not r.get("header"):
+            if self.opened == self.highlighted_id() and not getattr(event.data_table, "clicked", False):
+                self.app.main.action_focus_pane(1)
+            else:
+                self.open_current()
         event.data_table.clicked = False
 
     def on_data_table_row_highlighted(self, event):
-        if not self.active:  # a page being replaced, or another of Today's lists, must not repaint the thread pane
+        """j/k move the highlight only; the pane keeps the Thread Enter opened (fast with a long list)."""
+        if not self.active:
             return
         self.app.cursor[self.view_index] = event.cursor_row
-        self.app.main.show_thread(self.current_thread_id())
+        if getattr(event.data_table, "click_moved", False):
+            event.data_table.click_moved = False
+            self.open_current()
 
     def action_down(self):
         self.query_one(DataTable).action_cursor_down()
@@ -1149,6 +1217,7 @@ class ThreadsPage(Page, ThreadActions):
         tid = self.current_thread_id()
         if tid is None:
             return
+        self.opened = tid
         self.app.main.show_thread(tid)  # the pane always shows the selected Thread before writing to it
         tv = self.app.main.thread_view
         if tv is not None and tv.thread_id == tid:
@@ -2011,7 +2080,7 @@ def related_markup(db, v, limit: int = 6) -> list[str]:
     return out
 
 
-def details_markup(v, db) -> str:
+def details_markup(v, db, related=None) -> str:
     """The Thread's properties, Linear-style: Status, Person, Organization, Case, Channel; then the
     other Threads with the same Person and Organization."""
     t, p = v["thread"], v["person"]
@@ -2039,7 +2108,7 @@ def details_markup(v, db) -> str:
     lines += ["", head("case", "case"), case, "", f"[#928374]{ICON.get(kind, ICON['channel'])} channel[/]", escape(v["where"])]
     if p and (section := sequence_section(db, p["id"], keys=False)):  # FR-SEQ-19; its keys are on the Person page
         lines += ["", section]
-    return "\n".join(lines + related_markup(db, v))
+    return "\n".join(lines + (related_markup(db, v) if related is None else related))
 
 
 def thread_head(v) -> str:
@@ -2280,6 +2349,21 @@ class ThreadView(Horizontal):
     def on_mount(self):
         self.refresh_data()
 
+    def retarget(self, thread_id) -> bool:
+        """Show another Thread in this pane without remounting it (opening a Thread stays fast); False when
+        the reply box is open, so the pane is rebuilt and the reply kept."""
+        box = self.query(ReplyBox)
+        if not box or box.first().has_class("open") or not self.query(".thead"):
+            return False
+        box = box.first()
+        box.thread_id = box.draft_key = thread_id
+        box.view, box.pending_confirmation = None, False
+        self.thread_id, self.members, self.related, self.view = thread_id, None, None, None
+        for scroller in self.query(TextScroll):
+            scroller.scroll_home(animate=False)
+        self.refresh_data()
+        return True
+
     def refresh_data(self):
         if not self.query(".thead"):  # not composed yet; on_mount fills it
             return
@@ -2294,10 +2378,11 @@ class ThreadView(Horizontal):
                       self.query_one(".timeline"))
         self.query_one(ReplyBox).set_view(v)
 
-    def paint_status(self):
-        """Header and properties: they carry the status, and a Snoozed Thread's countdown."""
-        if len(self.query(".thead, .detailtext")) != 2:  # countdown may tick while this pane is being removed
-            return
+    def paint_status(self, details=True):
+        """Header and properties: they carry the status, and a Snoozed Thread's countdown (each second,
+        `details=False` reuses the other-Threads list instead of querying it again)."""
+        if len(self.query(".thead, .detailtext")) != 2 or getattr(self, "view", None) is None:
+            return  # countdown may tick while this pane is being removed
         v = self.view
         head = thread_head(v)
         if self.has_class("narrow"):  # properties column hidden: keep who, where, and case under the title
@@ -2305,13 +2390,15 @@ class ThreadView(Horizontal):
             bits = [escape(p["name"]) if p else "", escape(v["where"]), escape(v["case"]) if v["thread"].case_id else "no case (l)"]
             head += "\n[#928374]" + " · ".join(b for b in bits if b) + "[/]"
         self.query_one(".thead").update(head + "\n")
-        self.query_one(".detailtext").update(details_markup(v, self.app.db))
+        if details or getattr(self, "related", None) is None:
+            self.related = related_markup(self.app.db, v)
+        self.query_one(".detailtext").update(details_markup(v, self.app.db, self.related))
 
     def on_resize(self, event):
         narrow = event.size.width < 84
         if narrow != self.has_class("narrow"):
             self.set_class(narrow, "narrow")
-            self.refresh_data()
+            self.paint_status(details=False)  # only the header follows the width
 
     def reply(self, mode="all"):
         self.query_one(ReplyBox).open(self.view, mode)
@@ -3616,6 +3703,8 @@ class StatusLine(Static):
         if len(main.stack) > 1 and main.page is not None:  # deeper than the rail section: say where
             mode += f" › {main.page.TITLE.split(' ', 1)[-1].upper()}"
         left = f"[b {b['bg0']} on {b['grey2']}] {mode} [/][{b['grey2']}]\ue0bc[/] "
+        if app.remote is not None and not app.remote.online:
+            left += f"[b {b['bg0']} on {b['red']}] READ-ONLY [/] "
         sep = f" [{b['grey0']}]/[/] "
         counts = inbox.view_counts(app.db)
         parts = [f"[{b['grey1']}]{ICON['TODO']}[/] {counts['Todo']} todo",
@@ -5085,10 +5174,13 @@ class MainScreen(Screen):
             self.showing = thread_id
             tv.refresh_data()
             return
+        if thread_id is not None and tv is not None and tv.retarget(thread_id):
+            self.showing = thread_id
+            return
         pane.remove_children()
         self.showing = thread_id
         if thread_id is None:
-            pane.mount(Static("[#928374]No thread selected.[/]", classes="threadempty"))
+            pane.mount(Static("[#928374]Enter opens the highlighted thread.[/]", classes="threadempty"))
         else:
             pane.mount(ThreadView(thread_id))
 
@@ -5150,22 +5242,39 @@ class ReplyDrafts(MutableMapping):
             inbox.migrate(self.own)
         return self.own
 
+    held: dict  # texts a read-only laptop copy could not save yet (remote.Offline); saved when back online
+
+    def _all(self):
+        return inbox.reply_drafts(self.db) | {k: v for k, v in self.__dict__.get("held", {}).items() if v.strip()}
+
     def __getitem__(self, thread_id):
-        return inbox.reply_drafts(self.db)[thread_id]
+        return self._all()[thread_id]
 
     def __setitem__(self, thread_id, text):
-        inbox.save_reply_draft(self.db, thread_id, text)
+        from .remote import Offline
+        try:
+            inbox.save_reply_draft(self.db, thread_id, text)
+        except Offline:
+            self.__dict__.setdefault("held", {})[thread_id] = text
+            self.app.notify("Read-only · this reply stays open here and is saved once the service answers.",
+                            severity="warning")
+        else:
+            self.__dict__.get("held", {}).pop(thread_id, None)
 
     def __delitem__(self, thread_id):
-        if thread_id not in inbox.reply_drafts(self.db):
+        if thread_id not in self._all():
             raise KeyError(thread_id)
-        inbox.save_reply_draft(self.db, thread_id, "")
+        self[thread_id] = ""
 
     def __iter__(self):
-        return iter(inbox.reply_drafts(self.db))
+        return iter(self._all())
 
     def __len__(self):
-        return len(inbox.reply_drafts(self.db))
+        return len(self._all())
+
+    def save_held(self):
+        for thread_id, text in list(self.__dict__.get("held", {}).items()):
+            self[thread_id] = text
 
 
 APP_LOCK_PATH = Path("/run/universal-inbox-deploy/app.lock")
@@ -5210,9 +5319,11 @@ class Console(App):
     CONSOLE_UPDATE_PROTOCOL = 1
 
     def __init__(self, db_path: str, reply=None, sources=None, send_draft=None, slack_conversations=None,
-                 files=FILE_SERVER):
+                 files=FILE_SERVER, remote=None, syncer=None):
         super().__init__()
+        self.remote, self.syncer = remote, syncer  # CommsTerminal's laptop copy (remote.py, ADR 0004)
         self.db_path, self.send_reply, self.view, self.cursor = db_path, reply, 0, {}
+        self.opened = {}  # Status view -> the Thread Enter opened there (ThreadsPage.opened)
         self.home = self.HOME
         self.drafts = ReplyDrafts(self)
         self.files = files  # the service's LAN file server (host, port): Attachment links and upload pages
@@ -5240,7 +5351,12 @@ class Console(App):
     def on_mount(self):
         self.theme = "textual-light"  # toasts and built-in widgets match the light palette
         self.db = inbox.connect(self.db_path)
-        inbox.migrate(self.db)
+        if self.remote is None:
+            inbox.migrate(self.db)
+        else:  # the copy is the service's database: only its snapshots change the schema
+            self.remote.app = self
+            self.check_copy()
+            self.syncer.start()
         self.raw = files.raw_dir(self.db)
         self.data_version = self.db.execute("PRAGMA data_version").fetchone()[0]
         self.install_screen(MainScreen(), "main")
@@ -5275,7 +5391,24 @@ class Console(App):
     async def run_action(self, action, default_namespace=None, namespaces=None):
         if (self._console_stopping or self._console_closed) and action not in ("quit", "app.quit"):
             return False
-        return await super().run_action(action, default_namespace, namespaces)
+        from .remote import Offline
+        try:
+            return await super().run_action(action, default_namespace, namespaces)
+        except Offline as e:  # a write while the laptop copy is read-only: say so, keep running
+            self.notify(str(e), severity="warning")
+            return False
+
+    def push_screen(self, screen, callback=None, *args, **kwargs):
+        if callback is not None and self.remote is not None:
+            from .remote import Offline
+            chosen = callback
+
+            def callback(result):
+                try:
+                    return chosen(result)
+                except Offline as e:
+                    self.notify(str(e), severity="warning")
+        return super().push_screen(screen, callback, *args, **kwargs)
 
     def call_from_thread(self, callback, *args, **kwargs):
         if not self._managed_console:
@@ -5391,10 +5524,9 @@ class Console(App):
         """Snoozed Threads count down beside their status every second (the lists tick on their own)."""
         if self._console_stopping or self._console_closed:
             return
-        # ponytail: a Snoozed ThreadView repaints its properties each second; cache them if that gets slow
         for tv in self.screen.query(ThreadView):
             if getattr(tv, "view", None) is not None and tv.view["thread"].status == "SNOOZED":
-                tv.paint_status()
+                tv.paint_status(details=False)
         for card in self.screen.query(CaseCard):
             t = getattr(card, "thread", None)
             if t is not None and card.thread_id is not None and t.status == "SNOOZED":
@@ -5545,9 +5677,44 @@ class Console(App):
                 self.outdated = True  # the service migrated the database past this console's code
                 self.notify("The inbox was upgraded while this console ran · quit (q) and start it again.",
                             severity="error", timeout=24 * 3600)
-            self.undo = None  # new activity may have moved the Thread; restoring would hide it
+            if self.remote is None:  # the laptop copy keeps undo: a stale target is refused when undone
+                self.undo = None  # new activity may have moved the Thread; restoring would hide it
             self.main.refresh_all()
             self.toast_pauses()
+
+    def apply_snapshot(self, syncer, body):
+        """A newer copy of the service's database arrived (remote.Syncer): swap it in and repaint."""
+        if self._console_stopping or self._console_closed or not syncer.apply(self.db, body):
+            return
+        self.check_copy()
+        self.data_version = self.db.execute("PRAGMA data_version").fetchone()[0]
+        self.main.refresh_all()
+        self.toast_pauses()
+
+    def check_copy(self):
+        """Writes stay off while the copy's schema or the service's build differ from this console's code."""
+        version = self.db.execute("PRAGMA user_version").fetchone()[0]
+        service = getattr(self.syncer, "service_build", None)
+        mine = build_version().rsplit("-", 1)[-1] if build_version() else ""
+        if version != inbox.SCHEMA_VERSION or (service and mine and service != mine):
+            self.set_online("Update ready · restart CommsTerminal to load the service's version; read-only.")
+        elif self.syncer is not None and self.syncer.since is not None:
+            self.set_online(None)
+
+    def set_online(self, problem):
+        """None: the service answers and writes are on; else why the console is read-only (status bar)."""
+        remote = self.remote
+        if remote is None or (remote.problem == problem and remote.online == (problem is None)):
+            return
+        remote.online, remote.problem = problem is None, problem
+        if problem is not None:
+            self.notify(problem, severity="warning", timeout=10)
+        else:
+            self.drafts.save_held()
+        if self.is_screen_installed("main"):  # off, once the console has stopped
+            for line in self.main.query(StatusLine):
+                line.refresh_line()
+
 
     def toast_pauses(self):
         """A pause during a session says what it means and the way back (FR-SEQ-20)."""

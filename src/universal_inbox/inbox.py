@@ -2411,13 +2411,34 @@ def people(db) -> list[dict]:
 
 
 def organizations(db) -> list[dict]:
+    """Each Organization's Person, Thread, and open (Todo) Thread counts, as organization_view counts them, in
+    three queries rather than a person_view per member (the Organizations list and rail)."""
     with _read_snapshot(db):
+        members: dict[str, set[int]] = {}
+        for domain, pid in db.execute(
+                "SELECT DISTINCT org_key(substr(value, instr(value, '@') + 1)), person_id FROM identities"
+                " WHERE kind = 'email' AND person_id IS NOT NULL"):
+            members.setdefault(domain, set()).add(pid)
+        threads: dict[int, set[int]] = {}
+        for pid, tid in db.execute(
+                "SELECT DISTINCT i.person_id, COALESCE(t.merged_into, t.id) FROM thread_activities a"
+                " JOIN identities i ON i.id = a.identity_id JOIN threads t ON t.id = a.thread_id"
+                " WHERE i.person_id IS NOT NULL"):
+            threads.setdefault(pid, set()).add(tid)
+        todo = {r[0] for r in db.execute("SELECT id FROM threads WHERE status = 'TODO'")}
         out = []
-        for o in db.execute("SELECT id, domain, name FROM organizations ORDER BY domain"):
-            view = organization_view(db, o["domain"])
-            out.append({"id": o["id"], "domain": o["domain"], "people": len(view["people"]),
-                        "todo": sum(t.status == "TODO" for t in view["threads"]), "threads": len(view["threads"])})
+        for o in db.execute("SELECT id, domain FROM organizations ORDER BY domain"):
+            pids = members.get(o["domain"], set())
+            tids = set().union(*(threads.get(p, set()) for p in pids))
+            out.append({"id": o["id"], "domain": o["domain"], "people": len(pids), "todo": len(tids & todo),
+                        "threads": len(tids)})
         return out
+
+
+def people_count(db) -> int:
+    """len(people(db)), without building each Person (the rail)."""
+    return db.execute("SELECT COUNT(*) FROM persons p WHERE EXISTS"
+                      " (SELECT 1 FROM identities i WHERE i.person_id = p.id)").fetchone()[0]
 
 
 def organization_view(db, domain: str) -> dict:
