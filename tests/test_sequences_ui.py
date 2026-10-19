@@ -88,6 +88,48 @@ def test_sequences_page_makes_a_sequence_edits_a_step_and_archives(tmp_path):
     assert seen["archived"] == ["Trade show follow-up"] and seen["restored"] == []
 
 
+def test_steps_selection_survives_a_refresh_and_an_unchanged_editor_never_saves(tmp_path):
+    """A refresh (a service write, a CommsTerminal snapshot) keeps the selected Step and its typed text; leaving an
+    editor with no edits writes nothing (.agents/issues/2026-10-19-steps-cursor-jumps-back-to-step-1.md)."""
+    path, _ = seeded(tmp_path)
+    db, s = calls(path)
+    other = sq.create_sequence(db, "Other")
+    sq.add_step(db, other, "email")
+    first, second = (x["id"] for x in sq.sequence_steps(db, s))
+    edited = lambda: db.execute("SELECT updated_at FROM sequences WHERE id = ?", (s,)).fetchone()[0]  # noqa: E731
+    seen = {}
+
+    async def scenario(app, pilot):
+        app.main.go("sequences")
+        await pilot.pause()
+        page = app.main.current
+        steps = page.query_one("#steps", DataTable)
+        await pilot.press("enter")
+        await pilot.pause()
+        app.screen.query_one(StepEditor).query_one("#f-gap", Input).focus()
+        await pilot.pause()
+        before = edited()
+        await pilot.click("#steps", offset=(5, 2))  # Step 2's row, under the header
+        await pilot.pause()
+        seen["unchanged editor saved"] = edited() != before
+        app.screen.query_one(StepEditor).query_one("#f-body", TextArea).text = "typed, not saved yet"
+        app.main.refresh_all()
+        await pilot.pause()
+        seen["after refresh"] = (steps.cursor_row, app.main.showing,
+                                 app.screen.query_one(StepEditor).query_one("#f-body", TextArea).text)
+        await pilot.press("escape")
+        await pilot.pause()
+        page.query_one("#seqs", DataTable).focus()
+        await pilot.press("j")
+        await pilot.pause()
+        seen["other sequence"] = (page.sequence_id, steps.cursor_row)
+
+    run(Console(path), [scenario], size=(187, 40))
+    assert seen["unchanged editor saved"] is False
+    assert seen["after refresh"] == (1, f"step:{second}", "typed, not saved yet")
+    assert seen["other sequence"] == (other, 0) and first
+
+
 def test_enroll_from_people_then_do_skip_and_undo_tasks(tmp_path):
     path, ids = seeded(tmp_path)
     db, s = calls(path)

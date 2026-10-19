@@ -4568,8 +4568,12 @@ class SequencesPage(Page):
 
     def show_sequence(self, step_row=None):
         q = self.selected_sequence()
-        self.sequence_id = q["id"] if q else None
         table = self.query_one("#steps", DataTable)
+        if step_row is None and q and q["id"] == self.sequence_id and self.steps:  # a refresh keeps the Step
+            kept = self.selected_step()["id"]
+            ids = [s["id"] for s in sequences.sequence_steps(self.app.db, q["id"])]
+            step_row = ids.index(kept) if kept in ids else table.cursor_row
+        self.sequence_id = q["id"] if q else None
         narrow = self.size.width < 60
         table.clear(columns=True)
         table.add_columns(*(("#", "", "Step") if narrow else ("#", "", "Step", "Gap", "Time", "What")))
@@ -4826,7 +4830,9 @@ class StepEditor(Vertical):
         if not self.query("#f-body"):
             return True
         v = self.values()
-        if all(self.step.get(k) == val for k, val in v.items()):
+        blank = ("at_time", "action", "reply_to_step_id")  # save_step stores an empty one as NULL
+        if all((self.step.get(k) or None) == (val or None) if k in blank else self.step.get(k) == val
+               for k, val in v.items()):
             return True
         try:
             if type(v.get("gap_days", 0)) is not int:
