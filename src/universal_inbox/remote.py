@@ -285,6 +285,13 @@ RELAY_COMMAND = ("sudo -n /usr/bin/python3 -I -c "
                  f"\"exec(__import__('base64').b64decode('{base64.b64encode(RELAY.encode()).decode()}'))\"")
 
 
+def _die_with_parent():
+    """In the SSH master's child: SIGTERM when the console exits by any route (window closed, crash, kill)."""
+    import ctypes
+    import signal
+    ctypes.CDLL(None, use_errno=True).prctl(1, signal.SIGTERM)  # PR_SET_PDEATHSIG
+
+
 class Link:
     """The SSH route to the service: one master connection, and a relay session per request over it."""
 
@@ -298,7 +305,7 @@ class Link:
                 ["ssh", "-M", "-S", self.control, "-N", "-o", "ControlPersist=no", "-o", "ServerAliveInterval=15",
                  "-o", "ServerAliveCountMax=2", *self.ssh_args],
                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                start_new_session=True)
+                start_new_session=True, preexec_fn=_die_with_parent)
 
     def ready(self) -> bool:
         return self.master is not None and self.master.poll() is None and os.path.exists(self.control)
@@ -530,7 +537,6 @@ class Syncer:
         return True
 
     def run(self):
-        from .tui import ReplyError
         while True:
             app = self.remote.app
             link = self.remote.link
@@ -547,7 +553,7 @@ class Syncer:
             self.remote.drain(None)  # a snapshot taken mid-write would only be refused
             try:
                 body = self.once()
-            except (ReplyError, Offline, OSError, ValueError, KeyError) as e:
+            except Exception as e:  # noqa: BLE001 - the loop must outlive any one failed round
                 LOG.info("sync failed: %s", e)
                 self.offline("Offline · cannot reach the inbox service; read-only.")
                 time.sleep(2)

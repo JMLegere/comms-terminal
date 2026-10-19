@@ -174,14 +174,18 @@ def start_remote(ssh_args: str, db_path: str):
         syncer.since = None  # no copy yet: whatever an old sync-token says
         try:
             body = syncer.once(timeout=120)
-        except (ReplyError, remote.Offline) as e:
+            db = inbox.connect(db_path)
+            try:
+                syncer.apply(db, body)
+            finally:
+                db.close()
+        except (ReplyError, remote.Offline, OSError, ValueError) as e:
             link.stop()
-            raise SystemExit(f"CommsTerminal: cannot reach the inbox service: {e}")
-        db = inbox.connect(db_path)
-        try:
-            syncer.apply(db, body)
-        finally:
-            db.close()
+            Path(db_path).unlink(missing_ok=True)  # no half copy: the next launch starts over
+            raise SystemExit(f"CommsTerminal: cannot copy the inbox from the service: {e}")
+        except BaseException:
+            link.stop()
+            raise
     return link, rem, syncer
 
 

@@ -311,7 +311,7 @@ def _post(socket_path, path, payload, timeout=30) -> tuple[int, dict]:
         conn.request("POST", path, json.dumps(payload), {"Content-Type": "application/json"})
         r = conn.getresponse()
         raw = r.read()
-    except OSError as e:  # the request may have reached the service
+    except (OSError, http.client.HTTPException) as e:  # the request may have reached the service
         raise ReplyError(f"no response from the service: {e}", 504) from e
     finally:
         conn.close()
