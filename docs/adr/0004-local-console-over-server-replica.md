@@ -15,5 +15,6 @@ The Oracle ARM console was unusably slow over SSH: every keypress paid a 70–90
 - `files/` and `files-secret` stay on the server; attachments open through a server-signed URL fetched on click. Only the DB and raw `.eml` live on the laptop.
 - Offline, the laptop copy is read-only and the console shows a banner. A code or schema mismatch with the server also makes the console read-only until the launcher installs the server's release.
 - The local console no longer holds the server's shared app lock, so server releases no longer wait for the console to close.
-- Undo survives syncs and is refused only when its target changed. j/k only moves the highlight, Enter opens a Thread, and triage keys act on the highlighted row.
+- Undo survives syncs and is refused only when its target changed.
+- The highlighted Thread still shows beside the list as you move. A highlight-only flow with Enter to open was tried and dropped on 2026-10-19 because Jeremy preferred auto-select. Moves closer together than 80 ms (held j/k) show only the Thread the highlight stops on.
 - Workbox and its `universal-inbox.desktop` launcher keep the SSH console unchanged.

@@ -55,7 +55,7 @@ def test_console_opens_on_today_with_three_lists_and_the_rail_count(tmp_path):
     assert seen["counts"] == [6, 1, 1] and seen["shown"] == [True, True, True]
     assert "threads · 6" in seen["titles"][0] and "tasks · 1" in seen["titles"][1] and "drafts · 1" in seen["titles"][2]
     assert seen["rail"][0] == "today" and "  8[/]" in seen["rail"][1]
-    assert isinstance(seen["list"], ThreadsPage) and seen["right"] is type(None)  # Enter opens a Thread
+    assert isinstance(seen["list"], ThreadsPage) and seen["right"] is ThreadView
 
 
 def test_down_runs_on_into_the_next_list_and_the_right_pane_follows(tmp_path):

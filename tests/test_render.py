@@ -138,3 +138,15 @@ def test_older_messages_collapse_after_jeremys_last_reply():
     assert default_open(msgs) == {4, 5}
     assert default_open([{"who": "You"}]) == {0}
     assert default_open([{"who": "Ana"}, {"who": "Ana"}]) == {0, 1}
+
+
+def test_a_bracketed_url_renders_as_markup_textual_reads():
+    from textual.content import Content
+    markup = render.text_markup("Logan\n[https://ci3.googleusercontent.com/mail-sig/AIorK4w]\nthanks")
+    assert Content.from_markup(markup).plain == "Logan\n[↗ ci3.googleusercontent.com]\nthanks"
+
+
+def test_a_bracketed_html_link_renders_as_markup_textual_reads():
+    from textual.content import Content
+    shown, _ = render.html_body('<p>Recording: [<a href="https://drive.google.com/file/d/1">Click Here</a>]</p>')
+    assert Content.from_markup(shown).plain.startswith("Recording: [Click Here")

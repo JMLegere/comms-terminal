@@ -16,6 +16,7 @@ import socket
 import sqlite3
 import stat
 import textwrap
+import time
 import unicodedata
 from collections import Counter
 from collections.abc import MutableMapping
@@ -528,7 +529,7 @@ HELP = [  # (group, [(keys, what it does)]) — the full key map; Gmail-style wh
     ("Move around", [("j / k", "main page: move down / up (↑/↓ also work; or click a row)"),
                      ("space", "scroll the thread (pgup / pgdn)"),
                      ("← / →", "focus previous / next pane (no item opens)"),
-                     ("enter", "sidebar: open the item · thread row: open it beside the list, again to move into it (a case header opens the case)"),
+                     ("enter", "sidebar: open the item · list row: move into it (a case header opens the case)"),
                      ("1", "Today: Todo threads, due tasks, and drafts (tab: the next list)"),
                      ("2 – 6", "Todo, Snoozed, Done, Ignored, Drafts"),
                      ("7 – 0", "People, Organizations, Cases (Todo), Channels"), ("u", "back (esc also works)")]),
@@ -862,7 +863,6 @@ class ClickTable(DataTable):
             return
         event.stop()
         if row != self.cursor_row:
-            self.click_moved = True  # a Thread list opens a clicked row; j/k only highlight
             self.move_cursor(row=row)
         else:
             self.clicked = True  # the page may treat a click unlike enter (a Thread row keeps list focus)
@@ -979,31 +979,20 @@ THREAD_KEYS = [  # Thread actions, Gmail-style (decision #93); shared by the Thr
 ]
 
 
+PREVIEW_GAP = 0.08  # seconds: moves closer together than this (key repeat) skip the rows passed
+
+
 class ThreadsPage(Page, ThreadActions):
-    """The Status view's list. j/k move the highlight; Enter (or a click) opens that Thread beside the list, and
-    Thread keys act on the highlighted row. Arrows move focus between panes."""
+    """The Status view's list. The selected Thread shows beside it; arrows move focus between panes."""
 
     fixed_view = None  # a Status view index that stays put (Today's Todo list); else the app's current view
     KIND = "threads"
-
-    @property
-    def opened(self):
-        """The Thread Enter opened in the pane (kept per view across page rebuilds); j/k only move the highlight."""
-        return self.app.opened.get(self.view_index)
-
-    @opened.setter
-    def opened(self, thread_id):
-        self.app.opened[self.view_index] = thread_id
 
     def selectable_rows(self):
         return [i for i, r in enumerate(getattr(self, "rows", [])) if not r.get("header")]
 
     def show_current(self):
-        self.app.main.show_thread(self.opened)
-
-    def open_current(self):
-        self.opened = self.highlighted_id()
-        self.app.main.show_thread(self.opened)
+        self.app.main.show_thread(self.current_thread_id())
 
     @property
     def view_index(self) -> int:
@@ -1065,9 +1054,6 @@ class ThreadsPage(Page, ThreadActions):
             return
         db, view = self.app.db, self.view_index
         keep = self.current_thread_id()  # selection follows the Thread, not the row number
-        if self.app.main.pending_select is not None:  # open_thread: open the Thread it names
-            self.opened = self.app.main.pending_select
-        opened = self.opened
         old_id = self.rows[min(self.query_one(DataTable).cursor_row, len(self.rows) - 1)]["id"] if self.rows else None
         tv = self.app.main.thread_view
         members = inbox.snapshot(db, keep)["_members"] if keep is not None else None
@@ -1076,7 +1062,6 @@ class ThreadsPage(Page, ThreadActions):
             detail = inbox.get_thread(db, keep).status_detail
             if detail not in inbox.VIEWS[VIEW_NAMES[view]]:
                 view = self.app.view = next(i for i, name in enumerate(VIEW_NAMES) if detail in inbox.VIEWS[name])
-                self.opened = opened  # the open Thread goes with its row to the view it moved to
                 self.app.main.query_one("#main").border_title = pill(self.TITLE, "blue")
                 self.app.main.refresh_chrome()
         self.query_one("#legend", Static).update(LEGEND[VIEW_NAMES[view]])
@@ -1130,13 +1115,9 @@ class ThreadsPage(Page, ThreadActions):
             main.pending_select = None
         if self.host is not None:
             self.host.list_changed(self)
-        if self.opened is not None and inbox.get_thread(db, self.opened).id not in ids and not (
-                tv is not None and tv.query(ReplyBox) and tv.query_one(ReplyBox).has_class("open")):
-            self.opened = None  # it left this view (Done, Snoozed…): the pane clears, unless a reply is open
         if not self.active:  # another of Today's lists fills the right pane
             return
-        selected = self.opened if self.opened is None else inbox.get_thread(db, self.opened).id
-        self.opened = selected
+        selected = self.current_thread_id()
         main.show_thread(selected)
         tv = main.thread_view
         if tv is not None and getattr(tv, "view", None) is not None and tv.view["thread"].id == selected:
@@ -1176,39 +1157,40 @@ class ThreadsPage(Page, ThreadActions):
                      "summary": summary, "depth": depth}, *[r | {"depth": depth + 1} for r in groups[cid]]]
         return out
 
-    def highlighted_id(self):
+    def current_thread_id(self):
         if not getattr(self, "rows", None):
             return None
         tid = self.rows[min(self.query_one(DataTable).cursor_row, len(self.rows) - 1)]["id"]
         return inbox.get_thread(self.app.db, tid).id if tid is not None else None
 
-    def current_thread_id(self):
-        """What keys act on: the highlighted row, or the opened Thread while focus is inside it."""
-        if self.opened is not None and self.app.main.query_one("#thread").has_focus_within:
-            return inbox.get_thread(self.app.db, self.opened).id
-        return self.highlighted_id()
-
     def on_data_table_row_selected(self, event):
-        """Enter (or a second click) selects: a Case header row opens the Case; a Thread row opens in the pane
-        beside the list, and Enter on the open Thread moves focus into it."""
+        """Enter (or a second click) selects: a Case header row opens the Case; a Thread row moves focus into
+        the Thread beside it."""
         r = self.rows[event.cursor_row] if self.rows and event.cursor_row < len(self.rows) else None
         if r is not None and r.get("header") and r["case_id"]:
             self.app.main.open(lambda: CasePage(r["case_id"], r["title"]))
-        elif r is not None and not r.get("header"):
-            if self.opened == self.highlighted_id() and not getattr(event.data_table, "clicked", False):
-                self.app.main.action_focus_pane(1)
-            else:
-                self.open_current()
+        elif r is not None and not r.get("header") and not getattr(event.data_table, "clicked", False):
+            self.app.main.action_focus_pane(1)
         event.data_table.clicked = False
 
     def on_data_table_row_highlighted(self, event):
-        """j/k move the highlight only; the pane keeps the Thread Enter opened (fast with a long list)."""
-        if not self.active:
+        """The highlighted Thread shows beside the list. Held j/k shows where it lands: a move paints at once
+        unless the last one painted under PREVIEW_GAP ago; then only the row it stops on paints."""
+        if not self.active:  # a page being replaced, or another of Today's lists, must not repaint the thread pane
             return
         self.app.cursor[self.view_index] = event.cursor_row
-        if getattr(event.data_table, "click_moved", False):
-            event.data_table.click_moved = False
-            self.open_current()
+        if getattr(self, "_preview_timer", None) is not None:
+            self._preview_timer.stop()
+            self._preview_timer = None
+        if time.monotonic() - getattr(self, "_previewed", 0) >= PREVIEW_GAP:
+            self._preview()
+        else:
+            self._preview_timer = self.set_timer(PREVIEW_GAP, self._preview)
+
+    def _preview(self):
+        self._preview_timer, self._previewed = None, time.monotonic()
+        if self.active and self.is_attached:
+            self.app.main.show_thread(self.current_thread_id())
 
     def action_down(self):
         self.query_one(DataTable).action_cursor_down()
@@ -1220,7 +1202,6 @@ class ThreadsPage(Page, ThreadActions):
         tid = self.current_thread_id()
         if tid is None:
             return
-        self.opened = tid
         self.app.main.show_thread(tid)  # the pane always shows the selected Thread before writing to it
         tv = self.app.main.thread_view
         if tv is not None and tv.thread_id == tid:
@@ -5183,7 +5164,7 @@ class MainScreen(Screen):
         pane.remove_children()
         self.showing = thread_id
         if thread_id is None:
-            pane.mount(Static("[#928374]Enter opens the highlighted thread.[/]", classes="threadempty"))
+            pane.mount(Static("[#928374]No thread selected.[/]", classes="threadempty"))
         else:
             pane.mount(ThreadView(thread_id))
 
@@ -5326,7 +5307,6 @@ class Console(App):
         super().__init__()
         self.remote, self.syncer = remote, syncer  # CommsTerminal's laptop copy (remote.py, ADR 0004)
         self.db_path, self.send_reply, self.view, self.cursor = db_path, reply, 0, {}
-        self.opened = {}  # Status view -> the Thread Enter opened there (ThreadsPage.opened)
         self.home = self.HOME
         self.drafts = ReplyDrafts(self)
         self.files = files  # the service's LAN file server (host, port): Attachment links and upload pages
