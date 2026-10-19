@@ -495,7 +495,7 @@ HELP = [  # (group, [(keys, what it does)]) — the full key map; Gmail-style wh
     ("Thread", [("r", "reply to the sender   ctrl+enter sends now or later · esc keeps the draft"), ("a", "reply all"),
                 ("e", "done: it returns if they write again"), ("b", "snooze until a time (it also returns when they write)"),
 ("m", "ignore: it stays out of Todo (m again un-ignores)"), ("x", "ignore, as m does"),
-                ("l", "add to a case"), ("s", "change status: needs a response, investigating"),
+                ("l", "add to a case"), ("s", "change status: investigating, needs a response"),
                 ("p", "open the person"), ("o", "open in Gmail, Fastmail, or Slack"), ("z", "undo the last change"),
                 ("y", "copy the thread, its people, and Attio/Tana context as Markdown for an agent (file paths too)"),
                 ("f", "forward the newest message as a new email draft, its files attached"),
@@ -583,6 +583,9 @@ def parse_time(text: str, now: datetime) -> datetime | None:
 class ThreadActions:
     """Key actions on `self.current_thread_id()`; the host screen refreshes itself afterwards."""
 
+    def next_thread_id(self):
+        return None
+
     def _act(self, action, message):
         tid = self.current_thread_id()
         if tid is None:
@@ -609,8 +612,8 @@ class ThreadActions:
         if tid is None:
             return
         current = inbox.get_thread(self.app.db, tid).status_detail
-        opts = [(d, f"[{GLYPH[d][1]}]{GLYPH[d][0]}[/] {GLYPH[d][2]}") for d in inbox.VIEWS["Todo"]
-                if d != current]
+        opts = [(d, f"[{GLYPH[d][1]}]{GLYPH[d][0]}[/] {GLYPH[d][2]}")
+                for d in sorted(inbox.VIEWS["Todo"], key=lambda d: d != "IN_PROGRESS") if d != current]
         if current == "IGNORED":
             opts.append(("UNIGNORE", f"{ICON['TODO']} Un-ignore"))
 
@@ -618,6 +621,7 @@ class ThreadActions:
             if detail == "UNIGNORE":
                 self._act(inbox.Unignore(), "Un-ignored: back in Todo.")
             elif detail:
+                self.app.main.pending_select = self.next_thread_id()  # the queue moves on, as after Done
                 self._act(inbox.MarkTodo(detail), f"Marked {GLYPH[detail][2]}.")
         self.app.push_screen(Pick("Change status", opts), chosen)
 
@@ -1117,6 +1121,14 @@ class ThreadsPage(Page, ThreadActions):
             return None
         tid = self.rows[min(self.query_one(DataTable).cursor_row, len(self.rows) - 1)]["id"]
         return inbox.get_thread(self.app.db, tid).id if tid is not None else None
+
+    def next_thread_id(self):
+        """The Thread below the cursor, else the one above: where the cursor lands once this one moves."""
+        if not getattr(self, "rows", None):
+            return None
+        i = min(self.query_one(DataTable).cursor_row, len(self.rows) - 1)
+        ids = [r["id"] for r in self.rows]
+        return next((t for t in ids[i + 1:] if t is not None), None) or next((t for t in reversed(ids[:i]) if t is not None), None)
 
     def on_data_table_row_selected(self, event):
         """Enter (or a second click) selects: a Case header row opens the Case; a Thread row moves focus into
