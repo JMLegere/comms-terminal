@@ -352,12 +352,12 @@ def test_review_fixes_hold(db):
 
 
 def chained(db):
-    """Outbound: a call, then a sequence Step into Nurture (one letter)."""
+    """Outbound: a call, then an Enrollment Step into Nurture (one letter)."""
     nurture = sq.create_sequence(db, "Nurture")
     sq.add_step(db, nurture, "letter")
     out = sq.create_sequence(db, "Outbound")
     sq.add_step(db, out, "call")
-    step = sq.add_step(db, out, "sequence")
+    step = sq.add_step(db, out, "enrollment")
     assert sq.validate(db, out) == [(step, "Name the Sequence this Step enrolls them in.")]
     sq.save_step(db, step, enroll_sequence_id=out)
     assert sq.validate(db, out) == [(step, "A Step cannot enroll them in its own Sequence; they are still in it.")]
@@ -376,7 +376,7 @@ def test_sequence_step_enrolls_someone_who_never_responded_in_the_next_sequence(
     sq.enroll(db, dana, out, MONDAY)
     (call,) = sq.tasks_due(db, MONDAY)
     sq.complete_task(db, call["id"], MONDAY)
-    assert live(db, dana) == [("Outbound", "ACTIVE", None)]  # the sequence Task waits for its day
+    assert live(db, dana) == [("Outbound", "ACTIVE", None)]  # the Enrollment Task waits for its day
     sq.materialize(db, MONDAY + DAY)
     assert live(db, dana) == [("Nurture", "ACTIVE", None), ("Outbound", "FINISHED", "COMPLETED")]
     assert due(db, MONDAY + DAY) == [("Dana Roy", "letter", "due today", 1)]
@@ -386,7 +386,7 @@ def test_sequence_step_enrolls_someone_who_never_responded_in_the_next_sequence(
     sq.complete_task(db, call["id"], MONDAY + DAY)
     sq.materialize(db, MONDAY + 2 * DAY)
     (t,) = sq.tasks_due(db, MONDAY + 2 * DAY)
-    assert (t["kind"], t["flag"], t["enroll_sequence"]) == ("sequence", "already went through Nurture", "Nurture")
+    assert (t["kind"], t["flag"], t["enroll_sequence"]) == ("enrollment", "already went through Nurture", "Nurture")
 
 
 def test_sequence_step_waits_for_jeremy_when_they_responded_and_undo_removes_the_enrollment(db):
@@ -407,7 +407,7 @@ def test_sequence_step_waits_for_jeremy_when_they_responded_and_undo_removes_the
     assert live(db, dana) == [("Nurture", "ACTIVE", None), ("Outbound", "FINISHED", "COMPLETED")]
     sq.undo_task(db, undo)
     assert live(db, dana) == [("Outbound", "ACTIVE", None)]
-    assert [x["kind"] for x in sq.tasks_due(db, MONDAY + 2 * DAY)] == ["sequence"]
+    assert [x["kind"] for x in sq.tasks_due(db, MONDAY + 2 * DAY)] == ["enrollment"]
 
 
 def test_version_20_steps_tasks_and_pauses_survive_the_sequence_step_rebuild(db):
@@ -423,4 +423,20 @@ def test_version_20_steps_tasks_and_pauses_survive_the_sequence_step_rebuild(db)
     assert [tuple(r)[:-1] for r in db.execute("SELECT * FROM sequence_steps ORDER BY id")] == before
     assert db.execute("SELECT responded_at FROM enrollments").fetchone()[0] == MONDAY.isoformat()
     assert db.execute("PRAGMA foreign_key_check").fetchall() == []
-    sq.add_step(db, s, "sequence")
+    sq.add_step(db, s, "enrollment")
+
+
+def test_version_22_renames_sequence_steps_to_enrollment_steps(monkeypatch):
+    from test_email_reconcile import SCHEMA3
+    db = inbox.connect()
+    db.executescript(SCHEMA3)
+    with monkeypatch.context() as m:
+        m.setattr(inbox, "SCHEMA_VERSION", 21)
+        inbox.migrate(db)
+    with db:
+        db.execute("INSERT INTO sequences (id, name, created_at, updated_at) VALUES (1, 'Outbound', 'x', 'x')")
+        db.execute("INSERT INTO sequence_steps (sequence_id, position, kind, enroll_sequence_id) VALUES (1, 1, 'sequence', 1)")
+        db.execute("INSERT INTO sequence_steps (sequence_id, position, kind) VALUES (1, 2, 'call')")
+    inbox.migrate(db)
+    assert [tuple(r) for r in db.execute("SELECT kind, enroll_sequence_id FROM sequence_steps ORDER BY position")] == [
+        ("enrollment", 1), ("call", None)]

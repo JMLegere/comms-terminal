@@ -3,7 +3,7 @@
 A Sequence is an ordered set of Steps. Enrolling a Person makes an Enrollment, which works each Step as a Task:
 the next Task is created when the previous one is done or skipped, due its Step's gap in business days later
 (Mon-Fri, Halifax time). An email Task's Draft is made when its day comes, from the Step's text with the
-Person's fill-ins. A sequence Step chains Sequences: its Task enrolls the Person in another Sequence by itself
+Person's fill-ins. An Enrollment Step chains Sequences: its Task enrolls the Person in another Sequence by itself
 when its day comes, unless they responded or went through it before; then it waits for Jeremy. Anything inbound from the Person pauses their Enrollments; finishing ends one as Completed,
 Unsubscribed, or Canceled. Nothing here sends: email Tasks go out through Drafts and reply boxes.
 
@@ -20,7 +20,7 @@ from zoneinfo import ZoneInfo
 from . import inbox, platforms
 
 LOCAL = ZoneInfo("America/Halifax")  # Jeremy's days (main.LOCAL_TZ)
-KINDS = ("email", "call", "linkedin", "letter", "sequence")
+KINDS = ("email", "call", "linkedin", "letter", "enrollment")
 ACTIONS = ("connect", "message", "engage")
 FILL_INS = ("first_name", "last_name", "company")
 MARKER = re.compile(r"\{(\w+)\}")
@@ -305,7 +305,7 @@ def validate(db, sequence_id: int) -> list[tuple[int, str]]:
                 problems.append((st["id"], "Reply to must name an earlier email Step."))
             if st["kind"] != "email":
                 problems.append((st["id"], "Only an email Step can reply in an earlier email's Thread."))
-        if st["kind"] == "sequence":
+        if st["kind"] == "enrollment":
             target = db.execute("SELECT * FROM sequences WHERE id = ?", (st["enroll_sequence_id"],)).fetchone()
             if target is None:
                 problems.append((st["id"], "Name the Sequence this Step enrolls them in."))
@@ -463,7 +463,7 @@ def _day(iso: str) -> str:
 
 
 def materialize(db, now: datetime | None = None) -> int:
-    """Make each Active Enrollment's next Task, do each sequence Task whose time has come, and make the Draft of
+    """Make each Active Enrollment's next Task, do each Enrollment Task whose time has come, and make the Draft of
     each email Task whose day has come; finish an Enrollment whose last Task is done. Idempotent (one Task per
     Enrollment and Step, one Draft per Task), so it runs every minute from wake. Returns how many Tasks or
     Drafts it made."""
@@ -472,7 +472,7 @@ def materialize(db, now: datetime | None = None) -> int:
     with db:
         _tx(db)
         enrolled = 1
-        while enrolled:  # a sequence Task's new Enrollment gets its first Task in the same run
+        while enrolled:  # an Enrollment Task's new Enrollment gets its first Task in the same run
             for e in db.execute("SELECT * FROM enrollments WHERE state = 'ACTIVE'").fetchall():
                 if db.execute("SELECT 1 FROM tasks WHERE enrollment_id = ? AND state = 'DUE'", (e["id"],)).fetchone():
                     continue
@@ -508,14 +508,14 @@ def _next_task(db, e, now: datetime, due: datetime | None = None) -> int | None:
 
 
 def _enroll_tasks(db, now: datetime) -> int:
-    """Do the sequence Tasks whose time has come: enroll the Person in the Step's Sequence. One who responded
+    """Do the Enrollment Tasks whose time has come: enroll the Person in the Step's Sequence. One who responded
     during this Enrollment, or went through that Sequence before, waits for Jeremy (flag), and so does a
     refused enroll; the second rule also ends a loop of Sequences that enroll each other."""
     done = 0
     for t in db.execute(
             "SELECT t.id, t.due_at, s.enroll_sequence_id, e.person_id, e.responded_at FROM tasks t"
             " JOIN sequence_steps s ON s.id = t.step_id JOIN enrollments e ON e.id = t.enrollment_id"
-            " WHERE t.state = 'DUE' AND e.state = 'ACTIVE' AND s.kind = 'sequence' AND t.flag IS NULL").fetchall():
+            " WHERE t.state = 'DUE' AND e.state = 'ACTIVE' AND s.kind = 'enrollment' AND t.flag IS NULL").fetchall():
         if _at(t["due_at"]) > now:
             continue
         target = db.execute("SELECT name FROM sequences WHERE id = ?", (t["enroll_sequence_id"],)).fetchone()
@@ -587,7 +587,7 @@ def _close(db, task_id: int, state: str, now: datetime, thread_id: int | None = 
 
 
 def complete_task(db, task_id: int, now: datetime | None = None) -> dict:
-    """Jeremy did a non-email Task (FR-SEQ-9); a sequence Task enrolls the Person now, whatever its flag said.
+    """Jeremy did a non-email Task (FR-SEQ-9); an Enrollment Task enrolls the Person now, whatever its flag said.
     The next Step's Task follows. Returns what undo_task needs."""
     now = now or _now()
     with db:
@@ -596,9 +596,9 @@ def complete_task(db, task_id: int, now: datetime | None = None) -> dict:
                        " JOIN enrollments e ON e.id = t.enrollment_id WHERE t.id = ?", (task_id,)).fetchone()
         if t and t["kind"] == "email":
             raise Refused("An email Task is done when its Draft sends.")
-        if t and t["kind"] == "sequence" and t["enroll_sequence_id"] is None:
+        if t and t["kind"] == "enrollment" and t["enroll_sequence_id"] is None:
             raise Refused("This Step names no Sequence; name one in its Step, or skip the Task.")
-        enrolled = _enroll(db, t["person_id"], t["enroll_sequence_id"], now) if t and t["kind"] == "sequence" else None
+        enrolled = _enroll(db, t["person_id"], t["enroll_sequence_id"], now) if t and t["kind"] == "enrollment" else None
         undo = _close(db, task_id, "DONE", now) | dict(enrolled=enrolled)
         materialize(db, now)
     return undo
@@ -622,7 +622,7 @@ def undo_task(db, undo: dict) -> None:
         for t in db.execute("SELECT id FROM tasks WHERE enrollment_id IN (?, ?) AND id > ?",
                             (undo["task"]["enrollment_id"], undo.get("enrolled"), undo["after"])).fetchall():
             _drop_task(db, t["id"])
-        if undo.get("enrolled"):  # the Enrollment a sequence Task made
+        if undo.get("enrolled"):  # the Enrollment an Enrollment Task made
             db.execute("DELETE FROM enrollments WHERE id = ?", (undo["enrolled"],))
         db.execute("UPDATE tasks SET state = ?, done_at = ?, thread_id = ?, flag = ? WHERE id = ?",
                    (undo["task"]["state"], undo["task"]["done_at"], undo["task"]["thread_id"], undo["task"]["flag"],

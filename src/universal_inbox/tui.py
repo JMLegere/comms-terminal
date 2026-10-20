@@ -4007,7 +4007,7 @@ class CasePage(Page, ThreadActions):
 # --- Sequences: the Tasks and Sequences pages, enrolling, the Sequence section --------------------
 # (.agents/prd/2026-10-16-sequencing.md; layout from the accepted storybook/native/sequencing.py mocks)
 
-KIND_LABEL = {"email": "Email", "call": "Call", "linkedin": "LinkedIn", "letter": "Letter", "sequence": "Sequence"}
+KIND_LABEL = {"email": "Email", "call": "Call", "linkedin": "LinkedIn", "letter": "Letter", "enrollment": "Enrollment"}
 FINISH_REASONS = [("CANCELED", "Canceled · you stopped it; enrolling again is allowed"),
                   ("UNSUBSCRIBED", "Unsubscribed · they asked to stop; ends every Sequence for them"),
                   ("COMPLETED", "Completed · count it as done")]
@@ -4177,7 +4177,7 @@ class TaskPane(Horizontal):
                     yield Static("\n[#928374]LinkedIn replies do not reach Inbox. If they reply there, pause on their Person page.[/]")
                 elif t["kind"] == "letter":
                     yield Static(f"[#928374]{ICON['letter']} letter[/]\n{text(t['body'])}")
-                elif t["kind"] == "sequence":
+                elif t["kind"] == "enrollment":
                     yield Static(f"[b]Enroll in {escape(t['enroll_sequence'] or 'no Sequence')}[/]")
                     if t["flag"]:
                         yield Static(f"[#c14a4a]{ICON['warn']} Waiting for you: {escape(t['flag'])}. e enrolls them anyway, x skips.[/]")
@@ -4205,7 +4205,7 @@ class TaskPane(Horizontal):
     def hint(self):
         if self.item["kind"] == "email":
             return "n new Thread · x skip · p person" if self.item["flag"] == "reply target skipped" else "enter open Thread · x skip · p person"
-        if self.item["kind"] == "sequence":
+        if self.item["kind"] == "enrollment":
             return "e enroll · next · x skip · next · p person"
         return "e done · next · x skip · next · p person · y copy for agent"
 
@@ -4415,7 +4415,7 @@ class TasksPage(Page):
         except sequences.Refused as e:
             self.app.notify(f"Not enrolled: {e}", severity="error")
             return
-        done = f"Enrolled {t['person']} in {t['enroll_sequence']}." if t["kind"] == "sequence" else \
+        done = f"Enrolled {t['person']} in {t['enroll_sequence']}." if t["kind"] == "enrollment" else \
             f"Done: {t['person']}, Day {t['day']} {KIND_LABEL[t['kind']]}."
         self.app.offer_undo(done, lambda: sequences.undo_task(self.app.db, undo))
         self.refresh_data(select_id=nxt)
@@ -4785,7 +4785,7 @@ class StepEditor(Vertical):
     """One Step's fields and text, with a preview for an enrolled Person (FR-SEQ-18); ctrl+s or leaving saves."""
     BINDINGS = [Binding("ctrl+s", "save", "save Step"), Binding("escape", "close", "back to Steps")]
     FIELDS = {"email": ("Gap", "Time", "Reply to", "Subject"), "call": ("Gap", "Time"),
-              "linkedin": ("Gap", "Time", "Action"), "letter": ("Gap", "Time"), "sequence": ("Gap", "Time", "Sequence")}
+              "linkedin": ("Gap", "Time", "Action"), "letter": ("Gap", "Time"), "enrollment": ("Gap", "Time", "Sequence")}
 
     def __init__(self, step_id: int):
         super().__init__(classes="stepeditor")
@@ -4815,8 +4815,8 @@ class StepEditor(Vertical):
                                                                 "Action": "connect, message, or engage",
                                                                 "Sequence": "the Sequence to enroll them in, by name"}[label],
                                     classes="fvalue", id=f"f-{label.lower().replace(' ', '')}")
-            label = {"email": "body", "call": "script", "linkedin": "note", "letter": "letter", "sequence": "note"}[st["kind"]]
-            if st["kind"] == "sequence":
+            label = {"email": "body", "call": "script", "linkedin": "note", "letter": "letter", "enrollment": "note"}[st["kind"]]
+            if st["kind"] == "enrollment":
                 yield Static("[#928374]enrolls them on its day · waits for you if they responded[/]", classes="replyhint")
             yield Static(f"[#928374]{label} · fill-ins {{first_name}} {{last_name}} {{company}}[/]", classes="replyhint")
             yield TextArea(st["body"], classes="body-editor", id="f-body")
