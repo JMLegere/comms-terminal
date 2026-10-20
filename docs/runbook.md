@@ -82,7 +82,7 @@ Any number of Google Workspace mailboxes can be email Connections (schema 23). E
 2. On Workbox: `ssh oracle 'sudo docker exec universal-inbox universal-inbox init --gmail jeremy@agentmaple.ai'`. It prints the Inbound address, `jeremy.agentmaple.ai@inbox.agentmaple.com`.
 3. Cloudflare: add one Email Routing rule on `agentmaple.com`, that Inbound address → the `universal-inbox-email` Worker. Use a scoped `POST /zones/<zone>/email/routing/rules`; `scripts/cloudflare_setup.py --apply` changes much more (§2a step 4).
 4. **You:** in that mailbox, forward a copy of all mail to the Inbound address (§2 step 7). Google's confirmation arrives as a Todo Thread under the new Connection.
-5. Point a Sequence at it: `sequences.set_connection(db, <sequence id>, <connection id>)`. New Drafts send from it; existing Drafts keep their Connection.
+5. Point a Sequence at it: Sequences page, select the Sequence, `f` (sends from). New Drafts send from it; existing Drafts keep their Connection.
 
 ## 3a. Connect Fastmail
 

@@ -368,3 +368,31 @@ def test_sequence_step_names_its_sequence_and_a_waiting_task_enrolls_on_e(tmp_pa
     assert seen["task"] == ("enrollment", "already went through Nurture")
     assert [(e["sequence"], e["state"]) for e in sq.enrollments(db, ana)] == [
         ("Nurture", "ACTIVE"), ("Chain", "FINISHED"), ("Nurture", "FINISHED")]
+
+
+def test_f_changes_the_email_connection_a_sequence_sends_from(tmp_path):
+    """Any number of email addresses: f on a Sequence picks which one its email Tasks send from."""
+    path, _ = seeded(tmp_path)
+    db = inbox.connect(path)
+    with db:
+        new = db.execute("INSERT INTO connections (platform, external_id, self_id, label, connected_at, inbound)"
+                         " VALUES ('gmail', 'jeremy@agentmaple.ai', 'jeremy@agentmaple.ai', 'Email',"
+                         " '2026-10-20T00:00:00+00:00', 'jeremy.agentmaple.ai@inbox.agentmaple.com')").lastrowid
+    s = sq.create_sequence(db, "Secret", connection_id=sq.email_connections(db)[0]["id"])
+
+    async def scenario(app, pilot):
+        app.main.go("sequences")
+        await pilot.pause()
+        page = app.main.current
+        page.query_one("#seqs", DataTable).move_cursor(row=[q and q["id"] for q in page.rows].index(s))
+        await pilot.pause()
+        await pilot.press("f")
+        await pilot.pause()
+        assert isinstance(app.screen, Pick)
+        choose(app, str(new))
+        await pilot.press("enter")
+        await pilot.pause()
+        assert "jeremy@agentmaple.ai" in str(app.main.query_one("#thread").query(".threadempty").first().render())
+
+    run(Console(path), [scenario])
+    assert inbox.connect(path).execute("SELECT connection_id FROM sequences WHERE id = ?", (s,)).fetchone()[0] == new

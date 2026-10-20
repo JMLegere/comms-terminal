@@ -4559,7 +4559,7 @@ class TasksPage(Page):
 class SequencesTable(ClickTable):
     BINDINGS = [Binding("enter", "steps", "Steps"), Binding("n", "new_sequence", "new Sequence"),
                 Binding("a", "archive", "archive / restore"), Binding("x", "delete_sequence", "delete"),
-                Binding("R", "rename", "rename")]
+                Binding("R", "rename", "rename"), Binding("f", "sends_from", "sends from")]
 
     def action_steps(self):
         self.screen.query_one(SequencesPage).enter_steps()
@@ -4575,6 +4575,9 @@ class SequencesTable(ClickTable):
 
     def action_rename(self):
         self.screen.query_one(SequencesPage).rename()
+
+    def action_sends_from(self):
+        self.screen.query_one(SequencesPage).sends_from()
 
 
 class StepsTable(ClickTable):
@@ -4735,7 +4738,7 @@ class SequencesPage(Page):
         size = f"{q['steps']} Steps · {q['days']} days" if q["steps"] else "no Steps yet"
         enrolled = (f"{q['active']} active · {q['paused']} paused · {q['finished']} finished\n[#928374]{q['due_today']} Tasks due today[/]"
                     if q["used"] else "none\n[#928374]Enroll People from People (s) once it has Steps.[/]")
-        keys = "a restores it" if q["archived_at"] else "enter edits its Steps · a archives"
+        keys = "a restores it" if q["archived_at"] else "enter edits its Steps · f changes sends from · a archives"
         pane.mount(Static(
             f"{props_head('sequence', 'sequence')}\n[b]{escape(q['name'])}[/]\n[#928374]{size} · edited {stamp(q['updated_at'])}[/]"
             + (f"\n[#928374]{ICON['archive']} archived {stamp(q['archived_at'])}[/]" if q["archived_at"] else "") + "\n\n"
@@ -4798,6 +4801,19 @@ class SequencesPage(Page):
                 sequences.rename_sequence(self.app.db, q["id"], name)
                 self.after_change()
         self.app.push_screen(Ask(f"Rename {q['name']}", q["name"]), named)
+
+    def sends_from(self):
+        """f: the email Connection the selected Sequence's email Tasks send from, any of Jeremy's addresses."""
+        q = self.selected_sequence()
+        mail = sequences.email_connections(self.app.db)
+        if q is None or not mail:
+            return
+
+        def chosen(cid):
+            if cid and int(cid) != q["connection_id"]:
+                sequences.set_connection(self.app.db, q["id"], int(cid))
+                self.after_change()
+        self.app.push_screen(Pick(f"{q['name']} sends from", [(str(c["id"]), connection_label(c)) for c in mail]), chosen)
 
     def archive(self):
         q = self.selected_sequence()
