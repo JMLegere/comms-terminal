@@ -25,13 +25,16 @@ Status: MVP confirmed 2026-10-10; revised 2026-10-12 to follow Plain's status mo
   - Snoozed: Waiting for them, Paused for later.
   - Done: Done, Ignored.
   - Jeremy's reply moves a Thread to Waiting for them. Deviation (#116): with no reply in 4 days it returns to Todo (Needs next response) to follow up; there is no key to wait without replying.
-  - Any activity from the other side, including edits and deletions, returns a Snoozed or Done Thread to Todo / Needs next response.
+  - Eligible activity from the other side, including edits and deletions, returns a Snoozed or Done Thread to Todo / Needs next response (Block exception below).
   - Ignored does not move.
   - Rules Plain does not state (confirmed): a second message before Jeremy's first reply keeps Needs first response; a message on Investigating gives Needs next response; un-ignore gives Needs next response if Jeremy has replied, else Needs first response; a timed snooze returns to the Todo detail it had before.
 - **Ignore and Block**:
   - Ignore is the Done / Ignored Status detail, and the Ignored view is a filter.
-  - Block applies to one email address or Slack user.
+  - Block applies to one Identity (email address, Slack user, or phone number), independently of its Person or domain.
   - New Threads from blocked senders are created as Done / Ignored.
+  - Approved deviation (#138, 2026-10-20): blocked ordinary inbound messages, edits, and deletions stay in history and skip arrival-driven Status application on existing Threads. Other participants follow normal rules.
+  - Phone call rules, independent timers, complete email merge triage, explicit actions, Jeremy's own messages, and Sequence pause hooks remain unchanged.
+  - Unblocking applies normal rules to future activity and new Threads; current triage stays as it is, including Ignored until Jeremy un-ignores it.
   - Every new sender reaches the queue by default.
 - **People**:
   - A Person is a Slack user and/or a set of email addresses, auto-created on first contact.

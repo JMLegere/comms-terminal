@@ -6,7 +6,7 @@
 - **Status**: **Draft (revision 3; updated 2026-10-15).** Revision 3 adopted Plain's status model and integration architecture and added replying from the console (decisions #51–#56). Behavior follows Plain unless a deviation is stated with its reason. The technical design in §4–§5 is **Approved** (D1, decision #67). Each phase needs its own implementation authorization. D2 is resolved (SSH, #71); D3 is resolved (Cloudflare Tunnel, Email Routing with an Email Worker, Resend; #102). Phases 0–5 and the 6.1 and 6.3 builds are done; 6.2 and 6.4 are Jeremy's connect steps in `docs/runbook.md`. Linear context (FR-13c, #125) was built under Jeremy's "execute the plan"; under his subsequent "ship it", release `38e196e` is published to `main`/`dev` and deployed to the existing Workbox package/service. Linear was connected on 2026-10-16 with a Read-only key covering both workspace teams; see the connection receipt in `docs/design/linear-context.md`. Attachments (#127–#137) are built on `dev` (P1–P6) and their release (P7) is authorized; plan: `.agents/prd/2026-10-15-attachments.md`.
 - **Owner / authority**: Jeremy Legere (single user and product owner)
 - **Created**: 2026-10-10T20:04+00:00
-- **Updated**: 2026-10-16
+- **Updated**: 2026-10-20
 - **Topic**: MVP of a single-user, Plain-style Thread queue across Gmail and Slack
 - **Authority chain**:
   - `.agents/discovery/2026-10-10-universal-inbox.md`: validated problem and strategy.
@@ -30,7 +30,7 @@
 
 Source: discovery doc §Context.
 
-**Desired outcome.** One pull-only console that works like Plain for one person. Every connected email and Slack Thread has a Status, Jeremy replies from the console, and the other side's reply always brings a Thread back.
+**Desired outcome.** One pull-only console that works like Plain for one person. Every connected email and Slack Thread has a Status, Jeremy replies from the console, and eligible replies bring a Thread back under the Ignore and Block rules.
 
 **Audience.** Jeremy only.
 
@@ -140,16 +140,18 @@ Status key in brackets:
     - *Ignored*.
 - **FR-6a** [PL]: A new Thread starts in Todo / Needs first response.
 - **FR-6b** [PL]: Jeremy's reply moves the Thread to Snoozed / Waiting for them. A reply sent from the console is recorded as an outbound Activity when it is sent.
-- **FR-6c** [PL]: Any activity from the other side moves a Snoozed or Done Thread to Todo / Needs next response. This includes messages, and [C] edits and deletions; Plain: "When any activity happens in a thread, it will move back to Todo."
-- **FR-6d** [PL]: A snooze ends at its time, or on the other side's next activity, and the Thread returns to Todo.
+- **FR-6c** [PL + D]: Eligible activity from the other side moves a Snoozed or Done Thread to Todo / Needs next response. This includes messages, and [C] edits and deletions; Plain: "When any activity happens in a thread, it will move back to Todo." [D] Blocked ordinary activity on existing Threads is excluded by FR-7a (decision #138).
+- **FR-6d** [PL + D]: A snooze ends at its time, or on the other side's next eligible activity (FR-7a), and the Thread returns to Todo.
 - **FR-6e** [PL]: An Ignored Thread does not move Status on new activity until Jeremy un-ignores it.
 
 ### Ignore and Block
 
 - **FR-7** [C/PL]: **Ignore** is the Done / Ignored Status detail, set by Jeremy on a Thread. The Ignored view is a filter over Threads with that Status detail.
-- **FR-7a** [C/PL]: **Block** applies to a sending address: an email address, or a Slack user.
-  - A new Thread whose inbound messages all come from blocked addresses is created directly as Done / Ignored. This mirrors Plain's spam customers, whose threads "are automatically closed as ignored".
-  - [P] Unblocking affects only future Threads; existing Threads stay Ignored until Jeremy un-ignores them.
+- **FR-7a** [C/PL + D]: **Block** applies to one sending Identity: an email address, Slack user, or phone number. Its scope stays at that Identity, independent of its Person or domain.
+  - A new Thread from a blocked Identity is created directly as Done / Ignored. This mirrors Plain's spam customers, whose threads "are automatically closed as ignored".
+  - [D] On an existing Thread, blocked ordinary inbound messages, edits, and deletions remain stored but skip arrival-driven Status application (decision #138). This keeps a blocked participant from reopening a useful mixed conversation; other participants follow their normal rules.
+  - [C] Unblocking applies normal rules to future activity and new Threads. It leaves current triage unchanged; an existing Ignored Thread stays Ignored until Jeremy un-ignores it.
+  - Phone call rules, independent snooze/follow-up timers, exact-reference email reconciliation, Jeremy's own messages, explicit actions, and Sequence pause hooks retain their current behavior. Reconciliation may select another existing complete triage state before arrival eligibility is checked.
 - **FR-8** [C]: Every new sender reaches the queue by default.
 
 ### People
@@ -208,8 +210,9 @@ Status key in brackets:
   - Jeremy's action
   - Jeremy's own message, from the console or Slack (to Waiting for them)
   - a snooze expiring
-  - the other side's activity
+  - the other side's eligible activity (FR-7a)
   - Block, at Thread creation
+  - exact-reference email reconciliation selecting an existing complete triage state (FR-3)
 - **I-5**: Ignored does not move on new activity.
 - **I-6**: an email address belongs to at most one Person.
 
@@ -222,7 +225,7 @@ Executable form: `features/<domain>.feature` (Gherkin via pytest-bdd), each scen
 - **AS-3**: Jeremy replies to an email Thread from the console. → The reply is sent with `In-Reply-To`; the Thread is Snoozed / Waiting for them.
 - **AS-4**: The other side then replies. → Todo / Needs next response in the same Thread. Exact references reconcile eligible split email Threads even when a parent arrives later or a reply bridges stored branches; Activities remain unchanged.
 - **AS-5**: A Done Slack Thread's message is edited by its author. → Todo / Needs next response.
-- **AS-6**: Jeremy blocks `alerts@signoz.io`, and a new alert arrives. → A new Thread is created as Done / Ignored and is visible under the Ignored filter.
+- **AS-6**: Jeremy blocks `alerts@signoz.io`, and a new alert arrives. → A new Thread is created as Done / Ignored and is visible under the Ignored filter. A blocked Slack user replies in an existing Waiting for them Thread. → The reply is retained in that same Thread; it stays Snoozed / Waiting for them.
 - **AS-7**: A new prospect emails for the first time. → Todo / Needs first response; a Person is auto-created.
 - **AS-8**: The Slack token is revoked. → Slack sends `tokens_revoked`; health shows broken.
 - **AS-9**: Removed (decision #66: no reconciliation).
@@ -973,6 +976,11 @@ All entries are dated 2026-10-10; exact times are unproven unless noted. Full de
   - Request / decision: D-A7: each phase needs its own go. P1 first, then P2–P6 together, then the release (P7: deploy, live migration, backfill, live checks)
   - Source: Jeremy, "P1 only", "Build P2 through P6", release go (2026-10-15)
   - Status: Approved; P1–P6 built, release authorized
+
+- **138**
+  - Request / decision: Retain blocked ordinary inbound messages, edits, and deletions while suppressing their arrival-driven Status application on existing Threads. New blocked Threads still start Ignored. Keep per-Identity scope, other participants, Phone calls, timers, explicit actions, complete email merge triage, and Sequence pause hooks under their existing rules. Unblocking restores normal eligibility for future activity while existing Ignored Threads remain sticky.
+  - Source: Jeremy, "ship it" (2026-10-20), approving the bounded blocked-reply policy and implementation.
+  - Status: Approved; implementation authorized. Verification and release outcomes are recorded separately.
 
 ## 8. Work log
 

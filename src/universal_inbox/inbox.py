@@ -1933,7 +1933,7 @@ def _ingest(db, inc: Incoming) -> Thread | None:
         _reconcile_email_threads(db, True, channel_id)
     t = get_thread(db, thread_id)
     if not created or t.id != thread_id:
-        if nxt := transition((t.status, t.status_detail), event):
+        if (not event.blocked or call) and (nxt := transition((t.status, t.status_detail), event)):
             _set_status(db, t.id, at, *nxt, cause="reply" if event.from_jeremy else "call" if call else inc.kind.lower())
     if inc.kind == "DELETE":  # FR-2a
         db.execute("UPDATE activities SET content = NULL WHERE id = ?"
