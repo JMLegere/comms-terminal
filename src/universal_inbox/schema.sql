@@ -285,7 +285,7 @@ CREATE TABLE sequence_steps (
   id               INTEGER PRIMARY KEY,
   sequence_id      INTEGER NOT NULL REFERENCES sequences (id),
   position         INTEGER CHECK (position > 0),
-  kind             TEXT NOT NULL CHECK (kind IN ('email', 'call', 'linkedin', 'letter')),
+  kind             TEXT NOT NULL CHECK (kind IN ('email', 'call', 'linkedin', 'letter', 'sequence')),
   gap_days         INTEGER NOT NULL DEFAULT 0 CHECK (gap_days >= 0),
   at_time          TEXT CHECK (at_time GLOB '[0-2][0-9]:[0-5][0-9]'),
   subject          TEXT NOT NULL DEFAULT '',
@@ -293,6 +293,7 @@ CREATE TABLE sequence_steps (
   voicemail        TEXT NOT NULL DEFAULT '',
   action           TEXT CHECK (action IN ('connect', 'message', 'engage')),
   reply_to_step_id INTEGER REFERENCES sequence_steps (id),
+  enroll_sequence_id INTEGER REFERENCES sequences (id),  -- a sequence Step: the Sequence it enrolls them in
   UNIQUE (sequence_id, position)
 ) STRICT;
 
@@ -307,6 +308,7 @@ CREATE TABLE enrollments (
   enrolled_at  TEXT NOT NULL,
   finished_at  TEXT,
   starts_at    TEXT,  -- a later Start date (FR-SEQ-25): the first Task counts from it; NULL is the enroll day
+  responded_at TEXT,  -- first reply or connected call; kept through Resume, so enroll Steps can tell
   CHECK ((state = 'FINISHED') = (reason IS NOT NULL))
 ) STRICT;
 CREATE UNIQUE INDEX enrollments_live ON enrollments (person_id, sequence_id) WHERE state != 'FINISHED';

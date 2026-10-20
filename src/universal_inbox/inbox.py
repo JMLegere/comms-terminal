@@ -24,7 +24,7 @@ from typing import Protocol, Sequence
 
 from . import files, platforms
 
-SCHEMA_VERSION = 20
+SCHEMA_VERSION = 21
 WAIT = timedelta(days=4)  # Waiting for them ends after this with no reply: back to Todo to follow up (#116)
 EMAIL_CONFIRMATION_PENDING = "Email confirmation pending; wait for its sent receipt before replying."
 MIGRATIONS = {  # version -> statement that upgrades an existing database to it
@@ -290,6 +290,33 @@ WHERE draft_id IN (SELECT id FROM composition_drafts WHERE thread_id IS NOT NULL
     19: """ALTER TABLE composition_drafts ADD COLUMN send_at TEXT;
 ALTER TABLE composition_drafts ADD COLUMN send_error TEXT;""",
     20: "ALTER TABLE enrollments ADD COLUMN starts_at TEXT;",
+    # Enroll Steps chain Sequences: a fifth Step kind (a CHECK, so a table rebuild) and its target Sequence;
+    # an Enrollment remembers that its Person responded, which survives Resume. Paused ones have responded.
+    21: """PRAGMA legacy_alter_table = ON;
+CREATE TABLE sequence_steps_new (
+  id                 INTEGER PRIMARY KEY,
+  sequence_id        INTEGER NOT NULL REFERENCES sequences (id),
+  position           INTEGER CHECK (position > 0),
+  kind               TEXT NOT NULL CHECK (kind IN ('email', 'call', 'linkedin', 'letter', 'sequence')),
+  gap_days           INTEGER NOT NULL DEFAULT 0 CHECK (gap_days >= 0),
+  at_time            TEXT CHECK (at_time GLOB '[0-2][0-9]:[0-5][0-9]'),
+  subject            TEXT NOT NULL DEFAULT '',
+  body               TEXT NOT NULL DEFAULT '',
+  voicemail          TEXT NOT NULL DEFAULT '',
+  action             TEXT CHECK (action IN ('connect', 'message', 'engage')),
+  reply_to_step_id   INTEGER REFERENCES sequence_steps (id),
+  enroll_sequence_id INTEGER REFERENCES sequences (id),
+  UNIQUE (sequence_id, position)
+) STRICT;
+INSERT INTO sequence_steps_new (id, sequence_id, position, kind, gap_days, at_time, subject, body, voicemail, action,
+                                reply_to_step_id)
+SELECT id, sequence_id, position, kind, gap_days, at_time, subject, body, voicemail, action, reply_to_step_id
+FROM sequence_steps;
+DROP TABLE sequence_steps;
+ALTER TABLE sequence_steps_new RENAME TO sequence_steps;
+PRAGMA legacy_alter_table = OFF;
+ALTER TABLE enrollments ADD COLUMN responded_at TEXT;
+UPDATE enrollments SET responded_at = paused_at WHERE paused_at IS NOT NULL;""",
 }
 
 # ponytail: fixed list; extend when a free-mail sender forms an Organization by mistake.
