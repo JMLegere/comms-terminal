@@ -689,3 +689,23 @@ def test_held_j_shows_the_thread_it_lands_on(tmp_path, monkeypatch):
 
     run(app, [hold])
     assert seen["landed"] == seen["selected"] != seen["during"]  # the row passed showed, then where it stopped
+
+
+def test_thread_opens_at_its_newest_messages(tmp_path):
+    path, _ = seeded(tmp_path)
+    app, seen = Console(path), []
+
+    async def look(app, pilot):
+        timeline = app.main.thread_view.query_one(".timeline")
+        seen.append((timeline.max_scroll_y, timeline.scroll_y))
+
+    async def repaint(app, pilot):
+        tv = app.main.thread_view
+        tv.query_one(".timeline").scroll_home(animate=False, immediate=True)
+        tv.refresh_data()
+
+    settle = lambda app, pilot: pilot.pause(0.2)  # noqa: E731 - past PREVIEW_GAP, so the moved-to Thread shows
+    run(app, [settle, look, "j", settle, look, repaint, look], size=(140, 16))
+    assert seen[0][0] > 0 and seen[0][1] == seen[0][0]  # opened: newest messages in view
+    assert seen[1][1] == seen[1][0]  # another Thread opened in the same pane
+    assert seen[2][1] == 0  # a repaint keeps the reader's place

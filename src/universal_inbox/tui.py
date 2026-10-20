@@ -225,6 +225,22 @@ class _PageOverlap:
 
 class TextScroll(_PageOverlap, VerticalScroll):
     """A native vertical text pane with one-row page overlap."""
+    pinned = False  # held at the end while late layout grows it, until the reader scrolls
+
+    def pin_end(self):
+        """Show the end, and keep showing it as layout settles (Textual's anchor bottom-aligns short content)."""
+        self.pinned = True
+        self.scroll_end(animate=False, immediate=True)  # a deferred scroll could land mid-repaint, past the last resize
+
+    def release_anchor(self):  # every reader scroll (keys, wheel, scrollbar) comes through here
+        self.pinned = False
+        super().release_anchor()
+
+    def _size_updated(self, *args, **kwargs) -> bool:  # Resize is not posted for every late layout change
+        changed = super()._size_updated(*args, **kwargs)
+        if changed and self.pinned:
+            self.scroll_end(animate=False, immediate=True)
+        return changed
 
 
 class PagedTextArea(_PageOverlap, TextArea):
@@ -2085,7 +2101,7 @@ def show_messages(container, widgets, scroller=None):
     with container.app.batch_update():
         container.remove_children()
         container.mount_all(widgets)
-    if y:
+    if y and not scroller.pinned:  # pinned: the end is the place to keep
         container.call_after_refresh(lambda: scroller.scroll_to(y=y, animate=False))
 
 
@@ -2381,7 +2397,7 @@ class ThreadView(Horizontal):
             yield from context_sections()
 
     def on_mount(self):
-        self.refresh_data()
+        self.refresh_data(opened=True)
 
     def retarget(self, thread_id) -> bool:
         """Show another Thread in this pane without remounting it (opening a Thread stays fast); False when
@@ -2395,10 +2411,11 @@ class ThreadView(Horizontal):
         self.thread_id, self.members, self.related, self.view = thread_id, None, None, None
         for scroller in self.query(TextScroll):
             scroller.scroll_home(animate=False)
-        self.refresh_data()
+        self.refresh_data(opened=True)
         return True
 
-    def refresh_data(self):
+    def refresh_data(self, opened=False):
+        """Repaint; a Thread just opened scrolls to its newest messages, a repaint keeps its place."""
         if not self.query(".thead"):  # not composed yet; on_mount fills it
             return
         v = inbox.thread_view(self.app.db, self.thread_id, self.app.files)
@@ -2408,8 +2425,11 @@ class ThreadView(Horizontal):
         self.view = v
         self.paint_status()
         load_context(self, *thread_addresses([v]))
+        timeline = self.query_one(".timeline")
         show_messages(self.query_one(".msgs"), message_widgets(v, self.app.message_state(self.thread_id), self.app.raw),
-                      self.query_one(".timeline"))
+                      timeline)
+        if opened:
+            timeline.pin_end()
         self.query_one(ReplyBox).set_view(v)
 
     def paint_status(self, details=True):
