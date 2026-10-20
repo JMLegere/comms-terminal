@@ -815,7 +815,7 @@ def test_build_context_includes_deployed_package_manifest_and_checkout_resources
     # Verified 5a37 source closure: nineteen Python modules and the fresh-database SQL resource.
     deployed = {
         "__init__.py", "agent.py", "attio.py", "email.py", "fastmail.py", "files.py", "health.py",
-        "icons.py", "inbox.py", "linear.py", "main.py", "mcp.py", "platforms.py", "quo.py",
+        "calendar.py", "icons.py", "inbox.py", "linear.py", "main.py", "mcp.py", "platforms.py", "quo.py",
         "render.py", "schema.sql", "serve.py", "slack.py", "tana.py", "tui.py",
     }
     package = ROOT / "src/universal_inbox"
@@ -843,12 +843,13 @@ def test_unit_and_source_allowlist_keep_gate_credential_and_restart_contracts():
         "email-hook-secret", "resend-api-key", "attio-token", "fastmail-oauth",
         "quo-webhook-secret", "quo-api-key", "slack-signing-secret", "slack-user-token",
     )
-    assert runtime.OPTIONAL_CREDENTIALS == ("tana-oauth", "linear-token", "resend-webhook-secret")
+    assert runtime.OPTIONAL_CREDENTIALS == ("tana-oauth", "linear-token", "resend-webhook-secret", "google-calendar-ics")
     assert admitted == {
         **{name: "/etc/credstore.encrypted/universal-inbox." + name for name in runtime.CREDENTIALS},
         "tana-oauth": "universal-inbox.independent-tana-oauth",
         "linear-token": "universal-inbox.linear-token",
         "resend-webhook-secret": "universal-inbox.resend-webhook-secret",
+        "google-calendar-ics": "universal-inbox.google-calendar-ics",
     }
     ignore = (ROOT / ".dockerignore").read_text().splitlines()
     assert "**" in ignore

@@ -172,6 +172,40 @@ _Avoid_: Source, Account, Integration
 An outside tool that Universal Inbox reads to show context beside Threads, Persons, Organizations, and Cases, such as Tana, Attio, or Linear. It holds no Threads and is not a Platform.
 _Avoid_: Integration, Connection, Platform (for Tana, Attio, or Linear)
 
+## Calendar
+
+**Calendar**:
+The page that lays Calendar Items out over time, read from Jeremy's work calendar. Jeremy reads it here and changes Events in Google Calendar.
+_Avoid_: Agenda, Schedule
+
+**Event**:
+Any entry with a date or a time on Jeremy's work calendar. Every Event is a Meeting, a Block, or an All-day Event. It is never a Thread or an Activity.
+_Avoid_: Appointment, Calendar entry
+
 **Meeting**:
-A calendar event read from a Context source, with its summary and linked documents. It is context for the Persons and Organizations among its attendees. It is never a Thread or an Activity.
-_Avoid_: Call, Event (alone), Thread (for a meeting)
+An Event with attendees besides Jeremy. It is context for the Persons and Organizations among its attendees; Tana adds its summary and linked documents.
+_Avoid_: Call, Thread (for a meeting)
+
+**Block**:
+A timed Event with no attendees besides Jeremy, such as focus time, lunch, or a reminder to himself.
+_Avoid_: Focus time, Hold
+
+**All-day Event**:
+An Event with a date and no time, such as time off or a holiday.
+_Avoid_: OOO (alone)
+
+**Invite state**:
+Jeremy's answer to an Event he was invited to: Accepted, Tentative, Unanswered, or Declined.
+_Avoid_: RSVP, Response status
+
+**Calendar Item**:
+Anything placed on the Calendar: an Event, a Task on its day, a Snoozed Thread at the time it wakes, a Draft at the time it is set to send, or an Enrollment on the day it starts.
+_Avoid_: Entry, Event (for anything but an Event)
+
+**Event provider**:
+The outside service that Universal Inbox reads Events from, such as Google Calendar. It holds no Threads and is not a Platform.
+_Avoid_: Calendar provider, Integration, Connection, Context source
+
+**Deleted Event**:
+An Event that its Event provider no longer has, including one removed occurrence of a repeating Event. Universal Inbox keeps it, marked deleted.
+_Avoid_: Cancelled Event, Removed Event

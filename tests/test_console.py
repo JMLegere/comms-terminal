@@ -97,12 +97,13 @@ def test_click_selects_and_shows_the_thread_beside_the_list(tmp_path):
         await pilot.click("#table", offset=(10, page(app).selectable_rows()[1]))  # second Thread row
 
     async def after_click(app, pilot):
+        await pilot.pause(0.1)  # a click within PREVIEW_GAP of the first paint shows once the gap ends
         seen["page"], seen["selected"] = type(page(app)), page(app).current_thread_id()
         seen["shown"] = app.main.thread_view.thread_id
         seen["focus"] = app.focused.id
 
     async def click_rail(app, pilot):
-        await pilot.click("#rail", offset=(5, 6))  # Snoozed, below Today and a gap
+        await pilot.click("#rail", offset=(5, 7))  # Snoozed, below Today, Calendar, and a gap
 
     async def after_rail(app, pilot):
         seen["view"], seen["focus_after_rail"] = app.view, app.focused.id

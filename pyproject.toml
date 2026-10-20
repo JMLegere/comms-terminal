@@ -5,6 +5,7 @@ description = "Single-user, Plain-style Thread queue across Gmail and Slack"
 requires-python = ">=3.11"
 dependencies = [
     "pillow>=12.3.0",
+    "recurring-ical-events>=3",
     "textual>=8.2.8",
     "textual-image>=0.12.0",
 ]

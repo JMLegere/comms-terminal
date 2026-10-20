@@ -38,6 +38,7 @@ LoadCredentialEncrypted=slack-user-token:/etc/credstore.encrypted/universal-inbo
 LoadCredentialEncrypted=tana-oauth:universal-inbox.independent-tana-oauth
 LoadCredentialEncrypted=linear-token:universal-inbox.linear-token
 LoadCredentialEncrypted=resend-webhook-secret:universal-inbox.resend-webhook-secret
+LoadCredentialEncrypted=google-calendar-ics:universal-inbox.google-calendar-ics
 
 NoNewPrivileges=yes
 ProtectSystem=strict

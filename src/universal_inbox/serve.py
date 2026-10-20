@@ -4,7 +4,7 @@ and a health check of every Connection each 30 minutes.
 
 Credentials come from systemd's $CREDENTIALS_DIRECTORY (LoadCredentialEncrypted=):
 email-hook-secret, slack-signing-secret, slack-user-token, resend-api-key, fastmail-oauth, quo-webhook-secret,
-quo-api-key, tana-oauth, attio-token, linear-token, resend-webhook-secret.
+quo-api-key, tana-oauth, attio-token, linear-token, resend-webhook-secret, google-calendar-ics.
 """
 
 import base64
@@ -22,7 +22,7 @@ from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from . import attio, email, fastmail, files, inbox, linear, mcp, platforms, quo, slack, tana
+from . import attio, calendar, email, fastmail, files, inbox, linear, mcp, platforms, quo, slack, tana
 
 
 def credential(name: str) -> bytes | None:
@@ -744,6 +744,28 @@ def probe_loop(db_path: str, shared: dict, stop: threading.Event, every: float =
             return
 
 
+def calendar_loop(db_path: str, url: str, stop: threading.Event, every: float = 30) -> None:
+    """Read the Event provider every 30 seconds (ADR 0005). Writes happen only on a change or a failure run, so a
+    quiet calendar sends the laptop console nothing."""
+    import logging
+    log, ok_at = logging.getLogger("universal_inbox.calendar"), None
+    while True:
+        db = inbox.connect(db_path)
+        try:
+            if calendar.sync(db, calendar.fetch(url)):
+                log.info("calendar changed")
+            ok_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            calendar.record_ok(db)
+        except Exception as e:  # noqa: BLE001 - one failed fetch must not stop the loop
+            error = (str(e) or type(e).__name__).replace(url, "<secret address>")[:300]
+            calendar.record_failure(db, error, ok_at)
+            log.info("calendar fetch failed: %s", error)
+        finally:
+            db.close()
+        if stop.wait(every):
+            return
+
+
 def run(db_path: str, socket_path: str, host: str, port: int, files_host: str | None = None,
         files_port: int = 8789) -> None:
     import logging
@@ -762,6 +784,8 @@ def run(db_path: str, socket_path: str, host: str, port: int, files_host: str | 
     threads.append(threading.Thread(target=wake_loop, args=(db_path, stop, 60, kick,
                                                       files.getters(credential("slack-user-token")), senders), daemon=True))
     threads.append(threading.Thread(target=probe_loop, args=(db_path, senders.shared, stop), daemon=True))
+    if feed := credential(calendar.CREDENTIAL):
+        threads.append(threading.Thread(target=calendar_loop, args=(db_path, feed.decode(), stop), daemon=True))
     if fm is not None:
         threads.append(threading.Thread(target=fastmail.poll_loop, args=(db_path, fm, stop), daemon=True))
     if token := credential("slack-user-token"):

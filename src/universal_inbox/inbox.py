@@ -24,7 +24,7 @@ from typing import Protocol, Sequence
 
 from . import files, platforms
 
-SCHEMA_VERSION = 23
+SCHEMA_VERSION = 24
 WAIT = timedelta(days=4)  # Waiting for them ends after this with no reply: back to Todo to follow up (#116)
 EMAIL_CONFIRMATION_PENDING = "Email confirmation pending; wait for its sent receipt before replying."
 MIGRATIONS = {  # version -> statement that upgrades an existing database to it
@@ -348,6 +348,23 @@ CREATE UNIQUE INDEX connections_inbound ON connections (inbound);
 UPDATE connections SET inbound = 'fastmail@inbox.agentmaple.com' WHERE platform = 'fastmail';
 UPDATE connections SET inbound = lower(substr(self_id, 1, instr(self_id, '@'))) || 'inbox.agentmaple.com'
 WHERE platform = 'gmail' AND instr(self_id, '@') > 1;""",
+    # Calendar (ADR 0005): Events from the Event provider and its fetch health.
+    24: """CREATE TABLE events (
+  uid           TEXT NOT NULL,
+  recurrence_id TEXT NOT NULL DEFAULT '',  -- '' = the Event or series itself; else one occurrence (UTC or date)
+  ics           TEXT NOT NULL,             -- the VEVENT as Google gives it, less DTSTAMP
+  first_seen_at TEXT NOT NULL,
+  changed_at    TEXT NOT NULL,
+  deleted_at    TEXT,                      -- a Deleted Event: gone from the Event provider, kept
+  PRIMARY KEY (uid, recurrence_id)
+) STRICT;
+CREATE TABLE event_provider (
+  id        INTEGER PRIMARY KEY CHECK (id = 1),
+  owner     TEXT NOT NULL,                 -- the calendar's address (X-WR-CALNAME)
+  ok_at     TEXT,                          -- last good fetch, written when fetches start failing
+  failures  INTEGER NOT NULL DEFAULT 0,    -- failed fetches in a row
+  error     TEXT
+) STRICT;""",
 }
 
 # ponytail: fixed list; extend when a free-mail sender forms an Organization by mistake.

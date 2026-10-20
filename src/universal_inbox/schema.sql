@@ -329,3 +329,21 @@ CREATE TABLE tasks (
   CHECK ((state = 'DUE') = (done_at IS NULL))
 ) STRICT;
 CREATE INDEX tasks_due ON tasks (state, due_at);
+
+-- Calendar (ADR 0005): Events read from the Event provider, kept forever; calendar.py.
+CREATE TABLE events (
+  uid           TEXT NOT NULL,
+  recurrence_id TEXT NOT NULL DEFAULT '',  -- '' = the Event or series itself; else one occurrence (UTC or date)
+  ics           TEXT NOT NULL,             -- the VEVENT as Google gives it, less DTSTAMP
+  first_seen_at TEXT NOT NULL,
+  changed_at    TEXT NOT NULL,
+  deleted_at    TEXT,                      -- a Deleted Event: gone from the Event provider, kept
+  PRIMARY KEY (uid, recurrence_id)
+) STRICT;
+CREATE TABLE event_provider (
+  id        INTEGER PRIMARY KEY CHECK (id = 1),
+  owner     TEXT NOT NULL,                 -- the calendar's address (X-WR-CALNAME)
+  ok_at     TEXT,                          -- last good fetch, written when fetches start failing
+  failures  INTEGER NOT NULL DEFAULT 0,    -- failed fetches in a row
+  error     TEXT
+) STRICT;

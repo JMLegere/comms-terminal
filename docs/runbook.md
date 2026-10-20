@@ -171,6 +171,14 @@ Attachments (#127–#137): received files are copied into `~/.local/share/univer
 - **Backfill**: after the first deploy, `universal-inbox attachments-backfill` copies the Attachments of raw emails stored before this release. It repeats safely and prints counts only.
 - Check: `curl -s -o /dev/null -w '%{http_code}\n' http://192.168.0.107:8789/f/x/y` prints `404`; a chip in the console opens its file on Mani with Ctrl+Shift+click.
 
+## 3g. Connect Google Calendar (Event provider)
+
+The Calendar (FR-13d, ADR 0005) reads the primary calendar's **Secret address in iCal format** (Google Calendar → Settings → `jeremy@agentmaple.com` → Integrate calendar). The address is a bearer secret: anyone holding it reads the calendar. It lives only as the optional `google-calendar-ics` credential; never paste it in chat, logs, or the database.
+
+- **Oracle**: the unit's `LoadCredentialEncrypted=google-calendar-ics:universal-inbox.google-calendar-ics` and `container_runtime.py`'s optional list admit it. Install the address with `systemd-creds encrypt --name=google-calendar-ics - /etc/credstore.encrypted/universal-inbox.google-calendar-ics` (stdin, mode 0600), then `systemctl daemon-reload` and `systemctl restart universal-inbox`. Without the credential the service runs without the Calendar loop and the Calendar says no Event provider is connected.
+- **Check**: the journal shows `calendar changed` once; `universal-inbox events` lists this week. Healthy fetches write nothing, so a quiet calendar sends the laptop console no new copy.
+- **Rotate**: Reset the secret address in Google, encrypt the new one over the old file, and restart. Until then fetches fail (404) and the Calendar shows Google Calendar broken after three tries.
+
 ## 3. Connect Slack
 
 1. **You:** https://api.slack.com/apps → Create New App → From a manifest → paste `deploy/slack-app-manifest.yml`. Save the signing secret (Basic Information) as `~/.config/universal-inbox/slack-signing-secret`.

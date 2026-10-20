@@ -168,6 +168,15 @@ Thread, Person, Organization, and Case pages show separate details-column sectio
 - **Inherited context**: preserve existing Person/Organization context inheritance on all four page types. Cases inherit Linear context through their People and Organizations; no direct Case-to-issue field or copied issue data. Inbox Status stays unchanged.
 - **Fetch and health**: read on page open through the service, with the same five-minute cache as Attio and Tana. Each source has separate health in the rail's `context` section and bottom bar; a failure appears in its own section.
 
+### Calendar (FR-13d, ADR 0005)
+
+- **Rail**: Calendar sits directly under Today.
+- **Grid**: one month grid of week rows that scrolls without pages; a separator row starts each month, and a week that spans two months splits at it. It opens with two weeks above this week and the cursor on today. A cell shows the date (`today` on today), up to four Events as start hour and title (`?` unanswered, `~` maybe, declined dimmed, Deleted struck through, All-day in blue), `+N more`, and a count line: Tasks, Snoozed Threads waking, scheduled Draft sends, Enrollment starts.
+- **Day pane**: every Calendar Item of the cursor's day in time order. Enter opens it: an Event's details page, the Thread, the Task, the Draft, or the Person.
+- **Event details**: title and Invite state, time and repeat, location, join link, organizer and attendees with their answers (linked to People, with open Threads and Cases), Organizations, the description with Google's Meet/Zoom footer folded, and the Context sections for its people.
+- **Bottom bar**: `now` Event and minutes left, then `next` Event and when; clicking it opens the Calendar. A failing Event provider shows Google Calendar broken; the Calendar shows its copy "as of" the last good fetch.
+- **Keys**: grid `h`/`l` day, `j`/`k` week, `{`/`}` month, `t` today, `tab` or `enter` the day pane; day pane `j`/`k`, `enter` open, `o` join link, `tab`/`esc` back to the grid; Event details `o` join link, `esc` back. `←`/`→` move between grid and day pane.
+
 ## 4. Keys
 
 **Decision #93**: Gmail-style where Gmail has an equivalent.

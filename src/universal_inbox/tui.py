@@ -20,7 +20,7 @@ import time
 import unicodedata
 from collections import Counter
 from collections.abc import MutableMapping
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from email.errors import HeaderParseError
 from email.headerregistry import Address
 from email.utils import getaddresses
@@ -28,6 +28,7 @@ from functools import cache, partial
 from importlib import resources
 from pathlib import Path
 
+from rich.cells import cell_len, set_cell_size
 from rich.markup import escape
 from rich.style import Style
 from textual import events, work
@@ -43,7 +44,7 @@ from textual.widgets import DataTable, DirectoryTree, Input, OptionList, Static,
 from textual.widgets.option_list import Option
 from textual.worker import WorkerCancelled, get_current_worker
 
-from . import files, inbox, render, sequences
+from . import calendar as cal, files, inbox, render, sequences
 from .health import problem
 from .icons import ICON
 from .platforms import E164, FORMATS, PLATFORMS
@@ -99,6 +100,15 @@ ModalScreen { background: #7c6f64 25%; align: center middle; }
 #rail:focus, #main:focus-within, #thread:focus-within { border: round #45707a; }
 #main { width: 1fr; }
 #main.split { width: 2fr; }
+#main.split.wide { width: 5fr; }
+#monthgrid { height: 1fr; scrollbar-size-horizontal: 0; }
+.calweek, .calsep { height: auto; }
+.calsep { margin-top: 1; }
+#calbanner { height: auto; }
+#daylist { height: 1fr; background: #f9f5d7; border: none; padding: 1 0; }
+#daylist > .option-list--option-highlighted { background: #f5edca; text-style: none; }
+#daylist:focus > .option-list--option-highlighted { background: #eee0b7; color: #4f3829; }
+#eventscroll { height: 1fr; padding: 1 1; }
 #thread { display: none; }
 #thread.open { display: block; width: 3fr; }
 .threadempty, .sidetext { padding: 1 1; }
@@ -835,7 +845,8 @@ class Rail(OptionList):
             waiting = len(today["threads"]) + len(today["tasks"]) + len(today["drafts"])
         except Exception:  # a failed Draft read must not take the rail down; the Drafts list says why
             waiting = ""
-        opts = [item("today", "today", "Today", waiting), gap, header("threads", "threads")]
+        opts = [item("today", "today", "Today", waiting), item("calendar", "calendar", "Calendar"), gap,
+                header("threads", "threads")]
         for i, name in enumerate(VIEW_NAMES):
             if name == "All":
                 opts.append(item("drafts", "edited", "Drafts", db.execute("SELECT count(*) FROM composition_drafts").fetchone()[0]))
@@ -3739,6 +3750,37 @@ def build_version() -> str:
         return ""
 
 
+_next_event: dict = {}
+
+
+def next_event_markup(db) -> str:
+    """The bottom bar's Event in progress (time left) and the next one on any day (ADR 0005), read once a minute
+    or after a change."""
+    now = datetime.now().astimezone()
+    key = (id(db), db.execute("PRAGMA database_list").fetchone()[2], db.execute("PRAGMA data_version").fetchone()[0],
+           now.strftime("%Y%m%d%H%M"))
+    if _next_event.get("key") != key:
+        try:
+            current, nxt = cal.now_and_next(db, now)
+        except Exception:  # noqa: BLE001 - a bad Event must not take the bottom bar down; the Calendar says why
+            current = nxt = None
+        b, out = PALETTE, []
+        short = lambda e: escape(e["title"] if len(e["title"]) <= 24 else e["title"][:23] + "…")  # noqa: E731
+        if current:
+            left = int((cal._local(current["end"]) - now).total_seconds() // 60)
+            out.append(f"[b {b['fg1']}]now[/] {short(current)} [{b['grey1']}]{left} min left[/]")
+        if nxt:
+            start = cal._local(nxt["start"])
+            days = (start.date() - now.date()).days
+            when = (f"{start:%H:%M}" if days == 0 else f"tomorrow {start:%H:%M}" if days == 1 else
+                    f"{start:%a %H:%M}" if days < 7 else f"{start:%b %-d %H:%M}")
+            out.append(f"[{b['grey1']}]next[/] {short(nxt)} [{b['grey1']}]{when}[/]")
+        text = f" [{b['grey0']}]·[/] ".join(out)
+        _next_event.update(key=key, value=f"[@click=screen.go('calendar')][{b['grey1']}]{ICON['calendar']}[/] {text}[/]"
+                           if text else "")
+    return _next_event["value"]
+
+
 class StatusLine(Static):
     """The one bottom bar (#97): mode on the left, then the page's keys grouped by task, then counts and
     Connection health on the right. Keys are clickable. Flat, like the reference vim/tmux bars."""
@@ -3779,6 +3821,10 @@ class StatusLine(Static):
         counts = inbox.view_counts(app.db)
         parts = [f"[{b['grey1']}]{ICON['TODO']}[/] {counts['Todo']} todo",
                  f"[{b['grey1']}]{ICON['SNOOZED']}[/] {counts['Snoozed']} snoozed"]
+        if (soon := next_event_markup(app.db)):
+            parts.insert(0, soon)
+        if (why := cal.broken(app.db)):
+            parts.append(f"[b {b['bg0']} on {b['red']}] {ICON['broken']} Google Calendar broken [/]")
         for c in inbox.connections(app.db):
             # Icon only while healthy (the rail names each account); a broken one says which, in full.
             parts.append(f"[{b['grey1']}]{conn_icon(c)}[/] [{b['green']}]{ICON['ok']}[/]" if health_ok(c) else
@@ -5155,8 +5201,373 @@ class TodayPage(Page):
             self.enter(target, 1)
 
 
+# --- Calendar (ADR 0005) -------------------------------------------------------
+
+CAL_LINES = 4  # Event lines in a day cell; the rest show as +N
+CAL_COUNTS = (("task", "tasks"), ("snooze", "SNOOZED"), ("draft", "edited"), ("enrollment", "sequence"))
+CAL_WEEKS = (26, 52)  # weeks rendered before and after today; the cursor reaching an edge widens it
+
+
+def cal_by_day(items) -> dict:
+    """Calendar Items by local day; an Event that spans days is on each of them."""
+    out = {}
+    for i in items:
+        day = last = i["at"].date()
+        if i["kind"] == "event":
+            last = max(day, (cal._local(i["end"]) - timedelta(microseconds=1)).date())
+        while day <= last:
+            out.setdefault(day, []).append(i)
+            day += timedelta(days=1)
+    return out
+
+
+def cal_time(value) -> str:
+    """10:00 -> 10, 9:30 -> 9:30: the shortest clear start in a day cell."""
+    t = cal._local(value)
+    return f"{t.hour}" if t.minute == 0 else f"{t.hour}:{t.minute:02}"
+
+
+def cal_style(e) -> str:
+    return ("strike #a89984" if e["deleted_at"] else "#a89984" if e["state"] == "DECLINED" else
+            "#45707a" if e["all_day"] else "#654735")
+
+
+def cal_mark(e) -> str:
+    return "?" if e["state"] == "NEEDS-ACTION" else "~" if e["state"] == "TENTATIVE" else ""
+
+
+def cal_blocks(start: date, end: date) -> list:
+    """Week rows from Monday `start` to `end`, split at each month's first day by a separator row."""
+    blocks, day = [("sep", start)], start
+    while day < end:
+        week = [day + timedelta(days=i) for i in range(7)]
+        first = next((d for d in week if d.day == 1), None)
+        if first is not None and first != week[0]:
+            blocks += [("week", [d if d < first else None for d in week]), ("sep", first),
+                       ("week", [d if d >= first else None for d in week])]
+        else:
+            blocks += ([("sep", first)] if first is not None and blocks[-1] != ("sep", first) else []) + [("week", week)]
+        day += timedelta(days=7)
+    return blocks
+
+
+def cal_cell(day, items, width, cursor, today) -> list[str]:
+    """One day cell: its date, up to CAL_LINES Events, and a count line for the inbox's Calendar Items."""
+    if day is None:
+        return [" " * width] * (CAL_LINES + 2)
+    on = day == cursor
+    bg = f" on {PALETTE['bg4']}" if on else ""
+    def cut(s):  # by terminal cells: a wide emoji in a title must not push the next day over
+        return set_cell_size(set_cell_size(s, width - 2) + "…" if cell_len(s) > width - 1 else s, width)
+    head = f"{day.day}" + (f" {day:%b}" if day.day == 1 else "") + (" today" if day == today else "")
+    lines = [f"[b {PALETTE['blue'] if day == today else PALETTE['fg1'] if on else PALETTE['grey1']}{bg}]{escape(cut(' ' + head))}[/]"]
+    events = [i for i in items if i["kind"] == "event"]
+    shown = events if len(events) <= CAL_LINES else events[:CAL_LINES - 1]
+    for e in shown:
+        text = f" {'' if e['all_day'] else cal_time(e['start']) + ' '}{cal_mark(e)}{e['title']}"
+        lines.append(f"[{cal_style(e)}{bg}]{escape(cut(text))}[/]")
+    if len(events) > len(shown):
+        lines.append(f"[{PALETTE['grey1']}{bg}]{escape(cut(f' +{len(events) - len(shown)} more'))}[/]")
+    lines += [f"[{PALETTE['fg0']}{bg}]{' ' * width}[/]"] * (CAL_LINES + 1 - len(lines))
+    counts = Counter(i["kind"] for i in items)
+    tally = " ".join(f"{ICON[icon]}{counts[kind]}" for kind, icon in CAL_COUNTS if counts[kind])
+    lines.append(f"[{PALETTE['grey1']}{bg}]{escape(cut(' ' + tally))}[/]")
+    return lines
+
+
+class MonthGrid(VerticalScroll, can_focus=True):
+    """One scrolling month grid: week rows, a separator row where each month starts, the cursor on a day."""
+    BINDINGS = [Binding("h", "move(-1)", "day", key_display="h/l"), Binding("l", "move(1)", show=False),
+                Binding("j", "move(7)", "week", key_display="j/k"), Binding("k", "move(-7)", show=False),
+                Binding("left_curly_bracket", "month(-1)", "month", key_display="{/}"),
+                Binding("right_curly_bracket", "month(1)", show=False), Binding("t", "today", "today"),
+                Binding("tab", "day_pane", "day"), Binding("enter", "day_pane", show=False),
+                Binding("escape", "back", show=False)]
+
+    def __init__(self):
+        super().__init__(id="monthgrid")
+        self.today = date.today()
+        self.cursor = self.today
+        monday = self.today - timedelta(days=self.today.weekday())
+        self.start, self.end = monday - timedelta(weeks=CAL_WEEKS[0]), monday + timedelta(weeks=CAL_WEEKS[1])
+        self.by_day, self.blocks, self.shown = {}, [], []
+
+    def on_mount(self):
+        self.opened = False
+        self.load()
+
+    def on_resize(self, _):
+        self.render_blocks()
+        if not self.opened and self.size.width:  # first drawn at its real width: open on two weeks before today
+            self.opened = True
+            self.scroll_to_day(self.today - timedelta(weeks=2), top=True)
+
+    def load(self):
+        """Read the window's Calendar Items and draw it."""
+        self.today = date.today()
+        self.by_day = cal_by_day(cal.items(self.app.db, self.start, self.end))
+        blocks = cal_blocks(self.start, self.end)
+        if blocks != self.blocks:
+            self.blocks = blocks
+            self.remove_children()
+            self.mount_all([Static(classes="calsep" if kind == "sep" else "calweek") for kind, _ in blocks])
+            self.shown = [None] * len(blocks)
+        self.render_blocks()
+
+    def block_markup(self, kind, days) -> str:
+        width = max(6, (self.size.width - 1) // 7)
+        if kind == "sep":
+            label = f"── {days:%B %Y} "
+            return f"[b {PALETTE['blue']}]{label}{'─' * max(0, width * 7 - len(label))}[/]"
+        cells = [cal_cell(d, self.by_day.get(d, []) if d else [], width, self.cursor, self.today) for d in days]
+        return "\n".join("".join(row) for row in zip(*cells)) + f"\n[{PALETTE['bg5']}]{'─' * (width * 7)}[/]"
+
+    def render_blocks(self, only=None):
+        if not self.size.width:
+            return
+        for i, (widget, (kind, days)) in enumerate(zip(self.children, self.blocks)):
+            if only is not None and i not in only:
+                continue
+            markup = self.block_markup(kind, days)
+            if markup != self.shown[i]:  # unchanged rows: no redraw
+                self.shown[i] = markup
+                widget.update(markup)
+
+    def block_of(self, day) -> int:
+        return next(i for i, (kind, days) in enumerate(self.blocks) if kind == "week" and day in days)
+
+    def scroll_to_day(self, day, top=False):
+        i = self.block_of(day)
+        if top:  # by row arithmetic: right after drawing, the rows' heights are not laid out yet
+            y = sum(2 if kind == "sep" else CAL_LINES + 3 for kind, _ in self.blocks[:i])
+            self.set_timer(0.05, lambda: self.scroll_to(y=y, animate=False))
+        else:
+            self.scroll_to_widget(self.children[i], animate=False)
+
+    def set_cursor(self, day):
+        if not self.start <= day < self.end:  # the edge of the drawn window: widen it and draw again
+            self.start, self.end = min(self.start, day - timedelta(weeks=26)), max(self.end, day + timedelta(weeks=26))
+            self.start -= timedelta(days=self.start.weekday())
+            self.cursor = day
+            self.load()
+        else:
+            old, self.cursor = self.block_of(self.cursor), day
+            self.render_blocks(only={old, self.block_of(day)})
+        self.scroll_to_day(day)
+        self.parent.day_changed()
+
+    def action_move(self, days):
+        self.set_cursor(self.cursor + timedelta(days=days))
+
+    def action_month(self, step):
+        first = self.cursor.replace(day=1)
+        self.set_cursor((first + timedelta(days=32)).replace(day=1) if step > 0 else (first - timedelta(days=1)).replace(day=1))
+
+    def action_today(self):
+        self.set_cursor(date.today())
+        self.scroll_to_day(date.today() - timedelta(weeks=2), top=True)
+
+    def action_day_pane(self):
+        self.app.main.query_one(DayList).focus()
+
+    def action_back(self):
+        self.app.main.back()
+
+
+class DayList(OptionList):
+    """The right pane on the Calendar: every Calendar Item of the cursor's day, Enter opens one."""
+    BINDINGS = [Binding("j", "cursor_down", "move", key_display="j/k"), Binding("k", "cursor_up", show=False),
+                Binding("o", "join", "join link"), Binding("tab", "grid", "month"),
+                Binding("escape", "grid", show=False)]
+
+    def show(self, day, items):
+        self.items = items
+        self.clear_options()
+        self.add_option(Option(f"[b {PALETTE['blue']}]{day:%A, %B %-d}[/]", disabled=True))
+        for n, i in enumerate(items):
+            self.add_option(Option(cal_line(i), id=str(n)))
+        if not items:
+            self.add_option(Option(f"[{PALETTE['grey1']}]Nothing on this day.[/]", disabled=True))
+
+    def selected_item(self):
+        o = self.highlighted is not None and self.get_option_at_index(self.highlighted)
+        return self.items[int(o.id)] if o and o.id is not None else None
+
+    def on_option_list_option_selected(self, event):
+        event.stop()
+        if event.option.id is not None:
+            cal_open(self.app, self.items[int(event.option.id)])
+
+    def action_join(self):
+        i = self.selected_item()
+        url = i and i.get("join_url")
+        self.app.notify(f"[link='{url}']{escape(url)}[/link]" if url else "No join link for this.")
+
+    def action_grid(self):
+        self.app.main.query_one(MonthGrid).focus()
+
+
+def cal_line(i) -> str:
+    """One Calendar Item in the day pane."""
+    grey = PALETTE["grey1"]
+    if i["kind"] != "event":
+        icon = dict(CAL_COUNTS)[i["kind"]]
+        when = "" if i["all_day"] else f"{i['at']:%H:%M}  "
+        what = {"task": "Task", "snooze": "wakes", "draft": "sends", "enrollment": "starts"}[i["kind"]]
+        return f"[{grey}]{when}{ICON[icon]} {what}[/]  {escape(i['title'])}"
+    when = "all day" if i["all_day"] else f"{cal._local(i['start']):%H:%M}–{cal._local(i['end']):%H:%M}"
+    state = {"NEEDS-ACTION": "unanswered", "TENTATIVE": "maybe", "DECLINED": "declined"}.get(i["state"], "")
+    tags = " · ".join(t for t in (i["type"] if i["type"] == "block" else "", state,
+                                  "deleted" if i["deleted_at"] else "") if t)
+    where = i["location"].split("\n")[0][:40]
+    who = len(i["attendees"])
+    sub = " · ".join(t for t in (where, f"{who} people" if who > 1 else "", ICON["link"] if i["join_url"] else "") if t)
+    return (f"[{grey}]{when}[/]  [{cal_style(i)}]{escape(i['title'])}[/]" + (f"  [{grey}]{tags}[/]" if tags else "")
+            + (f"\n        [{grey}]{escape(sub)}[/]" if sub else ""))
+
+
+def cal_open(app, i):
+    """Open a Calendar Item where it lives: an Event's details, a Thread, a Task, a Draft, or a Person."""
+    main = app.main
+    if i["kind"] == "event":
+        main.open(lambda: EventPage(i))
+    elif i["kind"] == "snooze":
+        main.open_thread(i["ref"])
+    elif i["kind"] == "enrollment":
+        main.open_person(i["ref"])
+    else:
+        page = TasksPage() if i["kind"] == "task" else DraftsPage()
+        main.open(lambda: page)
+        app.call_after_refresh(lambda: app.call_after_refresh(lambda: page.refresh_data(select_id=i["ref"])))
+
+
+class CalendarPage(Page):
+    """Jeremy's work calendar (ADR 0005): one scrolling month grid, the cursor's day in the right pane."""
+    RAIL = "calendar"
+    TITLE = f"{ICON['calendar']} calendar"
+    SIDE = f"{ICON['calendar']} day"
+
+    def compose(self):
+        yield Static(id="calbanner")
+        yield MonthGrid()
+
+    def on_mount(self):
+        self.app.main.query_one("#thread").mount(DayList(id="daylist"))
+        self.refresh_data()
+
+    def focus_first(self):
+        self.query_one(MonthGrid).focus()
+
+    def refresh_data(self):
+        grid = self.query_one(MonthGrid)
+        p, why = cal.provider(self.app.db), cal.broken(self.app.db)
+        banner = self.query_one("#calbanner")
+        if p is None:
+            banner.update(f"[{PALETTE['grey1']}]No Event provider yet: add the google-calendar-ics credential "
+                          "(runbook §3g).[/]")
+        elif why:
+            since = cal._local(datetime.fromisoformat(p["ok_at"])).strftime("%a %H:%M") if p["ok_at"] else "earlier"
+            banner.update(f"[b {PALETTE['bg0']} on {PALETTE['red']}] {ICON['broken']} Google Calendar unreachable [/]"
+                          f" [{PALETTE['grey1']}]{escape(why)} · showing the copy as of {since}[/]")
+        else:
+            banner.update("")
+        banner.display = p is None or bool(why)
+        grid.load()
+        self.day_changed()
+
+    def day_changed(self):
+        grid = self.query_one(MonthGrid)
+        lists = self.app.main.query(DayList)
+        if lists:
+            lists.first().show(grid.cursor, grid.by_day.get(grid.cursor, []))
+
+
+class EventPage(Page):
+    """One Event: when, where, the join link, who comes with their answers (linked to People, Threads, Cases,
+    Organizations), the description, and the Context sources' view of its people beside it."""
+    BINDINGS = [Binding("escape", "back", "back"), Binding("o", "join", "join link"),
+                Binding("j", "scroll(1)", "scroll", key_display="j/k"), Binding("k", "scroll(-1)", show=False)]
+    SIDE = f"{ICON['tana']} context"
+    RAIL = "calendar"
+
+    def __init__(self, event: dict):
+        super().__init__()
+        self.event, self.TITLE = event, f"{ICON['calendar']} event"
+
+    def compose(self):
+        with TextScroll(id="eventscroll"):
+            yield Static(id="eventbody")
+
+    def on_mount(self):
+        self.refresh_data()
+
+    def focus_first(self):
+        self.query_one("#eventscroll").focus()
+
+    def refresh_data(self):
+        db, e, b = self.app.db, self.event, PALETTE
+        start, end = cal._local(e["start"]), cal._local(e["end"])
+        when = (f"{start:%a %b %-d} · all day" if e["all_day"] else f"{start:%a %b %-d} · {start:%H:%M}–{end:%H:%M}")
+        state = {"ACCEPTED": "Accepted", "TENTATIVE": "Tentative", "NEEDS-ACTION": "Unanswered",
+                 "DECLINED": "Declined"}.get(e["state"], e["state"].title())
+        out = [f"[b {b['blue']}]{escape(e['title'])}[/]  [{b['grey1']}][{state}][/]"
+               + (f"  [b {b['bg0']} on {b['red']}] deleted {e['deleted_at'][:10]} [/]" if e["deleted_at"] else ""),
+               f"{when}" + (" · repeats" if e["repeats"] else "")]
+        if e["location"]:
+            out.append(escape(e["location"]))
+        if e["join_url"]:
+            out.append(f"[{b['grey1']}]Join[/] [link='{e['join_url']}']{escape(e['join_url'])}[/link]  [{b['grey1']}](o)[/]")
+        mine = cal.me(db)
+        if e["organizer"]:
+            out.append(f"[{b['grey1']}]Organizer[/] {self.who(e['organizer']['email'], e['organizer']['name'])}")
+        people = e["attendees"]
+        if people:
+            out.append(f"\n[{b['grey1']}]{ICON['people']} attendees ({len(people)})[/]")
+            answer = {"ACCEPTED": "Accepted", "TENTATIVE": "Maybe", "NEEDS-ACTION": "Unanswered", "DECLINED": "Declined"}
+            for a in people:
+                out.append(f"  {self.who(a['email'], a['name'])}  [{b['grey1']}]{answer.get(a['state'], a['state'].title())}[/]")
+        domains = sorted({inbox._org(a["email"].split("@")[1]) for a in people if a["email"] not in mine and "@" in a["email"]})
+        known = [r["domain"] for r in db.execute(f"SELECT domain FROM organizations WHERE domain IN ({','.join('?' * len(domains))})",
+                                                    domains)] if domains else []
+        if known:
+            out.append(f"\n[{b['grey1']}]{ICON['organizations']} organizations[/]\n" + ", ".join(
+                f"[@click=app.open_org('{d}')][underline]{escape(d)}[/][/]" for d in known))
+        if e["description"]:
+            text, boiler = (e["description"].split("-::~", 1) + [""])[:2]  # Google's Meet/Zoom footer folds away
+            shown, trimmed = render.html_body(text) if "<" in text else render.text_body(text)
+            out.append(f"\n[{b['grey1']}]description[/]\n{shown}" + (f"\n[{b['grey1']}]•••[/]" if boiler or trimmed else ""))
+        self.query_one("#eventbody").update("\n".join(out))
+        emails = sorted({a["email"] for a in people if a["email"] not in mine})
+        self.app.main.show_side("", tana=(emails, known))
+
+    def who(self, email, name) -> str:
+        r = self.app.db.execute("SELECT person_id FROM identities WHERE kind = 'email' AND value = ? AND person_id IS NOT NULL",
+                                (email,)).fetchone()
+        name = "" if name.lower() == email else name
+        label = escape(name or email) + (" (you)" if email in cal.me(self.app.db) else "")
+        if r is None:
+            return f"{label}" + (f" [{PALETTE['grey1']}]{escape(email)}[/]" if name else "")
+        p = inbox.person_view(self.app.db, r[0])
+        open_ = [t for t in p["threads"] if t.status in ("TODO", "SNOOZED")]
+        extra = " · ".join(t for t in (f"{len(open_)} open Threads" if open_ else "",
+                                       "Case: " + ", ".join(p["cases"]) if p["cases"] else "") if t)
+        return (f"[@click=app.open_person({r[0]})][underline]{label}[/][/]"
+                + (f" [{PALETTE['grey1']}]{escape(extra)}[/]" if extra else ""))
+
+    def action_join(self):
+        url = self.event["join_url"]
+        self.app.notify(f"[link='{url}']{escape(url)}[/link]" if url else "No join link for this Event.")
+
+    def action_scroll(self, step):
+        self.query_one("#eventscroll").scroll_relative(y=step * 3, animate=False)
+
+    def action_back(self):
+        self.app.main.back()
+
+
 SECTIONS = {"today": TodayPage, "threads": ThreadsPage, "people": PeoplePage, "organizations": OrganizationsPage,
-            "cases": CasesPage, "channels": ChannelsPage, "tasks": TasksPage, "sequences": SequencesPage}
+            "cases": CasesPage, "channels": ChannelsPage, "tasks": TasksPage, "sequences": SequencesPage,
+            "calendar": CalendarPage}
 
 
 class MainScreen(Screen):
@@ -5241,6 +5652,11 @@ class MainScreen(Screen):
         if self.rail.has_focus:
             if direction > 0:
                 self.focus_list()
+        elif isinstance(self.current, CalendarPage):
+            if direction > 0 and not isinstance(self.focused, DayList):
+                self.query_one(DayList).focus()
+            elif direction < 0:
+                self.current.focus_first() if isinstance(self.focused, DayList) else self.rail.focus()
         elif tv is not None and tv.has_focus_within:
             if direction < 0:
                 self.focus_list()
@@ -5366,6 +5782,7 @@ class MainScreen(Screen):
         self.showing, self.side_text = None, None
         pane.set_class(bool(page.SIDE), "open")
         main.set_class(bool(page.SIDE), "split")
+        main.set_class(isinstance(page, CalendarPage), "wide")
         pane.border_title = pill(page.SIDE, "green") if page.SIDE else ""
         main.mount(page)
         main.border_title = pill(page.TITLE, "blue")

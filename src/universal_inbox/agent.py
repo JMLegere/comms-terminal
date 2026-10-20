@@ -1,9 +1,11 @@
-"""Commands for a terminal agent: Threads, Drafts, and Due Tasks as Markdown, changes to a Draft, and enrolling a
-Person in a Sequence. Nothing here sends, completes, or finishes; Jeremy does that from the console (FR-SEQ-22)."""
+"""Commands for a terminal agent: Threads, Drafts, and Due Tasks as Markdown, changes to a Draft, enrolling a
+Person in a Sequence, and Jeremy's calendar Events. Nothing here sends, completes, or finishes; Jeremy does that from the console (FR-SEQ-22)."""
 
+import json
 import sys
+from datetime import date, datetime, timedelta
 
-from . import files, inbox, sequences
+from . import calendar, files, inbox, sequences
 from .platforms import PLATFORMS
 from .tui import (CONTEXT_SOURCES, DRAFT_FIELDS, ReplyError, connection_label, draft_history, draft_text,
                   socket_context, staged_files, task_markdown, thread_addresses, thread_text)
@@ -28,6 +30,14 @@ def add_parsers(sub):
     e.add_argument("person", help="a Person id, email address, or exact name")
     e.add_argument("sequence", help="a Sequence id or exact name")
     e.add_argument("--start", help="a later Start date: YYYY-MM-DD, or a number of days from today")
+    v = sub.add_parser("events", help="Jeremy's calendar Events, repeats expanded, local time (ADR 0005)")
+    v.add_argument("--from", dest="start", type=date.fromisoformat, help="first day, YYYY-MM-DD (default today)")
+    v.add_argument("--to", dest="end", type=date.fromisoformat, help="last day, YYYY-MM-DD (default 7 days on)")
+    v.add_argument("--attendee", help="only Events with this address, or anyone at this domain")
+    v.add_argument("--query", help="only Events whose title contains this text")
+    v.add_argument("--last", type=int, metavar="N", help="the last N Events that already started, newest first")
+    v.add_argument("--deleted", action="store_true", help="include Deleted Events (gone from Google, kept here)")
+    v.add_argument("--json", action="store_true", help="one JSON object per line")
 
 
 def run(a, db):
@@ -49,6 +59,8 @@ def run(a, db):
             print("".join(task_markdown(db, t) + "\n" for t in due) or "No Tasks due.\n", end="")
         elif a.cmd == "enroll":
             print(enroll(db, a.person, a.sequence, getattr(a, "start", None)))
+        elif a.cmd == "events":
+            print(events(db, a), end="")
         else:
             changes = {k: getattr(a, k) for k in ("to", "cc", "subject", "body") if getattr(a, k) is not None}
             if changes.get("body") == "-":
@@ -117,3 +129,35 @@ def enroll(db, person: str, sequence: str, start: str | None = None) -> str:
         raise ValueError(f"--start {start!r} is neither YYYY-MM-DD nor a number of days")
     eid = sequences.enroll(db, rows[0][0], match[0]["id"], now, start=day)
     return f"Enrolled in {match[0]['name']}: the first Task is due {sequences.first_due(db, eid, now)}."
+
+
+def events(db, a) -> str:
+    today = date.today()
+    if a.last:
+        start, end = date(1970, 1, 1), today + timedelta(days=1)
+    else:
+        start, end = a.start or today, (a.end or (a.start or today) + timedelta(days=7)) + timedelta(days=1)
+    found = calendar.expand(db, start, end, deleted=a.deleted)
+    if a.attendee:
+        key = a.attendee.lower().lstrip("@")
+        hit = lambda m: m == key or m.endswith("@" + key)  # noqa: E731
+        found = [e for e in found if any(hit(p["email"]) for p in e["attendees"] + [e["organizer"] or {"email": ""}])]
+    if a.query:
+        found = [e for e in found if a.query.lower() in e["title"].lower()]
+    if a.last:
+        now = datetime.now().astimezone()
+        found = [e for e in found if calendar._local(e["start"]) <= now][::-1][:a.last]
+    if a.json:
+        return "".join(json.dumps({**{k: e[k] for k in ("id", "kind", "all_day", "title", "location", "join_url",
+                                                          "organizer", "attendees", "state", "repeats", "deleted_at")},
+                                   "start": e["start"].isoformat(), "end": e["end"].isoformat()}) + "\n" for e in found)
+    return "".join(event_line(e) + "\n" for e in found) or "No Events.\n"
+
+
+def event_line(e) -> str:
+    start, end = calendar._local(e["start"]), calendar._local(e["end"])
+    when = f"{start:%Y-%m-%d %a} all day" if e["all_day"] else f"{start:%Y-%m-%d %a %H:%M}-{end:%H:%M}"
+    who = e["organizer"]["email"] + " (organizer)" if e["organizer"] else ""
+    more = f" +{len(e['attendees']) - 1}" if len(e["attendees"]) > 1 else ""
+    gone = f"\tdeleted {e['deleted_at'][:10]}" if e["deleted_at"] else ""
+    return f"{when}\t{e['title']}\t[{e['state'].lower()}]\t{who}{more}{gone}"

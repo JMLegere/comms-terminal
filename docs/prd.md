@@ -173,6 +173,11 @@ Status key in brackets:
   - Fetch through Linear's GraphQL API on page open, using a Jeremy-owned personal API key restricted to **Read** and only required teams. Store the key as an encrypted service credential; the console never holds it. Use the same five-minute service cache as other Context sources. The section reports errors; the rail and bottom bar show Linear source health separately from Connection health. No Linear writes, issue/task creation, comments, notifications, or webhooks. Reason: Jeremy wants active issue context beside conversations while task management stays in Linear (2026-10-15). Capability is published and deployed under "ship it"; Linear was connected on 2026-10-16 with a Read-only key covering both workspace teams; see the [connection receipt](design/linear-context.md#connection-receipt--2026-10-16).
   - **Review accepted** (2026-10-15): Jeremy's annotations on the focused [spike findings and phased plan](design/linear-context.md#spike-findings) accept the issue exclusions, bounded Customer Request text inspection, and inherited context/match reasons. Auth remains settled as "Read-only API key". Jeremy subsequently authorized local Phases 1–4 with "execute the plan", then code publication and existing Workbox package/service deployment with "ship it"; both release steps are complete. The plan records implementation, regression-suite limitations, deployment receipt, and installed fixture UI evidence. Account/credential and workspace/team-access changes remain separately gated; human acceptance remains separate.
 
+- **FR-13d** [D]: The Calendar shows Jeremy's work calendar, read-only, beside the inbox's own dated items (decision #139, ADR 0005). The service reads Google Calendar's secret iCal address every 30 seconds and keeps every Event it has seen; an Event that leaves Google becomes a Deleted Event, kept and struck through. Repeating Events expand for any range, with no horizon.
+  - [D] Calendar sits in the rail under Today: one month grid of week rows that scrolls without pages, a separator row where each month starts, opening on two weeks before through two weeks after this week. A day cell lists its Events (declined dimmed, unanswered marked `?`, Deleted struck through) and one count line for Tasks, Snoozed Threads, scheduled Drafts, and Enrollment starts. The right pane lists every Calendar Item of the cursor's day; Enter opens an Event's details (attendees linked to People, Threads, Cases, and Organizations; join link; Context sources) or the Thread, Task, Draft, or Person.
+  - [D] The bottom bar shows the Event in progress with the time left, then the next timed Event on any day; Declined, All-day, and Deleted Events do not count. After three failed fetches the Calendar shows its last copy with "as of" and the bottom bar shows Google Calendar broken.
+  - [D] Agents read Events with `universal-inbox events` (expanded, local time, `--json`). Reason: Jeremy leaves the terminal for a browser to see his schedule (2026-10-20, `.agents/discovery/2026-10-20-calendar.md`).
+
 ### Console
 
 - **FR-14** [PL + D]: **Keyboard**:
@@ -985,6 +990,11 @@ All entries are dated 2026-10-10; exact times are unproven unless noted. Full de
   - Request / decision: Retain blocked ordinary inbound messages, edits, and deletions while suppressing their arrival-driven Status application on existing Threads. New blocked Threads still start Ignored. Keep per-Identity scope, other participants, Phone calls, timers, explicit actions, complete email merge triage, and Sequence pause hooks under their existing rules. Unblocking restores normal eligibility for future activity while existing Ignored Threads remain sticky.
   - Source: Jeremy, "ship it" (2026-10-20), approving the bounded blocked-reply policy and implementation.
   - Status: Approved; implementation authorized. Verification and release outcomes are recorded separately.
+
+- **139**
+  - Request / decision: A read-only Calendar in the console, like renCal, from Jeremy's Google work calendar (FR-13d, ADR 0005). The service polls the secret iCal address every 30 seconds, stores Events as Google gives them, keeps Deleted Events forever, and expands repeats on read. Supersedes #122's "no Google Calendar Connection" for the Calendar; the Tana section's Meetings are unchanged. Considered: Google Calendar API with push (needs a sign-in; the path for later writes), Tana's sync (timing unknown), vdirsyncer/khal beside the console, invite-derived Events.
+  - Source: Jeremy's discovery and grilling answers (2026-10-20), spike (Google changes reached the feed in 8–13 s), "implement and ship".
+  - Status: Built and shipped (2026-10-20).
 
 ## 8. Work log
 

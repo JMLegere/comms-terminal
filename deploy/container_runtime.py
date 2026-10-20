@@ -33,7 +33,7 @@ CREDENTIALS = (
     "email-hook-secret", "resend-api-key", "attio-token", "fastmail-oauth",
     "quo-webhook-secret", "quo-api-key", "slack-signing-secret", "slack-user-token",
 )
-OPTIONAL_CREDENTIALS = ("tana-oauth", "linear-token", "resend-webhook-secret")
+OPTIONAL_CREDENTIALS = ("tana-oauth", "linear-token", "resend-webhook-secret", "google-calendar-ics")
 ADMITTED_CREDENTIALS = CREDENTIALS + OPTIONAL_CREDENTIALS
 INSPECT = ('{"running":{{json .State.Running}},"pid":{{json .State.Pid}},'
            '"execs":{{json .ExecIDs}},"image":{{json .Image}},'
