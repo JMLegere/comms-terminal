@@ -5274,6 +5274,7 @@ class ReplyDrafts(MutableMapping):
 
 
 APP_LOCK_PATH = Path("/run/universal-inbox-deploy/app.lock")
+UPDATE_EXIT = 75  # CommsTerminal: the launcher installs the service's build and opens the console again
 
 
 def inherited_app_lock_fd():
@@ -5693,8 +5694,18 @@ class Console(App):
         mine = build_version().rsplit("-", 1)[-1] if build_version() else ""
         if version != inbox.SCHEMA_VERSION or (service and mine and service != mine):
             self.set_online("Update ready · restart CommsTerminal to load the service's version; read-only.")
+            if service and mine and service != mine:
+                self.update_now()
         elif self.syncer is not None and self.syncer.confirmed:
             self.set_online(None)
+
+    def update_now(self):
+        """The service runs another build: quit with UPDATE_EXIT, so deploy/commsterminal-local installs that build
+        and reopens, once no write is on its way and no reply text would be lost."""
+        saved = not self.is_screen_installed("main") or self.main.save_draft()  # at mount, nothing is typed yet
+        if self.remote is None or not self.remote.idle.is_set() or not saved or self.drafts.__dict__.get("held"):
+            return
+        self.exit(return_code=UPDATE_EXIT)
 
     def set_online(self, problem):
         """None: the service answers and writes are on; else why the console is read-only (status bar)."""
