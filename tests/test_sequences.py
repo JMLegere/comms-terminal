@@ -349,3 +349,78 @@ def test_review_fixes_hold(db):
     assert moved == 1 and sq.enrollments(db, dana)[0]["reason"] == "COMPLETED"
     sq.restore_step(db, undo)
     assert sq.enrollments(db, dana)[0]["state"] == "ACTIVE" and len(sq.tasks_due(db, MONDAY + 6 * DAY)) == 1
+
+
+def chained(db):
+    """Outbound: a call, then a sequence Step into Nurture (one letter)."""
+    nurture = sq.create_sequence(db, "Nurture")
+    sq.add_step(db, nurture, "letter")
+    out = sq.create_sequence(db, "Outbound")
+    sq.add_step(db, out, "call")
+    step = sq.add_step(db, out, "sequence")
+    assert sq.validate(db, out) == [(step, "Name the Sequence this Step enrolls them in.")]
+    sq.save_step(db, step, enroll_sequence_id=out)
+    assert sq.validate(db, out) == [(step, "A Step cannot enroll them in its own Sequence; they are still in it.")]
+    sq.save_step(db, step, enroll_sequence_id=nurture)
+    assert sq.validate(db, out) == []
+    return out, nurture
+
+
+def live(db, person_id):
+    return [(e["sequence"], e["state"], e["reason"]) for e in sq.enrollments(db, person_id)]
+
+
+def test_sequence_step_enrolls_someone_who_never_responded_in_the_next_sequence(db):
+    out, nurture = chained(db)
+    dana = person(db, "dana@harbourline.example", "Dana Roy")
+    sq.enroll(db, dana, out, MONDAY)
+    (call,) = sq.tasks_due(db, MONDAY)
+    sq.complete_task(db, call["id"], MONDAY)
+    assert live(db, dana) == [("Outbound", "ACTIVE", None)]  # the sequence Task waits for its day
+    sq.materialize(db, MONDAY + DAY)
+    assert live(db, dana) == [("Nurture", "ACTIVE", None), ("Outbound", "FINISHED", "COMPLETED")]
+    assert due(db, MONDAY + DAY) == [("Dana Roy", "letter", "due today", 1)]
+    sq.finish(db, sq.enrollments(db, dana)[0]["id"], "CANCELED", MONDAY + DAY)
+    sq.enroll(db, dana, out, MONDAY + DAY)  # a second run through Outbound does not loop into Nurture again
+    (call,) = sq.tasks_due(db, MONDAY + DAY)
+    sq.complete_task(db, call["id"], MONDAY + DAY)
+    sq.materialize(db, MONDAY + 2 * DAY)
+    (t,) = sq.tasks_due(db, MONDAY + 2 * DAY)
+    assert (t["kind"], t["flag"], t["enroll_sequence"]) == ("sequence", "already went through Nurture", "Nurture")
+
+
+def test_sequence_step_waits_for_jeremy_when_they_responded_and_undo_removes_the_enrollment(db):
+    out, nurture = chained(db)
+    dana = person(db, "dana@harbourline.example", "Dana Roy")
+    sq.enroll(db, dana, out, MONDAY)
+    inbox.ingest(db, inbox.Incoming(1, ME, "mailbox", "MESSAGE", "<dana-reply@x>",
+                                    inbox.Identity("email", "dana@harbourline.example", "Dana Roy"),
+                                    MONDAY + timedelta(hours=1), "Not now", title="Re: Hello"))
+    (e,) = [x for x in sq.enrollments(db, dana) if x["sequence"] == "Outbound"]
+    sq.resume(db, e["id"], MONDAY + DAY)
+    (call,) = sq.tasks_due(db, MONDAY + DAY)
+    sq.complete_task(db, call["id"], MONDAY + DAY)
+    sq.materialize(db, MONDAY + 2 * DAY)
+    (t,) = sq.tasks_due(db, MONDAY + 2 * DAY)
+    assert t["flag"] == "they responded Oct 19" and live(db, dana) == [("Outbound", "ACTIVE", None)]
+    undo = sq.complete_task(db, t["id"], MONDAY + 2 * DAY)  # Jeremy enrolls them anyway
+    assert live(db, dana) == [("Nurture", "ACTIVE", None), ("Outbound", "FINISHED", "COMPLETED")]
+    sq.undo_task(db, undo)
+    assert live(db, dana) == [("Outbound", "ACTIVE", None)]
+    assert [x["kind"] for x in sq.tasks_due(db, MONDAY + 2 * DAY)] == ["sequence"]
+
+
+def test_version_20_steps_tasks_and_pauses_survive_the_sequence_step_rebuild(db):
+    from schema_history import downgrade
+    s, steps = secret(db)
+    dana = person(db, "dana@harbourline.example", "Dana Roy")
+    sq.enroll(db, dana, s, MONDAY)
+    with db:
+        db.execute("UPDATE enrollments SET state = 'PAUSED', paused_at = ?", (MONDAY.isoformat(),))
+    downgrade(db, 20)
+    before = [tuple(r) for r in db.execute("SELECT * FROM sequence_steps ORDER BY id")]
+    inbox.migrate(db)
+    assert [tuple(r)[:-1] for r in db.execute("SELECT * FROM sequence_steps ORDER BY id")] == before
+    assert db.execute("SELECT responded_at FROM enrollments").fetchone()[0] == MONDAY.isoformat()
+    assert db.execute("PRAGMA foreign_key_check").fetchall() == []
+    sq.add_step(db, s, "sequence")

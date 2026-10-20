@@ -103,7 +103,7 @@ An ordered set of Steps, each due a number of business days after the previous o
 _Avoid_: Campaign, Cadence, Workflow
 
 **Step**:
-One touch in a Sequence, of one kind (email, call, LinkedIn, or letter), holding everything needed to do it. A Step is the template; each Enrollment works it as a Task.
+One touch in a Sequence, of one kind (email, call, LinkedIn, letter, or sequence), holding everything needed to do it. A Step is the template; each Enrollment works it as a Task. A sequence Step chains Sequences: on its day it enrolls the Person in another Sequence, unless they responded during this one or went through that one before, when its Task waits for Jeremy.
 _Avoid_: Touch, Action, Task (for one Person's copy)
 
 **Enrollment**:

@@ -326,3 +326,45 @@ def test_an_email_task_sends_from_the_tasks_page_and_the_next_task_follows(tmp_p
     run(Console(path, send_draft=send_draft), [scenario], size=(187, 40))
     assert seen["editor"] == "TaskDraftView"
     assert seen["task"] == ("DONE", 1)
+
+
+def test_sequence_step_names_its_sequence_and_a_waiting_task_enrolls_on_e(tmp_path):
+    path, _ = seeded(tmp_path)
+    db, s = calls(path)
+    nurture = sq.create_sequence(db, "Nurture")
+    sq.add_step(db, nurture, "letter")
+    chain = sq.create_sequence(db, "Chain")
+    sq.save_step(db, sq.add_step(db, chain, "sequence"), enroll_sequence_id=nurture)
+    ana = next(p["id"] for p in inbox.people(db) if p["name"] == "Ana Ruiz")
+    sq.finish(db, sq.enroll(db, ana, nurture), "CANCELED")
+    sq.enroll(db, ana, chain)  # she went through Nurture before, so the Task waits
+    seen = {}
+
+    async def scenario(app, pilot):
+        app.main.go("sequences")
+        await pilot.pause()
+        app.main.current.query_one("#steps").focus()
+        await pilot.press("n")
+        await pilot.pause()
+        choose(app, "sequence")
+        await pilot.press("enter")
+        await pilot.pause()
+        editor = app.main.query_one(StepEditor)
+        editor.query_one("#f-sequence", Input).value = "Nowhere"
+        seen["refused"] = editor.save()
+        editor.query_one("#f-sequence", Input).value = "nurture"
+        seen["saved"] = editor.save()
+        seen["step"] = [(x["kind"], x["enroll_sequence_id"]) for x in sq.sequence_steps(app.db, s)]
+        app.main.go("tasks")
+        await pilot.pause()
+        t = app.main.current.selected()
+        seen["task"] = (t["kind"], t["flag"])
+        await pilot.press("e")
+        await pilot.pause()
+
+    run(Console(path), [scenario], size=(187, 40))
+    assert seen["refused"] is False and seen["saved"] is True
+    assert seen["step"] == [("call", None), ("sequence", nurture), ("email", None)]
+    assert seen["task"] == ("sequence", "already went through Nurture")
+    assert [(e["sequence"], e["state"]) for e in sq.enrollments(db, ana)] == [
+        ("Nurture", "ACTIVE"), ("Chain", "FINISHED"), ("Nurture", "FINISHED")]
