@@ -393,7 +393,7 @@ def test_case_shows_threads_as_cards_and_replies_in_one(tmp_path):
 
     run(app, [open_case, cards, "r", *"on it", "ctrl+enter", "enter"])
     assert seen["order"] and seen["focus"]
-    assert seen["collapsed"] == {ids["ana"]: False, ids["spec"]: True}  # Done threads collapse, like resolved
+    assert seen["collapsed"] == {ids["ana"]: False, ids["spec"]: False}  # Done threads show too
     assert sent == [ids["ana"]]
 
 

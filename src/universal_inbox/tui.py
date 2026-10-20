@@ -3840,7 +3840,7 @@ class CaseCard(Vertical):
         if expanded:
             body = ""
             show_messages(msgs_box, message_widgets(v, self.app.message_state(t.id), self.app.raw))
-        else:  # Done or Ignored: collapsed like a resolved Linear thread
+        else:  # folded with enter
             msgs_box.remove_children()
             last = msgs[-1]["at"] if msgs else None
             body = (f"[#928374]{len(msgs)} message{'s' * (len(msgs) != 1)} · last {ago(last)} · "
@@ -4012,8 +4012,7 @@ class CasePage(Page, ThreadActions):
             self.paint()
 
     def expanded(self, v) -> bool:
-        open_thread = v["thread"].status != "DONE"
-        return open_thread != (v["thread"].id in self.toggled)
+        return v["thread"].id not in self.toggled  # every Thread shows; enter folds one to a line
 
     def live_cards(self) -> list:
         """Cards for the Case's Threads, in order; a card being removed has no Thread."""
