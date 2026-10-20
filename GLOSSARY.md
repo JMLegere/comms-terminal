@@ -74,7 +74,7 @@ A Done Status for noise that does not move when new messages arrive, until Jerem
 _Avoid_: Dismissed, Archived
 
 **Blocked**:
-A flag on one Identity that makes new Threads from it start as Ignored.
+A flag on one Identity that makes new Threads from it start as Ignored and keeps its ordinary inbound messages, edits, and deletions from moving an existing Thread's Status. Activity stays in history. Phone calls, independent timers, and email Thread reconciliation keep their own rules.
 _Avoid_: Spam, Blacklisted, Screened out, Ignored (for senders)
 
 **Triage**:

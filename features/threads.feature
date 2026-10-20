@@ -15,6 +15,14 @@ Feature: Threads
     When Ingest receives a new email from "alerts@signoz.io"
     Then a Thread is created with Status "DONE" and Status Detail "IGNORED"
 
+  @AS-6 @FR-7a
+  Scenario: Ingest of a blocked Slack reply preserves an existing waiting Thread
+    Given a Slack Thread from "U0BOT" with Status "SNOOZED" and Status Detail "WAITING_FOR_CUSTOMER"
+    When Block is called for Kind "slack_user" and Value "U0BOT"
+    And Ingest receives a Slack reply from "U0BOT" in that Slack thread at "10:40"
+    Then both messages are in one Thread
+    And the Thread has Status "SNOOZED" and Status Detail "WAITING_FOR_CUSTOMER"
+
   @AS-4 @FR-6c
   Scenario: Ingest of the other side's reply moves a waiting Thread to TODO / NEW_REPLY
     Given an email Thread from "ana@acme.com" with Status "SNOOZED" and Status Detail "WAITING_FOR_CUSTOMER"

@@ -224,13 +224,17 @@ Stored values are Plain's enum names. The console shows the product label.
 
 ### Rules (inside `inbox`)
 
-One pure function, `inbox.transition`, decides every rule below; each writer persists its result.
+Ingestion checks arrival eligibility first. Eligible arrivals and the other writers' events pass to the pure `inbox.transition`; each writer persists its result.
+
+**Existing-Thread arrival eligibility** **[D]** (FR-7a; decision #138, approved 2026-10-20): `_ingest` stores the Activity and Attachments and reconciles email before checking whether the arrival may apply Status rules. On an existing or reconciled Thread, a blocked inbound Identity's ordinary `MESSAGE`, `EDIT`, or `DELETE` skips `transition` and `_set_status`. The selected `status`, `status_detail`, `status_changed_at`, `snoozed_until`, `detail_before_snooze`, and `follow_up_at` stay unchanged by that arrival, with no arrival-driven Status audit entry.
+
+Deletion content clearing and Sequence pause hooks still run. A Phone call (`MESSAGE` carrying `data.call`) keeps its existing eligibility and rules, including Thread creation and sticky Ignored behavior. Independent timers, Jeremy's own activity, explicit actions, and unblocked participants retain their rules. Email reconciliation can select another existing complete triage state before this guard; the guard preserves that selected state. Unblocking restores normal eligibility for future arrivals while Ignored remains sticky.
 
 **`ingest`**
 - New Thread from another person, sender not blocked → `TODO` / `CREATED` (FR-6a).
 - New Thread from another person, sender blocked → `DONE` / `IGNORED` (FR-7a).
 - New Thread from Jeremy (his own top-level Slack post) → `SNOOZED` / `WAITING_FOR_CUSTOMER` **[D]** (decision #61).
-- Another person's message, edit, or deletion on an existing Thread (FR-6c):
+- Another person's eligible message, edit, or deletion on an existing Thread (FR-6c):
   - from `SNOOZED` or `DONE_MANUALLY_SET` → `TODO` / `NEW_REPLY`.
   - from `TODO` / `CREATED` → unchanged **[C]**: the first response is still owed.
   - from `TODO` / `NEW_REPLY` or `IN_PROGRESS` → `TODO` / `NEW_REPLY` **[C]**.
@@ -264,7 +268,7 @@ One pure function, `inbox.transition`, decides every rule below; each writer per
 - **Initial email parent**: a new message first attaches to the earliest valid, stored same-mailbox parent in `Incoming.thread_ref` order (`In-Reply-To` precedes `References`). Shared-ancestor and native-ID intersections are the fallback. Eligible reconciliation still chooses the lowest canonical ID afterward; a Case-conflicting bridge stays attached to its explicit parent while the component remains separate.
 - **Identifier syntax**: bracketed ASCII dot-atom Message-IDs and domain literals; nested RFC comments and quoted prose are skipped with their escapes, and identifier case stays exact. The remaining field must be a sequence of valid Message-IDs and whitespace; adjacent IDs are accepted. Unstructured residual text, bare IDs, whitespace/control characters inside IDs, malformed IDs, and ambiguous own IDs supply no identity evidence. Subjects, senders, bodies, dates, and `fm_thread` alone never create reconciliation edges. Provider-supplied explicit member Message-IDs retain their existing behavior; reconciliation makes no provider calls.
 - **Raw recovery**: explicit preview/apply reads `data.raw` only as a lowercase 64-hex SHA256 pointer to `raw/<sha>.eml` beside the database. It rejects symlinks, verifies the complete byte hash, parses headers only, and requires the raw Message-ID to agree with the original stored native-ID singleton, independently of any receipt aliases. Mail lacking a Message-ID may instead prove the existing `<sha256-<verified hash>@inbox>` fallback. Recovery indexes `In-Reply-To` and `References`; missing or invalid evidence remains a coverage gap.
-- **Triage during ingest**: reconciliation first selects the latest complete existing triage state, then the new Activity follows the ordinary inbound/outbound status rules. Duplicate evidence never repeats those rules. Existing sent-echo deduplication remains a separate operation.
+- **Triage during ingest**: reconciliation first selects the latest complete existing triage state, then the new Activity follows the arrival eligibility check and inbound/outbound status rules in §4. A blocked ordinary arrival preserves the selected state. Duplicate evidence never repeats those rules. Existing sent-echo deduplication remains a separate operation.
 - **Triage during sending**: capture pre-provider attempt time, Activity high-water mark, and complete triage state. Outbound persistence resolves the canonical Thread without overwriting newer inbound work or user triage. Selected original reply draft ID remains the staging owner; alias reconciliation never unions staged files from different drafts.
 - **Durable send boundary**: new outgoing Gmail Activities may persist `data.seen_through_activity_id`, the global Activity high-water mark captured in the coherent pre-provider snapshot. The latest logical own send's valid integer checkpoint lets a Case-compatible exact component with an actual receipt-derived alias/reference link retain its complete current Todo/Investigating state when inbound Activity IDs exceed that boundary, instead of hiding unseen inbound work under ordinary Waiting. A later own send whose snapshot included that inbound and newer Done/Paused/Ignored triage retain normal precedence. This internal metadata is written only at Activity insertion; legacy latest-own rows without a valid checkpoint keep ordinary reducer/manual-repair limits. No user configuration, schema change, or old Activity rewrite is involved.
 - **Slack**:

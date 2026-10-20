@@ -3501,8 +3501,9 @@ class PersonPage(Page):
         i = self.selected()
         if i:
             inbox.block(self.app.db, i["kind"], i["value"], not i["blocked"])
-            message = (f"Unblocked {i['value']}: new messages reach Todo again." if i["blocked"] else
-                       f"Blocked {i['value']}: new messages go straight to Ignored.")
+            message = (f"Unblocked {i['value']}: future messages follow normal Thread rules." if i["blocked"] else
+                       f"Blocked messages from {i['value']}: existing Threads won't reopen on messages, edits or deletes; "
+                       "new Threads start Ignored.")
             self.app.offer_undo(message, lambda: inbox.block(self.app.db, i["kind"], i["value"], bool(i["blocked"])))
             self.refresh_data()
 

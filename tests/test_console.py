@@ -213,12 +213,28 @@ def test_person_page_toggles_block(tmp_path):
     db = inbox.connect(path)
     pid = db.execute("SELECT person_id FROM identities WHERE value = 'ana@acme.com'").fetchone()[0]
     app = Console(path)
+    blocked = lambda: db.execute("SELECT blocked FROM identities WHERE value = 'ana.ruiz@gmail.com'").fetchone()[0]  # noqa: E731
 
     async def open_person(app, pilot):
         app.main.open_person(pid)
 
-    run(app, [open_person, "b"])  # first row: ana.ruiz@gmail.com, seeded as blocked
-    assert db.execute("SELECT blocked FROM identities WHERE value = 'ana.ruiz@gmail.com'").fetchone()[0] == 0
+    async def check_unblocked(app, pilot):
+        assert blocked() == 0
+        assert any(m.startswith("Unblocked ana.ruiz@gmail.com: future messages follow normal Thread rules.")
+                   and "undo" in m for m in (n.message for n in app._notifications))
+
+    async def check_undo_unblock(app, pilot):
+        assert blocked() == 1 and app.undo is None
+
+    async def check_blocked(app, pilot):
+        assert blocked() == 1
+        assert any(m.startswith("Blocked messages from ana.ruiz@gmail.com: existing Threads won't reopen on messages, "
+                               "edits or deletes; new Threads start Ignored.")
+                   and "undo" in m for m in (n.message for n in app._notifications))
+
+    # First row: ana.ruiz@gmail.com, seeded as blocked. Undo both unblock and block.
+    run(app, [open_person, "b", check_unblocked, "z", check_undo_unblock, "b", "b", check_blocked, "z"])
+    assert blocked() == 0 and app.undo is None
 
 
 def test_person_page_renames_and_undo_restores(tmp_path):

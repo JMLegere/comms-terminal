@@ -1,11 +1,12 @@
 """Audit log: every Status or Case change of a Thread is recorded with its cause and shown in the timeline."""
 
 import sqlite3
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from universal_inbox import inbox
+from universal_inbox import inbox, sequences
 from universal_inbox.tui import audit_markup
 
 NOW = datetime(2026, 10, 15, 15, 0, tzinfo=timezone.utc)
@@ -90,3 +91,126 @@ def test_case_feed_shows_threads_joining_and_leaving_and_description_edits(monke
     assert feed(other) == [("created", None, None), ("added", b.id, "action"), ("removed", b.id, "undo")]
     with pytest.raises(sqlite3.DatabaseError, match="append-only"):
         db.execute("DELETE FROM case_log")
+
+
+@pytest.fixture
+def slack_thread(monkeypatch):
+    monkeypatch.setattr(inbox, "_now", lambda: NOW)
+    db = inbox.connect()
+    inbox.migrate(db)
+    with db:
+        db.execute("INSERT INTO connections (platform, external_id, self_id, label, connected_at)"
+                   " VALUES ('slack', 'T0TEST', 'U0SELF', 'Slack', ?)", (NOW.isoformat(),))
+    original = inbox.Incoming(1, "D0TEST", "im", "MESSAGE", "D0TEST:1",
+                              inbox.Identity("slack_user", "U0BOT"), NOW - timedelta(minutes=2), "original")
+    thread = inbox.ingest(db, original)
+    yield db, original, thread
+    db.close()
+
+
+@pytest.mark.parametrize("action", [
+    inbox.Wait(), inbox.Snooze(NOW + timedelta(days=1)), inbox.Done(), inbox.Investigate(),
+], ids=["waiting", "timed-snooze", "done", "investigating"])
+@pytest.mark.parametrize("kind", ["MESSAGE", "EDIT", "DELETE"])
+def test_blocked_activity_preserves_triage_audit_and_ingestion_effects(slack_thread, monkeypatch, action, kind):
+    db, original, thread = slack_thread
+    edited = replace(original, kind="EDIT", native_id="D0TEST:1:2", content="edited",
+                     occurred_at=NOW - timedelta(minutes=1))
+    inbox.ingest(db, edited)
+    inbox.act(db, thread.id, inbox.Investigate())  # a timed snooze must retain its prior Todo detail
+    inbox.act(db, thread.id, action)
+    inbox.block(db, "slack_user", "U0BOT")
+    before, audit = inbox.snapshot(db, thread.id), entries(db, thread.id)
+    paused = []
+    monkeypatch.setattr(sequences, "pause_person", lambda *args: paused.append(args))
+    native_id = {"MESSAGE": "D0TEST:3", "EDIT": "D0TEST:1:3", "DELETE": original.native_id}[kind]
+    at = NOW + timedelta(minutes=1)
+    result = inbox.ingest(db, replace(original, kind=kind, native_id=native_id, occurred_at=at,
+                                      content="blocked update", thread_ref=[original.native_id]))
+    assert result.id == thread.id
+    assert inbox.snapshot(db, thread.id) == before  # all six triage fields, not only Status
+    assert entries(db, thread.id) == audit
+    assert [tuple(r) for r in db.execute(
+        "SELECT kind, native_id, content FROM activities WHERE thread_id = ? ORDER BY id", (thread.id,),
+    )] == [
+        ("MESSAGE", original.native_id, None if kind == "DELETE" else "original"),
+        ("EDIT", edited.native_id, None if kind == "DELETE" else "edited"),
+        (kind, native_id, None if kind == "DELETE" else "blocked update"),
+    ]
+    person = db.execute("SELECT person_id FROM identities WHERE kind = 'slack_user' AND value = 'U0BOT'").fetchone()[0]
+    assert paused == ([(db, person, at, "replied")] if kind == "MESSAGE" else [])
+
+
+@pytest.mark.parametrize("unblock", [False, True], ids=["other-participant", "unblocked-sender"])
+def test_unblocked_identity_can_reopen_the_same_thread(slack_thread, unblock):
+    db, original, thread = slack_thread
+    inbox.block(db, "slack_user", "U0BOT")
+    inbox.act(db, thread.id, inbox.Wait())
+    if unblock:
+        inbox.block(db, "slack_user", "U0BOT", False)
+    sender = original.sender if unblock else inbox.Identity("slack_user", "U0OTHER")
+    result = inbox.ingest(db, replace(original, native_id="D0TEST:2", sender=sender,
+                                      occurred_at=NOW + timedelta(minutes=1), thread_ref=[original.native_id]))
+    assert (result.id, result.status, result.status_detail) == (thread.id, "TODO", "NEW_REPLY")
+    assert entries(db, thread.id)[-1] == ("STATUS", "message", "WAITING_FOR_CUSTOMER", "NEW_REPLY", None)
+
+
+def test_ignored_thread_stays_sticky_after_block_unblock_and_other_arrivals(slack_thread):
+    db, original, thread = slack_thread
+    inbox.act(db, thread.id, inbox.Ignore())
+    before, audit = inbox.snapshot(db, thread.id), entries(db, thread.id)
+    arrivals = [(original.sender, True), (original.sender, False),
+                (inbox.Identity("slack_user", "U0OTHER"), False), (None, False)]
+    for n, (sender, blocked) in enumerate(arrivals, 2):
+        inbox.block(db, "slack_user", "U0BOT", blocked)
+        result = inbox.ingest(db, replace(original, native_id=f"D0TEST:{n}", sender=sender,
+                                          occurred_at=NOW + timedelta(minutes=n), thread_ref=[original.native_id]))
+        assert result.id == thread.id
+        assert inbox.snapshot(db, thread.id) == before
+        assert entries(db, thread.id) == audit
+
+
+@pytest.mark.parametrize("action,detail", [
+    (inbox.Wait(), "NEW_REPLY"), (inbox.Snooze(NOW + timedelta(days=1)), "IN_PROGRESS"),
+], ids=["follow-up", "timed-snooze"])
+def test_blocked_reply_does_not_prevent_independent_due_wake(slack_thread, action, detail):
+    db, original, thread = slack_thread
+    inbox.act(db, thread.id, inbox.Investigate())
+    waiting = inbox.act(db, thread.id, action)
+    inbox.block(db, "slack_user", "U0BOT")
+    before, audit = inbox.snapshot(db, thread.id), entries(db, thread.id)
+    inbox.ingest(db, replace(original, native_id="D0TEST:2", occurred_at=NOW + timedelta(minutes=1),
+                             thread_ref=[original.native_id]))
+    assert inbox.snapshot(db, thread.id) == before
+    due = datetime.fromisoformat(waiting.follow_up_at or waiting.snoozed_until)
+    assert inbox.wake(db, due - timedelta(microseconds=1)) == 0
+    assert inbox.wake(db, due) == 1
+    assert inbox.wake(db, due) == 0
+    assert inbox.get_thread(db, thread.id).status_detail == detail
+    assert entries(db, thread.id) == audit + [("STATUS", "woke", waiting.status_detail, detail, None)]
+
+
+@pytest.mark.parametrize("action,expected", [
+    (inbox.Wait(), ("TODO", "NEW_REPLY")), (inbox.Ignore(), ("DONE", "IGNORED")),
+], ids=["waiting", "ignored"])
+def test_blocked_phone_calls_keep_existing_creation_and_reopen_rules(slack_thread, action, expected):
+    db, _, _ = slack_thread
+    with db:
+        db.execute("INSERT INTO connections (id, platform, external_id, self_id, label, connected_at)"
+                   " VALUES (2, 'quo', '+15555550000', '+15555550000', 'Phone', ?)", (NOW.isoformat(),))
+    inbox.block(db, "phone", "+15555550101")
+    call = inbox.Incoming(2, "+15555550101", "im", "MESSAGE", "call-1",
+                          inbox.Identity("phone", "+15555550101"), NOW - timedelta(minutes=2), "Missed call",
+                          data={"peer": "+15555550101", "call": {"direction": "incoming", "outcome": "missed", "length": 0}})
+    thread = inbox.ingest(db, call)
+    assert (thread.status, thread.status_detail) == ("DONE", "IGNORED")
+    assert entries(db, thread.id) == [("STATUS", "blocked", None, "IGNORED", None)]
+    inbox.act(db, thread.id, action)
+    before, audit = inbox.snapshot(db, thread.id), entries(db, thread.id)
+    result = inbox.ingest(db, replace(call, native_id="call-2", occurred_at=NOW + timedelta(minutes=1)))
+    assert (result.id, result.status, result.status_detail) == (thread.id, *expected)
+    if expected[1] == "IGNORED":
+        assert inbox.snapshot(db, thread.id) == before
+        assert entries(db, thread.id) == audit
+    else:
+        assert entries(db, thread.id) == audit + [("STATUS", "call", "WAITING_FOR_CUSTOMER", "NEW_REPLY", None)]

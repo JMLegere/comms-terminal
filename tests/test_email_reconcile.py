@@ -91,9 +91,16 @@ def test_bridge_uses_lowest_id_and_flattens_existing_aliases(db):
     one = inbox.ingest(db, incoming("<one@test>"))
     two = inbox.ingest(db, incoming("<two@test>", occurred_at=AT + timedelta(minutes=1)))
     three = inbox.ingest(db, incoming("<three@test>", occurred_at=AT + timedelta(minutes=2)))
+    inbox.act(db, three.id, inbox.Investigate())
+    inbox.act(db, three.id, inbox.Snooze(AT + timedelta(days=5)))
+    selected = triage(db, three.id)
+    audit = [tuple(r) for r in db.execute("SELECT * FROM audit_log ORDER BY id")]
     early = activities(db)
     bridge = incoming("<bridge@test>", ["<three@test>", "<two@test>"], occurred_at=AT + timedelta(minutes=3))
+    inbox.block(db, bridge.sender.kind, bridge.sender.value)
     assert inbox.ingest(db, bridge).id == two.id
+    assert triage(db, two.id) == selected
+    assert [tuple(r) for r in db.execute("SELECT * FROM audit_log ORDER BY id")] == audit
     assert inbox.ingest(db, replace(bridge, thread_ref=["<one@test>", "<three@test>"])) is None
     assert [inbox.get_thread(db, t.id).id for t in (one, two, three)] == [one.id] * 3
     assert [tuple(r) for r in db.execute("SELECT id, merged_into FROM threads ORDER BY id")] == [
@@ -101,6 +108,8 @@ def test_bridge_uses_lowest_id_and_flattens_existing_aliases(db):
     ]
     assert activities(db)[:3] == early
     assert message_ids(db, three.id) == ["<one@test>", "<two@test>", "<three@test>", "<bridge@test>"]
+    assert triage(db, one.id) == selected
+    assert [tuple(r) for r in db.execute("SELECT * FROM audit_log ORDER BY id")] == audit
 
 
 def test_shared_absent_ancestor_merges_but_subject_sender_body_and_provider_thread_do_not(db):
