@@ -50,5 +50,10 @@ while :; do
     update
     rc=0
     "$DATA/bin/universal-inbox" --db "$DATA/inbox.db" --remote "$SSH_ARGS" || rc=$?
-    [ "$rc" -eq 75 ] || exit "$rc"
+    [ "$rc" -eq 75 ] && continue
+    if [ "$rc" -ne 0 ]; then  # a crash: keep the window, and Textual's traceback above it, until Jeremy has read it
+        printf '\nCommsTerminal exited (code %s) · press Enter to close\n' "$rc"
+        read -r _ || true
+    fi
+    exit "$rc"
 done

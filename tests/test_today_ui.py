@@ -201,3 +201,28 @@ def test_drafts_group_failed_then_unsent_then_scheduled(tmp_path):
 
     run(Console(path), [scenario])
     assert seen["today"] == seen["drafts"] == ["failed", "Hello", "sooner", "later"]
+
+
+def test_drafts_opens_over_todays_draft_without_crashing(tmp_path):
+    """Drafts (6) mounting while Today's Draft was still leaving the right pane repainted that half-removed view,
+    and the console quit (.agents/issues/2026-10-20-commsterminal-crash-opening-drafts-from-today.md)."""
+    from universal_inbox.tui import DraftConnection
+    path = with_work(tmp_path)
+    seen = {}
+
+    async def scenario(app, pilot):
+        today = app.main.current
+        today.enter(today.drafts, 1)
+        await pilot.pause()
+        seen["before"] = app.main.draft_view
+        await pilot.press("6")
+        await pilot.pause()
+        await pilot.pause()
+        view = app.main.draft_view
+        seen["after"] = (type(app.main.current), view is not None and view is not seen["before"],
+                         view is not None and str(view.query_one(DraftConnection).render()))
+
+    run(Console(path), [scenario])
+    assert seen["before"] is not None
+    page, fresh, label = seen["after"]
+    assert page is DraftsPage and fresh and label not in ("", "Choose Connection")

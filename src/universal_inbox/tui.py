@@ -5169,14 +5169,19 @@ class MainScreen(Screen):
         """The list in use: the current page, or the one of Today's lists holding the cursor."""
         return self.current.active_list if self.current is not None else None
 
+    def pane_views(self, kind):
+        """The thread pane's live views of `kind`. A pane clear removes its old view over later frames, while the
+        next page is already mounting; repainting that half-removed view crashed the console
+        (.agents/issues/2026-10-20-commsterminal-crash-opening-drafts-from-today.md)."""
+        return [v for v in self.query(f"#thread {kind.__name__}") if not v._pruning]  # set as the removal starts
+
     @property
     def thread_view(self) -> ThreadView | None:
-        views = self.query("#thread ThreadView")
-        return views.first() if views else None
+        return next(iter(self.pane_views(ThreadView)), None)
 
     @property
     def draft_view(self) -> DraftView | None:
-        return next((v for v in self.query("#thread DraftView") if v.draft_id == self.app.selected_draft), None)
+        return next((v for v in self.pane_views(DraftView) if v.draft_id == self.app.selected_draft), None)
 
     def save_draft(self):
         lists = self.current.lists if self.current is not None else []
