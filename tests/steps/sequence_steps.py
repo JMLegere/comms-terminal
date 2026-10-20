@@ -1,6 +1,6 @@
 """Sequences steps (features/sequences.feature); synthetic local records only."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -11,6 +11,7 @@ from universal_inbox import inbox, sequences
 ME = "jeremy@agentmaple.example"
 DAYS = {"Monday": datetime(2026, 10, 19, 13, 0, tzinfo=timezone.utc)}
 DAYS["Wednesday"] = DAYS["Monday"] + timedelta(days=2)
+DAYS["November 2"] = datetime(2026, 11, 2, 14, 0, tzinfo=timezone.utc)  # 10:00 AST
 
 
 class Sender:
@@ -58,6 +59,13 @@ def person_at(outreach, name, address, org):
 def enroll(outreach, name, sequence, day):
     outreach.now = DAYS[day]
     outreach.enrollment = sequences.enroll(outreach.db, outreach.people[name], outreach.sequences[sequence], outreach.now)
+
+
+@when(parsers.parse('Enroll with Start date "{start}" is called for "{name}" in "{sequence}" on {day}'))
+def enroll_from(outreach, start, name, sequence, day):
+    outreach.now = DAYS[day]
+    outreach.enrollment = sequences.enroll(outreach.db, outreach.people[name], outreach.sequences[sequence], outreach.now,
+                                           start=date.fromisoformat(start))
 
 
 def due(outreach, day):

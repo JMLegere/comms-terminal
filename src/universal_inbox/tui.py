@@ -560,7 +560,7 @@ HELP = [  # (group, [(keys, what it does)]) — the full key map; Gmail-style wh
                    ("a", "archive a Sequence (asks about its live Enrollments), or restore an archived one"),
                    ("x", "delete an unused Sequence, or a Step (Enrollments on it move on; z undoes)"),
                    ("J / K", "move a Step down / up"), ("R", "rename a Sequence"), ("ctrl+s", "save the Step being edited")]),
-    ("Enroll", [("s", "People or a Person page: enroll in a Sequence"), ("r", "Person page: resume a Paused Enrollment"),
+    ("Enroll", [("s", "People or a Person page: enroll in a Sequence, starting today or on a later date"), ("r", "Person page: resume a Paused Enrollment"),
                 ("f", "Person page: finish an Enrollment (Canceled, Unsubscribed, Completed)")]),
     ("Case", [("n", "Cases views: start a case (a goal) with no threads yet"),
               ("enter", "Cases views or a case header row: open the case"),
@@ -4052,20 +4052,40 @@ def enroll_person(app, person_id: int, name: str):
         app.notify("No Sequences yet: make one under Sequences (n).", severity="warning")
         return
     options = [(str(q["id"]), f"[#928374]{escape(q['name'])} · already in it, {live[q['id']].title()}[/]" if q["id"] in live
-                else f"{escape(q['name'])} · {q['steps']} Steps · first Task due today") for q in active]
+                else f"{escape(q['name'])} · {q['steps']} Steps") for q in active]
     names = {str(q["id"]): q["name"] for q in active}
+
+    def enroll(sid, start=None):
+        try:
+            eid = sequences.enroll(app.db, person_id, int(sid), start=start)
+        except sequences.Refused as e:
+            app.notify(f"Not enrolled: {e}", severity="error")
+            return
+        app.offer_undo(f"Enrolled {name} in {names[sid]}: the first Task is due {sequences.first_due(app.db, eid)},"
+                       " under Tasks.", lambda: sequences.unenroll(app.db, eid))
+        app.main.refresh_all()
 
     def chosen(sid):
         if sid is None:
             return
-        try:
-            eid = sequences.enroll(app.db, person_id, int(sid))
-        except sequences.Refused as e:
-            app.notify(f"Not enrolled: {e}", severity="error")
-            return
-        app.offer_undo(f"Enrolled {name} in {names[sid]}: the first Task is due today, under Tasks.",
-                       lambda: sequences.unenroll(app.db, eid))
-        app.main.refresh_all()
+
+        def typed(text):
+            if text is None:
+                return
+            start = sequences.parse_start(text, sequences._now())
+            if start is None:
+                app.notify(f"Not enrolled: {text!r} is neither a date (2026-12-01) nor a number of days.",
+                           severity="error")
+                return
+            enroll(sid, start)
+
+        def when(choice):
+            if choice == "today":
+                enroll(sid)
+            elif choice == "later":
+                app.push_screen(Ask("Start on", "2026-12-01, or a number of days from today"), typed)
+        app.push_screen(Pick(f"Start {names[sid]}", [("today", "Start today"), ("later", "Start later…")],
+                             "Start later holds the first Task until that day."), when)
     app.push_screen(Pick(f"Enroll {name}", options, "Every active Sequence. One live Enrollment per Person per Sequence."),
                     chosen)
 
@@ -4549,8 +4569,12 @@ class SequencesPage(Page):
 
     def show_sequence(self, step_row=None):
         q = self.selected_sequence()
-        self.sequence_id = q["id"] if q else None
         table = self.query_one("#steps", DataTable)
+        if step_row is None and q and q["id"] == self.sequence_id and self.steps:  # a refresh keeps the Step
+            kept = self.selected_step()["id"]
+            ids = [s["id"] for s in sequences.sequence_steps(self.app.db, q["id"])]
+            step_row = ids.index(kept) if kept in ids else table.cursor_row
+        self.sequence_id = q["id"] if q else None
         narrow = self.size.width < 60
         table.clear(columns=True)
         table.add_columns(*(("#", "", "Step") if narrow else ("#", "", "Step", "Gap", "Time", "What")))
@@ -4807,7 +4831,9 @@ class StepEditor(Vertical):
         if not self.query("#f-body"):
             return True
         v = self.values()
-        if all(self.step.get(k) == val for k, val in v.items()):
+        blank = ("at_time", "action", "reply_to_step_id")  # save_step stores an empty one as NULL
+        if all((self.step.get(k) or None) == (val or None) if k in blank else self.step.get(k) == val
+               for k, val in v.items()):
             return True
         try:
             if type(v.get("gap_days", 0)) is not int:
@@ -5275,6 +5301,7 @@ class ReplyDrafts(MutableMapping):
 
 
 APP_LOCK_PATH = Path("/run/universal-inbox-deploy/app.lock")
+UPDATE_EXIT = 75  # CommsTerminal: the launcher installs the service's build and opens the console again
 
 
 def inherited_app_lock_fd():
@@ -5694,8 +5721,18 @@ class Console(App):
         mine = build_version().rsplit("-", 1)[-1] if build_version() else ""
         if version != inbox.SCHEMA_VERSION or (service and mine and service != mine):
             self.set_online("Update ready · restart CommsTerminal to load the service's version; read-only.")
+            if service and mine and service != mine:
+                self.update_now()
         elif self.syncer is not None and self.syncer.confirmed:
             self.set_online(None)
+
+    def update_now(self):
+        """The service runs another build: quit with UPDATE_EXIT, so deploy/commsterminal-local installs that build
+        and reopens, once no write is on its way and no reply text would be lost."""
+        saved = not self.is_screen_installed("main") or self.main.save_draft()  # at mount, nothing is typed yet
+        if self.remote is None or not self.remote.idle.is_set() or not saved or self.drafts.__dict__.get("held"):
+            return
+        self.exit(return_code=UPDATE_EXIT)
 
     def set_online(self, problem):
         """None: the service answers and writes are on; else why the console is read-only (status bar)."""

@@ -364,9 +364,25 @@ def day_number(enrolled: datetime, due: datetime, tz=LOCAL) -> int:
 
 # --- Enrollments and Tasks ----------------------------------------------------
 
-def enroll(db, person_id: int, sequence_id: int, now: datetime | None = None) -> int:
-    """One Person into one Sequence (FR-SEQ-6); its first Task is due on the enroll day."""
+def parse_start(text: str, now: datetime) -> date | None:
+    """A Start date typed as `2026-12-01` or a number of days from today (FR-SEQ-25); None if it is neither."""
+    text = text.strip()
+    if text.isdigit():
+        return now.astimezone(LOCAL).date() + timedelta(days=int(text))
+    try:
+        return date.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def enroll(db, person_id: int, sequence_id: int, now: datetime | None = None, start: date | None = None) -> int:
+    """One Person into one Sequence (FR-SEQ-6); its first Task counts from the enroll day, or from a later
+    Start date (FR-SEQ-25)."""
     now = now or _now()
+    today = now.astimezone(LOCAL).date()
+    if start and start < today:
+        raise Refused(f"The Start date {start:%b} {start.day} is before today.")
+    starts = _iso(datetime.combine(start, time(0, 0), LOCAL)) if start and start > today else None
     with db:
         _tx(db)
         p = db.execute("SELECT display_name, unsubscribed_at FROM persons WHERE id = ?", (person_id,)).fetchone()
@@ -383,10 +399,18 @@ def enroll(db, person_id: int, sequence_id: int, now: datetime | None = None) ->
                           (person_id, sequence_id)).fetchone()
         if live:
             raise Refused(f"{p['display_name']} is already in {s['name']} ({live[0].title()}).")
-        eid = db.execute("INSERT INTO enrollments (person_id, sequence_id, state, enrolled_at) VALUES (?, ?, 'ACTIVE', ?)",
-                         (person_id, sequence_id, _iso(now))).lastrowid
+        eid = db.execute("INSERT INTO enrollments (person_id, sequence_id, state, enrolled_at, starts_at)"
+                         " VALUES (?, ?, 'ACTIVE', ?, ?)", (person_id, sequence_id, _iso(now), starts)).lastrowid
         materialize(db, now)
     return eid
+
+
+def first_due(db, enrollment_id: int, now: datetime | None = None) -> str:
+    """When an Enrollment's first Task is due, for a confirmation: "today" or "on Nov 2"."""
+    t = db.execute("SELECT due_at FROM tasks WHERE enrollment_id = ? ORDER BY id LIMIT 1", (enrollment_id,)).fetchone()
+    if t is None or _at(t[0]).astimezone(LOCAL).date() <= (now or _now()).astimezone(LOCAL).date():
+        return "today"
+    return f"on {_day(t[0])}"
 
 
 def unenroll(db, enrollment_id: int) -> None:
@@ -457,7 +481,7 @@ def _next_task(db, e, now: datetime, due: datetime | None = None) -> int | None:
         db.execute("UPDATE enrollments SET state = 'FINISHED', reason = 'COMPLETED', finished_at = ? WHERE id = ?",
                    (_iso(now), e["id"]))
         return None
-    base = _at(last["done_at"]) if last else _at(e["enrolled_at"])
+    base = _at(last["done_at"]) if last else _at(e["starts_at"] or e["enrolled_at"])
     due = due or due_date(base, step["gap_days"], step["at_time"])
     return db.execute("INSERT OR IGNORE INTO tasks (enrollment_id, step_id, due_at, state) VALUES (?, ?, ?, 'DUE')",
                       (e["id"], step["id"], _iso(due))).lastrowid
@@ -563,7 +587,7 @@ def tasks_due(db, now: datetime | None = None) -> list[dict]:
     out = []
     for r in db.execute(
             "SELECT t.*, s.kind, s.position, s.at_time, s.subject, s.body, s.voicemail, s.action, s.reply_to_step_id,"
-            " e.person_id, e.sequence_id, e.enrolled_at, q.name AS sequence, p.display_name AS person,"
+            " e.person_id, e.sequence_id, coalesce(e.starts_at, e.enrolled_at) AS starts_at, q.name AS sequence, p.display_name AS person,"
             " (SELECT count(*) FROM sequence_steps x WHERE x.sequence_id = q.id AND x.position IS NOT NULL) AS steps,"
             " (SELECT id FROM composition_drafts d WHERE d.task_id = t.id) AS draft_id"
             " FROM tasks t JOIN sequence_steps s ON s.id = t.step_id JOIN enrollments e ON e.id = t.enrollment_id"
@@ -575,7 +599,7 @@ def tasks_due(db, now: datetime | None = None) -> list[dict]:
             continue
         group = "overdue" if day < today else "later today" if r["at_time"] and due > now else "due today"
         org = person_fill(db, r["person_id"])["company"]
-        out.append(dict(r) | dict(group=group, organization=org, day=day_number(_at(r["enrolled_at"]), due),
+        out.append(dict(r) | dict(group=group, organization=org, day=day_number(_at(r["starts_at"]), due),
                                   age=(today - day).days))
     order = {"overdue": 0, "due today": 1, "later today": 2}
     return sorted(out, key=lambda t: (order[t["group"]], t["due_at"], t["id"]))
@@ -744,7 +768,7 @@ def enrollments(db, person_id: int, now: datetime | None = None) -> list[dict]:
     out = []
     for e in db.execute("SELECT e.*, q.name AS sequence FROM enrollments e JOIN sequences q ON q.id = e.sequence_id"
                         " WHERE e.person_id = ? ORDER BY e.state = 'FINISHED', e.id DESC", (person_id,)).fetchall():
-        enrolled = _at(e["enrolled_at"])
+        enrolled = _at(e["starts_at"] or e["enrolled_at"])
         tasks = {t["step_id"]: dict(t) for t in db.execute("SELECT * FROM tasks WHERE enrollment_id = ?", (e["id"],))}
         steps = [s for s in db.execute("SELECT * FROM sequence_steps WHERE sequence_id = ? ORDER BY position IS NULL, position",
                                        (e["sequence_id"],)) if s["position"] is not None or s["id"] in tasks]

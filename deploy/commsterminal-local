@@ -2,7 +2,8 @@
 # CommsTerminal on Jeremy's laptop (ADR 0004): the console runs here on a copy of the Oracle ARM inbox; every write
 # goes to its service over SSH. Installed as ~/.local/bin/commsterminal-local; the desktop entry runs it in Ghostty.
 # The console installs here the release the service runs: when the service reported a different build at the last
-# sync, this installs that commit from the local checkout (COMMSTERMINAL_REPO) before opening.
+# sync, this installs that commit from the local checkout (COMMSTERMINAL_REPO) before opening, and again whenever
+# the console quits to update.
 set -eu
 
 SSH_ARGS="-i $HOME/.ssh/oracle-dev -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UpdateHostKeys=no \
@@ -21,20 +22,33 @@ installed() {  # the short commit baked into the installed console (build_hook.p
     return 0
 }
 
-want=$(cat "$DATA/service-build" 2>/dev/null || true)
-have=$(installed)
-if [ -z "$have" ] || { [ -n "$want" ] && [ "$want" != "$have" ]; }; then
-    echo "CommsTerminal: installing the service's version ${want:-(latest main)}…"
-    git -C "$REPO" fetch -q origin
-    rev=$(git -C "$REPO" rev-parse --verify -q "${want:-origin/main}^{commit}")
-    # From an export of that commit: uv's git+file:// clone copies only branches and tags, so a commit that only
-    # origin/main reaches is missing there. The export has no .git, so the build stamp comes in as the service's.
-    src="$DATA/src"
-    rm -rf "$src"
-    mkdir -p "$src"
-    git -C "$REPO" archive "$rev" | tar -x -C "$src"
-    UNIVERSAL_INBOX_BUILD="$(git -C "$REPO" log -1 --format=%ct "$rev") ${want:-$(git -C "$REPO" rev-parse --short "$rev")}" \
-        uv tool install -q --reinstall --python 3.12 "$src"
-fi
+update() {  # install the service's build when it differs from this console's
+    want=$(cat "$DATA/service-build" 2>/dev/null || true)
+    have=$(installed)
+    if [ -z "$have" ] || { [ -n "$want" ] && [ "$want" != "$have" ]; }; then
+        echo "CommsTerminal: installing the service's version ${want:-(latest main)}…"
+        git -C "$REPO" fetch -q origin
+        rev=$(git -C "$REPO" rev-parse --verify -q "${want:-origin/main}^{commit}")
+        # From an export of that commit: uv's git+file:// clone copies only branches and tags, so a commit that
+        # only origin/main reaches is missing there. The export has no .git, so the build stamp comes in as the
+        # service's.
+        src="$DATA/src"
+        rm -rf "$src"
+        mkdir -p "$src"
+        git -C "$REPO" archive "$rev" | tar -x -C "$src"
+        UNIVERSAL_INBOX_BUILD="$(git -C "$REPO" log -1 --format=%ct "$rev") ${want:-$(git -C "$REPO" rev-parse --short "$rev")}" \
+            uv tool install -q --reinstall --python 3.12 "$src"
+        if [ -n "$want" ] && [ "$(installed)" != "$want" ]; then
+            echo "CommsTerminal: installed $(installed), but the service runs $want." >&2
+            exit 1
+        fi
+    fi
+}
 
-exec "$DATA/bin/universal-inbox" --db "$DATA/inbox.db" --remote "$SSH_ARGS"
+# The console quits with 75 (tui.UPDATE_EXIT) when a sync reports a new service build: update and open it again.
+while :; do
+    update
+    rc=0
+    "$DATA/bin/universal-inbox" --db "$DATA/inbox.db" --remote "$SSH_ARGS" || rc=$?
+    [ "$rc" -eq 75 ] || exit "$rc"
+done

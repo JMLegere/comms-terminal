@@ -126,6 +126,30 @@ _Avoid_: Step (for one Person's copy), Step instance, To-do
 A Task whose day has come and which is not yet done.
 _Avoid_: Due Step, Overdue item
 
+**Start date**:
+The day an Enrollment's first Task counts from: the day Jeremy enrolls the Person, unless he sets a later one. Until then the Enrollment is Active and its first Task is upcoming.
+_Avoid_: Delay, Scheduled enrollment, Snooze
+
+**Stalled signature**:
+A customer who has said they intend to sign but has not signed, and has gone quiet or kept moving the date.
+_Avoid_: Flake, Timing objection, Slipped deal
+
+**Deferred start**:
+A customer who has named a later date or event to start from, such as "January" or "after budget approval".
+_Avoid_: Timing objection, Delay, Pushed deal
+
+**Reopening trigger**:
+The specific evidence that brings a parked customer back into active pursuit, such as their named event passing or a reply naming a current need.
+_Avoid_: Revisit date, Follow-up reminder
+
+**Lever**:
+A commercial change Jeremy has approved in advance for offering to a customer, such as a later start date or a smaller scope, usually in exchange for a commitment from them.
+_Avoid_: Concession, Discount, Incentive, Sweetener
+
+**Play**:
+One deliberate use of a Lever, Sequence, or sales recipe on one deal, recorded with its result.
+_Avoid_: Tactic, Attempt
+
 ## Sources
 
 **Platform**:

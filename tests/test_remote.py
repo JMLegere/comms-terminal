@@ -229,3 +229,25 @@ def test_a_relaunch_on_an_unchanged_copy_needs_no_new_snapshot(service, laptop):
     started = time.monotonic()
     assert again.once(timeout=30) is None and again.confirmed  # nothing new, and at once
     assert time.monotonic() - started < 5
+
+
+def test_a_new_service_build_quits_for_the_launcher_to_update_unless_a_reply_is_held(service, laptop, monkeypatch):
+    rem, syncer, db, _ = laptop
+    db.close()
+    monkeypatch.setattr(tui, "build_version", lambda: "2026-10-19-1810-46ecc16")
+    syncer.service_build = "be56327"
+    seen = {}
+
+    async def scenario(app, pilot):
+        await pilot.pause()
+        seen["held"] = app.return_code  # the mount's check found the held reply
+        app.drafts.__dict__["held"] = {}
+        app.check_copy()
+        await pilot.pause()
+
+    from test_console import run
+    app = tui.Console(syncer.db_path, remote=rem, syncer=syncer)
+    app.drafts.__dict__["held"] = {1: "half a reply"}  # read-only text with nowhere to go yet
+    run(app, [scenario])
+    assert seen["held"] is None
+    assert app.return_code == tui.UPDATE_EXIT
