@@ -384,8 +384,9 @@ def test_case_shows_threads_as_cards_and_replies_in_one(tmp_path):
 
     async def cards(app, pilot):
         cs = list(page(app).query("CaseCard"))
-        starts = sorted((inbox.thread_view(db, t.id)["messages"][0]["at"], t.id) for t in inbox.case_threads(db, case_id))
-        seen["order"] = [c.thread_id for c in cs] == [tid for _, tid in starts]
+        kids = list(page(app).query_one(".cards").children)  # one timeline: each card follows its Added line
+        seen["order"] = all(kids[kids.index(c) - 1].has_class("feedline")
+                            and f"Added {c.thread.title}" in str(kids[kids.index(c) - 1].render()) for c in cs)
         seen["collapsed"] = {c.thread_id: "show" in str(c.query_one(".cardbody").render()) for c in cs}
         seen["focus"] = app.focused is page(app)
         page(app).select([c.thread_id for c in cs].index(ids["ana"]))

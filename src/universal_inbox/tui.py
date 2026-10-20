@@ -128,7 +128,7 @@ DataTable > .datatable--header { background: #f9f5d7; color: #928374; }
 .props { width: 34; height: 1fr; padding: 1 2; background: #f3eac7; border-left: solid #ebdbb2; }
 .props Static { text-wrap: nowrap; text-overflow: ellipsis; }  /* one line per entry, cut with … */
 .activity { width: 1fr; height: 1fr; padding: 1 1; }
-.casehead, .cards, .activityhead { height: auto; }
+.casehead, .cards, .activityhead, .feedline { height: auto; }
 .sectionhead { height: auto; padding: 1 0 0 0; }
 .card { height: auto; border: round #ebdbb2; border-title-align: left; border-subtitle-align: right;
         padding: 1 1 0 1; margin: 1 0 0 0; }
@@ -3818,11 +3818,11 @@ class StatusLine(Static):
 
 class CaseCard(Vertical):
     """A Thread inside a Case, like a synced Slack thread on a Linear issue: its messages stay together in
-    one card, cards sit in the Case's activity by when the Thread started, and a reply goes in the card."""
+    one card, the card sits in the Case's activity right after the Thread was added, and a reply goes in it."""
 
     def __init__(self, thread_id: int, index: int):
         super().__init__(classes="card")
-        self.thread_id, self.index = thread_id, index
+        self.thread_id, self.index, self.order = thread_id, index, ()
 
     def compose(self) -> ComposeResult:
         yield MessageText(classes="cardbody")
@@ -3907,8 +3907,8 @@ class DescriptionBox(Vertical):
 
 
 class CasePage(Page, ThreadActions):
-    """A Case laid out like a Linear issue: title, activity (Case events and Thread cards by start time),
-    and properties on the right. j/k select a Thread card; Thread keys act on it."""
+    """A Case laid out like a Linear issue: title, one activity timeline (Case events, each Thread card
+    after its "Added" line), and properties on the right. j/k select a Thread card; Thread keys act on it."""
 
     @property
     def RAIL(self):
@@ -3935,7 +3935,7 @@ class CasePage(Page, ThreadActions):
                 yield Static(classes="casehead")
                 yield Static("[b]Description[/]", classes="sectionhead")
                 yield DescriptionBox()
-                yield Static(classes="activityhead")
+                yield Static("[b]Activity[/]", classes="activityhead")
                 yield Vertical(classes="cards")
             with TextScroll(classes="props", can_focus=False):
                 yield Static(classes="caseprops")
@@ -3957,9 +3957,15 @@ class CasePage(Page, ThreadActions):
         self.toggled = {inbox.get_thread(db, tid).id for tid in self.toggled}
         case = db.execute("SELECT title, description, created_at FROM cases WHERE id = ?", (self.case_id,)).fetchone()
         self.description = case["description"]
-        # Cards sit in the activity by when each Thread started (its first message), like Linear's synced threads.
+        # One timeline: each card follows the line that last added its Thread; a Thread with no such line
+        # (it joined before the audit log) sits by when it started.
+        feed = inbox.case_feed(db, self.case_id)
+        at = lambda iso: datetime.fromisoformat(iso).astimezone() if iso else datetime.min.astimezone()  # noqa: E731
+        added = {e["thread_id"]: (at(e["at"]), i, 1) for i, e in enumerate(feed) if e["kind"] == "added"}
+        card_order = lambda v: added.get(v["thread"].id) or (  # noqa: E731
+            at(v["messages"][0]["at"] if v["messages"] else None), -1, 1)
         self.views = sorted((inbox.thread_view(db, t.id, self.app.files) for t in inbox.case_threads(db, self.case_id)),
-                            key=lambda v: v["messages"][0]["at"] if v["messages"] else "")
+                            key=card_order)
         threads = [v["thread"] for v in self.views]
         ids = [t.id for t in threads]
         self.sel = ids.index(keep) if keep in ids else max(0, min(self.sel, len(self.views) - 1))
@@ -3969,11 +3975,16 @@ class CasePage(Page, ThreadActions):
             f"[b #45707a]{escape(case['title'])}[/]\n[{color}]{ICON[icon_name]} {status}[/]"
             f"[#928374] · {len(threads)} thread{'s' * (len(threads) != 1)}[/]")
         self.query_one(DescriptionBox).show(self.description)
-        self.query_one(".activityhead").update(
-            "[b]Activity[/]\n" + "\n".join(case_feed_markup(e) for e in inbox.case_feed(db, self.case_id)))
         self.query_one(".caseprops").update(self.props_markup())
         load_context(self, *thread_addresses(self.views))
         cards = self.query_one(".cards")
+        lines = list(cards.query(".feedline"))
+        for _ in range(len(feed) - len(lines)):  # the feed is append-only, so lines only grow
+            lines.append(Static(classes="feedline"))
+            cards.mount(lines[-1])
+        for i, (line, e) in enumerate(zip(lines, feed)):
+            line.update(case_feed_markup(e))
+            line.order = (at(e["at"]), i, 0)
         if [c.thread_id for c in self.live_cards()] != [t.id for t in threads]:
             old, retained = self.live_cards(), []
             for i, t in enumerate(threads):
@@ -3984,15 +3995,20 @@ class CasePage(Page, ThreadActions):
                     card.thread_id, card.index = t.id, i
                     retained.append(card)
                 else:
-                    cards.mount(CaseCard(t.id, i))
+                    card = CaseCard(t.id, i)
+                    cards.mount(card)
+                card.order = card_order(self.views[i])
             for card in old:
                 if card not in retained:
                     card.query_one(ReplyBox).keep_draft()
                     card.thread_id = None  # removal finishes later; paint and the next refresh skip it
                     card.remove()
-            cards.sort_children(key=lambda c: c.index)
+            cards.sort_children(key=lambda c: c.order)
             self.call_after_refresh(self.paint)
         else:
+            for card, v in zip(self.live_cards(), self.views):
+                card.order = card_order(v)
+            cards.sort_children(key=lambda c: c.order)
             self.paint()
 
     def expanded(self, v) -> bool:
