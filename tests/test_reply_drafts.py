@@ -178,3 +178,19 @@ def test_console_says_to_restart_once_the_database_outgrows_its_code(seeded):
 
     run(Console(path), [upgrade])
     assert seen["toasts"] == ["The inbox was upgraded while this console ran · quit (q) and start it again."]
+
+
+def test_agent_draft_new_with_a_thread_makes_its_reply_draft(seeded, capsys):
+    from universal_inbox import agent
+    path, ids = seeded
+    db = inbox.connect(path)
+    out = agent.draft(db, "new", {"body": "Hi Ana, Tuesday works."}, None, None, ids["ana"])
+    (d,) = inbox.list_drafts(db)
+    assert (d["thread_id"], d["subject"], d["body"]) == (ids["ana"], "Re: Pricing for 40 seats?", "Hi Ana, Tuesday works.")
+    assert f"- Reply to: Thread {ids['ana']}" in out
+    assert inbox.reply_drafts(db) == {ids["ana"]: "Hi Ana, Tuesday works."}  # the console's reply box opens on it
+    with pytest.raises(ValueError, match=f"already has reply Draft {d['id']}"):
+        agent.draft(db, "new", {"body": "again"}, None, None, ids["ana"])
+    with pytest.raises(ValueError, match="needs --body"):
+        agent.draft(db, "new", {}, None, None, ids["logan"])
+    assert "Reply to" not in agent.draft(db, "new", {}, None, 1)  # no Thread: a new Thread's Draft

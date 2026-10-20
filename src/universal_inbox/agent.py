@@ -16,9 +16,10 @@ def add_parsers(sub):
     t.add_argument("id", type=int)
     sub.add_parser("drafts", help="list Drafts, then the Connections a new Draft can use")
     d = sub.add_parser("draft", help="one Draft as Markdown; with --to/--cc/--subject/--body, change it first (never sends)")
-    d.add_argument("id", help="a Draft id, or `new` (needs --connection)")
+    d.add_argument("id", help="a Draft id, or `new` (needs --connection for a new Thread, or --thread for a reply)")
     d.add_argument("--revision", type=int, help="the revision you read; required to change an existing Draft")
     d.add_argument("--connection", type=int, help="new Draft: the Connection id it sends from")
+    d.add_argument("--thread", type=int, help="new Draft: the Thread it replies to; its reply box sends it")
     for field in ("to", "cc", "subject"):
         d.add_argument(f"--{field}")
     d.add_argument("--body", help="the body, or - to read it from stdin")
@@ -52,7 +53,7 @@ def run(a, db):
             changes = {k: getattr(a, k) for k in ("to", "cc", "subject", "body") if getattr(a, k) is not None}
             if changes.get("body") == "-":
                 changes["body"] = sys.stdin.read()
-            print(draft(db, a.id, changes, a.revision, a.connection), end="")
+            print(draft(db, a.id, changes, a.revision, a.connection, getattr(a, "thread", None)), end="")
     except (KeyError, ValueError, inbox.DraftConflict) as e:  # sequences.Refused is a ValueError
         raise SystemExit(f"universal-inbox {a.cmd}: {e.args[0] if e.args else e}") from e
 
@@ -69,8 +70,18 @@ def thread(db, thread_id, socket) -> str:
     return thread_text(v, files.raw_dir(db), context)
 
 
-def draft(db, ref, changes, revision, connection_id) -> str:
-    if ref == "new":
+def draft(db, ref, changes, revision, connection_id, thread_id=None) -> str:
+    if ref == "new" and thread_id is not None:  # a reply Draft: the Thread gives its envelope
+        if old := inbox.reply_draft(db, thread_id):
+            raise ValueError(f"Thread {thread_id} already has reply Draft {old['id']}: change it with "
+                             f"`universal-inbox draft {old['id']} --revision {old['revision']}`")
+        d = inbox.save_reply_draft(db, thread_id, changes.pop("body", ""))
+        if d is None:
+            raise ValueError("a reply Draft needs --body")
+        if changes:
+            d = inbox.save_draft(db, {k: d[k] for k in DRAFT_FIELDS} | changes, draft_id=d["id"],
+                                 expected_revision=d["revision"])
+    elif ref == "new":
         c = next((c for c in inbox.connections(db) if c["id"] == connection_id), None)
         if c is None:
             raise ValueError("a new Draft needs --connection: an id from `universal-inbox drafts`")

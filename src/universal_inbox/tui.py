@@ -2552,6 +2552,7 @@ def draft_text(values, connection_label, history, raw=None, ref=None, staged=())
     if ref:
         lines.append(f"- Draft: {ref[0]} · revision {ref[1]} · change it with "
                      f"`universal-inbox draft {ref[0]} --revision {ref[1]} --body -` (also --to, --cc, --subject)")
+    lines += [f"- Reply to: Thread {values['thread_id']} (its reply box sends it)"] if values.get("thread_id") else []
     lines += [f"- Connection: {connection_label}",
               f"- From: {values['sender'] or 'not selected'}", f"- To: {values['to'] or 'not selected'}"]
     lines += [f"- Cc: {values['cc']}"] if values["cc"] else []
