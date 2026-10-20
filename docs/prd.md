@@ -183,7 +183,7 @@ Status key in brackets:
 
 ### Sequences
 
-- **FR-SEQ** [C]: Outreach Sequences run inside Universal Inbox (ADR 0003): Jeremy edits Sequences of Steps, enrolls one Person at a time, and works each Enrollment's Due Tasks on the Tasks page; anything inbound from the Person pauses their Enrollments. Requirements FR-SEQ-1–24 and acceptance scenarios AS-SEQ-1–17 are in the Sequencing PRD (`.agents/prd/2026-10-16-sequencing.md`); the interface names (Enroll, Due Tasks, Complete Task, Skip Task, Pause, Resume, Finish) are in `docs/design/api-and-database.md` §2.
+- **FR-SEQ** [C]: Outreach Sequences run inside Universal Inbox (ADR 0003): Jeremy edits Sequences of Steps, enrolls one Person at a time, and works each Enrollment's Due Tasks on the Tasks page; anything inbound from the Person pauses their Enrollments. Requirements FR-SEQ-1–24 and acceptance scenarios AS-SEQ-1–17 are in the Sequencing PRD (`.agents/prd/2026-10-16-sequencing.md`); FR-SEQ-25 and AS-SEQ-18 (Start date) are in `.agents/prd/2026-10-19-enrollment-start-date.md`; the interface names (Enroll, Due Tasks, Complete Task, Skip Task, Pause, Resume, Finish) are in `docs/design/api-and-database.md` §2.
 
 ### Non-functional
 

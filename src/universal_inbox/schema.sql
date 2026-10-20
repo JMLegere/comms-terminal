@@ -306,6 +306,7 @@ CREATE TABLE enrollments (
   pause_reason TEXT,
   enrolled_at  TEXT NOT NULL,
   finished_at  TEXT,
+  starts_at    TEXT,  -- a later Start date (FR-SEQ-25): the first Task counts from it; NULL is the enroll day
   CHECK ((state = 'FINISHED') = (reason IS NOT NULL))
 ) STRICT;
 CREATE UNIQUE INDEX enrollments_live ON enrollments (person_id, sequence_id) WHERE state != 'FINISHED';
