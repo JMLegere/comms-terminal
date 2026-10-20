@@ -638,7 +638,8 @@ def undo_task(db, undo: dict) -> None:
 
 def tasks_due(db, now: datetime | None = None) -> list[dict]:
     """The Tasks page (FR-SEQ-15): Active Enrollments' Tasks whose day has come, grouped Overdue, Today, and Later
-    today (a fixed time not yet reached), oldest first."""
+    today (a fixed time not yet reached), oldest first. A Task whose Draft is scheduled to send is left out until it
+    sends, or until the send fails or is unscheduled (Jeremy, 2026-10-20)."""
     now = now or _now()
     today = now.astimezone(LOCAL).date()
     out = []
@@ -650,7 +651,8 @@ def tasks_due(db, now: datetime | None = None) -> list[dict]:
             " (SELECT name FROM sequences x WHERE x.id = s.enroll_sequence_id) AS enroll_sequence"
             " FROM tasks t JOIN sequence_steps s ON s.id = t.step_id JOIN enrollments e ON e.id = t.enrollment_id"
             " JOIN sequences q ON q.id = e.sequence_id JOIN persons p ON p.id = e.person_id"
-            " WHERE t.state = 'DUE' AND e.state = 'ACTIVE' ORDER BY t.due_at, t.id"):
+            " WHERE t.state = 'DUE' AND e.state = 'ACTIVE' AND NOT EXISTS (SELECT 1 FROM composition_drafts d"
+            " WHERE d.task_id = t.id AND d.send_at IS NOT NULL AND d.send_error IS NULL) ORDER BY t.due_at, t.id"):
         due = _at(r["due_at"])
         day = due.astimezone(LOCAL).date()
         if day > today:

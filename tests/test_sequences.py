@@ -440,3 +440,18 @@ def test_version_22_renames_sequence_steps_to_enrollment_steps(monkeypatch):
     inbox.migrate(db)
     assert [tuple(r) for r in db.execute("SELECT kind, enroll_sequence_id FROM sequence_steps ORDER BY position")] == [
         ("enrollment", 1), ("call", None)]
+
+
+def test_a_scheduled_task_draft_leaves_the_tasks_list_until_its_send_fails_or_is_unscheduled(db):
+    s, _ = secret(db)
+    dana = person(db, "dana@harbourline.example", "Dana Roy")
+    sq.enroll(db, dana, s, MONDAY)
+    (t,) = sq.tasks_due(db, MONDAY)
+    d = draft_of(db, t["id"])
+    inbox.schedule_draft(db, d["id"], MONDAY + DAY)
+    assert sq.tasks_due(db, MONDAY) == []
+    inbox.set_send_error(db, d["id"], "refused")  # a failed scheduled send comes back to Jeremy
+    assert [x["id"] for x in sq.tasks_due(db, MONDAY)] == [t["id"]]
+    inbox.schedule_draft(db, d["id"], MONDAY + DAY)
+    inbox.schedule_draft(db, d["id"], None)
+    assert [x["id"] for x in sq.tasks_due(db, MONDAY)] == [t["id"]]
