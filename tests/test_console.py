@@ -641,6 +641,33 @@ def test_chrome_refresh_with_no_change_does_not_redraw(tmp_path):
     run(app, [spy, idle_tick, real_change])
 
 
+def test_thread_refresh_with_no_change_keeps_its_messages(tmp_path):
+    """Today's 60 s refresh and every service snapshot remounted the open Thread's messages, which painted
+    the pane empty for a frame (.agents/issues/2026-10-20-thread-pane-flashes-on-no-change-refresh.md)."""
+    path, _ = seeded(tmp_path)
+    app, seen = Console(path), {}
+    shown = lambda app: [id(w) for w in app.main.thread_view.query_one(".msgs").children]  # noqa: E731
+
+    async def before(app, pilot):
+        seen["ids"] = shown(app)
+        assert seen["ids"]
+
+    async def idle_refresh(app, pilot):
+        app.minute()
+        app.main.refresh_all()
+
+    async def unchanged(app, pilot):
+        assert shown(app) == seen["ids"]
+
+    async def toggle(app, pilot):
+        app.action_msg_toggle(app.main.thread_view.thread_id, 0)
+
+    async def repainted(app, pilot):
+        assert shown(app) != seen["ids"]  # a real change still repaints
+
+    run(app, [before, idle_refresh, unchanged, toggle, repainted])
+
+
 def test_thread_views_group_by_status_then_case(tmp_path):
     """Todo and the other many-Status views list Threads under Status headers, in the legend's order."""
     from universal_inbox.tui import GLYPH

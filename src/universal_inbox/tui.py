@@ -2095,8 +2095,22 @@ def message_widgets(v, st: dict | None = None, raw=None) -> list:
     return out
 
 
+def widget_key(w) -> tuple:
+    """What a not-yet-mounted widget tree shows: equal keys paint the same screen."""
+    own = w.content if isinstance(w, Static) else getattr(w, "image", None)  # markup, or a picture's path
+    return (type(w).__name__, tuple(sorted(w.classes)), str(w.styles.height),
+            own if own is None or isinstance(own, (str, Content)) else id(own),  # anything else always repaints
+            tuple(widget_key(c) for c in w._pending_children))
+
+
 def show_messages(container, widgets, scroller=None):
-    """Swap a message container's children, keeping the scroll position (toggling must not jump)."""
+    """Swap a message container's children, keeping the scroll position (toggling must not jump). Unchanged
+    widgets stay mounted: a remount paints the container empty for a frame, which read as the thread flashing
+    on every refresh (.agents/issues/2026-10-20-thread-pane-flashes-on-no-change-refresh.md)."""
+    key = tuple(widget_key(w) for w in widgets)
+    if container.children and key == getattr(container, "shown_key", None):
+        return
+    container.shown_key = key
     y = scroller.scroll_y if scroller is not None else None
     with container.app.batch_update():
         container.remove_children()
