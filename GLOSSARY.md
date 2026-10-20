@@ -165,7 +165,7 @@ A container of Threads on a Platform, such as a Slack channel or DM.
 _Avoid_: Space, Room, Inbox
 
 **Connection**:
-One connected account on a Platform, such as one forwarded Gmail address, one Slack workspace, or one Quo number.
+One connected account on a Platform, such as one forwarded Gmail address, one Slack workspace, or one Quo number. Jeremy can connect any number of email addresses; each email Connection has its own Inbound address, the `inbox.agentmaple.com` address its forward reaches, which files its mail under it.
 _Avoid_: Source, Account, Integration
 
 **Context source**:

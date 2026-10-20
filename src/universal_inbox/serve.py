@@ -455,6 +455,9 @@ def hooks_server(db_path: str, host: str, port: int, client=None,
             db = inbox.connect(db_path)
             try:
                 rows = db.execute("SELECT id, self_id, external_id FROM connections WHERE platform = 'gmail'").fetchall()
+                if len(rows) > 1:  # one Resend account sends for every Gmail Connection: the one it sent from
+                    sender = email.receipt_sender(body)
+                    rows = [r for r in rows if r["self_id"].lower() == sender]
                 if (len(rows) != 1 or rows[0]["id"] <= 0
                         or not rows[0]["self_id"].strip() or not rows[0]["external_id"].strip()):
                     return 503, "text/plain", b""
@@ -485,11 +488,15 @@ SIGNATURE_ERROR = "inbound request failed signature check"
 
 def intake(db, platform: str, headers, body: bytes, secret: bytes, now: datetime, *args) -> tuple[int, str]:
     """Every inbound webhook: the Platform's Connection (503 when there is none) goes to its adapter's
-    `handle_hook`, which verifies and parses; a failed signature check (401) records a Last Error (AS-19)."""
-    p = platforms.PLATFORMS[platform]
-    connection = db.execute("SELECT * FROM connections WHERE platform = ?", (platform,)).fetchone()
+    `handle_hook`, which verifies and parses; a failed signature check (401) records a Last Error (AS-19).
+    Email picks the Connection whose Inbound address is the envelope recipient (X-Inbox-To), else the Platform's
+    first: every email Connection's forward reaches the same Worker and signing secret."""
+    to = (headers.get("X-Inbox-To") or "").lower() if platform in platforms.EMAIL else ""
+    connection = (to and db.execute("SELECT * FROM connections WHERE inbound = ?", (to,)).fetchone()) or db.execute(
+        "SELECT * FROM connections WHERE platform = ? ORDER BY id", (platform,)).fetchone()
     if connection is None:
-        return 503, f"no {p.title} Connection"
+        return 503, f"no {platforms.PLATFORMS[platform].title} Connection"
+    p = platforms.PLATFORMS[connection["platform"]]
     out = importlib.import_module(f".{p.adapter}", __package__).handle_hook(db, connection, headers, body, secret,
                                                                             now, *args)
     status, text = out if isinstance(out, tuple) else (out, "")

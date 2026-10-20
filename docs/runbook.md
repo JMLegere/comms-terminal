@@ -58,7 +58,7 @@ Replying to a latest message whose SMTP identity remains pending is refused befo
 
 Obtain Jeremy's separate approval for the exact live target and operations before each provider, credential, tunnel, migration, service, or real-email action:
 
-1. Review the clean release and current schema. Take and verify an approved consistent database backup before migration 13; preserve raw mail, attachment storage, aliases, and saved drafts. Confirm exactly one Gmail Connection with usable `self_id` and `external_id`; other Platforms can coexist. Zero or multiple Gmail Connections return 503. Endpoint ownership comes from this local binding, never `from`/`to` in an event.
+1. Review the clean release and current schema. Take and verify an approved consistent database backup before migration 13; preserve raw mail, attachment storage, aliases, and saved drafts. Confirm each Gmail Connection has usable `self_id` and `external_id`; other Platforms can coexist. With several, a receipt binds to the one whose address is its `from`; no Gmail Connection, or no match, returns 503. Ownership comes from the local Connections; `from` only picks among them.
    Upgrade both the service and console code. Preserve any unsent reply text before restarting an existing console: open reply text is held in that process's memory, so a database backup alone does not capture it. Keep staged-file ownership with its selected original draft; do not silently restart an active editor.
 2. In the authorized Resend account, create the endpoint for `https://hooks.agentmaple.com/hooks/resend`, subscribed to **`email.sent`**. Stage its separate `whsec_…` signing secret as `~/.config/universal-inbox/resend-webhook-secret` (0600), keeping values out of arguments, history, and logs. Preserve the existing forwarding secret and sending-only key.
 3. Review all staged credentials, then use the approved installer/package steps. `deploy/install.sh` encrypts the optional secret, shreds its staged copy, and installs `universal-inbox.service.d/resend.conf` only when its encrypted credential exists. The installer also restarts services and processes other staged credentials: authorize that exact scope. Missing/invalid receipt configuration leaves `/hooks/resend` at 503 while existing hooks and other Platforms retain their behavior.
@@ -73,6 +73,16 @@ The receipt reader requires one decimal Content-Length, rejects Transfer-Encodin
 - Historical repair needs authoritative UUID↔SMTP-ID proof and approval for the **exact current** mapping and affected Threads. The recorded incident concerns Threads 299/300, but refresh their triage, Cases, aliases, drafts, and files before previewing any repair. Subject/body similarity supplies no proof. Older replies whose provider UUID was discarded require separate manual evidence. A stored orphan receipt cannot establish Draft ownership after a crash between provider acceptance and local recording.
 - A receipt rollback should disable only the new provider subscription/routing and optional receipt drop-in under explicit approval; preserve unrelated hook routes, credentials, and settings. Keep mappings, Activity/raw history, aliases, and drafts intact. Use a rollback build that accepts schema 13: the older schema-12 build rejects a migrated database.
 - Never lower `user_version`, delete receipt rows, or automatically unmerge to force an older build to start. Restoring an earlier consistent backup requires separate approval, an explicit account of concurrent changes it would lose, and matching code/data/storage. Full uninstall in §7 is broader than receipt rollback.
+
+## 2b. Connect another email address
+
+Any number of Google Workspace mailboxes can be email Connections (schema 23). Each one has an Inbound address, `<its address with @ as .>@inbox.agentmaple.com`; the hook files mail by the envelope recipient (`X-Inbox-To`), and the first Gmail Connection takes anything no Connection claims. Replies and Sequence Drafts send through the same Resend key, from the Connection's own address. Example for `jeremy@agentmaple.ai`:
+
+1. **You:** Resend → Domains → Add domain → `agentmaple.ai`, set up like `agentmaple.com` (§2 step 2); add its DKIM TXT and the `send`/`rsend` records at the domain's DNS host and wait for Verified. Resend refuses to send from an unverified domain.
+2. On Workbox: `ssh oracle 'sudo docker exec universal-inbox universal-inbox init --gmail jeremy@agentmaple.ai'`. It prints the Inbound address, `jeremy.agentmaple.ai@inbox.agentmaple.com`.
+3. Cloudflare: add one Email Routing rule on `agentmaple.com`, that Inbound address → the `universal-inbox-email` Worker. Use a scoped `POST /zones/<zone>/email/routing/rules`; `scripts/cloudflare_setup.py --apply` changes much more (§2a step 4).
+4. **You:** in that mailbox, forward a copy of all mail to the Inbound address (§2 step 7). Google's confirmation arrives as a Todo Thread under the new Connection.
+5. Point a Sequence at it: `sequences.set_connection(db, <sequence id>, <connection id>)`. New Drafts send from it; existing Drafts keep their Connection.
 
 ## 3a. Connect Fastmail
 

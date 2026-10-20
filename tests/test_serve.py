@@ -383,13 +383,26 @@ def test_resend_unreadable_config_does_not_break_listener(tmp_path, monkeypatch)
 
 
 @pytest.mark.parametrize("count", [0, 2])
-def test_resend_requires_exactly_one_gmail_not_first_or_payload_address(tmp_path, monkeypatch, count):
+def test_resend_without_a_gmail_or_the_one_it_sent_from_is_503(tmp_path, monkeypatch, count):
     path = receipt_db(tmp_path, gmail_count=count)
     routes = hook_routes(monkeypatch, path, {"resend-webhook-secret": RESEND_KEY})
     body = receipt_body()
     assert routes["/hooks/resend"](receipt_headers(body), body)[0] == 503
     db = inbox.connect(path)
     assert db.execute("SELECT count(*) FROM resend_receipts").fetchone()[0] == 0
+    db.close()
+
+
+
+def test_resend_receipt_binds_to_the_gmail_connection_it_was_sent_from(tmp_path, monkeypatch):
+    """Several Gmail Connections share one Resend account: the receipt's From picks among them."""
+    path = receipt_db(tmp_path, gmail_count=2)
+    routes = hook_routes(monkeypatch, path, {"resend-webhook-secret": RESEND_KEY})
+    body = json.dumps({"type": "email.sent", "data": {"email_id": RESEND_ID, "message_id": "<w@delivery.example>",
+                                                      "from": "Jeremy <ME2@example.com>"}}).encode()
+    assert routes["/hooks/resend"](receipt_headers(body), body)[0] == 204
+    db = inbox.connect(path)
+    assert [r[0] for r in db.execute("SELECT connection_id FROM resend_receipts")] == [2]
     db.close()
 
 
@@ -569,3 +582,47 @@ def test_reply_unknown_and_pending_statuses(tmp_path, monkeypatch, error, status
                                 serve.Senders(made={2: Sender()}))
     db.close()
     assert result == (status, {"error": str(error)})
+
+
+def test_email_hook_files_mail_under_the_connection_its_forward_reached():
+    """Any number of email Connections: X-Inbox-To (the Worker's envelope recipient) picks the one whose Inbound
+    address it is; a recipient no Connection has, or a Worker without the header, goes to the first Gmail."""
+    db = inbox.connect()
+    inbox.migrate(db)
+    with db:
+        for address, platform, inbound in [("a@x.io", "gmail", "a@inbox.agentmaple.com"),
+                                           ("a@y.ai", "gmail", "a.y.ai@inbox.agentmaple.com"),
+                                           ("f@fm.com", "fastmail", "fastmail@inbox.agentmaple.com")]:
+            db.execute("INSERT INTO connections (platform, external_id, self_id, label, connected_at, inbound)"
+                       " VALUES (?, ?, ?, 'Email', '2026-10-20T00:00:00+00:00', ?)", (platform, address, address, inbound))
+    now = datetime(2026, 10, 20, 10, tzinfo=timezone.utc)
+    ts = str(int(now.timestamp()))
+
+    def deliver(n, to):
+        raw = f"From: b@c.io\r\nSubject: hi\r\nMessage-ID: <m{n}@c.io>\r\n\r\nhello".encode()
+        headers = {"X-Inbox-Timestamp": ts} | ({"X-Inbox-To": to} if to is not None else {})
+        signed = ts.encode() + b"." + (to.encode() + b"." if to is not None else b"") + raw
+        headers["X-Inbox-Signature"] = "sha256=" + hmac.new(b"k", signed, hashlib.sha256).hexdigest()
+        platform = serve.HOOKS["/hooks/email"](headers)
+        assert serve.intake(db, platform, headers, raw, b"k", now)[0] == 204
+        return db.execute("SELECT c.external_id FROM activities a JOIN threads t ON t.id = a.thread_id JOIN channels ch"
+                          " ON ch.id = t.channel_id JOIN connections c ON c.id = ch.connection_id WHERE a.native_id = ?",
+                          (f"<m{n}@c.io>",)).fetchone()[0]
+
+    assert deliver(1, "A.Y.AI@inbox.agentmaple.com") == "a@y.ai"
+    assert deliver(2, "a@inbox.agentmaple.com") == "a@x.io"
+    assert deliver(3, "fastmail@inbox.agentmaple.com") == "f@fm.com"
+    assert deliver(4, "nobody@inbox.agentmaple.com") == "a@x.io"
+    assert deliver(5, None) == "a@x.io"
+
+
+def test_init_connects_each_gmail_address_with_its_own_inbound_address(tmp_path, capsys):
+    from universal_inbox import main
+    path = str(tmp_path / "inbox.db")
+    for _ in range(2):  # idempotent
+        main.main(["--db", path, "init", "--gmail", "Jeremy@agentmaple.com", "--gmail", "jeremy@agentmaple.ai"])
+    db = inbox.connect(path)
+    assert [tuple(r) for r in db.execute("SELECT platform, self_id, inbound FROM connections ORDER BY id")] == [
+        ("gmail", "jeremy@agentmaple.com", "jeremy.agentmaple.com@inbox.agentmaple.com"),
+        ("gmail", "jeremy@agentmaple.ai", "jeremy.agentmaple.ai@inbox.agentmaple.com")]
+    assert "forward its mail to jeremy.agentmaple.ai@inbox.agentmaple.com" in capsys.readouterr().out

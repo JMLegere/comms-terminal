@@ -24,7 +24,7 @@ from typing import Protocol, Sequence
 
 from . import files, platforms
 
-SCHEMA_VERSION = 22
+SCHEMA_VERSION = 23
 WAIT = timedelta(days=4)  # Waiting for them ends after this with no reply: back to Todo to follow up (#116)
 EMAIL_CONFIRMATION_PENDING = "Email confirmation pending; wait for its sent receipt before replying."
 MIGRATIONS = {  # version -> statement that upgrades an existing database to it
@@ -341,6 +341,13 @@ FROM sequence_steps;
 DROP TABLE sequence_steps;
 ALTER TABLE sequence_steps_new RENAME TO sequence_steps;
 PRAGMA legacy_alter_table = OFF;""",
+    # Any number of email Connections: each one's Inbound address (the Worker's X-Inbox-To) picks it. The
+    # existing ones keep the addresses their forwards already reach (runbook §1 step 7, #113).
+    23: """ALTER TABLE connections ADD COLUMN inbound TEXT;
+CREATE UNIQUE INDEX connections_inbound ON connections (inbound);
+UPDATE connections SET inbound = 'fastmail@inbox.agentmaple.com' WHERE platform = 'fastmail';
+UPDATE connections SET inbound = lower(substr(self_id, 1, instr(self_id, '@'))) || 'inbox.agentmaple.com'
+WHERE platform = 'gmail' AND instr(self_id, '@') > 1;""",
 }
 
 # ponytail: fixed list; extend when a free-mail sender forms an Organization by mistake.

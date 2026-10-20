@@ -143,13 +143,13 @@ def test_version_12_upgrade_adds_only_receipts_and_preserves_records_files_and_g
         read = lambda: {name: [tuple(r) for r in db.execute(f'SELECT {columns[name]} FROM "{name}" ORDER BY rowid')]  # noqa: E731
                         for name in tables}
         rows = read()
-        unchanged = "SELECT type, name, tbl_name, sql FROM sqlite_schema WHERE tbl_name NOT IN ('composition_drafts', 'persons') ORDER BY name"
+        unchanged = "SELECT type, name, tbl_name, sql FROM sqlite_schema WHERE tbl_name NOT IN ('composition_drafts', 'persons', 'connections') ORDER BY name"
         schema = [tuple(r) for r in db.execute(unchanged)]
         inbox.migrate(db)
         assert db.execute("PRAGMA user_version").fetchone()[0] == inbox.SCHEMA_VERSION
         assert read() == rows  # 13-17 add tables, and NULL columns on existing Drafts and People
         assert db.execute("SELECT count(*) FROM composition_drafts WHERE thread_id IS NOT NULL").fetchone()[0] == 0
-        names = {row[1] for row in schema}  # 15-17 add the audit logs and Sequences tables
+        names = {row[1] for row in schema}  # 15-17 add the audit logs and Sequences tables; 23 a Connection column
         assert [tuple(r) for r in db.execute(unchanged) if r[1] in names] == schema
         assert files.attachment_path(db, sha).read_bytes() == b"retained file"
         assert (files.raw_dir(db) / f"{raw_sha}.eml").read_bytes() == raw
@@ -188,3 +188,18 @@ def test_failed_version_13_upgrade_rolls_back_ddl_and_version_and_restores_fk(tm
         assert "\n".join(db.iterdump()) == before
     finally:
         db.close()
+
+
+def test_version_23_gives_existing_email_connections_the_inbound_addresses_their_forwards_reach():
+    db = inbox.connect()
+    inbox.migrate(db)
+    from schema_history import downgrade
+    downgrade(db, 22)
+    with db:
+        for platform, address in [("gmail", "Jeremy@agentmaple.com"), ("fastmail", "legere@fastmail.com"),
+                                  ("slack", "T0")]:
+            db.execute("INSERT INTO connections (platform, external_id, self_id, label, connected_at)"
+                       " VALUES (?, ?, ?, 'x', '2026-10-20T00:00:00+00:00')", (platform, address, address))
+    inbox.migrate(db)
+    assert [tuple(r) for r in db.execute("SELECT platform, inbound FROM connections ORDER BY id")] == [
+        ("gmail", "jeremy@inbox.agentmaple.com"), ("fastmail", "fastmail@inbox.agentmaple.com"), ("slack", None)]

@@ -3,6 +3,7 @@
 from universal_inbox import inbox
 
 UNDO = {
+    23: "DROP INDEX connections_inbound; ALTER TABLE connections DROP COLUMN inbound;",
     22: "",  # renames a Step kind; the rebuilt table keeps its columns
     21: "ALTER TABLE enrollments DROP COLUMN responded_at; ALTER TABLE sequence_steps DROP COLUMN enroll_sequence_id;",
     20: "ALTER TABLE enrollments DROP COLUMN starts_at;",

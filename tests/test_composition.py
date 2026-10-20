@@ -51,7 +51,10 @@ def incoming(native_id, **changes):
 
 
 def old_rows(db):
-    columns = {"persons": "id, display_name, created_at"}  # 17 adds unsubscribed_at, NULL on existing People
+    columns = {"persons": "id, display_name, created_at",  # 17 adds unsubscribed_at, NULL on existing People
+               # 23 adds inbound, the address an existing email Connection's forward already reaches
+               "connections": "id, platform, external_id, self_id, label, connected_at, auth_ok, last_error,"
+                              " probe_error, probed_at"}
     return {r[0]: [tuple(a) for a in db.execute(f'SELECT {columns.get(r[0], "*")} FROM "{r[0]}" ORDER BY rowid')]
             for r in db.execute("SELECT name FROM sqlite_schema WHERE type = 'table'"
                                 " AND name NOT LIKE 'sqlite_%' AND name != 'composition_drafts'")}
@@ -198,8 +201,9 @@ def test_v8_draft_migration_matches_fresh_preserves_old_rows_aliases_guards_and_
         inbox.migrate(fresh)
         assert old.execute("PRAGMA user_version").fetchone()[0] == inbox.SCHEMA_VERSION
         assert shape(old) == shape(fresh)
-        assert {k: v for k, v in shape(old).items() if k in old_shape and k[1] != "persons"} == \
-            {k: v for k, v in old_shape.items() if k[1] != "persons"}  # 17: persons.unsubscribed_at
+        changed = ("persons", "connections")  # 17: persons.unsubscribed_at; 23: connections.inbound
+        assert {k: v for k, v in shape(old).items() if k in old_shape and k[1] not in changed} == \
+            {k: v for k, v in old_shape.items() if k[1] not in changed}
         assert {k: v for k, v in old_rows(old).items() if k in before} == before  # later migrations may add tables
         assert inbox.get_thread(old, two.id).id == one.id
         assert old.execute("PRAGMA foreign_keys").fetchone()[0] == 1

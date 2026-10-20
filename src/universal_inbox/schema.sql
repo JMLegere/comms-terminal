@@ -8,8 +8,10 @@ CREATE TABLE connections (
   auth_ok           INTEGER NOT NULL DEFAULT 1 CHECK (auth_ok IN (0, 1)),
   last_error        TEXT,
   probe_error       TEXT,                  -- the last health check's failure (decision #119)
-  probed_at         TEXT                   -- when the last health check ran
+  probed_at         TEXT,                  -- when the last health check ran
+  inbound           TEXT                   -- email: the address its forward reaches, the Worker's X-Inbox-To
 ) STRICT;
+CREATE UNIQUE INDEX connections_inbound ON connections (inbound);
 
 CREATE TABLE channels (
   id            INTEGER PRIMARY KEY,

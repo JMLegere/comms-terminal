@@ -50,7 +50,8 @@ def main(argv=None) -> None:
     s.add_argument("--files-host", help="LAN address for the file server (Attachments); off when omitted")
     s.add_argument("--files-port", type=int, default=8789)
     i = sub.add_parser("init", help="create Connections, one per Platform (platforms.py)")
-    i.add_argument("--gmail", "--email", dest="gmail", help="Jeremy's forwarded Gmail address, e.g. jeremy@agentmaple.com")
+    i.add_argument("--gmail", "--email", dest="gmail", action="append", default=[],
+                   help="a forwarded Gmail address, e.g. jeremy@agentmaple.com; repeat for more")
     i.add_argument("--slack-team", help="Slack team ID")
     i.add_argument("--slack-user", help="Jeremy's Slack user ID")
     i.add_argument("--quo", "--sms", dest="quo", help="the Quo Work number, E.164 (+1…)")
@@ -77,20 +78,23 @@ def main(argv=None) -> None:
         from . import serve
         serve.run(a.db, a.socket, a.host, a.port, a.files_host, a.files_port)
     elif a.cmd == "init":
-        from . import inbox
+        from . import email, fastmail, inbox
         from .platforms import PLATFORMS
         db = inbox.connect(a.db)
         inbox.migrate(db)
         now = datetime.now(timezone.utc).isoformat()
         with db:
-            new = [("gmail", a.gmail and a.gmail.lower(), None), ("fastmail", a.fastmail and a.fastmail.lower(), None),
-                   ("slack", a.slack_team if a.slack_user else None, a.slack_user), ("quo", a.quo, None)]
-            for platform, external_id, self_id in new:
+            new = [*(("gmail", g.lower(), None, email.inbound_for(g)) for g in a.gmail),
+                   ("fastmail", a.fastmail and a.fastmail.lower(), None, fastmail.INBOUND),
+                   ("slack", a.slack_team if a.slack_user else None, a.slack_user, None), ("quo", a.quo, None, None)]
+            for platform, external_id, self_id, inbound in new:
                 if external_id:
-                    db.execute("INSERT OR IGNORE INTO connections (platform, external_id, self_id, label, connected_at)"
-                               " VALUES (?, ?, ?, ?, ?)", (platform, external_id, self_id or external_id,
-                                                           PLATFORMS[platform].title, now))
-        print(f"Connections in {a.db}: " + ", ".join(r[0] for r in db.execute("SELECT platform FROM connections")))
+                    db.execute("INSERT OR IGNORE INTO connections (platform, external_id, self_id, label, connected_at,"
+                               " inbound) VALUES (?, ?, ?, ?, ?, ?)", (platform, external_id, self_id or external_id,
+                                                                      PLATFORMS[platform].title, now, inbound))
+        print(f"Connections in {a.db}:")
+        for r in db.execute("SELECT platform, external_id, inbound FROM connections ORDER BY id"):
+            print(f"  {r[0]} {r[1]}" + (f" (forward its mail to {r[2]})" if r[2] else ""))
     elif a.cmd == "slack-import":
         # Run with the service's credential, e.g. sudo systemd-run --uid=jerry --pipe --wait
         #   -p LoadCredentialEncrypted=slack-user-token:/etc/credstore.encrypted/universal-inbox.slack-user-token …

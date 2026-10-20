@@ -16,6 +16,13 @@ from email.utils import getaddresses, make_msgid, parseaddr, parsedate_to_dateti
 from . import files, inbox, render
 
 SIGNATURE_WINDOW = 300  # seconds
+INBOX = "inbox.agentmaple.com"  # Email Routing's domain: every forward reaches the Worker here (runbook D3)
+
+
+def inbound_for(address: str) -> str:
+    """The Inbound address a new Gmail Connection's forward goes to: its whole address as the local part, so any
+    number of mailboxes, even ones sharing a name across domains, never collide."""
+    return f"{address.lower().replace('@', '.')}@{INBOX}"
 
 # FR-3a: Plain's auto-reply header signals. A subject prefix alone never counts.
 AUTO_REPLY_HEADERS = (
@@ -313,6 +320,14 @@ def handle_hook(db, connection, headers, body: bytes, secret: bytes, now: dateti
     log.info("email %s %s", outcome, mid)
     inbox.set_connection_error(db, connection["id"], None)
     return 204
+
+
+def receipt_sender(body: bytes) -> str:
+    """The address an authenticated Resend receipt was sent from, lowercase; "" when it names none."""
+    try:
+        return parseaddr(json.loads(body)["data"]["from"])[1].lower()
+    except (ValueError, RecursionError, KeyError, TypeError, AttributeError):
+        return ""
 
 
 def handle_resend_hook(db, connection_id: int, body: bytes) -> tuple[int, bool]:
