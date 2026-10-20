@@ -49,6 +49,28 @@ def test_queue_key_marks_selected_thread_done(tmp_path):
     assert detail(path, first["id"]) == "DONE_MANUALLY_SET"
 
 
+def test_b_blocks_the_lone_sender_and_ignores_the_thread_until_undo(tmp_path):
+    path, _ = seeded(tmp_path)
+    db = inbox.connect(path)
+    app, seen = Console(path), {}
+
+    async def pick_lone_sender(app, pilot):
+        row = next(i for i, r in enumerate(page(app).rows) if not r.get("header")
+                   and [s["blocked"] for s in inbox.thread_senders(db, r["id"])] == [False])
+        page(app).query_one("DataTable").move_cursor(row=row)
+        await pilot.pause()
+        seen["id"] = page(app).current_thread_id()
+
+    async def check(app, pilot):
+        seen["blocked"] = inbox.thread_senders(db, seen["id"])[0]["blocked"]
+        seen["detail"] = detail(path, seen["id"])
+
+    run(app, [pick_lone_sender, "b", check, "z"])
+    assert seen["blocked"] and seen["detail"] == "IGNORED"
+    assert not inbox.thread_senders(db, seen["id"])[0]["blocked"]
+    assert detail(path, seen["id"]) != "IGNORED"
+
+
 def test_status_tabs_by_key_and_click(tmp_path):
     path, _ = seeded(tmp_path)
     app, seen = Console(path), {}

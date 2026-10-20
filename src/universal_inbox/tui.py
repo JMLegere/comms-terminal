@@ -534,7 +534,8 @@ HELP = [  # (group, [(keys, what it does)]) — the full key map; Gmail-style wh
                      ("2 – 6", "Todo, Snoozed, Done, Ignored, Drafts"),
                      ("7 – 0", "People, Organizations, Cases (Todo), Channels"), ("u", "back (esc also works)")]),
     ("Thread", [("r", "reply to the sender   ctrl+enter sends now or later · esc keeps the draft"), ("a", "reply all"),
-                ("e", "done: it returns if they write again"), ("b", "snooze until a time (it also returns when they write)"),
+                ("e", "done: it returns if they write again"), ("g", "snooze until a time (it also returns when they write)"),
+                ("b", "block or unblock the sender (one sender: also ignores the thread)"),
 ("m", "ignore: it stays out of Todo (m again un-ignores)"), ("x", "ignore, as m does"),
                 ("l", "add to a case"), ("s", "change status: investigating, needs a response"),
                 ("p", "open the person"), ("o", "open in Gmail, Fastmail, or Slack"), ("z", "undo the last change"),
@@ -647,6 +648,43 @@ class ThreadActions:
             self._act(inbox.Unignore(), "Un-ignored: back in Todo.")
         else:
             self._act(inbox.Ignore(), "Ignored. New messages will not bring it back.")
+
+    def action_block_sender(self):
+        """Block (or unblock) whoever wrote: the only sender at once, else a pick, latest sender first (#138)."""
+        tid = self.current_thread_id()
+        if tid is None:
+            return
+        senders = inbox.thread_senders(self.app.db, tid)
+        if not senders:
+            self.app.notify("Nobody else wrote in this thread: nothing to block.")
+        elif len(senders) == 1:
+            self._block_sender(tid, senders[0], ignore=True)
+        else:
+            def chosen(n):
+                if n is not None:
+                    self._block_sender(tid, senders[int(n)], ignore=False)
+            opts = [(str(n), f"{escape(s['label'])} · {escape(s['value'])}" + (" (blocked)" if s["blocked"] else ""))
+                    for n, s in enumerate(senders)]
+            self.app.push_screen(Pick("Block or unblock a sender", opts), chosen)
+
+    def _block_sender(self, tid, s, ignore):
+        """Block also Ignores the Thread when the sender is its only one; a block alone changes only new Threads."""
+        db = self.app.db
+        snap = inbox.snapshot(db, tid)
+        inbox.block(db, s["kind"], s["value"], not s["blocked"])
+        if s["blocked"]:
+            message = f"Unblocked {s['value']}: new messages reach Todo again."
+        elif ignore and inbox.get_thread(db, tid).status_detail != "IGNORED":
+            inbox.act(db, tid, inbox.Ignore())
+            message = f"Blocked {s['value']} and ignored this thread: new threads from them go straight to Ignored."
+        else:
+            message = f"Blocked {s['value']}: new threads from them go straight to Ignored."
+
+        def undo():
+            inbox.block(db, s["kind"], s["value"], s["blocked"])
+            inbox.restore(db, snap)
+        self.app.offer_undo(message, undo)
+        self.after_change()
 
     def action_status(self):
         tid = self.current_thread_id()
@@ -976,7 +1014,7 @@ class Page(Vertical):
 
 THREAD_KEYS = [  # Thread actions, Gmail-style (decision #93); shared by the Threads list and a Case
     Binding("r", "reply('sender')", "reply"), Binding("a", "reply('all')", "reply all"),
-    Binding("e", "done", "done"), Binding("b", "pause", "snooze"),
+    Binding("e", "done", "done"), Binding("g", "pause", "snooze"), Binding("b", "block_sender", "block sender"),
     Binding("m", "ignore", "ignore"), Binding("l", "case", "case"), Binding("s", "status", "status"),
     Binding("p", "person", show=False), Binding("o", "link", show=False), Binding("y", "copy", "copy for agent"),
     Binding("f", "forward", show=False), Binding("x", "ignore", show=False),  # x drops: Ignore, as m does
@@ -1014,7 +1052,7 @@ class ThreadsPage(Page, ThreadActions):
     ]
     EMPTY = {
         "Todo": "All caught up: nothing needs a reply.",
-        "Snoozed": "Nothing snoozed or waiting. Press b on a thread to snooze it.",
+        "Snoozed": "Nothing snoozed or waiting. Press g on a thread to snooze it.",
         "Done": "Nothing done yet. Press e on a thread when it needs nothing more.",
         "Ignored": "Nothing ignored. Press m on a thread to stop it coming back.",
         "All": "No threads yet. They arrive with your next email or Slack message.",
@@ -3650,7 +3688,7 @@ class ConnectionPage(Page):
 
 
 KEY_GROUP = {  # bottom bar order: move · reply · triage · organize · general
-    "j": 0, "escape": 0, "u": 0, "r": 1, "a": 1, "ctrl+enter": 1, "ctrl+o": 1, "e": 2, "b": 2, "m": 2,
+    "j": 0, "escape": 0, "u": 0, "r": 1, "a": 1, "ctrl+enter": 1, "ctrl+o": 1, "e": 2, "g": 2, "b": 2, "m": 2,
     "l": 3, "s": 3, "z": 4, "question_mark": 4, "q": 4,
 }
 

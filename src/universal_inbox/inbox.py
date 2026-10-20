@@ -1354,6 +1354,19 @@ def block(db, kind: str, value: str, blocked: bool = True) -> None:
                    (int(blocked), kind, value))
 
 
+def thread_senders(db, thread_id: int) -> list[dict]:
+    """The Identities that wrote in a Thread, latest first: label (Person name, else the address), kind, value,
+    blocked. Jeremy's own messages have no Identity, so he is never one."""
+    rows = db.execute("SELECT identity_id FROM thread_activities WHERE thread_id = ? AND kind = 'MESSAGE'"
+                      " AND identity_id IS NOT NULL GROUP BY identity_id ORDER BY MAX(occurred_at) DESC, MAX(id) DESC",
+                      (get_thread(db, thread_id).id,)).fetchall()
+    senders = []
+    for r in rows:
+        label, i = _sender(db, r[0])
+        senders.append({"label": label, "kind": i["kind"], "value": i["value"], "blocked": bool(i["blocked"])})
+    return senders
+
+
 def add_identity(db, person_id: int, kind: str, value: str) -> None:
     value = value.lower() if kind == "email" else value
     with db:

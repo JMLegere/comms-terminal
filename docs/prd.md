@@ -976,6 +976,10 @@ All entries are dated 2026-10-10; exact times are unproven unless noted. Full de
   - Request / decision: D-A7: each phase needs its own go. P1 first, then P2–P6 together, then the release (P7: deploy, live migration, backfill, live checks)
   - Source: Jeremy, "P1 only", "Build P2 through P6", release go (2026-10-15)
   - Status: Approved; P1–P6 built, release authorized
+- **138**
+  - Request / decision: On a Thread, `b` blocks or unblocks the sender, and snooze moves from `b` to `g` (amends #93). One sender: block it and Ignore the Thread. Several: pick one, latest first, and block only. Block stays per Identity (#62); one `z` undoes it all.
+  - Source: Jeremy, "i want the ability to block a sender from the thread detail", "replace b, b should be block, make snooze g" (2026-10-20)
+  - Status: Accepted
 
 - **138**
   - Request / decision: Retain blocked ordinary inbound messages, edits, and deletions while suppressing their arrival-driven Status application on existing Threads. New blocked Threads still start Ignored. Keep per-Identity scope, other participants, Phone calls, timers, explicit actions, complete email merge triage, and Sequence pause hooks under their existing rules. Unblocking restores normal eligibility for future activity while existing Ignored Threads remain sticky.

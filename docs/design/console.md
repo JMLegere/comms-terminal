@@ -145,8 +145,9 @@ Text-first, like a terminal mail client with Gmail's habits. Images show in the 
 ### Status, Case, and Person pickers
 
 - `s`: a small menu of Todo details (Needs first response, Needs next response, Investigating) and `Unignore` when the Thread is Ignored.
-- `b` (snooze): a menu of `1 hour`, `tomorrow 9:00`, `next Monday 9:00`, or a typed time. No indefinite option (#96); a snoozed Thread also returns when they write.
+- `g` (snooze): a menu of `1 hour`, `tomorrow 9:00`, `next Monday 9:00`, or a typed time. No indefinite option (#96); a snoozed Thread also returns when they write.
 - `c`: a filterable list of Cases, `new case…`, and `remove from case`.
+- `b` (block sender, #138): blocks the Identity that wrote, or unblocks it when it is already blocked. With one sender it acts at once and also Ignores the Thread; with several it offers a menu, latest sender first, and blocks only. `z` undoes both.
 - `p`: the Person record: Identities (with `b` block/unblock, `a` add Identity, `x` remove Identity), Organizations, Threads with their glyphs, Cases.
 
 ### Cases, Channels, Health
@@ -172,7 +173,7 @@ Thread, Person, Organization, and Case pages show separate details-column sectio
 **Decision #93**: Gmail-style where Gmail has an equivalent.
 
 - Move: `←`/`→` focus the previous/next pane without opening an item or changing contents; `↑`/`↓` or `j`/`k` move in the main page. In the rail, `↑`/`↓` highlight and `enter` opens; in the thread pane, `↑`/`↓` scroll. `space`/`pgdn`/`pgup` scroll the thread, `u` or `esc` back, `1` Today, `2`–`5` Status views, `6` Drafts, `7`–`0` People, Organizations, Cases, Channels. On a list row, `enter` moves into the item beside it (a Case header opens the Case; a reply Draft opens its Thread's reply box); in pickers and single-line fields it submits; in a reply or Draft body it types a newline and `ctrl+enter` sends. `x` drops the row's item: a Thread is Ignored (as `m`), a Task skipped, a Draft deleted; `z` undoes. On Tasks, `/` filters.
-- Thread (main list, focused thread pane, or selected Case card): `r` reply to the sender, `a` reply all (FR-3b's reply-all stays one key away), `e` Done (Gmail archive), `b` snooze (Gmail snooze), `m` or `x` Ignore (Gmail mute), `l` Case (Gmail label), `z` undo (Gmail undo), `s` change status, `p` Person, `o` open in Gmail or Slack, `f` forward the newest message as an email Draft with its Attachments (#134), `ctrl+enter` send (#100).
+- Thread (main list, focused thread pane, or selected Case card): `r` reply to the sender, `a` reply all (FR-3b's reply-all stays one key away), `e` Done (Gmail archive), `g` snooze, `b` block or unblock the sender (#138), `m` or `x` Ignore (Gmail mute), `l` Case (Gmail label), `z` undo (Gmail undo), `s` change status, `p` Person, `o` open in Gmail or Slack, `f` forward the newest message as an email Draft with its Attachments (#134), `ctrl+enter` send (#100).
 - Reply and Draft: `ctrl+o` attach, `delete` remove the highlighted staged file, paste an image path to attach it.
 - Copy for an agent: `y` on a Thread (or its Case card) or a Draft copies it to the clipboard (OSC 52) as Markdown to paste into a terminal agent. A Thread gives its properties, every message in full with link URLs, Trimmed content, and each Attachment's Workbox path, and the Attio, Tana, and Linear answers as JSON. A Draft gives its envelope, current unsaved body, and staged files with their paths, then each Thread in its Captured history.
 - The same Markdown comes from the command line, so an agent can fetch it fresh: `universal-inbox threads [view]`, `universal-inbox thread ID`, `universal-inbox drafts`, `universal-inbox draft ID`. `universal-inbox draft ID --revision N --body -` (or `--to`, `--cc`, `--subject`) changes a Draft only at the revision the agent read, and `universal-inbox draft new --connection ID` starts one. Nothing on the command line sends; Jeremy sends from the console.
