@@ -251,3 +251,20 @@ def test_a_new_service_build_quits_for_the_launcher_to_update_unless_a_reply_is_
     run(app, [scenario])
     assert seen["held"] is None
     assert app.return_code == tui.UPDATE_EXIT
+
+
+def test_link_master_forwards_the_file_server_and_relays_do_not(monkeypatch, tmp_path):
+    seen = []
+
+    class Popen:
+        def __init__(self, args, **kw):
+            seen.append(args)
+
+        def poll(self):
+            return None
+    monkeypatch.setattr(remote.subprocess, "Popen", Popen)
+    link = remote.Link(["host"], str(tmp_path / "ctl"))
+    link.start()
+    assert seen[0][seen[0].index("-L") + 1] == "127.0.0.1:8789:127.0.0.1:8789"
+    assert "-L" not in link.command()
+    assert tui.FILE_SERVER == ("127.0.0.1", 8789)

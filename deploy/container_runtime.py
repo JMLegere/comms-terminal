@@ -386,13 +386,13 @@ def create_args(config, image):
     return ["container", "create", *common(), "--name", config["container_name"],
             "--label", OWNER + "=true", "--label", "io.comms-terminal.sha=" + image["sha"],
             "--log-driver=local", "--log-opt=max-size=10m", "--log-opt=max-file=3",
-            "--publish", "127.0.0.1:8787:8787",
+            "--publish", "127.0.0.1:8787:8787", "--publish", "127.0.0.1:8789:8789",
             "--mount", "type=bind,src=" + config["home"] + ",dst=" + HOME,
             "--mount", "type=bind,src=" + str(Path(config["socket"]).parent) + ",dst=/run/comms-terminal",
             "--mount", "type=bind,src=" + config["container_secrets"] + ",dst=/run/secrets,readonly",
             "--mount", "type=bind,src=" + config["state"] + ",dst=" + STATE + ",readonly",
             "--entrypoint", CLI, image["image"], "--socket", SOCKET,
-            "serve", "--host", "0.0.0.0", "--port", "8787"]
+            "serve", "--host", "0.0.0.0", "--port", "8787", "--files-host", "0.0.0.0"]
 
 
 def serve(config):

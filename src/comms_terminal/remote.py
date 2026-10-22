@@ -283,6 +283,9 @@ while b:=s.recv(65536):
 # Root on the host reaches the container's 0600 socket; the administrator's sudo is the existing access.
 RELAY_COMMAND = ("sudo -n /usr/bin/python3 -I -c "
                  f"\"exec(__import__('base64').b64decode('{base64.b64encode(RELAY.encode()).decode()}'))\"")
+# The master carries Attachment links and upload pages to the service's loopback file server (tui.FILE_SERVER).
+# A port already taken on the laptop only warns: writes keep working (ExitOnForwardFailure stays off).
+FILES_FORWARD = "127.0.0.1:8789:127.0.0.1:8789"
 
 
 def _die_with_parent():
@@ -303,7 +306,7 @@ class Link:
             Path(self.control).unlink(missing_ok=True)
             self.master = subprocess.Popen(
                 ["ssh", "-M", "-S", self.control, "-N", "-o", "ControlPersist=no", "-o", "ServerAliveInterval=15",
-                 "-o", "ServerAliveCountMax=2", *self.ssh_args],
+                 "-o", "ServerAliveCountMax=2", "-L", FILES_FORWARD, *self.ssh_args],
                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 start_new_session=True, preexec_fn=_die_with_parent)
 

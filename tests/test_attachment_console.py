@@ -159,7 +159,7 @@ def test_reply_attaches_a_workbox_file_shows_an_upload_link_and_delete_unstages(
 
     run(app, [open_reply])
     assert seen["staged"] == ["notes.txt"] and seen["list"] == 1
-    assert any(f"http://192.168.0.107:8789/up/thread.{ids['ana']}." in n for n in seen["notes"])
+    assert any(f"http://127.0.0.1:8789/up/thread.{ids['ana']}." in n for n in seen["notes"])
     assert inbox.staged(db, thread_id=ids["ana"]) == []
 
 

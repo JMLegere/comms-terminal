@@ -39,7 +39,7 @@ def main(argv=None) -> None:
     p = argparse.ArgumentParser(prog="comms-terminal")
     p.add_argument("--db", default=default_db())
     p.add_argument("--socket", default=default_socket())
-    p.add_argument("--files-host", help="console: the file server's LAN address in Attachment links (192.168.0.107)")
+    p.add_argument("--files-host", help="console: the file server's address in Attachment links (127.0.0.1, the SSH forward)")
     p.add_argument("--files-port", type=int, help="console: the file server's port (8789)")
     p.add_argument("--remote", metavar="SSH_ARGS",
                    help="console: work on a local copy (--db) of the service reached by `ssh SSH_ARGS` (ADR 0004)")

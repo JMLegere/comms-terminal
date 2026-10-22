@@ -224,10 +224,11 @@ def test_docker_command_uses_fixed_socket_sanitized_env_and_no_shell(monkeypatch
 
 def test_fixed_daemon_argv_maps_only_required_state_and_loopback(config):
     args = runtime.create_args(config, {"image": IMAGE, "sha": A})
-    assert args[args.index("--publish") + 1] == "127.0.0.1:8787:8787"
+    assert [args[i + 1] for i, a in enumerate(args) if a == "--publish"] == ["127.0.0.1:8787:8787", "127.0.0.1:8789:8789"]
     assert "--restart=no" in args and "--read-only" in args and "--cap-drop=ALL" in args
     assert args[args.index("--user") + 1] == "10001:10001"
-    assert args[-8:] == [IMAGE, "--socket", runtime.SOCKET, "serve", "--host", "0.0.0.0", "--port", "8787"]
+    assert args[-10:] == [IMAGE, "--socket", runtime.SOCKET, "serve", "--host", "0.0.0.0", "--port", "8787",
+                          "--files-host", "0.0.0.0"]
     mounts = [args[index + 1] for index, arg in enumerate(args) if arg == "--mount"]
     assert len(mounts) == 4
     assert any(m.endswith("dst=/run/secrets,readonly") for m in mounts)

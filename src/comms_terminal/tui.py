@@ -2599,7 +2599,7 @@ def copy_for_agent(app, text: str, what: str):
 
 DRAFT_FIELDS = ("connection_id", "kind", "sender", "to", "cc", "subject", "body")
 SENDING_UNAVAILABLE = "Sending unavailable · drafts only."
-FILE_SERVER = ("192.168.0.107", 8789)  # serve --files-host/--files-port in production (deploy/comms-terminal.service)
+FILE_SERVER = ("127.0.0.1", 8789)  # the console's SSH forward to the service's file server (remote.FILES_FORWARD)
 DRAFT_HINT = "ctrl+enter send · ctrl+s save · ctrl+o attach · esc close"
 SEND_UNKNOWN = "Send outcome unknown · it may have gone out. Check Sent, then ctrl+enter."
 
