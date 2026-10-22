@@ -1,5 +1,5 @@
 # Deploy: cd deploy/email-worker && npx wrangler deploy && npx wrangler secret put EMAIL_HOOK_SECRET
-name = "comms-terminal-email"
+name = "universal-inbox-email"  # deployed Worker name; renaming creates a second Worker
 main = "worker.js"
 compatibility_date = "2026-10-01"
 workers_dev = false
