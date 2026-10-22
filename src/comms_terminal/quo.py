@@ -8,7 +8,8 @@ Replies go out through Quo's send API; the delivered event for a console reply c
 and is dropped by ingest as a duplicate.
 
 Calls (.agents/discovery/2026-10-15-phone-calls.md): call.completed becomes a Phone call, stored as a MESSAGE
-Activity whose data carries `call` (direction, outcome, length); its content is the one-line summary. A Call
+Activity whose data carries `call` (direction, outcome, length, and Quo's answered_at and completed_at when
+present); its content is the one-line summary. A Call
 transcript (call.transcript.completed, or call.voicemail.completed's text) is an EDIT Activity targeting the
 call, from Jeremy so it never moves Status; thread_view shows it under the summary.
 """
@@ -73,7 +74,8 @@ def _call(event: dict, connection) -> inbox.Incoming | None:
     outcome = ("connected" if status == "answered" else "voicemail" if incoming and r.get("hasVoicemail")
                else "missed" if incoming else "no answer")
     call = {"direction": r["direction"], "outcome": outcome,
-            "length": int(r.get("duration") or 0) if outcome in ("connected", "voicemail") else 0}
+            "length": int(r.get("duration") or 0) if outcome in ("connected", "voicemail") else 0,
+            **{k: r[q] for k, q in (("answered_at", "answeredAt"), ("completed_at", "completedAt")) if r.get(q)}}
     link = (event["data"].get("links") or {}).get("quo")
     summary = call_summary(call)
     return inbox.Incoming(

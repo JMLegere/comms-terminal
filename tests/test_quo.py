@@ -141,6 +141,10 @@ def test_call_outcomes():
     assert out("incoming", "unanswered", 42, voicemail=True).content == "Voicemail, 42s"
     assert out("outgoing", "unanswered", 30).data["call"] == {"direction": "outgoing", "outcome": "no answer", "length": 0}
     assert out("outgoing", "unanswered").sender is None and out("incoming", "unanswered").sender.value == ANA
+    timed = quo.parse(json.loads(call_event("call.completed", "AC9", ANA, direction="outgoing", status="answered",
+                                            duration=755, answeredAt="2026-10-22T14:04:13.338Z",
+                                            completedAt="2026-10-22T14:16:43.858Z")), con).data["call"]
+    assert (timed["answered_at"], timed["completed_at"]) == ("2026-10-22T14:04:13.338Z", "2026-10-22T14:16:43.858Z")
 
 
 def test_every_call_puts_its_thread_in_todo_and_joins_the_texts():
