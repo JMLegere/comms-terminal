@@ -2327,7 +2327,9 @@ def queue(db, view: str) -> list[dict]:
         " (SELECT max(occurred_at) FROM thread_activities a WHERE a.thread_id = t.id) AS last_at,"
         " (SELECT max(occurred_at) FROM thread_activities a WHERE a.thread_id = t.id AND a.identity_id IS NOT NULL) AS last_in,"
         " (SELECT identity_id FROM thread_activities a WHERE a.thread_id = t.id AND a.identity_id IS NOT NULL"
-        "   ORDER BY occurred_at, id LIMIT 1) AS first_identity"
+        "   ORDER BY occurred_at, id LIMIT 1) AS first_identity,"
+        " EXISTS (SELECT 1 FROM composition_drafts d JOIN threads m ON m.id = d.thread_id"
+        "   WHERE m.id = t.id OR m.merged_into = t.id) AS drafted"
         f" FROM threads t JOIN channels ch ON ch.id = t.channel_id JOIN connections c ON c.id = ch.connection_id"
         f" WHERE t.merged_into IS NULL AND t.status_detail IN ({','.join('?' * len(details))})", details).fetchall()
     out = []
@@ -2335,7 +2337,7 @@ def queue(db, view: str) -> list[dict]:
         label, identity = _sender(db, r["first_identity"]) if r["first_identity"] else ("You", None)
         out.append({"id": r["id"], "title": r["title"], "status": r["status"], "detail": r["status_detail"],
                     "case_id": r["case_id"], "until": r["follow_up_at"] or r["snoozed_until"], "who": label, "where": _where(r, identity), "last_at": r["last_at"],
-                    "waiting_since": r["last_in"] or r["last_at"]})
+                    "waiting_since": r["last_in"] or r["last_at"], "drafted": bool(r["drafted"])})
     if view == "Todo":
         return sorted(out, key=lambda x: x["waiting_since"])
     return sorted(out, key=lambda x: x["last_at"], reverse=True)

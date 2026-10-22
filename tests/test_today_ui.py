@@ -9,6 +9,7 @@ from textual.widgets import DataTable
 
 from test_console import run, seeded
 from comms_terminal import inbox, sequences as sq
+from comms_terminal.icons import ICON
 from comms_terminal.tui import ChannelsPage, Console, DraftsPage, StatusLine, TaskPane, ThreadsPage, ThreadView, TodayPage
 
 MONDAY = datetime(2026, 10, 19, 13, 0, tzinfo=timezone.utc)
@@ -226,3 +227,21 @@ def test_drafts_opens_over_todays_draft_without_crashing(tmp_path):
     assert seen["before"] is not None
     page, fresh, label = seen["after"]
     assert page is DraftsPage and fresh and label not in ("", "Choose Connection")
+
+
+def test_a_thread_with_a_saved_reply_draft_shows_a_pencil_before_its_title(tmp_path):
+    path, _ = seeded(tmp_path)
+    db = inbox.connect(path)
+    drafted, plain = [t["id"] for t in inbox.queue(db, "Todo")][:2]
+    inbox.save_reply_draft(db, drafted, "Thanks, more soon")
+    seen = {}
+
+    async def scenario(app, pilot):
+        threads = app.main.current.lists[0]
+        table = threads.query_one(DataTable)
+        ids = [r["id"] for r in threads.rows]
+        seen["titles"] = {tid: str(table.get_row_at(ids.index(tid))[2]) for tid in (drafted, plain)}
+
+    run(Console(path), [scenario])
+    assert seen["titles"][drafted].startswith(f"[#b47109]{ICON['edited']}[/] ")
+    assert ICON["edited"] not in seen["titles"][plain]

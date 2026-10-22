@@ -1169,7 +1169,10 @@ class ThreadsPage(Page, ThreadActions):
                 table.add_row(icon, name, f"[#928374]{escape(cut(r['summary'], title_w))}[/]", "")
                 continue
             who = f"{indent}[b]{escape(cut(r['who'], who_w))}[/]" + (f" [#928374]· {escape(r['where'])}[/]" if show_where else "")
-            table.add_row(indent + glyph(r["detail"]), who, escape(cut(r["title"], title_w)), f"[#928374]{times[r['id']]}[/]")
+            # A saved reply Draft on the Thread (or a merged alias) shows as a pencil before the title
+            title = (f"[#b47109]{ICON['edited']}[/] " + escape(cut(r["title"], title_w - 2)) if r["drafted"]
+                     else escape(cut(r["title"], title_w)))
+            table.add_row(indent + glyph(r["detail"]), who, title, f"[#928374]{times[r['id']]}[/]")
         table.show_cursor = bool(self.rows)
         if not self.rows:
             table.add_row("", f"[#928374]{self.EMPTY[VIEW_NAMES[view]]}[/]", "", "")
