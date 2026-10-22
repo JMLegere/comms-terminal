@@ -141,3 +141,40 @@ def test_thread_timeline_page_keys_dispatch_and_limits(tmp_path):
         assert pane.scroll_y == 0
 
     run(Console(path), [scenario])
+
+
+@pytest.mark.parametrize("editor", ["reply", "draft"])
+def test_undo_and_redo_of_a_long_paste_keep_the_console_running(tmp_path, editor):
+    """Textual resizes before it moves the cursor on undo/redo; the stale cursor must not end the console."""
+    path, ids = seeded(tmp_path)
+    pasted = "".join(f"pasted line {i:03d}\n" for i in range(40))
+    seen = {}
+
+    async def scenario(app, pilot):
+        if editor == "reply":
+            app.main.open_thread(ids["ana"])
+            await pilot.pause()
+            await pilot.press("r")
+            await pilot.pause()
+            area = app.main.thread_view.query_one(".reply", TextArea)
+            area.text = ""
+        else:
+            await pilot.press("6", "n")
+            await pilot.pause()
+            area = app.main.draft_view.query_one(TextArea)
+        area.focus()
+        start = area.text
+        area._replace_via_keyboard(pasted, *area.selection)  # what a terminal paste does
+        await pilot.pause()
+        await pilot.press("ctrl+z")
+        await pilot.pause()
+        seen["undo"] = area.text, area.cursor_location
+        await pilot.press("ctrl+y")
+        await pilot.pause()
+        seen["redo"] = area.text, area.cursor_location, area.scroll_y == area.max_scroll_y
+        seen["start"], seen["running"] = start, app.is_running
+
+    run(Console(path), [scenario])
+    assert seen["running"]
+    assert seen["undo"] == (seen["start"], (0, 0))
+    assert seen["redo"] == (seen["start"] + pasted, (40, 0), True)

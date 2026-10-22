@@ -37,6 +37,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.content import Content
 from textual.coordinate import Coordinate
+from textual.geometry import Offset
 from textual.message import Message
 from textual.screen import ModalScreen, Screen
 from textual.suggester import Suggester
@@ -265,6 +266,13 @@ class PagedTextArea(_PageOverlap, TextArea):
         target = self.navigator.get_location_at_y_offset(cursor_location, offset)
         self.scroll_relative(y=offset, animate=False)
         self.move_cursor(target)
+
+    def scroll_cursor_visible(self, center: bool = False, animate: bool = False) -> Offset:
+        # Textual's undo/redo resizes (scrollbar watcher scrolls here) before it moves the cursor into the
+        # shorter document; the stale row would raise. The cursor move that follows scrolls instead.
+        if self.cursor_location[0] >= self.document.line_count:
+            return Offset(0, 0)
+        return super().scroll_cursor_visible(center, animate)
 
     def action_cursor_page_down(self) -> None:
         self._cursor_page(1)
@@ -4973,10 +4981,10 @@ class StepEditor(Vertical):
             if st["kind"] == "enrollment":
                 yield Static("[#928374]enrolls them on its day · waits for you if they responded[/]", classes="replyhint")
             yield Static(f"[#928374]{label} · fill-ins {{first_name}} {{last_name}} {{company}}[/]", classes="replyhint")
-            yield TextArea(st["body"], classes="body-editor", id="f-body")
+            yield PagedTextArea(st["body"], classes="body-editor", id="f-body")
             if st["kind"] == "call":
                 yield Static("[#928374]voicemail, left on the second call[/]", classes="replyhint")
-                yield TextArea(st["voicemail"], classes="body-editor", id="f-voicemail")
+                yield PagedTextArea(st["voicemail"], classes="body-editor", id="f-voicemail")
             yield Static("ctrl+s save · edits apply to Tasks not yet due · esc back to Steps", classes="replyhint")
 
     def on_mount(self):
