@@ -37,6 +37,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.content import Content
 from textual.coordinate import Coordinate
+from textual.geometry import Offset
 from textual.message import Message
 from textual.screen import ModalScreen, Screen
 from textual.suggester import Suggester
@@ -265,6 +266,13 @@ class PagedTextArea(_PageOverlap, TextArea):
         target = self.navigator.get_location_at_y_offset(cursor_location, offset)
         self.scroll_relative(y=offset, animate=False)
         self.move_cursor(target)
+
+    def scroll_cursor_visible(self, center: bool = False, animate: bool = False) -> Offset:
+        # Textual's undo/redo resizes (scrollbar watcher scrolls here) before it moves the cursor into the
+        # shorter document; the stale row would raise. The cursor move that follows scrolls instead.
+        if self.cursor_location[0] >= self.document.line_count:
+            return Offset(0, 0)
+        return super().scroll_cursor_visible(center, animate)
 
     def action_cursor_page_down(self) -> None:
         self._cursor_page(1)
@@ -1169,7 +1177,10 @@ class ThreadsPage(Page, ThreadActions):
                 table.add_row(icon, name, f"[#928374]{escape(cut(r['summary'], title_w))}[/]", "")
                 continue
             who = f"{indent}[b]{escape(cut(r['who'], who_w))}[/]" + (f" [#928374]· {escape(r['where'])}[/]" if show_where else "")
-            table.add_row(indent + glyph(r["detail"]), who, escape(cut(r["title"], title_w)), f"[#928374]{times[r['id']]}[/]")
+            # A saved reply Draft on the Thread (or a merged alias) shows as a pencil before the title
+            title = (f"[#b47109]{ICON['edited']}[/] " + escape(cut(r["title"], title_w - 2)) if r["drafted"]
+                     else escape(cut(r["title"], title_w)))
+            table.add_row(indent + glyph(r["detail"]), who, title, f"[#928374]{times[r['id']]}[/]")
         table.show_cursor = bool(self.rows)
         if not self.rows:
             table.add_row("", f"[#928374]{self.EMPTY[VIEW_NAMES[view]]}[/]", "", "")
@@ -4965,10 +4976,10 @@ class StepEditor(Vertical):
             if st["kind"] == "enrollment":
                 yield Static("[#928374]enrolls them on its day · waits for you if they responded[/]", classes="replyhint")
             yield Static(f"[#928374]{label} · fill-ins {{first_name}} {{last_name}} {{company}}[/]", classes="replyhint")
-            yield TextArea(st["body"], classes="body-editor", id="f-body")
+            yield PagedTextArea(st["body"], classes="body-editor", id="f-body")
             if st["kind"] == "call":
                 yield Static("[#928374]voicemail, left on the second call[/]", classes="replyhint")
-                yield TextArea(st["voicemail"], classes="body-editor", id="f-voicemail")
+                yield PagedTextArea(st["voicemail"], classes="body-editor", id="f-voicemail")
             yield Static("ctrl+s save · edits apply to Tasks not yet due · esc back to Steps", classes="replyhint")
 
     def on_mount(self):
