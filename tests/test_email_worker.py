@@ -83,7 +83,7 @@ def test_dual_delivery_availability_and_signed_http_boundaries():
 
 def test_worker_routes_preserve_legacy_hooks_and_add_resend():
     config = tomllib.loads((ROOT / "deploy/email-worker/wrangler.toml").read_text())
-    assert config["name"] == "comms-terminal-email"
+    assert config["name"] == "universal-inbox-email"
     assert config["routes"] == [
         {"pattern": f"https://hooks.agentmaple.com/hooks/{name}*", "zone_name": "agentmaple.com"}
         for name in ("email", "slack", "quo", "resend")
