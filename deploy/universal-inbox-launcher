@@ -1,8 +1,0 @@
-#!/bin/sh
-exec /usr/bin/flock --shared --no-fork /var/lib/universal-inbox-deploy/app.lock /bin/sh -c '
-if [ -e /var/lib/universal-inbox-deploy/writers-blocked ]; then
-    printf "%s\n" "Universal Inbox update recovery is pending; try again after recovery." >&2
-    exit 75
-fi
-exec /home/jerry/.local/opt/universal-inbox-current/bin/universal-inbox "$@"
-' universal-inbox "$@"

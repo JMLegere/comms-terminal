@@ -6,8 +6,8 @@ import pytest
 from textual.widgets import TextArea
 
 from test_console import run, seeded
-from universal_inbox import inbox
-from universal_inbox.tui import Console
+from comms_terminal import inbox
+from comms_terminal.tui import Console
 
 
 @pytest.mark.parametrize("wrapped", [False, True], ids=["lines", "wrapped-lines"])

@@ -11,7 +11,7 @@ from urllib.parse import quote
 
 import pytest
 
-from universal_inbox import email, files, inbox, platforms
+from comms_terminal import email, files, inbox, platforms
 from test_email_reconcile import (  # noqa: F401
     AT, OTHER, SELF, RecordingSender, activities, db, historical, incoming,
     message_ids, persisted, raw_bytes, triage,

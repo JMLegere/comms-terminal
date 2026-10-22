@@ -9,8 +9,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import seed_demo  # noqa: E402
 
-from universal_inbox import inbox  # noqa: E402
-from universal_inbox.tui import (HELP, CasePage, CasesPage, Console, OrganizationPage, PeoplePage, PersonPage,  # noqa: E402
+from comms_terminal import inbox  # noqa: E402
+from comms_terminal.tui import (HELP, CasePage, CasesPage, Console, OrganizationPage, PeoplePage, PersonPage,  # noqa: E402
                                  ReplyError, ThreadsPage)
 
 
@@ -465,7 +465,7 @@ def test_thread_details_list_other_threads_with_the_person_and_organization(tmp_
     path, ids = seeded(tmp_path)
     db = inbox.connect(path)
     v = inbox.thread_view(db, ids["ana"])
-    from universal_inbox.tui import related_markup
+    from comms_terminal.tui import related_markup
     text = "\n".join(related_markup(db, v))
     others = [t for t in v["person"]["threads"] if t.id != ids["ana"]]
     assert "other threads with Ana Ruiz" in text and "other threads with acme.com" in text
@@ -568,7 +568,7 @@ def test_drag_one_person_onto_another_previews_then_merges(tmp_path):
 
 def test_snoozed_rows_show_time_left():
     from datetime import timedelta
-    from universal_inbox.tui import left
+    from comms_terminal.tui import left
     now = datetime(2026, 10, 13, 12, tzinfo=timezone.utc)
     assert [left((now + d).isoformat(), now) for d in (timedelta(minutes=5, seconds=24),
                                                         timedelta(hours=3, minutes=32, seconds=12),
@@ -605,7 +605,7 @@ def test_snoozed_status_counts_down_on_case_cards_and_thread_header(tmp_path):
         seen["head"].append(str(app.main.thread_view.query_one(".thead").render()))
 
     async def open_case(app, pilot):
-        from universal_inbox.tui import CasePage
+        from comms_terminal.tui import CasePage
         app.main.open(lambda: CasePage(case_id))
 
     async def card(app, pilot):
@@ -622,7 +622,7 @@ def test_snoozed_status_counts_down_on_case_cards_and_thread_header(tmp_path):
 def test_chrome_refresh_with_no_change_does_not_redraw(tmp_path):
     """The 60 s chrome refresh repainted the rail and status line every minute even when nothing changed,
     which read as a screen flash (.agents/discovery/2026-10-15-tui-redraw-smoothness.md)."""
-    from universal_inbox.tui import StatusLine
+    from comms_terminal.tui import StatusLine
     path, _ = seeded(tmp_path)
     app, calls = Console(path), []
 
@@ -672,7 +672,7 @@ def test_thread_refresh_with_no_change_keeps_its_messages(tmp_path):
 
 def test_thread_views_group_by_status_then_case(tmp_path):
     """Todo and the other many-Status views list Threads under Status headers, in the legend's order."""
-    from universal_inbox.tui import GLYPH
+    from comms_terminal.tui import GLYPH
     path, _ = seeded(tmp_path)
     app, seen = Console(path), {}
 
@@ -697,7 +697,7 @@ def test_thread_views_group_by_status_then_case(tmp_path):
 
 
 def test_held_j_shows_the_thread_it_lands_on(tmp_path, monkeypatch):
-    from universal_inbox import tui
+    from comms_terminal import tui
     monkeypatch.setattr(tui, "PREVIEW_GAP", 0.5)  # wide, so the second move always falls inside it
     path, _ = seeded(tmp_path)
     app, seen = Console(path), {}

@@ -20,7 +20,7 @@ import time
 
 import pytest
 
-from universal_inbox import inbox, serve
+from comms_terminal import inbox, serve
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -36,8 +36,8 @@ def producer(after=B):
     # GitHub push shape: https://docs.github.com/en/webhooks/webhook-events-and-payloads#push
     return {"ref": "refs/heads/main", "before": A, "after": after, "created": False,
             "deleted": False, "forced": False,
-            "repository": {"id": 1414867332, "name": "universal-inbox",
-                           "full_name": "JMLegere/universal-inbox", "private": False,
+            "repository": {"id": 1414867332, "name": "comms-terminal",
+                           "full_name": "JMLegere/comms-terminal", "private": False,
                            "default_branch": "main", "clone_url": "https://untrusted.invalid/ignored.git"},
             "pusher": {"name": "JMLegere"}, "sender": {"login": "JMLegere"},
             "commits": [{"id": after, "message": "literal $(touch /ignored); never executed"}],
@@ -216,9 +216,9 @@ def test_real_http_admission_published_vector_and_producer(config, capfd):
 
 
 @pytest.mark.parametrize("change,expected", [
-    ({"repository": {"id": 1, "full_name": "JMLegere/universal-inbox"}}, 403),
+    ({"repository": {"id": 1, "full_name": "JMLegere/comms-terminal"}}, 403),
     ({"repository": {"id": 1414867332, "full_name": "other/repo"}}, 403),
-    ({"repository": {"id": True, "full_name": "JMLegere/universal-inbox"}}, 403),
+    ({"repository": {"id": True, "full_name": "JMLegere/comms-terminal"}}, 403),
     ({"ref": "refs/heads/other"}, 400), ({"deleted": True}, 400),
     ({"after": "0" * 40}, 400), ({"after": "$(touch /ignored)"}, 400),
 ])
@@ -393,14 +393,14 @@ def test_trusted_fetch_frozen_build_and_sanitized_jerry_environment(config, monk
     updater.git = git
     assert updater.fetch() == B
     fetch = next(args for args in git_calls if "fetch" in args)
-    assert "https://github.com/JMLegere/universal-inbox.git" in fetch
+    assert "https://github.com/JMLegere/comms-terminal.git" in fetch
     assert "refs/heads/main:refs/heads/deploy-main" in fetch
     user_calls = []
     local = LocalUpdater(config)
 
     def as_user(args, **kwargs):
         user_calls.append(([str(arg) for arg in args], kwargs))
-        if str(args[0]) == config.uv or str(args[0]).endswith("/universal-inbox"):
+        if str(args[0]) == config.uv or str(args[0]).endswith("/comms-terminal"):
             return ""
         return local.as_user(args, **kwargs)
 
@@ -606,29 +606,29 @@ def test_readiness_uses_actual_daemon_unix_reply_socket(config):
 
 @pytest.fixture
 def launcher(config, tmp_path):
-    cli = Path(config.current).resolve() / "bin/universal-inbox"
+    cli = Path(config.current).resolve() / "bin/comms-terminal"
     cli.write_text("#!" + sys.executable + "\n" +
                    "import json, os, sys\n"
                    "if sys.argv[1:2] == ['hold']:\n"
                    "    print('ready', flush=True); sys.stdin.readline(); raise SystemExit(0)\n"
                    "print(json.dumps({'argv': sys.argv[1:], 'home': os.environ.get('HOME'), "
                    "'credentials': os.environ.get('CREDENTIALS_DIRECTORY'), "
-                   "'socket': os.environ.get('UNIVERSAL_INBOX_SOCKET'), "
+                   "'socket': os.environ.get('COMMS_TERMINAL_SOCKET'), "
                    "'tty': [sys.stdin.isatty(), sys.stdout.isatty()], "
                    "'input': '' if sys.stdin.isatty() else sys.stdin.read()}), flush=True)\n"
                    "raise SystemExit(17)\n")
     cli.chmod(0o755)
-    path = tmp_path / "universal-inbox"
-    path.write_text((ROOT / "deploy/universal-inbox-launcher").read_text()
-                    .replace("/var/lib/universal-inbox-deploy", config.state)
-                    .replace("/home/jerry/.local/opt/universal-inbox-current", config.current))
+    path = tmp_path / "comms-terminal"
+    path.write_text((ROOT / "deploy/comms-terminal-launcher").read_text()
+                    .replace("/var/lib/comms-terminal-deploy", config.state)
+                    .replace("/home/jerry/.local/opt/comms-terminal-current", config.current))
     path.chmod(0o755)
     return path
 
 
 def test_real_launcher_preserves_argv_exit_environment_stdin_and_tty(config, launcher):
     environment = {**os.environ, "HOME": "/example/home", "CREDENTIALS_DIRECTORY": "/example/credentials",
-                   "UNIVERSAL_INBOX_SOCKET": "/example/socket"}
+                   "COMMS_TERMINAL_SOCKET": "/example/socket"}
     args = ["space value", "--literal", "$(echo not-a-shell)", ""]
     result = subprocess.run([launcher, *args], input="stdin survives\n", capture_output=True,
                             text=True, env=environment, timeout=5)
@@ -680,18 +680,18 @@ def test_real_launcher_shared_and_exclusive_native_lock_waits(config, launcher, 
 
 
 def test_units_keep_exact_daemon_flags_and_event_only_activation():
-    base = (ROOT / "deploy/universal-inbox.service").read_text()
-    override = (ROOT / "deploy/universal-inbox-release.conf").read_text()
+    base = (ROOT / "deploy/comms-terminal.service").read_text()
+    override = (ROOT / "deploy/comms-terminal-release.conf").read_text()
     original = next(line for line in base.splitlines() if line.startswith("ExecStart="))
-    expected = original.replace("/home/jerry/.local/bin/universal-inbox",
-                                "/home/jerry/.local/opt/universal-inbox-current/bin/universal-inbox")
+    expected = original.replace("/home/jerry/.local/bin/comms-terminal",
+                                "/home/jerry/.local/opt/comms-terminal-current/bin/comms-terminal")
     assert expected in override.splitlines()
-    assert "ExecCondition=/usr/bin/test ! -e /var/lib/universal-inbox-deploy/writers-blocked" in override
-    path = (ROOT / "deploy/universal-inbox-update.path").read_text()
+    assert "ExecCondition=/usr/bin/test ! -e /var/lib/comms-terminal-deploy/writers-blocked" in override
+    path = (ROOT / "deploy/comms-terminal-update.path").read_text()
     assert "queue/pending" in path and "queue/in-progress" in path
-    update = (ROOT / "deploy/universal-inbox-update.service").read_text()
+    update = (ROOT / "deploy/comms-terminal-update.service").read_text()
     assert "TimeoutStartSec=infinity" in update and "OnCalendar" not in update + path
-    assert "User=inbox-deploy" in (ROOT / "deploy/universal-inbox-deploy.service").read_text()
+    assert "User=inbox-deploy" in (ROOT / "deploy/comms-terminal-deploy.service").read_text()
 
 
 def test_same_sha_restart_retry_clears_intent_before_later_manual_inactivity(config, monkeypatch):

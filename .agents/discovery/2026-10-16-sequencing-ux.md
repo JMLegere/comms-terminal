@@ -15,7 +15,7 @@
 
 ### Seed (confirmed 2026-10-16)
 
-- Topic: the Sequencing feature in the Universal Inbox console: what it does and its UX and design direction. Covers the Steps page, the Sequence editor, enrolling, Enrollment states on Person and Thread pages, and the day-to-day feel of Step Drafts and Call blocks.
+- Topic: the Sequencing feature in the Comms Terminal console: what it does and its UX and design direction. Covers the Steps page, the Sequence editor, enrolling, Enrollment states on Person and Thread pages, and the day-to-day feel of Step Drafts and Call blocks.
 - Trigger, in Jeremy's words: "i want to define the actual feature and direction for the sequencing now that we know we want to build into universal inbox. i want to have a ux and design direction".
 - Parent: strategy discovery `.agents/discovery/2026-10-15-attio-sequences.md` (complete; strategy D) and ADR 0003. Jeremy declined the cold-send-path topic (V1) for now in favour of this one.
 
@@ -25,7 +25,7 @@
 - Step kinds: email, call, LinkedIn, letter. Each holds shared text with `{first_name}`, `{last_name}`, `{company}`, a business-day gap counted from the previous Step's completion, and an optional fixed time.
 - An email Step becomes a Draft on its due day, optionally a reply Draft on an earlier email Step's Thread. It is done when that Draft is sent. Saved replies become persistent Drafts, at most one per Thread.
 - Other Steps are marked done. A Step can be skipped; deleting its Draft skips it.
-- Enrollment: from the console or `universal-inbox enroll`. One Active or Paused Enrollment per Person per Sequence; Opted out refuses. First Step due on the enroll day.
+- Enrollment: from the console or `comms-terminal enroll`. One Active or Paused Enrollment per Person per Sequence; Opted out refuses. First Step due on the enroll day.
 - Any inbound message or call, or a connected call, pauses the Enrollment. Resume makes the next Step due immediately. Finished: Completed, Opted out, or Other.
 - A Steps page with a rail count. Agent commands `steps` and `enroll`. Step send is gated until a Connection is allowed for cold mail.
 - Deferred: build slices, the cold send path, auto-send.
@@ -301,8 +301,8 @@ Accepted trade-offs:
 
 ```mermaid
 flowchart LR
-  J["Jeremy"] -->|"works Due Steps, edits Sequences, enrolls People"| C["Universal Inbox console"]
-  C --> S["Universal Inbox service"]
+  J["Jeremy"] -->|"works Due Steps, edits Sequences, enrolls People"| C["Comms Terminal console"]
+  C --> S["Comms Terminal service"]
   S -->|"read-only context"| X["Attio · Tana · Linear"]
   J -->|"dials"| Q["Quo app"]
   Q -->|"call events"| S

@@ -78,7 +78,7 @@ Draft reads return a dictionary containing integer `id` and `revision`, the comp
 
 ### Sequences interface
 
-`src/universal_inbox/sequences.py` owns Sequences (`GLOSSARY.md` Outreach); `inbox` calls it from Wake, Ingest, Send Draft, Reply, and the Draft delete and restore calls. Nothing in it sends.
+`src/comms_terminal/sequences.py` owns Sequences (`GLOSSARY.md` Outreach); `inbox` calls it from Wake, Ingest, Send Draft, Reply, and the Draft delete and restore calls. Nothing in it sends.
 
 - **Create Sequence** (`sequences.create_sequence(db, name, connection_id=None)`), **Add Step** (`add_step(db, sequence_id, kind, after=None)`), **Save Step** (`save_step(db, step_id, **fields)`), **Move Step** (`move_step`), **Delete Step** (`delete_step`, live: Enrollments on it move to the next Step; `restore_step` undoes), **Archive Sequence** (`archive_sequence(db, sequence_id, cancel_live)`; a used Sequence is archived, never deleted), and **Validate** (`validate`: unknown fill-ins and reply targets).
 - **Enroll** (`sequences.enroll(db, person_id, sequence_id, now, start=None)`): one Person into one Sequence; refused (`sequences.Refused`) for an Unsubscribed Person, an archived or empty Sequence, a live Enrollment in it, or a Start date before today. The first Task counts from the enroll day, or from a later Start date (`enrollments.starts_at`, FR-SEQ-25); the Day number counts from the same day.
@@ -278,7 +278,7 @@ Deletion content clearing and Sequence pause hooks still run. A Phone call (`MES
 
 ## 5. Database
 
-SQLite, one file. The DDL below describes the core model; `src/universal_inbox/schema.sql` is the complete current schema, applied by `inbox.migrate`. `PRAGMA foreign_keys = ON`, `PRAGMA journal_mode = WAL`. Tables are `STRICT`; times are UTC ISO 8601 text; the schema version is `PRAGMA user_version`. Version 4 adds `threads.merged_into`, `email_refs`, alias guards, and `thread_activities` to version 3, preserving Case descriptions, five-day follow-ups, and append-only Activity triggers. Version 13 adds `resend_receipts` to version 12 without changing earlier migrations or immutable Activity/raw records. Version 14 adds `composition_drafts.thread_id` (Reply Drafts). Version 15 adds the append-only `audit_log`; earlier changes have no entries. Version 16 adds the append-only `case_log`. Version 17 adds the Sequences tables (`sequences`, `sequence_steps`, `enrollments`, `tasks`), `composition_drafts.task_id`, and `persons.unsubscribed_at`. Version 19 adds `composition_drafts.send_at` and `send_error` (send later). Version 20 adds `enrollments.starts_at` (Start date). Migration commits schema/version together and rejects databases newer than the build. Rollback must use a schema-17-compatible build or a separately approved consistent backup; never lower the version or discard mappings/history to start old code (`docs/runbook.md` §2a).
+SQLite, one file. The DDL below describes the core model; `src/comms_terminal/schema.sql` is the complete current schema, applied by `inbox.migrate`. `PRAGMA foreign_keys = ON`, `PRAGMA journal_mode = WAL`. Tables are `STRICT`; times are UTC ISO 8601 text; the schema version is `PRAGMA user_version`. Version 4 adds `threads.merged_into`, `email_refs`, alias guards, and `thread_activities` to version 3, preserving Case descriptions, five-day follow-ups, and append-only Activity triggers. Version 13 adds `resend_receipts` to version 12 without changing earlier migrations or immutable Activity/raw records. Version 14 adds `composition_drafts.thread_id` (Reply Drafts). Version 15 adds the append-only `audit_log`; earlier changes have no entries. Version 16 adds the append-only `case_log`. Version 17 adds the Sequences tables (`sequences`, `sequence_steps`, `enrollments`, `tasks`), `composition_drafts.task_id`, and `persons.unsubscribed_at`. Version 19 adds `composition_drafts.send_at` and `send_error` (send later). Version 20 adds `enrollments.starts_at` (Start date). Migration commits schema/version together and rejects databases newer than the build. Rollback must use a schema-17-compatible build or a separately approved consistent backup; never lower the version or discard mappings/history to start old code (`docs/runbook.md` §2a).
 
 ```mermaid
 erDiagram
@@ -538,7 +538,7 @@ Four exact hook routes compose this listener; absent optional credentials return
 
 The console is a terminal app (`docs/design/console.md`, decisions #71–#75). It calls `inbox` directly for everything except sending.
 
-- **`POST /reply`** on the service's Unix socket `$XDG_RUNTIME_DIR/universal-inbox.sock` (mode 0600, owned by `jerry`).
+- **`POST /reply`** on the service's Unix socket `$XDG_RUNTIME_DIR/comms-terminal.sock` (mode 0600, owned by `jerry`).
   - Body: JSON `{"thread_id", "text", "to", "cc"}`.
   - `200 {"status", "status_detail"}` after `inbox.reply` succeeds; `504 {"error"}` on `SendUnknown` before its `SendFailed` base class maps to 502; `400 {"error"}` for a pre-send pending parent/Attachment problem; `404` for an unknown Thread. Failed/pending/unknown sends retain work; no automatic retry.
   - Only the service holds the Resend key and Slack token (NFR-5).

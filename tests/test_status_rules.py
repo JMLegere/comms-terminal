@@ -1,7 +1,7 @@
 """inbox.transition against design §4 and decision #68, one row per rule."""
 import pytest
 
-from universal_inbox.inbox import Arrived, Reopen, Unignore, Woke, transition
+from comms_terminal.inbox import Arrived, Reopen, Unignore, Woke, transition
 
 ROWS = [
     # current, event, kwargs, expected

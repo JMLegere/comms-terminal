@@ -1,15 +1,15 @@
-# Universal Inbox MVP — PRD
+# Comms Terminal MVP — PRD
 
 ## 1. Document control
 
-- **Title**: Universal Inbox MVP (Gmail + Slack)
+- **Title**: Comms Terminal MVP (Gmail + Slack)
 - **Status**: **Draft (revision 3; updated 2026-10-15).** Revision 3 adopted Plain's status model and integration architecture and added replying from the console (decisions #51–#56). Behavior follows Plain unless a deviation is stated with its reason. The technical design in §4–§5 is **Approved** (D1, decision #67). Each phase needs its own implementation authorization. D2 is resolved (SSH, #71); D3 is resolved (Cloudflare Tunnel, Email Routing with an Email Worker, Resend; #102). Phases 0–5 and the 6.1 and 6.3 builds are done; 6.2 and 6.4 are Jeremy's connect steps in `docs/runbook.md`. Linear context (FR-13c, #125) was built under Jeremy's "execute the plan"; under his subsequent "ship it", release `38e196e` is published to `main`/`dev` and deployed to the existing Workbox package/service. Linear was connected on 2026-10-16 with a Read-only key covering both workspace teams; see the connection receipt in `docs/design/linear-context.md`. Attachments (#127–#137) are built on `dev` (P1–P6) and their release (P7) is authorized; plan: `.agents/prd/2026-10-15-attachments.md`.
 - **Owner / authority**: Jeremy Legere (single user and product owner)
 - **Created**: 2026-10-10T20:04+00:00
 - **Updated**: 2026-10-20
 - **Topic**: MVP of a single-user, Plain-style Thread queue across Gmail and Slack
 - **Authority chain**:
-  - `.agents/discovery/2026-10-10-universal-inbox.md`: validated problem and strategy.
+  - `.agents/discovery/2026-10-10-comms-terminal.md`: validated problem and strategy.
   - `GLOSSARY.md`: terms.
   - `docs/requirements.md`: MVP scope.
   - `docs/adr/0001-purpose-built-thread-ledger.md`: strategy.
@@ -176,7 +176,7 @@ Status key in brackets:
 - **FR-13d** [D]: The Calendar shows Jeremy's work calendar, read-only, beside the inbox's own dated items (decision #139, ADR 0005). The service reads Google Calendar's secret iCal address every 30 seconds and keeps every Event it has seen; an Event that leaves Google becomes a Deleted Event, kept and struck through. Repeating Events expand for any range, with no horizon.
   - [D] Calendar sits in the rail under Today: one month grid of week rows that scrolls without pages, a separator row where each month starts, opening on two weeks before through two weeks after this week. A day cell lists its Events (declined dimmed, unanswered marked `?`, Deleted struck through) and one count line for Tasks, Snoozed Threads, scheduled Drafts, and Enrollment starts. The right pane lists every Calendar Item of the cursor's day; Enter opens an Event's details (attendees linked to People, Threads, Cases, and Organizations; join link; Context sources) or the Thread, Task, Draft, or Person.
   - [D] The bottom bar shows the Event in progress with the time left, then the next timed Event on any day; Declined, All-day, and Deleted Events do not count. After three failed fetches the Calendar shows its last copy with "as of" and the bottom bar shows Google Calendar broken.
-  - [D] Agents read Events with `universal-inbox events` (expanded, local time, `--json`). Reason: Jeremy leaves the terminal for a browser to see his schedule (2026-10-20, `.agents/discovery/2026-10-20-calendar.md`).
+  - [D] Agents read Events with `comms-terminal events` (expanded, local time, `--json`). Reason: Jeremy leaves the terminal for a browser to see his schedule (2026-10-20, `.agents/discovery/2026-10-20-calendar.md`).
 
 ### Console
 
@@ -190,7 +190,7 @@ Status key in brackets:
 
 ### Sequences
 
-- **FR-SEQ** [C]: Outreach Sequences run inside Universal Inbox (ADR 0003): Jeremy edits Sequences of Steps, enrolls one Person at a time, and works each Enrollment's Due Tasks on the Tasks page; anything inbound from the Person pauses their Enrollments. Requirements FR-SEQ-1–24 and acceptance scenarios AS-SEQ-1–17 are in the Sequencing PRD (`.agents/prd/2026-10-16-sequencing.md`); FR-SEQ-25 and AS-SEQ-18 (Start date) are in `.agents/prd/2026-10-19-enrollment-start-date.md`; the interface names (Enroll, Due Tasks, Complete Task, Skip Task, Pause, Resume, Finish) are in `docs/design/api-and-database.md` §2.
+- **FR-SEQ** [C]: Outreach Sequences run inside Comms Terminal (ADR 0003): Jeremy edits Sequences of Steps, enrolls one Person at a time, and works each Enrollment's Due Tasks on the Tasks page; anything inbound from the Person pauses their Enrollments. Requirements FR-SEQ-1–24 and acceptance scenarios AS-SEQ-1–17 are in the Sequencing PRD (`.agents/prd/2026-10-16-sequencing.md`); FR-SEQ-25 and AS-SEQ-18 (Start date) are in `.agents/prd/2026-10-19-enrollment-start-date.md`; the interface names (Enroll, Due Tasks, Complete Task, Skip Task, Pause, Resume, Finish) are in `docs/design/api-and-database.md` §2.
 
 ### Non-functional
 
@@ -259,7 +259,7 @@ Executable form: `features/<domain>.feature` (Gherkin via pytest-bdd), each scen
 
 ## 4. Architecture and solution shape
 
-**Current: N/A.** `universal-inbox/` holds documents and the BDD setup. There is no product code or runtime.
+**Current: N/A.** `comms-terminal/` holds documents and the BDD setup. There is no product code or runtime.
 
 **Target: Approved (D1 re-approved 2026-10-12, decision #67).**
 - Strategy C (ADR 0001), with Plain's integration architecture (ADR 0002).
@@ -286,7 +286,7 @@ Executable form: `features/<domain>.feature` (Gherkin via pytest-bdd), each scen
 
 ```mermaid
 flowchart LR
-  J([Jeremy]) -->|triage and reply via browser| UI[Universal Inbox]
+  J([Jeremy]) -->|triage and reply via browser| UI[Comms Terminal]
   GW[(Google Workspace / Gmail)] -->|routing rule copies inbound mail| IM[(Inbound mail service)]
   IM -->|HTTPS POST| UI
   UI -->|send reply| OM[(Outbound mail provider)]
@@ -300,12 +300,12 @@ flowchart LR
 ```mermaid
 flowchart TB
   subgraph Workbox[Workbox host]
-    subgraph SVC[universal-inbox serve: systemd service]
+    subgraph SVC[comms-terminal serve: systemd service]
       HOOKS[Hooks server: inbound mail, Slack events]
       SOCK[Local reply socket]
       WAKE[wake timer]
     end
-    TUI[universal-inbox: terminal console]
+    TUI[comms-terminal: terminal console]
     DB[(SQLite file)]
     CRED[[systemd encrypted credentials]]
   end
@@ -353,17 +353,17 @@ flowchart LR
 - **`pyproject.toml`**: Python ≥3.11, no runtime dependencies, `pytest` and `pytest-bdd` for development. **Current** (decision #49).
 - **`features/<domain>.feature`**: acceptance scenarios in Gherkin, one file per product domain, written against the four `inbox` calls and the adapters; `@wip` until steps pass. **Current.**
 - **`tests/test_features.py`**: binds every feature; step definitions go in `tests/steps/`. **Current.**
-- **`src/universal_inbox/inbox.py`** and **`schema.sql`** (**Current**, Phase 1): the domain module. Public: `connect`, `migrate`, `ingest`, `act`, `reply`, `wake`, `block`, `add_identity`, `remove_identity`. Private: threading and Slack time grouping, Status rules, Person and Organization resolution, FR-2a content clearing.
-- **`src/universal_inbox/email.py`**: `verify`, `parse` (stdlib `email`; returns nothing for an auto-reply, FR-3a), `EmailSender`.
-- **`src/universal_inbox/slack.py`**: `verify`, `parse` (applies Channel selection), `SlackSender`, `user_email`.
-- **`src/universal_inbox/health.py`**: `connection_health(connection, now)`.
-- **`src/universal_inbox/tui.py`** (**Current**): the Textual console (`docs/design/console.md`).
-- **`src/universal_inbox/main.py`** (**Current**): the `universal-inbox` command: console (default), `serve`, `init`.
+- **`src/comms_terminal/inbox.py`** and **`schema.sql`** (**Current**, Phase 1): the domain module. Public: `connect`, `migrate`, `ingest`, `act`, `reply`, `wake`, `block`, `add_identity`, `remove_identity`. Private: threading and Slack time grouping, Status rules, Person and Organization resolution, FR-2a content clearing.
+- **`src/comms_terminal/email.py`**: `verify`, `parse` (stdlib `email`; returns nothing for an auto-reply, FR-3a), `EmailSender`.
+- **`src/comms_terminal/slack.py`**: `verify`, `parse` (applies Channel selection), `SlackSender`, `user_email`.
+- **`src/comms_terminal/health.py`**: `connection_health(connection, now)`.
+- **`src/comms_terminal/tui.py`** (**Current**): the Textual console (`docs/design/console.md`).
+- **`src/comms_terminal/main.py`** (**Current**): the `comms-terminal` command: console (default), `serve`, `init`.
 - **`scripts/seed_demo.py`** (**Current**): synthetic data for visual QA and the 6.3 demo.
-- **`src/universal_inbox/serve.py`** (**Current**): public `/hooks/email`, `/hooks/slack`, `/hooks/quo`, and optional signed `/hooks/resend`; sending/context APIs on the private Unix socket; periodic receipt reconciliation and deferred downloads.
-- **`src/universal_inbox/main.py`**: both listeners and `wake` every minute; reads credentials from `$CREDENTIALS_DIRECTORY`.
+- **`src/comms_terminal/serve.py`** (**Current**): public `/hooks/email`, `/hooks/slack`, `/hooks/quo`, and optional signed `/hooks/resend`; sending/context APIs on the private Unix socket; periodic receipt reconciliation and deferred downloads.
+- **`src/comms_terminal/main.py`**: both listeners and `wake` every minute; reads credentials from `$CREDENTIALS_DIRECTORY`.
 - **`scripts/oauth_slack.py`**: consent helper for Jeremy's post-build connect.
-- **`deploy/universal-inbox.service`**: systemd system unit. Ingress and mail-service configuration per D3.
+- **`deploy/comms-terminal.service`**: systemd system unit. Ingress and mail-service configuration per D3.
 
 **Schema and API.** `docs/design/api-and-database.md` (decisions #58–#61): 9 tables with constraints and append-only triggers, Plain Status enum values, Status rules, the `inbox` interface, adapters, and HTTP routes.
 
@@ -374,11 +374,11 @@ Every path is **Proposed** unless marked Current. D1 is approved (#67); each pha
 ### Phase 0 — Decision and repository (done 2026-10-11)
 
 - **0.1 Resolve D1.** Done (#47); reopened by #53 and #55; re-approved 2026-10-12 (#67).
-- **0.2 Repository.** Done: `JMLegere/universal-inbox`, `main` and `dev`.
+- **0.2 Repository.** Done: `JMLegere/comms-terminal`, `main` and `dev`.
 
 ### Phase 1 — Inbox module
 
-- **Status: done 2026-10-12.** `src/universal_inbox/inbox.py`, `schema.sql`; `tests/steps/inbox_steps.py`, `tests/test_schema.py`. 27 tests pass; 25 later-phase scenarios stay `@wip`.
+- **Status: done 2026-10-12.** `src/comms_terminal/inbox.py`, `schema.sql`; `tests/steps/inbox_steps.py`, `tests/test_schema.py`. 27 tests pass; 25 later-phase scenarios stay `@wip`.
 - **1.1 `pyproject.toml`.** Current (BDD setup).
 - **1.2 `inbox.connect` and `inbox.migrate`**: the schema in the design doc.
   - Requirements: FR-2, FR-2a, I-1, I-2, I-3, I-6.
@@ -392,7 +392,7 @@ Every path is **Proposed** unless marked Current. D1 is approved (#67); each pha
 
 ### Phase 2 — Email adapter
 
-- **Status: done 2026-10-12.** `src/universal_inbox/email.py` (verify, parse, `EmailSender` over Resend, `handle_hook`).
+- **Status: done 2026-10-12.** `src/comms_terminal/email.py` (verify, parse, `EmailSender` over Resend, `handle_hook`).
 
 - **2.1 `email.verify` and `email.parse`.**
   - Requirements: FR-3, FR-3a, FR-5, AS-11, AS-19.
@@ -407,7 +407,7 @@ Every path is **Proposed** unless marked Current. D1 is approved (#67); each pha
 
 ### Phase 3 — Slack adapter
 
-- **Status: done 2026-10-12.** `src/universal_inbox/slack.py` (verify, parse, `SlackClient`, `SlackSender`, `handle_hook`); `scripts/oauth_slack.py`.
+- **Status: done 2026-10-12.** `src/comms_terminal/slack.py` (verify, parse, `SlackClient`, `SlackSender`, `handle_hook`); `scripts/oauth_slack.py`.
 
 - **3.1 `scripts/oauth_slack.py`**: bot scopes for selected channels, plus Jeremy's user scopes for DM history and events, `chat:write`, `users:read`, and `users:read.email`.
 - **3.2 `slack.verify` and `slack.parse`.**
@@ -421,7 +421,7 @@ Every path is **Proposed** unless marked Current. D1 is approved (#67); each pha
 
 ### Phase 4 — Trust monitor
 
-- **Status: done 2026-10-12.** `src/universal_inbox/health.py`; `inbox.set_connection_error`, `inbox.set_auth`.
+- **Status: done 2026-10-12.** `src/comms_terminal/health.py`; `inbox.set_connection_error`, `inbox.set_auth`.
 
 - **4.1 `health.connection_health`.**
   - Requirements: NFR-2, AS-8.
@@ -429,7 +429,7 @@ Every path is **Proposed** unless marked Current. D1 is approved (#67); each pha
 
 ### Phase 5 — Console (terminal)
 
-- **Status: done 2026-10-12.** `serve.py`, `tui.py`, `main.py` (`universal-inbox`, `serve`, `init`), `scripts/seed_demo.py`; `tests/test_console.py`, `tests/test_serve.py`. 60 tests pass; 12 visual-QA screenshots reviewed; real-terminal run in herdr; service smoke-tested over HTTP and the Unix socket.
+- **Status: done 2026-10-12.** `serve.py`, `tui.py`, `main.py` (`comms-terminal`, `serve`, `init`), `scripts/seed_demo.py`; `tests/test_console.py`, `tests/test_serve.py`. 60 tests pass; 12 visual-QA screenshots reviewed; real-terminal run in herdr; service smoke-tested over HTTP and the Unix socket.
 
 Design: `docs/design/console.md` (approved). Verify each step with Textual's test driver (`run_test`) and the visual-QA states in console.md §5.
 
@@ -446,7 +446,7 @@ Design: `docs/design/console.md` (approved). Verify each step with Textual's tes
 
 ### Phase 6 — Package and demo
 
-- **6.1 `deploy/universal-inbox.service` plus a credential runbook.** **Built** 2026-10-12: unit (`systemd-analyze verify` clean), `docs/runbook.md`, package installed with `uv tool install`.
+- **6.1 `deploy/comms-terminal.service` plus a credential runbook.** **Built** 2026-10-12: unit (`systemd-analyze verify` clean), `docs/runbook.md`, package installed with `uv tool install`.
   - Authorization: point-of-risk approval to install the system unit. Installing needs `sudo`; Jeremy runs runbook §3–§4.
 - **6.2 Set up the ingress and mail services per D3.** The console needs only SSH (D2). **Built** 2026-10-12: `scripts/cloudflare_setup.py` (remotely managed tunnel, DNS, Email Routing, Worker, routing rule; plan then `--apply`), `deploy/email-worker/` (checked against the real hook by `tests/test_email_worker.py`), `deploy/install.sh`, `deploy/slack-app-manifest.yml`, runbook §2–§3. The service runs email-only until Slack is connected (Slack secrets in a unit drop-in).
   - Authorization: point-of-risk approval for each external account, DNS record, and routing rule. Jeremy performs them (runbook §6); none has been made.
@@ -708,7 +708,7 @@ All entries are dated 2026-10-10; exact times are unproven unless noted. Full de
   - Status: Approved
   - Supersedes: D1 open
 - **48**
-  - Request / decision: Execute Phase 0; the repository remote is `JMLegere/universal-inbox`, public (agent recommended private)
+  - Request / decision: Execute Phase 0; the repository remote is `JMLegere/comms-terminal`, public (agent recommended private)
   - Source: Jeremy, "execute phase 0" and ask tool answer
   - Status: Accepted
 - **49**
@@ -867,7 +867,7 @@ All entries are dated 2026-10-10; exact times are unproven unless noted. Full de
   - Source: Jeremy, "aerc, neomutt and meli all render HTML through w3m or lynx as text. should we try this?", ask tool answer "Bake-off first" (2026-10-12)
   - Status: Accepted
 - **111**
-  - Request / decision: Fastmail joins as a second email Connection (`legere@fastmail.com`). The Basic plan refuses JMAP OAuth (`access_denied`, twice), JMAP API tokens, and IMAP, so Universal Inbox signs in like omp: OAuth with dynamic client registration and PKCE against Fastmail's MCP server (`scripts/oauth_fastmail.py`; scopes `mcp-read mcp-action mcp-send`). The service polls the Inbox and Sent every minute (`fastmail.poll_loop`), threads by Fastmail's thread ID, and replies with `send_email` (mode reply), which sets threading headers, quotes the original, and files the copy in Sent. MCP returns text bodies with quotes already stripped and no raw source or Auto-Submitted header, so Fastmail mail renders from text and only mailer-daemon bounces are filtered. Senders are keyed by Connection for Fastmail; the Gmail forward stays the hook-fed email Connection. One-time import of the last 30 days of Inbox and Sent, every Thread left in Todo (11 messages, 5 Threads). Refresh tokens rotate and reuse revokes the grant (seen live), so one process holds the token and persists each new one
+  - Request / decision: Fastmail joins as a second email Connection (`legere@fastmail.com`). The Basic plan refuses JMAP OAuth (`access_denied`, twice), JMAP API tokens, and IMAP, so Comms Terminal signs in like omp: OAuth with dynamic client registration and PKCE against Fastmail's MCP server (`scripts/oauth_fastmail.py`; scopes `mcp-read mcp-action mcp-send`). The service polls the Inbox and Sent every minute (`fastmail.poll_loop`), threads by Fastmail's thread ID, and replies with `send_email` (mode reply), which sets threading headers, quotes the original, and files the copy in Sent. MCP returns text bodies with quotes already stripped and no raw source or Auto-Submitted header, so Fastmail mail renders from text and only mailer-daemon bounces are filtered. Senders are keyed by Connection for Fastmail; the Gmail forward stays the hook-fed email Connection. One-time import of the last 30 days of Inbox and Sent, every Thread left in Todo (11 messages, 5 Threads). Refresh tokens rotate and reuse revokes the grant (seen live), so one process holds the token and persists each new one
   - Source: Jeremy, "i want to link my fastmail to universal inbox", "connected app like omp", "Yes, through Fastmail", "last 30 days, all in todo", "Yes, try JMAP first" (2026-10-12)
   - Status: Accepted
 - **112**
@@ -875,7 +875,7 @@ All entries are dated 2026-10-10; exact times are unproven unless noted. Full de
   - Source: Jeremy, "also can you do the same one-time import for my gmail", ask tool answer "Google Takeout", "defer that for now" (2026-10-12)
   - Status: Completed (2026-10-12). Imported 95 messages into 32 Todo Threads from Inbox and Sent for the 30-day window ending `2026-10-12T16:11:29Z`; skipped 36 duplicates and one auto-reply, and held one invalid date. Existing Thread states preserved. Persisted dates, sender attribution, Todo queue visibility, and all 95 raw-message hashes verified; 118 tests passed.
 - **113**
-  - Request / decision: Fastmail incoming mail is event-driven, like Gmail: a Fastmail rule ("Universal Inbox": all messages → send a copy to `fastmail@inbox.agentmaple.com`, continue other rules, first in the list) feeds a second Email Routing rule and the same Worker, which now sends the envelope recipient as `X-Inbox-To` inside the signature; the hook files the copy under the Connection that address names, with its raw source (full rendering, real threading headers, automated-mail filtering). The service accepts both signature forms. MCP stays for sending (the Fastmail ID of a forwarded copy is found by sender and Message-ID) and for a 10-minute poll of Sent that catches replies written in Fastmail itself. Jeremy chose to copy everything, screened mail included; contact mail also still reaches Gmail through his older forward, and the first copy by Message-ID wins
+  - Request / decision: Fastmail incoming mail is event-driven, like Gmail: a Fastmail rule ("Comms Terminal": all messages → send a copy to `fastmail@inbox.agentmaple.com`, continue other rules, first in the list) feeds a second Email Routing rule and the same Worker, which now sends the envelope recipient as `X-Inbox-To` inside the signature; the hook files the copy under the Connection that address names, with its raw source (full rendering, real threading headers, automated-mail filtering). The service accepts both signature forms. MCP stays for sending (the Fastmail ID of a forwarded copy is found by sender and Message-ID) and for a 10-minute poll of Sent that catches replies written in Fastmail itself. Jeremy chose to copy everything, screened mail included; contact mail also still reaches Gmail through his older forward, and the first copy by Message-ID wins
   - Source: Jeremy, "is it possible to make the fastmail connection event driven instead of polling - like gmail?", "Yes + slow Sent poll", "connect to chrome on mani and configure fastmail for me", "Everything, screened too" (2026-10-12)
   - Status: Accepted
 - **114**
@@ -918,12 +918,12 @@ All entries are dated 2026-10-10; exact times are unproven unless noted. Full de
 - **122**
   - Request / decision: Integrate Tana as a read-only Context source (FR-13a). Meetings come from Tana only: no Google Calendar Connection, no meeting Threads, no backfill. Matching: email Identity to Tana People Email, Organization domain to Tana Organizations Domain, attendee emails for Meetings; teammates included. The service holds the Tana sign-in (OAuth with dynamic client registration and PKCE, like Fastmail, signed in on Mani) and answers the console over the reply socket (`POST /tana`), caching each answer for five minutes. No writes to Tana; a later write path goes in as Tana proposals. Considered and dropped in the same session: meetings as Threads (from Google Calendar, one Thread per series, admitted when an attendee is outside agentmaple.com), Tana comments as Threads, and sending Observations to Tana.
   - Source: Jeremy's grilling answers (2026-10-13): "maybe meetings aren't threads, but meetings and their linked docs/types are fetched live on threads of connected people and orgs", "Tana only, no Calendar", "person, org, case thread", "No writes now".
-  - Status: Built (2026-10-13): `tana.py`, `POST /tana`, the console's Tana section and bottom-bar health, `mcp.py` (the MCP client moved out of `fastmail.py`; `FastmailError` is now `McpError`), `scripts/oauth_mcp.py --resource tana` (renamed from `oauth_fastmail.py`), `deploy/universal-inbox.service.d/tana.conf`, runbook §3c. Full suite: 227 passed after the move to `mcp.py`; Thread and Person pages checked in rendered screenshots with sample Tana data. Connected 2026-10-13: the live NBIF Thread (Laïla Thériault) shows her Tana person, NBIF, the Breakthru deal, six active threats, two open tasks, and the next and past meetings; first fetch 9.8 s, then cached.
+  - Status: Built (2026-10-13): `tana.py`, `POST /tana`, the console's Tana section and bottom-bar health, `mcp.py` (the MCP client moved out of `fastmail.py`; `FastmailError` is now `McpError`), `scripts/oauth_mcp.py --resource tana` (renamed from `oauth_fastmail.py`), `deploy/comms-terminal.service.d/tana.conf`, runbook §3c. Full suite: 227 passed after the move to `mcp.py`; Thread and Person pages checked in rendered screenshots with sample Tana data. Connected 2026-10-13: the live NBIF Thread (Laïla Thériault) shows her Tana person, NBIF, the Breakthru deal, six active threats, two open tasks, and the next and past meetings; first fetch 9.8 s, then cached.
 
 - **123**
   - Request / decision: Integrate Attio as a second read-only Context source (FR-13b), shaped like Tana (#122): same pages, same five-minute service cache, same socket route pattern (`POST /attio`), its own section above Tana's (Jeremy, 2026-10-14). Auth is a read-only workspace access token (Records, Object configuration, List entries, List configuration, Tasks, User management: read), stored as the `attio-token` credential, over Attio's REST API; Attio's MCP server (OAuth, rotating tokens) was the alternative. Shows every filled field of the Person and Company, their list entries, open deals (stage not Lost) with stage, value, owner, and list, and open tasks on the Person, Company, or those deals (most tasks hang off a deal). Teammates match like everyone else.
   - Source: Jeremy's answers (2026-10-14): "can we do a similar attio integration like tana?", "it should summarize the structured data and open tasks for the person and org", "Access token", "Every filled field", "Yes, open deals too", "Same pages as Tana".
-  - Status: Built (2026-10-14): `attio.py`, `POST /attio`, the console's Attio section, the rail's context section and bottom-bar health for both sources (`ContextSection` replaces `TanaSection`), `deploy/universal-inbox.service.d/attio.conf`, runbook §3d. The token was created in Attio ("Universal Inbox") on 2026-10-14.
+  - Status: Built (2026-10-14): `attio.py`, `POST /attio`, the console's Attio section, the rail's context section and bottom-bar health for both sources (`ContextSection` replaces `TanaSection`), `deploy/comms-terminal.service.d/attio.conf`, runbook §3d. The token was created in Attio ("Comms Terminal") on 2026-10-14.
 - **124**
   - Request / decision: Slack channels group top-level messages by time again, replacing #115's one Thread per top-level message: a top-level message joins the channel's latest top-level Thread until the channel has been quiet for 1 hour (any message, replies included, counts as activity). The first reply to a top-level message starts its own Thread, and later replies in that Slack reply-thread join it. A console reply always goes inside a Slack reply-thread, never top-level ("replies should never be a top-level message"): the Thread's reply-thread when it is made of replies, otherwise under its latest top-level message. DMs and group DMs answer top-level unless the Thread is made of replies ("dms stay top-level"). DMs keep FR-4b's sender windows. Found live: #dev talks top-level, so each message became its own Thread, and console replies went into a Slack reply-thread under the first message.
   - Source: Jeremy, "my console should reply in the replies of any top-level message, replies should never be a top-level message", "the slack threads are not combining and my replies are not replying to the thread. can you only start a new slack thread once 1h has been passed in the channel with no activity? also start a new thread when someone replies to a top-level comment." (2026-10-14)
@@ -938,7 +938,7 @@ All entries are dated 2026-10-10; exact times are unproven unless noted. Full de
   - Source: Jeremy, "i want to add slack as a connection type for drafts", "channel or existing dm", "i think we should not start a new thread and just use the existing timing behaviour", "sms should be 7 days with no activity to start a new thread, slack should be 24h", and "go ahead once we have agreement" (2026-10-15). Plan: `.agents/prd/2026-10-15-slack-drafts.md`.
   - Status: Built (2026-10-15): schema 11, `inbox.send_draft` through `_ingest`, `SLACK_QUIET` / `SMS_QUIET`, `SlackSender.start` / `conversations`, `POST /slack-conversations`, the console's Slack Draft picker.
 - **127**
-  - Request / decision: Attachments in both directions. Received Attachments and Inline images on Gmail, Slack, and SMS are copied on arrival into one content-addressed store beside the database (`files/<sha256>`, 0600), recorded in their own table because `activities.data` is immutable (option S1 of S0–S4). Gmail parts are stored at ingest; Slack and Quo files download after the hook answers, on the service's wake loop (up to 5 tries); `universal-inbox attachments-backfill` copies those in already-stored raw emails. Email and Slack replies and Drafts send staged Attachments: Gmail through Resend `attachments`, Slack through the files upload flow, with `files.info`'s share `ts` recorded so the echo is a duplicate. Forward makes an email Draft with the message's Attachments. Supersedes #51's attachments deferral and the Deferred list entry. Slack user scopes add `files:read` and `files:write` (re-consented 2026-10-15)
+  - Request / decision: Attachments in both directions. Received Attachments and Inline images on Gmail, Slack, and SMS are copied on arrival into one content-addressed store beside the database (`files/<sha256>`, 0600), recorded in their own table because `activities.data` is immutable (option S1 of S0–S4). Gmail parts are stored at ingest; Slack and Quo files download after the hook answers, on the service's wake loop (up to 5 tries); `comms-terminal attachments-backfill` copies those in already-stored raw emails. Email and Slack replies and Drafts send staged Attachments: Gmail through Resend `attachments`, Slack through the files upload flow, with `files.info`'s share `ts` recorded so the echo is a duplicate. Forward makes an email Draft with the message's Attachments. Supersedes #51's attachments deferral and the Deferred list entry. Slack user scopes add `files:read` and `files:write` (re-consented 2026-10-15)
   - Source: Jeremy, "i want to add support for attachments", grilling round 1 (both directions), discovery Phases 1–4 (2026-10-15); `.agents/discovery/2026-10-15-attachments.md`; `.agents/prd/2026-10-15-attachments.md`
   - Status: Built (2026-10-15): `53f565d` (P1, migration 12), `b39b0aa` (P2), `6e1ea2c` (P3), `c16cdad` (P6), `f1cad01`, `f1a9876`, `37e48fd` (P4–P5)
 - **128**
@@ -1048,9 +1048,9 @@ All entries are dated 2026-10-10; exact times are unproven unless noted. Full de
   - Basis: Source-observed
 - **2026-10-11T23:50:41+00:00**
   - Actor: Agent
-  - Activity: Phase 0.2: `git init`, first commit `1838513` (docs), public remote `JMLegere/universal-inbox`, `main` and `dev` pushed
+  - Activity: Phase 0.2: `git init`, first commit `1838513` (docs), public remote `JMLegere/comms-terminal`, `main` and `dev` pushed
   - Result: Phase 0 complete
-  - Evidence: https://github.com/JMLegere/universal-inbox; `git ls-remote --heads origin`
+  - Evidence: https://github.com/JMLegere/comms-terminal; `git ls-remote --heads origin`
   - Basis: Source-observed
 - **2026-10-11T23:54:38+00:00**
   - Actor: Agent
@@ -1116,25 +1116,25 @@ All entries are dated 2026-10-10; exact times are unproven unless noted. Full de
   - Actor: Agent
   - Activity: Built Gmail-like Thread rendering (#105–#110): raw messages kept beside the database (`raw/<sha256>.eml`, 0600); `render.py` (HTML and plain text to markup, link domains, trimmed content, invite cards, attachment chips); console collapsing, `•••`, recipient lines, `;`/`:`; replies quote the last inbound message with Gmail markup; echo matching accepts the quoted copy
   - Result: 92 tests pass; six real samples rendered in the console and screenshots reviewed; not yet deployed
-  - Evidence: `src/universal_inbox/render.py`, `tests/test_render.py`, `tests/test_schema.py`
+  - Evidence: `src/comms_terminal/render.py`, `tests/test_render.py`, `tests/test_schema.py`
   - Basis: Source-observed
 - **2026-10-12T15:38:56+00:00**
   - Actor: Agent
-  - Activity: Fastmail adapter (#111): `fastmail.py` (MCP client with token refresh and rotation, poller, sender, import), `scripts/oauth_fastmail.py`, service wiring, `init --fastmail`, `fastmail-import`, `deploy/universal-inbox.service.d/fastmail.conf`; readable thread view (gutter badges, message cards) shipped earlier as `f1ac0a7`
+  - Activity: Fastmail adapter (#111): `fastmail.py` (MCP client with token refresh and rotation, poller, sender, import), `scripts/oauth_fastmail.py`, service wiring, `init --fastmail`, `fastmail-import`, `deploy/comms-terminal.service.d/fastmail.conf`; readable thread view (gutter badges, message cards) shipped earlier as `f1ac0a7`
   - Result: 98 tests pass; live sign-in granted read, action, and send; import stored 11 messages in 5 Threads, all Todo; polling waits for `deploy/install.sh`
-  - Evidence: `src/universal_inbox/fastmail.py`, `tests/test_fastmail.py`, `docs/runbook.md` §3a
+  - Evidence: `src/comms_terminal/fastmail.py`, `tests/test_fastmail.py`, `docs/runbook.md` §3a
   - Basis: Source-observed
 - **2026-10-12T16:08:31+00:00**
   - Actor: Agent
   - Activity: Fastmail made event-driven (#113: Worker `X-Inbox-To`, second routing rule, Fastmail rule created in Jeremy's browser, Sent-only poll, reply lookup by Message-ID); connection names and icons in the rail; Slack mentions and threads from any channel and Slack formatting (#114)
   - Result: 107 tests pass; Worker version 19cfa202 deployed; service restarted 15:50 UTC; Slack not yet connected
-  - Evidence: `src/universal_inbox/fastmail.py`, `src/universal_inbox/slack.py`, `src/universal_inbox/render.py`, `tests/test_slack_mentions.py`, `tests/test_email_worker.py`
+  - Evidence: `src/comms_terminal/fastmail.py`, `src/comms_terminal/slack.py`, `src/comms_terminal/render.py`, `tests/test_slack_mentions.py`, `tests/test_email_worker.py`
   - Basis: Source-observed
 - **2026-10-12T16:40:12+00:00**
   - Actor: Agent
-  - Activity: Slack connected (app A0C8LNM1YE6, events verified, rules #business #dev #incident), 7-day import, friendly channel and person names, one-to-one Slack threads in channels (#115); work moved to worktree `../universal-inbox-slack` (branch `slack-people`) while another session works in the main checkout
+  - Activity: Slack connected (app A0C8LNM1YE6, events verified, rules #business #dev #incident), 7-day import, friendly channel and person names, one-to-one Slack threads in channels (#115); work moved to worktree `../comms-terminal-slack` (branch `slack-people`) while another session works in the main checkout
   - Result: 116 tests pass in the worktree
-  - Evidence: `src/universal_inbox/slack.py`, `src/universal_inbox/inbox.py`, `tests/test_slack_mentions.py`, `features/slack.feature`
+  - Evidence: `src/comms_terminal/slack.py`, `src/comms_terminal/inbox.py`, `tests/test_slack_mentions.py`, `features/slack.feature`
   - Basis: Source-observed
 
 ## 9. Sources and coverage check

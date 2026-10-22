@@ -1,6 +1,6 @@
-# Universal Inbox — Requirements
+# Comms Terminal — Requirements
 
-Status: MVP confirmed 2026-10-10; revised 2026-10-12 to follow Plain's status model and integration architecture and to add replying from the console; revised 2026-10-15 for the read-only Linear Context design and implementation. Under Jeremy's "ship it", release `38e196e` is published to `main`/`dev` and deployed to the existing Workbox package/service. Linear was connected on 2026-10-16 with a Read-only key covering both workspace teams; verification results, limitations, and deployment receipt are in `docs/design/linear-context.md`. Behavior follows Plain unless a deviation is stated with its reason. The detailed, traceable version is `docs/prd.md`. Builds on `.agents/discovery/2026-10-10-universal-inbox.md`, `GLOSSARY.md`, ADR 0001, and ADR 0002.
+Status: MVP confirmed 2026-10-10; revised 2026-10-12 to follow Plain's status model and integration architecture and to add replying from the console; revised 2026-10-15 for the read-only Linear Context design and implementation. Under Jeremy's "ship it", release `38e196e` is published to `main`/`dev` and deployed to the existing Workbox package/service. Linear was connected on 2026-10-16 with a Read-only key covering both workspace teams; verification results, limitations, and deployment receipt are in `docs/design/linear-context.md`. Behavior follows Plain unless a deviation is stated with its reason. The detailed, traceable version is `docs/prd.md`. Builds on `.agents/discovery/2026-10-10-comms-terminal.md`, `GLOSSARY.md`, ADR 0001, and ADR 0002.
 
 ## MVP
 

@@ -1,6 +1,6 @@
 # Follow Plain's integration architecture, including for email
 
-Universal Inbox receives and sends messages the way Plain does. Email arrives by forwarding: a Google Workspace routing rule copies each inbound message for `jeremy@agentmaple.com` to an inbound address, and replies written in the console go out through an outbound mail provider with SPF/DKIM records on `agentmaple.com`. Slack uses a bot in selected channels, delivers messages as events, and posts replies from Jeremy's own profile; Jeremy's DMs arrive as events on his behalf. Ingestion is event-driven, and Thread Status keeps Plain's Status plus Status detail.
+Comms Terminal receives and sends messages the way Plain does. Email arrives by forwarding: a Google Workspace routing rule copies each inbound message for `jeremy@agentmaple.com` to an inbound address, and replies written in the console go out through an outbound mail provider with SPF/DKIM records on `agentmaple.com`. Slack uses a bot in selected channels, delivers messages as events, and posts replies from Jeremy's own profile; Jeremy's DMs arrive as events on his behalf. Ingestion is event-driven, and Thread Status keeps Plain's Status plus Status detail.
 
 The agent recommended reading the Gmail mailbox through Google's API (push notifications and API sending), because that sees replies Jeremy sends from Gmail and lets the system reconcile email against the source. Jeremy chose Plain's model. The accepted costs are:
 

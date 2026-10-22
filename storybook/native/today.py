@@ -17,7 +17,7 @@ import render  # first: it sets the terminal environment Textual reads on import
 
 sys.path.insert(0, str(render.ROOT / "scripts"))
 import seed_demo  # noqa: E402
-from universal_inbox import inbox, sequences, tui  # noqa: E402
+from comms_terminal import inbox, sequences, tui  # noqa: E402
 
 TITLE = "Today"
 STATES = {  # state: (spec, PRD requirements, PRD scenarios, description)
@@ -68,7 +68,7 @@ async def wait(pilot, rounds=6):
 async def capture(entry, output):
     spec = STATES[entry["exportName"]][0]
     rendered = []
-    with tempfile.TemporaryDirectory(prefix="universal-inbox-today-", dir="/tmp") as temporary, ExitStack() as stack:
+    with tempfile.TemporaryDirectory(prefix="comms-terminal-today-", dir="/tmp") as temporary, ExitStack() as stack:
         db_path = Path(temporary) / "synthetic.db"
         for module in (tui, inbox, sequences, seed_demo):
             stack.enter_context(patch.object(module, "datetime", render.FixedClock))

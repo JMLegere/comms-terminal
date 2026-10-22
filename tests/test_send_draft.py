@@ -9,7 +9,7 @@ import pytest
 from datetime import timedelta
 from types import SimpleNamespace
 
-from universal_inbox import email, inbox, quo, serve, slack
+from comms_terminal import email, inbox, quo, serve, slack
 from test_composition import AT, PEER, PHONE, SELF, db, envelope, incoming  # noqa: F401  (db is a fixture)
 
 RESEND_ID = "0a1b2c3d-1234-4000-8000-123456789abc"

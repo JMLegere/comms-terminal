@@ -6,7 +6,7 @@
 import argparse
 from datetime import datetime, timedelta, timezone
 
-from universal_inbox import inbox
+from comms_terminal import inbox
 
 ME = "jeremy@agentmaple.com"
 LONG = "\n\n".join(f"Paragraph {n}: details about the rollout plan, owners, and the dates we discussed." for n in range(1, 12))

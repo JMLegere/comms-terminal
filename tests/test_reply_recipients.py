@@ -1,4 +1,4 @@
-from universal_inbox.email import reply_all, reply_sender
+from comms_terminal.email import reply_all, reply_sender
 
 ME = "me@example.com"
 

@@ -1,0 +1,19 @@
+[Unit]
+Description=Oracle Comms Terminal webhook tunnel
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+DynamicUser=yes
+LoadCredentialEncrypted=tunnel-credentials:/etc/credstore.encrypted/comms-terminal-ingest.tunnel
+ExecStart=/opt/comms-terminal-deploy/cloudflared --no-autoupdate --config /etc/comms-terminal-ingest/config.yml tunnel --metrics 127.0.0.1:20242 --protocol http2 run --credentials-file ${CREDENTIALS_DIRECTORY}/tunnel-credentials
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

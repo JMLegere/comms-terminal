@@ -4,7 +4,7 @@ import io
 import urllib.error
 from datetime import datetime, timedelta, timezone
 
-from universal_inbox import email, health, inbox, quo, serve
+from comms_terminal import email, health, inbox, quo, serve
 
 
 def creds(name):

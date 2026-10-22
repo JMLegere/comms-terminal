@@ -1,8 +1,8 @@
-# Universal Inbox owns outreach Sequences
+# Comms Terminal owns outreach Sequences
 
 Status: accepted (2026-10-16)
 
-Jeremy's cold outreach follows the Secret Sequence: 15 working days of manual emails, calls, LinkedIn touches, and a letter. It stopped when the Lemlist seat was dropped in June 2026. Universal Inbox now owns Sequences, Enrollments, and Steps; Attio stays a read-only Context source that supplies the People Jeremy enrolls. The deciding facts, recorded in `.agents/discovery/2026-10-15-attio-sequences.md`:
+Jeremy's cold outreach follows the Secret Sequence: 15 working days of manual emails, calls, LinkedIn touches, and a letter. It stopped when the Lemlist seat was dropped in June 2026. Comms Terminal now owns Sequences, Enrollments, and Steps; Attio stays a read-only Context source that supplies the People Jeremy enrolls. The deciding facts, recorded in `.agents/discovery/2026-10-15-attio-sequences.md`:
 
 - No new subscription spend, and the Attio workspace is on Free or Plus.
 - Jeremy works one queue: Due Tasks sit beside Threads and Drafts.

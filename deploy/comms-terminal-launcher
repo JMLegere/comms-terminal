@@ -1,0 +1,8 @@
+#!/bin/sh
+exec /usr/bin/flock --shared --no-fork /var/lib/comms-terminal-deploy/app.lock /bin/sh -c '
+if [ -e /var/lib/comms-terminal-deploy/writers-blocked ]; then
+    printf "%s\n" "Comms Terminal update recovery is pending; try again after recovery." >&2
+    exit 75
+fi
+exec /home/jerry/.local/opt/comms-terminal-current/bin/comms-terminal "$@"
+' comms-terminal "$@"

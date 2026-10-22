@@ -1,6 +1,6 @@
 """The statusline's version: the BUILD stamp baked in at install, shown as YYYY-MM-DD-HHMM-commit in local time."""
 
-from universal_inbox import tui
+from comms_terminal import tui
 
 
 def test_build_version_formats_the_stamp_in_local_time(tmp_path, monkeypatch):

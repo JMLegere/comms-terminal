@@ -14,8 +14,8 @@ from textual import events
 from textual.widgets import OptionList, TextArea
 from test_reconcile_console import bridge_console, seed_console
 
-from universal_inbox import agent, files, inbox
-from universal_inbox.tui import Console, DraftsPage, Pick, PickFile, ReplyBox, StagedList, thread_text
+from comms_terminal import agent, files, inbox
+from comms_terminal.tui import Console, DraftsPage, Pick, PickFile, ReplyBox, StagedList, thread_text
 
 
 def png() -> bytes:

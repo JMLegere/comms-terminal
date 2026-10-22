@@ -1,6 +1,6 @@
 # Build a purpose-built Thread ledger instead of adopting a support platform
 
-Universal Inbox is built as a narrow system that owns exactly the domain in `GLOSSARY.md` (Thread, Activity, Status, Case, Person, Organization, Connection). It does not adopt an open-source support platform such as Chatwoot or extend the open-source "Universal Inbox" project. The core of the product is trust: provable completeness against each source and visible sync health. No researched product provides that core, so every adopt-or-extend option would bolt it onto a model built for something else. The cost is that every Connection becomes code we own and maintain.
+Comms Terminal is built as a narrow system that owns exactly the domain in `GLOSSARY.md` (Thread, Activity, Status, Case, Person, Organization, Connection). It does not adopt an open-source support platform such as Chatwoot or extend the open-source "Universal Inbox" project. The core of the product is trust: provable completeness against each source and visible sync health. No researched product provides that core, so every adopt-or-extend option would bolt it onto a model built for something else. The cost is that every Connection becomes code we own and maintain.
 
 ## Considered Options
 
@@ -13,4 +13,4 @@ Universal Inbox is built as a narrow system that owns exactly the domain in `GLO
 
 - Gmail and Slack connect through official APIs as internal, single-user apps. Later chat Platforms come in through bridges.
 - Scope ships in complete increments, starting with Gmail and Slack together so the model is multi-platform from the first release (`docs/requirements.md`); later Platforms follow one at a time, so the tool is never half-finished in daily use.
-- Full evidence and the option comparison are in `.agents/discovery/2026-10-10-universal-inbox.md`.
+- Full evidence and the option comparison are in `.agents/discovery/2026-10-10-comms-terminal.md`.

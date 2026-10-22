@@ -3,7 +3,7 @@
 import pytest
 from textual.widgets import DataTable, TextArea
 
-from universal_inbox.tui import Console
+from comms_terminal.tui import Console
 from test_console import run, seeded
 
 

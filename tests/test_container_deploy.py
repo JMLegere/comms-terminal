@@ -13,7 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from universal_inbox import inbox
+from comms_terminal import inbox
 
 from test_github_deploy import (A, B, C, ROOT, config, deploy, post, producer, read_data, receiver)
 
@@ -40,11 +40,11 @@ def container_config(config, monkeypatch):
     config.current = str(state / "current")
     old = image_release(config, A, image=IMAGE_A)
     Path(config.current).symlink_to(old)
-    database = Path(config.home) / ".local/share/universal-inbox/inbox.db"
+    database = Path(config.home) / ".local/share/comms-terminal/inbox.db"
     database.parent.mkdir(parents=True)
     deploy.snapshot(config.db, database)
     config.db = str(database)
-    config.socket = "/run/universal-inbox/inbox.sock"
+    config.socket = "/run/comms-terminal/inbox.sock"
     config.bootstrap_sha = C  # Metadata, not this obsolete native bootstrap hint, selects the image.
     monkeypatch.setattr(deploy, "trusted_path", lambda _: None)
     return config
@@ -75,13 +75,13 @@ def test_container_config_runtime_selection_and_layout(container_config, tmp_pat
 
 
 def test_update_unit_allows_durable_container_wal_and_native_data():
-    unit = (ROOT / "deploy/universal-inbox-update.service").read_text()
+    unit = (ROOT / "deploy/comms-terminal-update.service").read_text()
     writable = {path for line in unit.splitlines() if line.startswith("ReadWritePaths=")
                 for path in line.split("=", 1)[1].split()}
     assert "ProtectSystem=strict" in unit
     assert writable == {
-        "/var/lib/universal-inbox-deploy", "-/var/lib/universal-inbox/home",
-        "-/home/jerry/.local/opt", "-/home/jerry/.local/share/universal-inbox",
+        "/var/lib/comms-terminal-deploy", "-/var/lib/comms-terminal/home",
+        "-/home/jerry/.local/opt", "-/home/jerry/.local/share/comms-terminal",
         "-/home/jerry/.cache/uv",
     }
 
@@ -216,7 +216,7 @@ def test_container_stage_uses_fetched_worktree_host_dockerfile_and_online_snapsh
     candidate = updater.stage(B)
     build, timeout = next((args, timeout) for args, timeout in commands if "build" in args)
     assert timeout == 900 and build[build.index("--file") + 1] == deploy.DOCKERFILE
-    assert build[build.index("--build-arg") + 1] == "UNIVERSAL_INBOX_BUILD=1760800000 abc1234"
+    assert build[build.index("--build-arg") + 1] == "COMMS_TERMINAL_BUILD=1760800000 abc1234"
     assert any(args[-1] == B and "log" in args for args in git_calls)
     assert Path(build[-1]).parent == Path(container_config.state) / "builds"
     assert Path(build[-1]).name == candidate.name and candidate.parent == Path(container_config.releases)
@@ -413,7 +413,7 @@ def test_container_deployment_lock_runs_native_quiesce_before_lock_and_resumes_a
         assert barrier.exists()
         with open(container_config.lock, "r+") as probe, pytest.raises(BlockingIOError):
             fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    runtime = "/opt/universal-inbox-deploy/container_runtime.py"
+    runtime = "/opt/comms-terminal-deploy/container_runtime.py"
     assert calls == [(["/usr/bin/python3", "-I", runtime, operation], 65)
                      for operation in ("quiesce", "resume-consoles")]
     assert trusts == [runtime, runtime] and not barrier.exists()

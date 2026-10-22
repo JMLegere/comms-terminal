@@ -1,0 +1,20 @@
+[Unit]
+Description=Cloudflare tunnel for Comms Terminal deployment webhooks
+Wants=network-online.target
+After=network-online.target comms-terminal-deploy.service
+
+[Service]
+User=inbox-deploy
+Group=inbox-deploy
+LoadCredentialEncrypted=tunnel-credentials:/etc/credstore.encrypted/comms-terminal-deploy.tunnel-credentials
+ExecStart=/opt/comms-terminal-deploy/cloudflared --no-autoupdate --config /etc/comms-terminal-deploy/cloudflared.yml tunnel --protocol http2 run --credentials-file ${CREDENTIALS_DIRECTORY}/tunnel-credentials
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

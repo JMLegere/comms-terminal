@@ -8,8 +8,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import seed_demo  # noqa: E402
 
-from universal_inbox import calendar as cal, inbox  # noqa: E402
-from universal_inbox.tui import CalendarPage, Console, DayList, EventPage, MonthGrid, StatusLine  # noqa: E402
+from comms_terminal import calendar as cal, inbox  # noqa: E402
+from comms_terminal.tui import CalendarPage, Console, DayList, EventPage, MonthGrid, StatusLine  # noqa: E402
 
 
 def stamp(dt):

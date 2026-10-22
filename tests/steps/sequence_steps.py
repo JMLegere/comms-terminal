@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 from pytest_bdd import given, parsers, then, when
 
-from universal_inbox import inbox, sequences
+from comms_terminal import inbox, sequences
 
 ME = "jeremy@agentmaple.example"
 DAYS = {"Monday": datetime(2026, 10, 19, 13, 0, tzinfo=timezone.utc)}

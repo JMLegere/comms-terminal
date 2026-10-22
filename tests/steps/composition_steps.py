@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 from pytest_bdd import given, parsers, then, when
 
-from universal_inbox import inbox
+from comms_terminal import inbox
 
 AT = datetime(2026, 10, 1, 10, tzinfo=timezone.utc)
 SELF = "me@example.test"

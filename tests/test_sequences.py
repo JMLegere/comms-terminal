@@ -5,7 +5,7 @@ from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
-from universal_inbox import inbox, sequences as sq
+from comms_terminal import inbox, sequences as sq
 from test_attachment_send import FakeSender
 
 ME = "jeremy@agentmaple.example"
@@ -273,7 +273,7 @@ def test_merging_people_moves_enrollments(db):
 
 def test_agent_lists_due_tasks_and_enrolls_but_never_sends(db, capsys):  # AS-SEQ-12, FR-SEQ-22
     from types import SimpleNamespace
-    from universal_inbox import agent
+    from comms_terminal import agent
     s, _ = secret(db)
     priya = person(db, "priya@gmail.com", "Priya Shah")
     agent.run(SimpleNamespace(cmd="enroll", person="priya@gmail.com", sequence="secret sequence"), db)
@@ -289,7 +289,7 @@ def test_agent_lists_due_tasks_and_enrolls_but_never_sends(db, capsys):  # AS-SE
 
 def test_start_date_holds_the_first_task_until_that_day(db, capsys):  # AS-SEQ-18, FR-SEQ-25
     from types import SimpleNamespace
-    from universal_inbox import agent
+    from comms_terminal import agent
     s, _ = secret(db)
     dana = person(db, "dana@harbourline.example", "Dana Roy", org="Harbourline")
     assert (sq.parse_start("2026-12-01", MONDAY), sq.parse_start("14", MONDAY), sq.parse_start("soon", MONDAY)) == (

@@ -18,7 +18,7 @@ from email.utils import parseaddr, parsedate_to_datetime
 from pathlib import Path
 from zipfile import ZipFile
 
-from universal_inbox import email, files, inbox, platforms
+from comms_terminal import email, files, inbox, platforms
 
 MEMBERS = ("Takeout/Mail/Inbox.mbox", "Takeout/Mail/Sent.mbox")
 STATUS_COLUMNS = "status, status_detail, snoozed_until, detail_before_snooze"
@@ -74,7 +74,7 @@ def run(archive, db_path, connection_id, since, until, apply=False) -> dict:
     counts = dict(scanned=0, outside_range=0, invalid_date=0, filtered=0, malformed=0, duplicates=0,
                   stored=0, threads=[], existing_threads_changed=0, verified_todo=0)
     with ExitStack() as stack:
-        private = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="universal-inbox-takeout-")))
+        private = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="comms-terminal-takeout-")))
         if apply:
             db = stack.enter_context(closing(sqlite3.connect(path.as_uri() + "?mode=rw", uri=True)))
         else:

@@ -5,8 +5,8 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from test_console import seed_demo  # puts scripts/ on the path
-from universal_inbox import inbox, serve
-from universal_inbox.sequences import LOCAL
+from comms_terminal import inbox, serve
+from comms_terminal.sequences import LOCAL
 from test_attachment_send import FakeSender
 
 
@@ -82,7 +82,7 @@ def test_due_new_draft_sends_as_a_new_thread(db):
 
 def test_ctrl_enter_in_a_reply_box_schedules_it_for_tomorrow(tmp_path):
     from test_console import run, seeded
-    from universal_inbox.tui import Console, Pick
+    from comms_terminal.tui import Console, Pick
     path, ids = seeded(tmp_path)
     sent, seen = [], {}
     app = Console(path, reply=lambda *a: sent.append(a) or {})

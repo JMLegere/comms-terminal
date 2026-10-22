@@ -6,8 +6,8 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from universal_inbox import inbox, sequences
-from universal_inbox.tui import audit_markup
+from comms_terminal import inbox, sequences
+from comms_terminal.tui import audit_markup
 
 NOW = datetime(2026, 10, 15, 15, 0, tzinfo=timezone.utc)
 ANA = inbox.Identity("email", "ana@acme.com", "Ana")

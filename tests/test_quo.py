@@ -6,7 +6,7 @@ import hmac
 import json
 from datetime import datetime, timezone
 
-from universal_inbox import inbox, quo, serve
+from comms_terminal import inbox, quo, serve
 
 KEY = b"whsec_" + base64.b64encode(b"secret-bytes")
 NOW = datetime(2026, 10, 12, 21, 20, tzinfo=timezone.utc)

@@ -5,8 +5,8 @@ from textual.widgets import Input, TextArea
 
 from test_console import run, seeded
 from test_drafts_ui import choose, type_address
-from universal_inbox import inbox
-from universal_inbox.tui import Console, DraftConnection, ReplyBox
+from comms_terminal import inbox
+from comms_terminal.tui import Console, DraftConnection, ReplyBox
 
 
 EMAIL, PHONE = "lcarr@example.test", "+12025550123"

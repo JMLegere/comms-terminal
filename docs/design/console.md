@@ -4,7 +4,7 @@ Status: **Approved** by Jeremy, 2026-10-12 (decisions #71–#75). Replaces the w
 
 ## 1. Form
 
-A terminal app (Textual) that Jeremy runs over SSH on Workbox: `ssh workbox -t universal-inbox`.
+A terminal app (Textual) that Jeremy runs over SSH on Workbox: `ssh workbox -t comms-terminal`.
 
 - **Decision #71**: terminal UI instead of the web console. Jeremy works in terminals (herdr); SSH replaces the private web port, so D2 is resolved as "SSH to Workbox".
 - **Decision #72**: Textual as the toolkit. It is the one runtime dependency beyond the standard library; it gives panes, key bindings, and a headless test driver.
@@ -13,17 +13,17 @@ A terminal app (Textual) that Jeremy runs over SSH on Workbox: `ssh workbox -t u
 
 ```
 Workbox
-  universal-inbox serve   systemd service; holds the credentials
+  comms-terminal serve   systemd service; holds the credentials
     /hooks/email, /hooks/slack   public, verified
     wake() every minute
     local socket: POST /reply    jerry-only Unix socket
-  universal-inbox         Textual app, run by Jeremy over SSH
+  comms-terminal         Textual app, run by Jeremy over SSH
     reads SQLite; calls inbox.act, block, add_identity, remove_identity directly
     replies through the service's local socket
 ```
 
 - **Decision #73**: replies go through the service. The service keeps the Resend key and Slack token as encrypted systemd credentials; the app never holds a token (NFR-5).
-  - Socket: `$XDG_RUNTIME_DIR/universal-inbox.sock` (mode 0600, owned by `jerry`).
+  - Socket: `$XDG_RUNTIME_DIR/comms-terminal.sock` (mode 0600, owned by `jerry`).
   - `POST /reply` with JSON `{"thread_id", "text", "to", "cc"}` → `200 {"status", "status_detail"}`, or `502 {"error"}` on `SendFailed`.
 - Both processes open the same SQLite file in WAL mode with a 5-second busy timeout.
 - The app refreshes when `PRAGMA data_version` changes (checked every 2 seconds), so new mail and Slack messages appear without a keypress. If the service has migrated the database past the console's code (`user_version` above `SCHEMA_VERSION`), one error toast says to quit and start the console again.
@@ -87,7 +87,7 @@ Everything clickable: rail items, list rows (preview, then open), menu options, 
 
 ### Icons
 
-`src/universal_inbox/icons.py` maps every entity, Status detail, action, and term to a Nerd Font Material Design glyph (Nerd Fonts 3.5.1). Ghostty ships the symbols. Footer actions, rail items, panel titles, list rows, and details use the mapper; the Status detail glyphs replace the earlier Unicode glyphs.
+`src/comms_terminal/icons.py` maps every entity, Status detail, action, and term to a Nerd Font Material Design glyph (Nerd Fonts 3.5.1). Ghostty ships the symbols. Footer actions, rail items, panel titles, list rows, and details use the mapper; the Status detail glyphs replace the earlier Unicode glyphs.
 
 ### Thread
 
@@ -185,7 +185,7 @@ Thread, Person, Organization, and Case pages show separate details-column sectio
 - Thread (main list, focused thread pane, or selected Case card): `r` reply to the sender, `a` reply all (FR-3b's reply-all stays one key away), `e` Done (Gmail archive), `g` snooze, `b` block or unblock the sender (#138), `m` or `x` Ignore (Gmail mute), `l` Case (Gmail label), `z` undo (Gmail undo), `s` change status, `p` Person, `o` open in Gmail or Slack, `f` forward the newest message as an email Draft with its Attachments (#134), `ctrl+enter` send (#100).
 - Reply and Draft: `ctrl+o` attach, `delete` remove the highlighted staged file, paste an image path to attach it.
 - Copy for an agent: `y` on a Thread (or its Case card) or a Draft copies it to the clipboard (OSC 52) as Markdown to paste into a terminal agent. A Thread gives its properties, every message in full with link URLs, Trimmed content, and each Attachment's Workbox path, and the Attio, Tana, and Linear answers as JSON. A Draft gives its envelope, current unsaved body, and staged files with their paths, then each Thread in its Captured history.
-- The same Markdown comes from the command line, so an agent can fetch it fresh: `universal-inbox threads [view]`, `universal-inbox thread ID`, `universal-inbox drafts`, `universal-inbox draft ID`. `universal-inbox draft ID --revision N --body -` (or `--to`, `--cc`, `--subject`) changes a Draft only at the revision the agent read, `universal-inbox draft new --connection ID` starts one for a new Thread, and `universal-inbox draft new --thread ID --body -` starts a Thread's reply Draft, which its reply box opens on. Nothing on the command line sends; Jeremy sends from the console.
+- The same Markdown comes from the command line, so an agent can fetch it fresh: `comms-terminal threads [view]`, `comms-terminal thread ID`, `comms-terminal drafts`, `comms-terminal draft ID`. `comms-terminal draft ID --revision N --body -` (or `--to`, `--cc`, `--subject`) changes a Draft only at the revision the agent read, `comms-terminal draft new --connection ID` starts one for a new Thread, and `comms-terminal draft new --thread ID --body -` starts a Thread's reply Draft, which its reply box opens on. Nothing on the command line sends; Jeremy sends from the console.
 - General: `?` all keys, `q` quit.
 - The footer lists every action for the page as plain text: key in blue, description in grey, no icons or blocks (#94).
 
@@ -207,7 +207,7 @@ Hot reload: the console restarts on every source change.
 
 ```
 uv run python scripts/seed_demo.py --db /tmp/demo.db
-.venv/bin/watchfiles --filter python '.venv/bin/universal-inbox --db /tmp/demo.db' src/universal_inbox
+.venv/bin/watchfiles --filter python '.venv/bin/comms-terminal --db /tmp/demo.db' src/comms_terminal
 ```
 
 Run the console binary directly, not through `uv run`: `uv run` does not pass the watcher's stop signal on, which leaves two consoles drawing over each other.

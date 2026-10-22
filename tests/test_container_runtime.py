@@ -25,7 +25,7 @@ SPEC.loader.exec_module(runtime)
 A = "a" * 40
 IMAGE = "sha256:" + "b" * 64
 ID = "c" * 64
-CONSOLE = "universal-inbox-console-" + "e" * 32
+CONSOLE = "comms-terminal-console-" + "e" * 32
 CID = "d" * 64
 
 
@@ -61,9 +61,9 @@ def config(tmp_path, monkeypatch):
     home.mkdir(mode=0o700)
     return {"runtime": "container", "state": str(state), "releases": str(releases),
             "current": str(state / "current"), "home": str(home),
-            "db": str(home / ".local/share/universal-inbox/inbox.db"), "lock": str(state / "app.lock"),
-            "socket": runtime.SOCKET, "container_name": "universal-inbox",
-            "container_secrets": "/run/universal-inbox-secrets"}
+            "db": str(home / ".local/share/comms-terminal/inbox.db"), "lock": str(state / "app.lock"),
+            "socket": runtime.SOCKET, "container_name": "comms-terminal",
+            "container_secrets": "/run/comms-terminal-secrets"}
 
 
 def test_root_trust_chain_rejects_writable_symlink_or_nonroot_ancestor(monkeypatch):
@@ -134,9 +134,9 @@ class FakeDocker:
             assert "--network=none" in args and "--mount" not in args
             return self.protocol
         if args[:2] == ["container", "ls"]:
-            if "label=io.universal-inbox.role=console" in args:
+            if "label=io.comms-terminal.role=console" in args:
                 return "\n".join(self.consoles)
-            if "name=^/universal-inbox$" in args:
+            if "name=^/comms-terminal$" in args:
                 return ID if self.info is not None else ""
             return CID if any("name=^/" + name + "$" in args for name in self.consoles) else ""
         if args[:2] == ["container", "inspect"]:
@@ -231,7 +231,7 @@ def test_fixed_daemon_argv_maps_only_required_state_and_loopback(config):
     mounts = [args[index + 1] for index, arg in enumerate(args) if arg == "--mount"]
     assert len(mounts) == 4
     assert any(m.endswith("dst=/run/secrets,readonly") for m in mounts)
-    assert any(m.endswith("dst=/run/universal-inbox-deploy,readonly") for m in mounts)
+    assert any(m.endswith("dst=/run/comms-terminal-deploy,readonly") for m in mounts)
     assert not any("docker.sock" in value or "privileged" in value for value in args)
     assert "--env" not in args and "--env-file" not in args
 
@@ -353,7 +353,7 @@ def test_console_supervises_independent_nonroot_helper_with_native_argv(config, 
     monkeypatch.setattr(runtime.sys, "stdout", TTY())
     monkeypatch.setenv("TERM", "xterm-ghostty")
     monkeypatch.setenv("COLORTERM", "truecolor")
-    monkeypatch.setenv("UNIVERSAL_INBOX_EXPECTED_SHA", "untrusted-caller-value")
+    monkeypatch.setenv("COMMS_TERMINAL_EXPECTED_SHA", "untrusted-caller-value")
     monkeypatch.setattr(runtime, "parent_death", lambda *a: None)
     monkeypatch.setattr(runtime.uuid, "uuid4", lambda: SimpleNamespace(hex="e" * 32))
     recorded = {}
@@ -370,9 +370,9 @@ def test_console_supervises_independent_nonroot_helper_with_native_argv(config, 
     assert args[-len(native)-2:-len(native)] == [IMAGE, runtime.HELPER]
     assert "exec" not in args and "--rm" in args and "--sig-proxy=true" in args
     assert args[args.index("--name") + 1] == CONSOLE
-    assert "io.universal-inbox.role=console" in args and "io.universal-inbox.sha=" + A in args
-    assert "UNIVERSAL_INBOX_EXPECTED_SHA=" + A in args
-    assert "UNIVERSAL_INBOX_EXPECTED_SHA=untrusted-caller-value" not in args
+    assert "io.comms-terminal.role=console" in args and "io.comms-terminal.sha=" + A in args
+    assert "COMMS_TERMINAL_EXPECTED_SHA=" + A in args
+    assert "COMMS_TERMINAL_EXPECTED_SHA=untrusted-caller-value" not in args
     assert "--interactive" in args and "--tty" in args
     assert "TERM=xterm-ghostty" in args and "COLORTERM=truecolor" in args
     assert args[args.index("--user") + 1] == "10001:10001"
@@ -561,7 +561,7 @@ def test_incompatible_image_is_refused_before_starting_managed_frontend(config, 
 
 @pytest.mark.parametrize("compatible", [False, True])
 def test_image_probe_checks_actual_installed_console_not_host_helper(tmp_path, compatible):
-    package = tmp_path / "universal_inbox"
+    package = tmp_path / "comms_terminal"
     package.mkdir()
     (package / "__init__.py").write_text("")
     source = "class Console:\n    pass\n"
@@ -697,17 +697,17 @@ def test_abrupt_wrapper_death_reaches_app_through_signal_proxy(tmp_path):
 
 
 def helper_fixture(tmp_path):
-    text = (ROOT / "Dockerfile").read_text().split("COPY <<'PY' /opt/universal-inbox-console.py\n", 1)[1].split("\nPY\n", 1)[0]
+    text = (ROOT / "Dockerfile").read_text().split("COPY <<'PY' /opt/comms-terminal-console.py\n", 1)[1].split("\nPY\n", 1)[0]
     lock, gate, app, helper = (tmp_path / n for n in ("app.lock", "writers-blocked", "app", "helper.py"))
     lock.touch(mode=0o640)
     (tmp_path / "current").symlink_to("/host/releases/" + A + "-" + "d" * 12)
     app.write_text("#!/usr/bin/python3\nimport sys\nprint('actual-tui-ready', flush=True)\ninput()\nsys.exit(23)\n")
     app.chmod(0o755)
-    helper.write_text(text.replace("/run/universal-inbox-deploy/app.lock", str(lock))
-                      .replace("/run/universal-inbox-deploy/writers-blocked", str(gate))
-                      .replace("/run/universal-inbox-deploy/console-update", str(tmp_path / "console-update"))
-                      .replace("/run/universal-inbox-deploy/current", str(tmp_path / "current"))
-                      .replace("/opt/venv/bin/universal-inbox", str(app)))
+    helper.write_text(text.replace("/run/comms-terminal-deploy/app.lock", str(lock))
+                      .replace("/run/comms-terminal-deploy/writers-blocked", str(gate))
+                      .replace("/run/comms-terminal-deploy/console-update", str(tmp_path / "console-update"))
+                      .replace("/run/comms-terminal-deploy/current", str(tmp_path / "current"))
+                      .replace("/opt/venv/bin/comms-terminal", str(app)))
     return lock, gate, helper
 
 
@@ -715,7 +715,7 @@ def test_embedded_lock_fd_survives_exec_in_actual_tui(tmp_path):
     lock, gate, helper = helper_fixture(tmp_path)
     process = subprocess.Popen([sys.executable, "-I", str(helper)], stdin=subprocess.PIPE,
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                               env={"UNIVERSAL_INBOX_EXPECTED_SHA": A})
+                               env={"COMMS_TERMINAL_EXPECTED_SHA": A})
     try:
         assert process.stdout.readline().strip() == "actual-tui-ready"
         with lock.open("rb") as stream:
@@ -739,12 +739,12 @@ def test_embedded_gate_is_checked_after_exclusive_update_lock_releases(tmp_path,
         fcntl.flock(stream, fcntl.LOCK_EX)
         process = subprocess.Popen([sys.executable, "-I", str(helper)], stdin=subprocess.PIPE,
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                                   env={"UNIVERSAL_INBOX_EXPECTED_SHA": A})
+                                   env={"COMMS_TERMINAL_EXPECTED_SHA": A})
         gate.touch()
         fcntl.flock(stream, fcntl.LOCK_UN)
     try:
         output, error = process.communicate(timeout=5)
-        assert process.returncode == 75 and output == "" and "Universal Inbox" in error
+        assert process.returncode == 75 and output == "" and "Comms Terminal" in error
     finally:
         if process.poll() is None:
             process.kill()
@@ -757,14 +757,14 @@ def test_embedded_helper_rejects_old_selected_image_after_waiting_for_update_loc
         fcntl.flock(stream, fcntl.LOCK_EX)
         process = subprocess.Popen([sys.executable, "-I", str(helper)], stdin=subprocess.PIPE,
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                                   env={"UNIVERSAL_INBOX_EXPECTED_SHA": A})
+                                   env={"COMMS_TERMINAL_EXPECTED_SHA": A})
         current = tmp_path / "current"
         current.unlink()
         current.symlink_to("/host/releases/" + "f" * 40 + "-" + "1" * 12)
         fcntl.flock(stream, fcntl.LOCK_UN)
     try:
         output, error = process.communicate(timeout=5)
-        assert process.returncode == 75 and output == "" and "Universal Inbox" in error
+        assert process.returncode == 75 and output == "" and "Comms Terminal" in error
     finally:
         if process.poll() is None:
             process.kill()
@@ -772,15 +772,15 @@ def test_embedded_helper_rejects_old_selected_image_after_waiting_for_update_loc
 
 
 def test_real_launcher_preserves_argument_stdin_exit_and_tty(tmp_path, monkeypatch):
-    text = (ROOT / "deploy/commsterminal").read_text()
-    prefix = "/usr/bin/sudo -n -- /usr/bin/python3 -I /opt/universal-inbox-deploy/container_runtime.py"
+    text = (ROOT / "deploy/comms-terminal").read_text()
+    prefix = "/usr/bin/sudo -n -- /usr/bin/python3 -I /opt/comms-terminal-deploy/container_runtime.py"
     assert prefix in text and ' -- "$@"' in text
     monkeypatch.setenv("TERM", "xterm-ghostty")
     monkeypatch.setenv("COLORTERM", "truecolor")
     transport = ["console", "--terminal", "xterm-ghostty", "--colorterm", "truecolor", "--"]
     recorder = tmp_path / "recorder.py"
     recorder.write_text("import json,sys\nline=sys.stdin.readline()\nprint(json.dumps({'argv':sys.argv[1:],'line':line,'tty':sys.stdin.isatty()}),flush=True)\nsys.exit(23)\n")
-    launcher = tmp_path / "commsterminal"
+    launcher = tmp_path / "comms-terminal"
     launcher.write_text(text.replace(prefix, "/usr/bin/python3 -I " + str(recorder)))
     launcher.chmod(0o755)
     args = ["a b", "literal;not-a-shell", ""]
@@ -818,24 +818,24 @@ def test_build_context_includes_deployed_package_manifest_and_checkout_resources
         "calendar.py", "icons.py", "inbox.py", "linear.py", "main.py", "mcp.py", "platforms.py", "quo.py",
         "render.py", "schema.sql", "serve.py", "slack.py", "tana.py", "tui.py",
     }
-    package = ROOT / "src/universal_inbox"
+    package = ROOT / "src/comms_terminal"
     checkout = {path.relative_to(package).as_posix() for path in package.rglob("*")
                 if path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc"}
     includes = [line[1:] for line in (ROOT / ".dockerignore").read_text().splitlines()
                 if line.startswith("!")]
-    required = {"src/universal_inbox/" + name for name in deployed | checkout}
+    required = {"src/comms_terminal/" + name for name in deployed | checkout}
     assert {path for path in required if not any(fnmatchcase(path, rule) for rule in includes)} == set()
-    assert "src/universal_inbox/schema.sql" in includes
+    assert "src/comms_terminal/schema.sql" in includes
     for private in (".git/config", ".venv/pyvenv.cfg", "inbox.db", "files-secret", "raw/message.eml",
-                    "src/universal_inbox/__pycache__/inbox.cpython-312.pyc"):
+                    "src/comms_terminal/__pycache__/inbox.cpython-312.pyc"):
         assert not any(fnmatchcase(private, rule) for rule in includes)
 
 
 def test_unit_and_source_allowlist_keep_gate_credential_and_restart_contracts():
-    unit = (ROOT / "deploy/universal-inbox-container.service").read_text()
-    assert "ExecCondition=/usr/bin/test ! -e /var/lib/universal-inbox-deploy/writers-blocked" in unit
-    assert "ExecStart=/usr/bin/python3 -I /opt/universal-inbox-deploy/container_runtime.py serve" in unit
-    assert "ExecStopPost=/usr/bin/python3 -I /opt/universal-inbox-deploy/container_runtime.py stop" in unit
+    unit = (ROOT / "deploy/comms-terminal-container.service").read_text()
+    assert "ExecCondition=/usr/bin/test ! -e /var/lib/comms-terminal-deploy/writers-blocked" in unit
+    assert "ExecStart=/usr/bin/python3 -I /opt/comms-terminal-deploy/container_runtime.py serve" in unit
+    assert "ExecStopPost=/usr/bin/python3 -I /opt/comms-terminal-deploy/container_runtime.py stop" in unit
     assert "Restart=always" in unit and "RestartPreventExitStatus=75" in unit
     admitted = dict(line.split("=", 1)[1].split(":", 1) for line in unit.splitlines()
                     if line.startswith("LoadCredentialEncrypted="))
@@ -845,17 +845,17 @@ def test_unit_and_source_allowlist_keep_gate_credential_and_restart_contracts():
     )
     assert runtime.OPTIONAL_CREDENTIALS == ("tana-oauth", "linear-token", "resend-webhook-secret", "google-calendar-ics")
     assert admitted == {
-        **{name: "/etc/credstore.encrypted/universal-inbox." + name for name in runtime.CREDENTIALS},
-        "tana-oauth": "universal-inbox.independent-tana-oauth",
-        "linear-token": "universal-inbox.linear-token",
-        "resend-webhook-secret": "universal-inbox.resend-webhook-secret",
-        "google-calendar-ics": "universal-inbox.google-calendar-ics",
+        **{name: "/etc/credstore.encrypted/comms-terminal." + name for name in runtime.CREDENTIALS},
+        "tana-oauth": "comms-terminal.independent-tana-oauth",
+        "linear-token": "comms-terminal.linear-token",
+        "resend-webhook-secret": "comms-terminal.resend-webhook-secret",
+        "google-calendar-ics": "comms-terminal.google-calendar-ics",
     }
     ignore = (ROOT / ".dockerignore").read_text().splitlines()
     assert "**" in ignore
     assert {line for line in ignore if line.startswith("!")} == {
-        "!pyproject.toml", "!uv.lock", "!README.md", "!src/", "!src/universal_inbox/",
-        "!src/universal_inbox/*.py", "!src/universal_inbox/schema.sql"}
+        "!pyproject.toml", "!uv.lock", "!README.md", "!src/", "!src/comms_terminal/",
+        "!src/comms_terminal/*.py", "!src/comms_terminal/schema.sql"}
     dockerfile = (ROOT / "Dockerfile").read_text()
     assert dockerfile.count("FROM python:3.12.12-slim-bookworm") == 2
     assert "COPY pyproject.toml uv.lock ./\n" in dockerfile  # Exact deployed source has no README requirement.

@@ -16,7 +16,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import import_takeout  # noqa: E402
 
-from universal_inbox import email, files, inbox  # noqa: E402
+from comms_terminal import email, files, inbox  # noqa: E402
 
 SINCE = datetime(2026, 9, 12, tzinfo=timezone.utc)
 UNTIL = datetime(2026, 10, 12, 16, tzinfo=timezone.utc)

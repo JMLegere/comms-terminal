@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from universal_inbox import calendar as cal, inbox
+from comms_terminal import calendar as cal, inbox
 
 HFX = ZoneInfo("America/Halifax")
 

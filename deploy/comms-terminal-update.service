@@ -1,0 +1,16 @@
+[Unit]
+Description=Apply accepted Comms Terminal GitHub notifications
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/comms-terminal-deploy/github_deploy.py update --config /etc/comms-terminal-deploy/config.json
+TimeoutStartSec=infinity
+UMask=0077
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/comms-terminal-deploy -/home/jerry/.local/opt -/home/jerry/.local/share/comms-terminal -/home/jerry/.cache/uv -/var/lib/comms-terminal/home
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes

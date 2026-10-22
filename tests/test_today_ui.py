@@ -8,8 +8,8 @@ import pytest
 from textual.widgets import DataTable
 
 from test_console import run, seeded
-from universal_inbox import inbox, sequences as sq
-from universal_inbox.tui import ChannelsPage, Console, DraftsPage, StatusLine, TaskPane, ThreadsPage, ThreadView, TodayPage
+from comms_terminal import inbox, sequences as sq
+from comms_terminal.tui import ChannelsPage, Console, DraftsPage, StatusLine, TaskPane, ThreadsPage, ThreadView, TodayPage
 
 MONDAY = datetime(2026, 10, 19, 13, 0, tzinfo=timezone.utc)
 
@@ -206,7 +206,7 @@ def test_drafts_group_failed_then_unsent_then_scheduled(tmp_path):
 def test_drafts_opens_over_todays_draft_without_crashing(tmp_path):
     """Drafts (6) mounting while Today's Draft was still leaving the right pane repainted that half-removed view,
     and the console quit (.agents/issues/2026-10-20-commsterminal-crash-opening-drafts-from-today.md)."""
-    from universal_inbox.tui import DraftConnection
+    from comms_terminal.tui import DraftConnection
     path = with_work(tmp_path)
     seen = {}
 

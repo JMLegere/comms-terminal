@@ -1,6 +1,6 @@
 """Phase 6.3 demo: the real service on synthetic data (docs/prd.md §5, Phase 6.3).
 
-Runs `universal-inbox serve`'s pieces in-process: the hooks server over HTTP, the reply socket, and
+Runs `comms-terminal serve`'s pieces in-process: the hooks server over HTTP, the reply socket, and
 encrypted-credential loading (from a temporary directory of demo secrets). Inbound mail and Slack
 events are signed fixture requests sent over HTTP; outbound sends go to fake Resend and Slack
 endpoints that record what would have been sent. Nothing leaves this machine.
@@ -9,7 +9,7 @@ Walks AS-1, AS-3, AS-11, AS-4, AS-6, AS-13, and AS-17 and checks each outcome.
 
     uv run python scripts/demo.py                    # run all scenarios, print PASS/FAIL
     uv run python scripts/demo.py --step --keep      # pause between scenarios; keep serving after
-    universal-inbox --db <db> --socket <socket>      # in another pane, to watch and reply
+    comms-terminal --db <db> --socket <socket>      # in another pane, to watch and reply
 """
 
 import argparse
@@ -27,10 +27,10 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from universal_inbox import inbox, serve, slack
-from universal_inbox.email import EmailSender
-from universal_inbox.slack import SlackSender
-from universal_inbox.tui import socket_reply
+from comms_terminal import inbox, serve, slack
+from comms_terminal.email import EmailSender
+from comms_terminal.slack import SlackSender
+from comms_terminal.tui import socket_reply
 
 MAILBOX, TEAM, ME = "jeremy@agentmaple.com", "T0AGENTMAPLE", "U0JEREMY"
 SLACK_USERS = {"U0LOGAN": ("Logan Carr", "logan@agentmaple.com")}
@@ -186,9 +186,9 @@ def run(demo: Demo, fakes: FakeEndpoints, step):
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--db", default=str(Path(tempfile.gettempdir()) / "universal-inbox-demo.db"))
+    ap.add_argument("--db", default=str(Path(tempfile.gettempdir()) / "comms-terminal-demo.db"))
     ap.add_argument("--socket", default=str(Path(os.environ.get("XDG_RUNTIME_DIR", tempfile.gettempdir()))
-                                            / "universal-inbox-demo.sock"))
+                                            / "comms-terminal-demo.sock"))
     ap.add_argument("--port", type=int, default=8788)
     ap.add_argument("--step", action="store_true", help="pause before each scenario")
     ap.add_argument("--keep", action="store_true", help="keep serving after the scenarios (for the console)")
@@ -208,7 +208,7 @@ def main(argv=None) -> int:
     db.close()
 
     # Demo secrets in a private directory, loaded the way systemd's LoadCredentialEncrypted= exposes them.
-    creds = tempfile.mkdtemp(prefix="universal-inbox-demo-creds-")
+    creds = tempfile.mkdtemp(prefix="comms-terminal-demo-creds-")
     demo_secrets = {n: secrets.token_hex(32).encode() for n in ("email-hook-secret", "slack-signing-secret")}
     demo_secrets["resend-webhook-secret"] = b"whsec_" + base64.b64encode(secrets.token_bytes(32))
     for name, value in {**demo_secrets, "slack-user-token": b"xoxp-demo", "resend-api-key": b"re_demo"}.items():
@@ -225,7 +225,7 @@ def main(argv=None) -> int:
         threading.Thread(target=s.serve_forever, daemon=True).start()
 
     print(f"Demo service: hooks on http://127.0.0.1:{a.port}, reply socket {a.socket}, database {a.db}")
-    print(f"Watch it:     universal-inbox --db {a.db} --socket {a.socket}")
+    print(f"Watch it:     comms-terminal --db {a.db} --socket {a.socket}")
     demo = Demo(a.db, a.socket, a.port, demo_secrets)
     run(demo, fakes, a.step)
     failed = [s for s, ok in demo.results if not ok]

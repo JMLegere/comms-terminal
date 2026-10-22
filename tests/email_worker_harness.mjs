@@ -114,7 +114,7 @@ async function checks() {
       assert.equal(calls.length, 1);
     }
     reset((call) => new Response(null, { status: call.url.hostname === "source.test" ? 401 : 503 }));
-    assert.equal((await email(env, raw)).rejected, "universal-inbox hook returned HTTP 401");
+    assert.equal((await email(env, raw)).rejected, "comms-terminal hook returned HTTP 401");
     const networkError = new Error("private source network diagnostic");
     reset(() => { throw networkError; });
     await assert.rejects(email({ HOOK_URL: source, EMAIL_HOOK_SECRET: secret }, raw), (error) => error === networkError);

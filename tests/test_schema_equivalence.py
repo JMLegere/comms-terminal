@@ -2,7 +2,7 @@
 
 import re
 
-from universal_inbox import inbox
+from comms_terminal import inbox
 from test_email_reconcile import SCHEMA3  # frozen schema-3 database, the oldest live shape
 
 

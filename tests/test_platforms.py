@@ -2,7 +2,7 @@
 
 from datetime import timedelta
 
-from universal_inbox.platforms import E164, FORMATS, PLATFORMS
+from comms_terminal.platforms import E164, FORMATS, PLATFORMS
 
 
 def test_e164_takes_7_to_15_digits_after_plus():

@@ -1,4 +1,4 @@
-# Universal Inbox
+# Comms Terminal
 
 A single-user console that tracks who owes whom what across Jeremy's professional messaging Platforms, modelled on Plain's thread queue.
 
@@ -169,7 +169,7 @@ One connected account on a Platform, such as one forwarded Gmail address, one Sl
 _Avoid_: Source, Account, Integration
 
 **Context source**:
-An outside tool that Universal Inbox reads to show context beside Threads, Persons, Organizations, and Cases, such as Tana, Attio, or Linear. It holds no Threads and is not a Platform.
+An outside tool that Comms Terminal reads to show context beside Threads, Persons, Organizations, and Cases, such as Tana, Attio, or Linear. It holds no Threads and is not a Platform.
 _Avoid_: Integration, Connection, Platform (for Tana, Attio, or Linear)
 
 ## Calendar
@@ -203,9 +203,9 @@ Anything placed on the Calendar: an Event, a Task on its day, a Snoozed Thread a
 _Avoid_: Entry, Event (for anything but an Event)
 
 **Event provider**:
-The outside service that Universal Inbox reads Events from, such as Google Calendar. It holds no Threads and is not a Platform.
+The outside service that Comms Terminal reads Events from, such as Google Calendar. It holds no Threads and is not a Platform.
 _Avoid_: Calendar provider, Integration, Connection, Context source
 
 **Deleted Event**:
-An Event that its Event provider no longer has, including one removed occurrence of a repeating Event. Universal Inbox keeps it, marked deleted.
+An Event that its Event provider no longer has, including one removed occurrence of a repeating Event. Comms Terminal keeps it, marked deleted.
 _Avoid_: Cancelled Event, Removed Event

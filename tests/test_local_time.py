@@ -4,7 +4,7 @@ import os
 import time
 from datetime import datetime, timezone
 
-from universal_inbox import main
+from comms_terminal import main
 
 
 def test_times_read_in_halifax_unless_tz_is_set(monkeypatch):

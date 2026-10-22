@@ -6,9 +6,9 @@ import pytest
 from rich.text import Text
 
 from test_console import page, run, seeded
-from universal_inbox import inbox, linear, serve, tui
-from universal_inbox.icons import ICON
-from universal_inbox.tui import (CONTEXT_SOURCES, CasePage, Console, ContextSection, OrganizationPage,
+from comms_terminal import inbox, linear, serve, tui
+from comms_terminal.icons import ICON
+from comms_terminal.tui import (CONTEXT_SOURCES, CasePage, Console, ContextSection, OrganizationPage,
                                  PersonPage, ReplyError, ThreadsPage, agent_text, linear_markup, socket_context)
 
 
@@ -46,7 +46,7 @@ def test_linear_registration_reuses_task_glyph_and_existing_source_order():
 
 
 def test_agent_thread_command_keeps_linear_in_fresh_markdown(tmp_path, monkeypatch, capsys):
-    from universal_inbox.main import main
+    from comms_terminal.main import main
 
     path, ids = seeded(tmp_path)
     calls = []
@@ -57,7 +57,7 @@ def test_agent_thread_command_keeps_linear_in_fresh_markdown(tmp_path, monkeypat
             return answer() if name == "linear" else None
         return fetch
 
-    monkeypatch.setattr("universal_inbox.agent.socket_context", source)
+    monkeypatch.setattr("comms_terminal.agent.socket_context", source)
     main(["--db", path, "--socket", str(tmp_path / "context.sock"), "thread", str(ids["ana"])])
     text = capsys.readouterr().out
     assert [name for name, _, _ in calls] == ["attio", "tana", "linear"]
@@ -188,7 +188,7 @@ def test_linear_context_and_match_evidence_on_all_four_surfaces(tmp_path, surfac
             page(app).action_copy()
             assert "## Linear\n" in copied[-1] and '"identifier": "DEV-123"' in copied[-1]
             assert "Need 40 seats before the November rollout." in copied[-1] and URL in copied[-1]
-            assert "Fresh copy: `universal-inbox thread " in copied[-1]
+            assert "Fresh copy: `comms-terminal thread " in copied[-1]
         if surface == "person":
             await pilot.press("escape")
             await settle(app, pilot)

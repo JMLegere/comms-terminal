@@ -1,4 +1,4 @@
-// Cloudflare Email Worker for Universal Inbox (D3, decision #102).
+// Cloudflare Email Worker for Comms Terminal (D3, decision #102).
 // Gmail forwards jeremy@agentmaple.com to jeremy@inbox.agentmaple.com; Email Routing hands each message
 // here, and this posts the raw RFC 822 bytes to POST /hooks/email, signed the way email.verify() checks:
 //   X-Inbox-Timestamp: <unix seconds>
@@ -61,7 +61,7 @@ export default {
     }, env, ctx);
     // ponytail: if every hook fails, bounce the forwarded copy (Gmail still has the original); a retry queue
     // would keep it, add one if bounces show up in practice.
-    if (!response.ok) message.setReject(`universal-inbox hook returned HTTP ${response.status}`);
+    if (!response.ok) message.setReject(`comms-terminal hook returned HTTP ${response.status}`);
   },
   async fetch(request, env, ctx) {
     const url = new URL(request.url);

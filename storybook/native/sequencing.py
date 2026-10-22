@@ -19,7 +19,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.widgets import DataTable, Input, Static, TextArea
 from textual.widgets.option_list import Option
-from universal_inbox import inbox, tui
+from comms_terminal import inbox, tui
 
 ME = "jeremy@agentmaple.com"
 # Proposed glyphs (Nerd Fonts 3.5.1, present in the bundled VictorMono): icons.py gains these with P2/P3.
@@ -637,7 +637,7 @@ async def capture(entry, output):
     file, spec, *_ = STATES[entry["exportName"]]
     spec = dict(spec, state=entry["exportName"],
                 due_count=0 if spec.get("empty") else sum(1 for d in DUE if d[1] != spec.get("paused")))
-    with tempfile.TemporaryDirectory(prefix="universal-inbox-sequencing-", dir="/tmp") as temporary, ExitStack() as stack:
+    with tempfile.TemporaryDirectory(prefix="comms-terminal-sequencing-", dir="/tmp") as temporary, ExitStack() as stack:
         db_path = Path(temporary) / "synthetic.db"
         stack.enter_context(patch.object(tui, "datetime", render.FixedClock))
         stack.enter_context(patch.object(inbox, "datetime", render.FixedClock))

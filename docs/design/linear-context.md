@@ -20,7 +20,7 @@ Names/text if straightforward, exact-key fallback otherwise remains the original
 
 ## Goal
 
-Show every matching Linear issue related to the Person or Organization whose conversation Jeremy is handling, except Done, Completed, Canceled, or Archived, without leaving Universal Inbox. Backlog, triage, and other nonterminal matching issues remain included. Linear remains the task-management authority; Inbox only reads context.
+Show every matching Linear issue related to the Person or Organization whose conversation Jeremy is handling, except Done, Completed, Canceled, or Archived, without leaving Comms Terminal. Backlog, triage, and other nonterminal matching issues remain included. Linear remains the task-management authority; Inbox only reads context.
 
 ## Where it appears
 
@@ -116,7 +116,7 @@ Jeremy authorized local Phases 1–4 with "execute the plan", then code publicat
 
 ## Local implementation evidence — 2026-10-15
 
-- Implemented [`linear.py`](../../src/universal_inbox/linear.py), the private `POST /linear` route, optional encrypted `linear-token` credential/drop-in, names-aware five-minute service cache, and Linear cards/health on all four page types. No new dependency, database schema, message Connection, or OAuth machinery.
+- Implemented [`linear.py`](../../src/comms_terminal/linear.py), the private `POST /linear` route, optional encrypted `linear-token` credential/drop-in, names-aware five-minute service cache, and Linear cards/health on all four page types. No new dependency, database schema, message Connection, or OAuth machinery.
 - Matching uses exact emails/domains and unique local full-name/company-name phrases, including ordinary paired Markdown formatting. Customer-name candidates tolerate whitespace, then require normalized exact equality. Customer Request discovery stays bounded; lifecycle exclusions apply through both issue and Request paths.
 - Linear sections refetch after local or external database changes; the service reuses its cache when matching inputs are unchanged. Old address/name-revision results cannot replace current answers. Attio/Tana socket payloads and cache behavior stay unchanged.
 - Focused checks: `uv run pytest -q tests/test_linear.py tests/test_linear_service.py tests/test_linear_console.py tests/test_tana.py tests/test_attio.py tests/test_serve.py --tb=short` — **225 passed**.
@@ -133,22 +133,22 @@ Jeremy authorized local Phases 1–4 with "execute the plan", then code publicat
 ## Deployment receipt — 2026-10-15
 
 - Under Jeremy's "ship it", release `38e196e8bc07d24c22543f0b150ca0427f47d04c` was published to `main`/`dev` and deployed to the existing Workbox uv-tool package/service. All **19 packaged Python/SQL source files** match that release.
-- The earlier noninteractive sudo check required authentication. After Jeremy completed real sudo authentication, a normal package reinstall and existing service restart completed. `universal-inbox.service` is active/running; `/run/universal-inbox/inbox.sock` remains **0600** and the live database remains **schema 11**. `deploy/install.sh` was not run.
+- The earlier noninteractive sudo check required authentication. After Jeremy completed real sudo authentication, a normal package reinstall and existing service restart completed. `comms-terminal.service` is active/running; `/run/comms-terminal/inbox.sock` remains **0600** and the live database remains **schema 11**. `deploy/install.sh` was not run.
 - Live private-socket checks: `POST /linear` with `{}` returned **503** (`Linear is not connected`); an explicit `{"emails":null}` returned **400** through safe array validation.
 - Linear remains unconnected: its credential drop-in is absent. No Linear key creation/installation, account/team permission change, private Linear workspace query, or Linear issue/task/comment write occurred. Exact key/workspace/required-team authorization and live identity, access, Customer Request, match, link, cache, and health verification remain Phase 5 gates.
 - Installed-package UI proof imported `Console` from the installed uv-tool package, with provenance asserted. Generated 19 synthetic fixture captures in temporary `/tmp/linear-context-proof-p3swqg_6/`; opened and inspected Thread 220, Person 100, Organization 160, Case 80, and 220-column loading/empty/error renders. The inherited narrow-Thread properties-collapse limitation remains. This establishes installed fixture rendering; real-provider matches, live links, and human acceptance remain unverified.
 
 ## Connection receipt — 2026-10-16
 
-- Jeremy asked Claude to take control of his Chrome and set up the Linear connection. Claude created the personal API key "Universal Inbox" in the `agentmaple` workspace with **Read** as its only permission and **All teams you have access to**, which is both teams (Engineering `DEV`, Business `BIZ`). Claude copied the key with Linear's copy button and never read or displayed its value.
-- Jeremy pasted the key into a hidden prompt and ran a Linear-only staging script with sudo: `systemd-creds encrypt --name=linear-token` into the service credential store, `shred` of the staged copy, the `linear.conf` drop-in from `main`, `daemon-reload`, and a service restart. `deploy/install.sh` was not run, because the repository's `universal-inbox.service` differed from the installed unit and the installer would have overwritten it.
-- `universal-inbox.service` is active with the `linear.conf` drop-in. Linear's key list shows "Universal Inbox" with 1 permission, 2 teams, and last use on 2026-10-16.
+- Jeremy asked Claude to take control of his Chrome and set up the Linear connection. Claude created the personal API key "Comms Terminal" in the `agentmaple` workspace with **Read** as its only permission and **All teams you have access to**, which is both teams (Engineering `DEV`, Business `BIZ`). Claude copied the key with Linear's copy button and never read or displayed its value.
+- Jeremy pasted the key into a hidden prompt and ran a Linear-only staging script with sudo: `systemd-creds encrypt --name=linear-token` into the service credential store, `shred` of the staged copy, the `linear.conf` drop-in from `main`, `daemon-reload`, and a service restart. `deploy/install.sh` was not run, because the repository's `comms-terminal.service` differed from the installed unit and the installer would have overwritten it.
+- `comms-terminal.service` is active with the `linear.conf` drop-in. Linear's key list shows "Comms Terminal" with 1 permission, 2 teams, and last use on 2026-10-16.
 - Live private-socket checks: `POST /linear` with `{}` returned **200** `{"issues":[]}`. A request for an active customer's domain returned 12 nonterminal issues across Now, Triage, In Review, Dev Deployed, and Prod Deployed states, each with match reasons and an Open in Linear link. Two of those issues matched through the Linear Customer and its Customer Requests, which confirms Customer Request access with this key. A request for a customer whose linked issues are all completed, canceled, or duplicates returned no issues, as the exclusion rule requires.
 - No Linear write occurred. Live console rendering on real pages, Linear source health in the rail and bottom bar, five-minute cache freshness, key expiration behavior, and human acceptance remain unverified.
 
 ## Sources
 
-- [Universal Inbox FR-13c and decision 125](../prd.md).
+- [Comms Terminal FR-13c and decision 125](../prd.md).
 - [Console context-source presentation](console.md#context-sources).
 - [Linear OAuth](https://linear.app/developers/oauth-2-0-authentication).
 - [Linear Customers and Customer Requests API](https://linear.app/developers/managing-customers).
@@ -156,4 +156,4 @@ Jeremy authorized local Phases 1–4 with "execute the plan", then code publicat
 - [Linear API-key permissions and team restrictions](https://linear.app/docs/api-and-webhooks).
 - [Linear filtering](https://linear.app/developers/filtering) and [pagination](https://linear.app/developers/pagination).
 - [Linear GraphQL schema](https://api.linear.app/graphql): unauthenticated `__type` metadata checked for `IssueFilter`, `CustomerNeedFilter`, `CustomerNeed`, `NullableCustomerFilter`, `StringArrayComparator`, `StringItemComparator`, and root query arguments; no workspace records queried.
-- Local request/cache seams: [`ContextSection` and `socket_context`](../../src/universal_inbox/tui.py), [`handle_linear`](../../src/universal_inbox/serve.py), and [`tana.Context`](../../src/universal_inbox/tana.py). The socket still carries email/domain keys; Linear adds service-resolved eligible names to its cache key and a local database revision to its UI key.
+- Local request/cache seams: [`ContextSection` and `socket_context`](../../src/comms_terminal/tui.py), [`handle_linear`](../../src/comms_terminal/serve.py), and [`tana.Context`](../../src/comms_terminal/tana.py). The socket still carries email/domain keys; Linear adds service-resolved eligible names to its cache key and a local database revision to its UI key.

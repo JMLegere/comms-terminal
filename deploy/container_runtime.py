@@ -15,17 +15,17 @@ import time
 import uuid
 
 
-CONFIG = "/etc/universal-inbox-deploy/config.json"
+CONFIG = "/etc/comms-terminal-deploy/config.json"
 DOCKER = "/usr/bin/docker"
 DOCKER_PREFIX = [DOCKER, "--host=unix:///var/run/docker.sock"]
 DOCKER_ENV = {"HOME": "/nonexistent", "DOCKER_CONFIG": "/nonexistent", "PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"}
 UID = GID = 10001
 HOME = "/home/inbox"
-SOCKET = "/run/universal-inbox/inbox.sock"
-STATE = "/run/universal-inbox-deploy"
-CLI = "/opt/venv/bin/universal-inbox"
-HELPER = "/opt/universal-inbox-console.py"
-OWNER = "io.universal-inbox.managed"
+SOCKET = "/run/comms-terminal/inbox.sock"
+STATE = "/run/comms-terminal-deploy"
+CLI = "/opt/venv/bin/comms-terminal"
+HELPER = "/opt/comms-terminal-console.py"
+OWNER = "io.comms-terminal.managed"
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 IMAGE = re.compile(r"sha256:[0-9a-f]{64}\Z")
 RELEASE = re.compile(r"([0-9a-f]{40})-[0-9a-f]{12}\Z")
@@ -37,15 +37,15 @@ OPTIONAL_CREDENTIALS = ("tana-oauth", "linear-token", "resend-webhook-secret", "
 ADMITTED_CREDENTIALS = CREDENTIALS + OPTIONAL_CREDENTIALS
 INSPECT = ('{"running":{{json .State.Running}},"pid":{{json .State.Pid}},'
            '"execs":{{json .ExecIDs}},"image":{{json .Image}},'
-           '"owner":{{json (index .Config.Labels "io.universal-inbox.managed")}}}')
-CONSOLE_NAME = re.compile(r"universal-inbox-console-[0-9a-f]{32}\Z")
+           '"owner":{{json (index .Config.Labels "io.comms-terminal.managed")}}}')
+CONSOLE_NAME = re.compile(r"comms-terminal-console-[0-9a-f]{32}\Z")
 CONSOLE_INSPECT = (INSPECT[:-1] + ',"name":{{json .Name}},"user":{{json .Config.User}},'
-                   '"role":{{json (index .Config.Labels "io.universal-inbox.role")}},'
-                   '"sha":{{json (index .Config.Labels "io.universal-inbox.sha")}}}')
-BARRIER = b"universal-inbox-console-update-v1\n"
+                   '"role":{{json (index .Config.Labels "io.comms-terminal.role")}},'
+                   '"sha":{{json (index .Config.Labels "io.comms-terminal.sha")}}}')
+BARRIER = b"comms-terminal-console-update-v1\n"
 CONSOLE_PROTOCOL = "console-update-v1"
 CONSOLE_PROBE = (
-    "from universal_inbox.tui import Console; "
+    "from comms_terminal.tui import Console; "
     "assert getattr(Console, 'CONSOLE_UPDATE_PROTOCOL', None) == 1; "
     "assert all(callable(getattr(Console, name, None)) for name in "
     "('_request_console_stop', '_save_console_drafts', '_stop_console')); "
@@ -93,15 +93,15 @@ def load_config(path=CONFIG):
     if not isinstance(value, dict) or any(name not in value for name in fields):
         raise RuntimeError("incomplete container configuration")
     config = {name: value[name] for name in fields}
-    if config["runtime"] != "container" or config["container_name"] != "universal-inbox":
+    if config["runtime"] != "container" or config["container_name"] != "comms-terminal":
         raise RuntimeError("invalid container runtime or name")
     for name in ("state", "releases", "current", "home", "db", "lock", "socket", "container_secrets"):
         absolute(config[name])
     state = Path(config["state"])
     if (config["releases"] != str(state / "releases") or config["current"] != str(state / "current") or
             config["lock"] != str(state / "app.lock") or config["socket"] != SOCKET or
-            config["container_secrets"] != "/run/universal-inbox-secrets" or
-            config["db"] != str(Path(config["home"]) / ".local/share/universal-inbox/inbox.db")):
+            config["container_secrets"] != "/run/comms-terminal-secrets" or
+            config["db"] != str(Path(config["home"]) / ".local/share/comms-terminal/inbox.db")):
         raise RuntimeError("container paths do not match the installed contract")
     trusted(state)
     return config
@@ -219,7 +219,7 @@ def remaining(deadline):
 
 def console_names(timeout=15):
     return docker(["container", "ls", "--all", "--filter", "label=" + OWNER + "=true",
-                   "--filter", "label=io.universal-inbox.role=console", "--format", "{{.Names}}"],
+                   "--filter", "label=io.comms-terminal.role=console", "--format", "{{.Names}}"],
                   timeout=timeout).splitlines()
 
 
@@ -373,7 +373,7 @@ def stop(config):
 
 def blocked(config):
     if os.path.lexists(Path(config["state"]) / "writers-blocked"):
-        raise WritersBlocked("Universal Inbox update recovery is pending; try again after recovery.")
+        raise WritersBlocked("Comms Terminal update recovery is pending; try again after recovery.")
 
 
 def common():
@@ -384,11 +384,11 @@ def common():
 
 def create_args(config, image):
     return ["container", "create", *common(), "--name", config["container_name"],
-            "--label", OWNER + "=true", "--label", "io.universal-inbox.sha=" + image["sha"],
+            "--label", OWNER + "=true", "--label", "io.comms-terminal.sha=" + image["sha"],
             "--log-driver=local", "--log-opt=max-size=10m", "--log-opt=max-file=3",
             "--publish", "127.0.0.1:8787:8787",
             "--mount", "type=bind,src=" + config["home"] + ",dst=" + HOME,
-            "--mount", "type=bind,src=" + str(Path(config["socket"]).parent) + ",dst=/run/universal-inbox",
+            "--mount", "type=bind,src=" + str(Path(config["socket"]).parent) + ",dst=/run/comms-terminal",
             "--mount", "type=bind,src=" + config["container_secrets"] + ",dst=/run/secrets,readonly",
             "--mount", "type=bind,src=" + config["state"] + ",dst=" + STATE + ",readonly",
             "--entrypoint", CLI, image["image"], "--socket", SOCKET,
@@ -477,19 +477,19 @@ def console(config, args, terminal=None):
         raise RuntimeError("console requires a terminal; --help is available without opening app data")
     blocked(config)
     if os.path.lexists(Path(config["state"]) / "console-update"):
-        raise WritersBlocked("Universal Inbox is updating; restart the app after the update.")
+        raise WritersBlocked("Comms Terminal is updating; restart the app after the update.")
     info = container(config)
     if info is None or not info["running"] or info["image"] != image["image"]:
         raise RuntimeError("the selected inbox backend is not running")
     require_console_protocol(image["image"])
-    name = "universal-inbox-console-" + uuid.uuid4().hex
+    name = "comms-terminal-console-" + uuid.uuid4().hex
     command = ["container", "run", "--rm", *common(), "--name", name, "--interactive", "--tty",
                "--sig-proxy=true", "--label", OWNER + "=true",
-               "--label", "io.universal-inbox.role=console", "--label", "io.universal-inbox.sha=" + image["sha"],
+               "--label", "io.comms-terminal.role=console", "--label", "io.comms-terminal.sha=" + image["sha"],
                "--log-driver=none", "--workdir", HOME,
-               "--env", "UNIVERSAL_INBOX_EXPECTED_SHA=" + image["sha"],
+               "--env", "COMMS_TERMINAL_EXPECTED_SHA=" + image["sha"],
                "--mount", "type=bind,src=" + config["home"] + ",dst=" + HOME,
-               "--mount", "type=bind,src=" + str(Path(config["socket"]).parent) + ",dst=/run/universal-inbox",
+               "--mount", "type=bind,src=" + str(Path(config["socket"]).parent) + ",dst=/run/comms-terminal",
                "--mount", "type=bind,src=" + config["container_secrets"] + ",dst=/run/secrets,readonly",
                "--mount", "type=bind,src=" + config["state"] + ",dst=" + STATE + ",readonly"]
     for key in ("TERM", "COLORTERM"):
@@ -541,7 +541,7 @@ def main(argv=None):
         return 2
     try:
         if os.geteuid() != 0:
-            raise RuntimeError("use the installed commsterminal launcher")
+            raise RuntimeError("use the installed comms-terminal launcher")
         config = load_config()
         if args[0] == "console":
             native = args[1:]
@@ -567,7 +567,7 @@ def main(argv=None):
         return 75
     except (RuntimeError, OSError, ValueError, KeyError, TypeError):
         # Never echo Docker diagnostics, credential values, config objects, or application arguments.
-        print("Universal Inbox container operation failed; check protected runtime state.", file=sys.stderr)
+        print("Comms Terminal container operation failed; check protected runtime state.", file=sys.stderr)
         return 1
 
 

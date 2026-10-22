@@ -1,14 +1,14 @@
-"""MCP sign-in for Universal Inbox (Fastmail, Tana): OAuth with dynamic client registration and PKCE.
+"""MCP sign-in for Comms Terminal (Fastmail, Tana): OAuth with dynamic client registration and PKCE.
 
-Run on the machine with the browser (Mani). It registers a public client named "Universal Inbox" once
+Run on the machine with the browser (Mani). It registers a public client named "Comms Terminal" once
 (or reuses --client-id), opens the server's consent page, catches the redirect on 127.0.0.1, exchanges
 the code, and writes {client_id, refresh_token, resource, scope} to --out (mode 0600). It then checks
 the access token against the resource and prints only the HTTP status, scope, and capability names.
 Never prints a token.
 
-    python3 scripts/oauth_mcp.py --resource jmap --out ~/.config/universal-inbox/fastmail-oauth.json
+    python3 scripts/oauth_mcp.py --resource jmap --out ~/.config/comms-terminal/fastmail-oauth.json
     python3 scripts/oauth_mcp.py --resource mcp --out …   # fallback when the plan refuses JMAP
-    python3 scripts/oauth_mcp.py --resource tana --out ~/.config/universal-inbox/tana-oauth.json
+    python3 scripts/oauth_mcp.py --resource tana --out ~/.config/comms-terminal/tana-oauth.json
 
 Tana's MCP server (decision #122) signs in the same way, against Tana's own endpoints.
 """
@@ -34,7 +34,7 @@ RESOURCES = {  # name -> (register, authorize, token endpoints), resource, scope
     "mcp": (FASTMAIL, "https://api.fastmail.com/mcp", "https://www.fastmail.com/dev/mcp offline_access"),
     "tana": (TANA, "https://home.tana.inc/mcp", "openid profile offline_access"),
 }
-USER_AGENT = "universal-inbox/0.1 (+https://github.com/JMLegere/universal-inbox)"
+USER_AGENT = "comms-terminal/0.1 (+https://github.com/JMLegere/comms-terminal)"
 
 
 def call(url, data=None, headers=None, form=False):
@@ -72,7 +72,7 @@ def catch_code(port: int, state: str) -> str:
                 desc = q.get("error_description", [""])[0]
                 self.wfile.write(f"Access not granted: {got['error'] or 'no code'} {desc}".encode())
             else:
-                self.wfile.write(b"Approved Universal Inbox; finishing in the terminal. You can close this tab.")
+                self.wfile.write(b"Approved Comms Terminal; finishing in the terminal. You can close this tab.")
 
         def log_message(self, *_):
             pass
@@ -98,13 +98,13 @@ def main(argv=None) -> int:
     client_id = a.client_id
     if not client_id:
         status, reg = call(register, {
-            "client_name": "Universal Inbox", "redirect_uris": [redirect], "token_endpoint_auth_method": "none",
+            "client_name": "Comms Terminal", "redirect_uris": [redirect], "token_endpoint_auth_method": "none",
             "grant_types": ["authorization_code", "refresh_token"], "response_types": ["code"], "scope": scope})
         if status >= 300 or "client_id" not in reg:
             raise SystemExit(f"client registration failed: HTTP {status} {reg.get('error', '')} "
                              f"{reg.get('error_description', '')}".strip())
         client_id = reg["client_id"]
-        print(f"registered client 'Universal Inbox' ({client_id})")
+        print(f"registered client 'Comms Terminal' ({client_id})")
 
     verifier = base64.urlsafe_b64encode(secrets.token_bytes(48)).rstrip(b"=").decode()
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()

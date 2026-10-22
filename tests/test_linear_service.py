@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from universal_inbox import inbox, linear, serve
+from comms_terminal import inbox, linear, serve
 
 
 class Context:

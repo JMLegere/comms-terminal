@@ -3,8 +3,8 @@
 import json
 from datetime import datetime, timedelta, timezone
 
-from universal_inbox import fastmail, inbox
-from universal_inbox import serve as _serve
+from comms_terminal import fastmail, inbox
+from comms_terminal import serve as _serve
 
 ME = "jeremy@fastmail.com"
 NOW = datetime.now(timezone.utc)

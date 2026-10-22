@@ -1,8 +1,8 @@
 """y copies the shown Thread or Draft as Markdown for a terminal agent."""
 
 from test_console import page, run, seeded
-from universal_inbox import inbox
-from universal_inbox.tui import Console, agent_text
+from comms_terminal import inbox
+from comms_terminal.tui import Console, agent_text
 
 
 def copied(app):
@@ -58,7 +58,7 @@ def test_agent_commands_read_threads_and_change_drafts_by_revision(tmp_path, cap
 
     import pytest
 
-    from universal_inbox.main import main
+    from comms_terminal.main import main
     path, ids = seeded(tmp_path)
     cli = lambda *args: main(["--db", path, "--socket", str(tmp_path / "none.sock"), *args])  # noqa: E731
 

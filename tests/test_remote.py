@@ -1,4 +1,4 @@
-"""CommsTerminal's laptop copy (remote.py, ADR 0004): the service's /call, /sync and /raw over its real socket,
+"""Comms Terminal's laptop copy (remote.py, ADR 0004): the service's /call, /sync and /raw over its real socket,
 reached through the same relay script SSH runs, with the console module's writes proxied."""
 
 import os
@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from universal_inbox import files, inbox, remote, serve, tui
+from comms_terminal import files, inbox, remote, serve, tui
 
 
 class LocalLink:

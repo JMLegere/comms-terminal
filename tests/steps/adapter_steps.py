@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from pytest_bdd import given, parsers, then, when
 
 from steps.inbox_steps import EMAIL, MAILBOX, SLACK, keep, tick
-from universal_inbox import email, health, inbox, serve, slack
+from comms_terminal import email, health, inbox, serve, slack
 
 EMAIL_SECRET, SLACK_SECRET = b"inbox-test-secret", b"slack-test-secret"
 NOW = datetime(2026, 10, 12, 12, tzinfo=timezone.utc)

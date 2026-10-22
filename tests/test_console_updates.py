@@ -11,7 +11,7 @@ import pytest
 from textual.widgets import Input, TextArea
 
 from test_console import run, seeded
-from universal_inbox import inbox, tui
+from comms_terminal import inbox, tui
 
 
 @pytest.fixture
@@ -21,7 +21,7 @@ def managed_lock(tmp_path, monkeypatch):
     fd = os.open(path, os.O_RDONLY)
     fcntl.flock(fd, fcntl.LOCK_SH)
     monkeypatch.setattr(tui, "APP_LOCK_PATH", path)
-    monkeypatch.setenv("UNIVERSAL_INBOX_APP_LOCK_FD", str(fd))
+    monkeypatch.setenv("COMMS_TERMINAL_APP_LOCK_FD", str(fd))
     yield path, fd
     try:
         os.close(fd)
@@ -135,7 +135,7 @@ def test_managed_quiescence_round_trips_open_inline_body_and_recipients(tmp_path
     db.close()
     fd = os.open(lock, os.O_RDONLY)
     fcntl.flock(fd, fcntl.LOCK_SH)
-    os.environ["UNIVERSAL_INBOX_APP_LOCK_FD"] = str(fd)
+    os.environ["COMMS_TERMINAL_APP_LOCK_FD"] = str(fd)
 
     async def reopen(app, pilot):
         app.main.open_thread(ids["ana"])
@@ -286,11 +286,11 @@ def test_invalid_environment_descriptor_is_not_adopted_or_closed(tmp_path, manag
     other.touch()
     wrong = os.open(other, os.O_RDONLY)
     try:
-        monkeypatch.setenv("UNIVERSAL_INBOX_APP_LOCK_FD", str(wrong))
+        monkeypatch.setenv("COMMS_TERMINAL_APP_LOCK_FD", str(wrong))
         with pytest.raises(RuntimeError, match="Invalid managed console"):
             tui.inherited_app_lock_fd()
         assert os.fstat(wrong).st_ino == other.stat().st_ino
-        monkeypatch.setenv("UNIVERSAL_INBOX_APP_LOCK_FD", str(valid))
+        monkeypatch.setenv("COMMS_TERMINAL_APP_LOCK_FD", str(valid))
         fcntl.flock(valid, fcntl.LOCK_UN)
         with pytest.raises(RuntimeError, match="Invalid managed console"):
             tui.inherited_app_lock_fd()

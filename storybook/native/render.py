@@ -39,7 +39,7 @@ from textual.widgets import DataTable, Input, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 from rich.markup import escape
 from rich.text import Text
-from universal_inbox import inbox, tui
+from comms_terminal import inbox, tui
 from scenes import (ADMISSION, BODY, COMPOSE, EDITED, EMAIL, EMAIL_VALUES, FROM,
                     OUTCOMES, PEOPLE, PHONE, RECIPIENTS, REFERENCES, SMS_VALUES,
                     SUBJECT, THREADS, WORK_PHONE, scene)
@@ -738,7 +738,7 @@ async def capture(entry, output):
     reference = spec.get("kind") == "reference"
     if spec.get("group") == "outcome":
         assert spec["saved"] and spec["reviewed"] == spec["frozen"], "Frozen attempt must retain original review"
-    with tempfile.TemporaryDirectory(prefix="universal-inbox-native-", dir="/tmp") as temporary, ExitStack() as stack:
+    with tempfile.TemporaryDirectory(prefix="comms-terminal-native-", dir="/tmp") as temporary, ExitStack() as stack:
         db_path = Path(temporary) / "synthetic.db"
         assert db_path.parent.parent == Path("/tmp")
         stack.enter_context(patch.object(tui, "datetime", FixedClock))
@@ -834,7 +834,7 @@ async def main():
         mocks = [capture for capture in captures if capture["id"].startswith("today--") and capture["columns"] == columns]
         assert len({capture["sha256"] for capture in mocks}) == len(today_catalog), "Every Today state must remain visually distinct"
     manifest = dict(renderer="Textual", columns=list(COLUMNS), font=dict(family="VictorMono Nerd Font", path="/fonts/" + FONT_PATH.name,
-                    sha256=hashlib.sha256(FONT_PATH.read_bytes()).hexdigest()), source=dict(tui_sha256=hashlib.sha256((ROOT / "src/universal_inbox/tui.py").read_bytes()).hexdigest(),
+                    sha256=hashlib.sha256(FONT_PATH.read_bytes()).hexdigest()), source=dict(tui_sha256=hashlib.sha256((ROOT / "src/comms_terminal/tui.py").read_bytes()).hexdigest(),
                     textual_version=TEXTUAL_VERSION), scenes=captures)
     (output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     print(f"Wrote {len(captures)} native captures and manifest", flush=True)

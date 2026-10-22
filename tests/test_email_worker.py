@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from universal_inbox import inbox, serve, slack
+from comms_terminal import inbox, serve, slack
 
 ROOT = Path(__file__).resolve().parents[1]
 pytestmark = pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
@@ -58,7 +58,7 @@ def test_worker_request_is_accepted_and_ingested(hook, tmp_path):
 
 def test_worker_with_the_wrong_secret_is_rejected(hook, tmp_path):
     url, _, db = hook
-    assert run_worker(url, "b" * 64, tmp_path) == "rejected: universal-inbox hook returned HTTP 401"
+    assert run_worker(url, "b" * 64, tmp_path) == "rejected: comms-terminal hook returned HTTP 401"
     assert db.execute("SELECT count(*) FROM threads").fetchone()[0] == 0
 
 
@@ -83,7 +83,7 @@ def test_dual_delivery_availability_and_signed_http_boundaries():
 
 def test_worker_routes_preserve_legacy_hooks_and_add_resend():
     config = tomllib.loads((ROOT / "deploy/email-worker/wrangler.toml").read_text())
-    assert config["name"] == "universal-inbox-email"
+    assert config["name"] == "comms-terminal-email"
     assert config["routes"] == [
         {"pattern": f"https://hooks.agentmaple.com/hooks/{name}*", "zone_name": "agentmaple.com"}
         for name in ("email", "slack", "quo", "resend")

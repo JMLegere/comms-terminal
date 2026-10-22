@@ -15,7 +15,7 @@
 
 ### Seed (confirmed 2026-10-15)
 
-- Topic: replacing Lemlist's cold-outreach sequencing. One candidate is Attio as the step engine, with each due step becoming a Draft in Universal Inbox for review and send. The topic covers full Lemlist replacement: sequences, channels, sending, and the daily step queue.
+- Topic: replacing Lemlist's cold-outreach sequencing. One candidate is Attio as the step engine, with each due step becoming a Draft in Comms Terminal for review and send. The topic covers full Lemlist replacement: sequences, channels, sending, and the daily step queue.
 - Trigger, in Jeremy's words: "lemlist had a sequence for cold outreach. can we explore setting up sequencing in attio and using attio steps to create drafts in universal inbox?"
 - Jeremy widened the seed from "Attio steps create Inbox Drafts" to "Lemlist replacement" at the seed gate.
 - Early solution ideas (Phase 3 candidates, not decisions): Attio Sequences or Workflows as the step engine; Attio steps creating Inbox Drafts.
@@ -29,13 +29,13 @@
 ### Attio workspace (live, 2026-10-15)
 
 - Workspace "Agent Maple", Jeremy is admin. Objects: People, Companies, Deals. Lists: Fundraising Deals, Revenue Deals, Paying Customers. No prospecting list or sequence exists yet.
-- Universal Inbox reads Attio read-only as a Context source (FR-13b, `src/universal_inbox/attio.py`) and imports recently touched Attio People.
+- Comms Terminal reads Attio read-only as a Context source (FR-13b, `src/comms_terminal/attio.py`) and imports recently touched Attio People.
 - Attio plan tier is unknown (Sequences need Pro).
 
-### Universal Inbox today (repo, 2026-10-15)
+### Comms Terminal today (repo, 2026-10-15)
 
 - Persistent email/SMS/Slack Drafts exist; a Draft can be sent as a new Thread (`1b440d0`). Jeremy sends from the console.
-- Terminal agent commands create and edit Drafts and never send: `universal-inbox draft new --connection ID --to --subject --body` (`src/universal_inbox/agent.py`, `e402167`).
+- Terminal agent commands create and edit Drafts and never send: `comms-terminal draft new --connection ID --to --subject --body` (`src/comms_terminal/agent.py`, `e402167`).
 - Connections: Gmail `jeremy@agentmaple.com` (sends through Resend), Fastmail `legere@fastmail.com`, Slack, Quo `+15068324154`.
 - The service already has public HTTPS ingress for webhooks (ADR 0002; Quo call webhooks in `e53ec04`).
 - Constraint from the composition discovery: Resend and Fastmail restrict cold or unsolicited mail, so the current email send path is not presumed permitted for cold outreach (`.agents/prd/2026-10-13-new-thread-composition.md` B1/L12). Non-SMS spend cap is $10/month (`docs/prd.md`).
@@ -109,7 +109,7 @@ Jeremy named the Sequence: "its the secret sequence that can be found in outline
 
 Jeremy runs founder-led cold outbound alone, to construction general-contractor leadership. Since giving up the Lemlist seat in June, he has had nothing that tells him which Secret Sequence Step is due for which Lead today, prepares it, and records it as done. The Secret Sequence is 15 working days of manual emails, call blocks, LinkedIn touches, and a letter.
 
-Cause: Leads live in Attio, but Attio Sequences only auto-send email and Attio says not to use them for cold outreach. Universal Inbox drafts and sends but knows nothing about Sequences. Lemlist costs too much for one seat.
+Cause: Leads live in Attio, but Attio Sequences only auto-send email and Attio says not to use them for cold outreach. Comms Terminal drafts and sends but knows nothing about Sequences. Lemlist costs too much for one seat.
 
 Consequence: cold outbound has stopped. No Lemlist task was completed after 2026-06-08, and outbound pipeline is zero against an April baseline of 25 new Leads per week.
 
@@ -157,7 +157,7 @@ M5 (Step history in Attio) was dropped by Jeremy.
 - **Step queue**: today's Due Steps across all Leads.
 - **Call block**: a call Step of up to two dials; it stays open after a missed first dial, and its voicemail rules depend on the Step.
 - **Paused / Finished**: Enrollment states. Superseded "Exit" (2026-10-16); canonical definitions are in `GLOSSARY.md`.
-- **Draft**: a saved, unsent Universal Inbox message that Jeremy reviews and sends.
+- **Draft**: a saved, unsent Comms Terminal message that Jeremy reviews and sends.
 
 ## Options
 
@@ -168,14 +168,14 @@ Load per month at April volume: about 108 new Leads × 13 Steps ≈ 1,400 Steps,
 - **Core idea:** buy back one seat of Lemlist (Email plan, list price $69/month) or Apollo (Basic, about $49–59/user/month; third-party figures, unverified). Configure the Secret Sequence with manual email, call, and LinkedIn task Steps. Attio stays the lead record through sync.
 - **Measures:** M1–M4 likely, from mature products. Fails M6. M7 depends on the tool sending through Jeremy's Google mailbox; Lemlist did this before.
 - **Assumptions:** the cost is acceptable after all; Quo calls integrate or are logged by hand.
-- **Risks:** a second inbox and Step queue outside Universal Inbox; the same cost that caused the drop.
+- **Risks:** a second inbox and Step queue outside Comms Terminal; the same cost that caused the drop.
 - **Cost/effort:** about $600–830/year; setup in hours.
 - **Rules out:** a single Step queue in Inbox.
 - **Prior art:** the Lemlist history itself (169 email tasks, 200 call tasks).
 
 ### B — Attio Workflows as Step engine; Inbox receives email Drafts (Jeremy's original idea)
 
-- **Core idea:** add a Lead to an Attio "Prospecting" list to enroll it. Attio Workflows with "Delay until" fire each Step. An email Step sends an HTTP request to Universal Inbox, which creates a Draft (the day-9 email as a reply on the first Thread). Call, LinkedIn, and letter Steps become Attio Tasks. Exit: Inbox writes a status to the Attio list entry, and the workflows filter on it.
+- **Core idea:** add a Lead to an Attio "Prospecting" list to enroll it. Attio Workflows with "Delay until" fire each Step. An email Step sends an HTTP request to Comms Terminal, which creates a Draft (the day-9 email as a reply on the first Thread). Call, LinkedIn, and letter Steps become Attio Tasks. Exit: Inbox writes a status to the Attio list entry, and the workflows filter on it.
 - **Measures:** M1, M3 plausible. M2 depends on workflow reliability and two queues (Attio Tasks plus Inbox Drafts). M4 needs a new Attio write path from Inbox. M6 at risk: about 1,400 Steps plus status writes ≈ 1,600+ credits/month, over Plus (1,500) and far over Free (250); the plan tier is unknown.
 - **Assumptions:** Attio's "Delay until" handles business days and a Monday start; HTTP blocks reach Inbox's public ingress; the plan has enough credits.
 - **Risks:** Call block state and the day-12 "call at the promised time" do not fit the Task model; Attio Task content cannot be edited; no sequence visibility in Inbox; Inbox becomes an Attio writer.
@@ -192,7 +192,7 @@ Load per month at April volume: about 108 new Leads × 13 Steps ≈ 1,400 Steps,
 - **Rules out:** Inbox involvement in email Steps.
 - **Early concern:** conflicts with two constraints; listed for completeness.
 
-### D — Universal Inbox owns Sequences (Jeremy's Phase 2 idea)
+### D — Comms Terminal owns Sequences (Jeremy's Phase 2 idea)
 
 - **Core idea:** Inbox stores the Sequence definition, Enrollments, and Step state. Enrollment pulls People from an Attio list or a selected Person (read-only, using the existing token). A daily scheduler fills a Step queue page in the console. Email Steps become Drafts (the day-9 email as a reply on the day-1 Thread). Call Steps open a Quo call, keep Call block state, and match Quo call webhooks to the Step. LinkedIn and letter Steps are check-off Steps. Any inbound Activity from the Lead's Identities exits the Enrollment, because Inbox already sees their email, SMS, and calls.
 - **Measures:** M1–M4 directly in one queue; M6 build-only cost; M7 still needs a permitted send path.
@@ -203,7 +203,7 @@ Load per month at April volume: about 108 new Leads × 13 Steps ≈ 1,400 Steps,
 
 ### E — Agent-run Sequence with derived state (not proposed by Jeremy)
 
-- **Core idea:** no Sequence engine. The Secret Sequence stays a playbook (Outline). An Attio list entry date marks Enrollment. Each morning a terminal agent reads the list and each Lead's Inbox history (`universal-inbox thread`, Drafts, calls), derives the Due Steps, creates email Drafts with `universal-inbox draft new`, and writes a call/LinkedIn/letter checklist. Replies are seen in Inbox history.
+- **Core idea:** no Sequence engine. The Secret Sequence stays a playbook (Outline). An Attio list entry date marks Enrollment. Each morning a terminal agent reads the list and each Lead's Inbox history (`comms-terminal thread`, Drafts, calls), derives the Due Steps, creates email Drafts with `comms-terminal draft new`, and writes a call/LinkedIn/letter checklist. Replies are seen in Inbox history.
 - **Measures:** M3 strong (the agent drafts with context); M6 near zero; M1 plausible. M2 weak: derived state is non-deterministic, and a skipped run or misread history drops Steps. M4 depends on the agent reading every channel.
 - **Assumptions:** history is complete enough to derive the Step; agent runs daily without fail.
 - **Risks:** silent misses, the same trust failure Jeremy had with plugins; no single checkable record of Step state.
@@ -226,12 +226,12 @@ Load per month at April volume: about 108 new Leads × 13 Steps ≈ 1,400 Steps,
 ```mermaid
 flowchart LR
   subgraph B["B: Attio engine"]
-    BA["Attio list + Workflows"] -->|"email Step (HTTP)"| BI["Universal Inbox Drafts"]
+    BA["Attio list + Workflows"] -->|"email Step (HTTP)"| BI["Comms Terminal Drafts"]
     BA -->|"call/LinkedIn/letter"| BT["Attio Tasks"]
     BI -->|"exit status"| BA
   end
   subgraph D["D: Inbox engine"]
-    DA["Attio list (read)"] --> DI["Universal Inbox Sequences + Step queue"]
+    DA["Attio list (read)"] --> DI["Comms Terminal Sequences + Step queue"]
     DI --> DQ["Quo calls"]
   end
   subgraph E["E: Agent derives"]
@@ -252,7 +252,7 @@ Added 2026-10-16 at Jeremy's request: the smallest set of questions whose answer
 | DQ3 | Must Step history live in Attio? | Yes: B favored. No: D and E favored. | **No** — M5 dropped (Phase 2). B weakened. |
 | DQ4 | Where do you work the daily Step queue? | One place, Inbox: D or E. A split between Attio Tasks and Inbox Drafts is acceptable: B stays in. | **One queue in Inbox** — D or E. |
 | DQ5 | Must every Due Step be guaranteed, with stored and checkable state? | Yes: D (or B). Best effort is fine: E (cheapest). | **Guaranteed, stored state** — D. |
-| DQ6 | Is it acceptable for Universal Inbox to grow from an inbox into sales engagement? | Yes: D. No: E (agent outside Inbox) or B. | **Yes, build into Inbox** — D. |
+| DQ6 | Is it acceptable for Comms Terminal to grow from an inbox into sales engagement? | Yes: D. No: E (agent outside Inbox) or B. | **Yes, build into Inbox** — D. |
 | DQ7 | Will any email Step auto-send without review? | Deferred by Jeremy. If yes later: D adds auto-send to its sender; it does not change the direction among D/E/B, but it raises the send-path bar (V1). | Deferred; non-deciding for D vs E |
 
 Result: DQ1–DQ6 leave only D. E's agent drafting survives as an optional content helper inside D. An answer that would change this: new spend (DQ1), a split queue (DQ4), best-effort reliability (DQ5), or a lean Inbox (DQ6).
@@ -261,7 +261,7 @@ Cross-cutting, not deciding: the cold send path (V1) applies to every remaining 
 
 ## Decision (approved 2026-10-16)
 
-**Recommended: D — Universal Inbox owns Sequences**, with E's agent drafting kept as an optional content helper. The agent fills Draft bodies through the existing `universal-inbox draft` commands, and Inbox alone holds Step state.
+**Recommended: D — Comms Terminal owns Sequences**, with E's agent drafting kept as an optional content helper. The agent fills Draft bodies through the existing `comms-terminal draft` commands, and Inbox alone holds Step state.
 
 Reasons:
 - M2 and M4 need a stored, checkable record of each Step and a view of every inbound reply. Inbox already ingests email, SMS, and Quo calls by Identity and already holds Drafts and Threads. No other option has both.
@@ -319,7 +319,7 @@ Accepted trade-offs:
 
 ```mermaid
 flowchart LR
-  J["Jeremy"] -->|"enrolls Leads, works Step queue, reviews and sends"| S["Universal Inbox with Sequences"]
+  J["Jeremy"] -->|"enrolls Leads, works Step queue, reviews and sends"| S["Comms Terminal with Sequences"]
   AG["Terminal agent (optional)"] -->|"fills Draft content"| S
   S -->|"reads Leads (read-only)"| AT["Attio"]
   S -->|"permitted cold email"| R["Lead mailboxes"]
@@ -389,7 +389,7 @@ Jeremy confirmed this shared understanding after a grilling session. Terms are i
 - **Pause**: any inbound message or call from the Person, or a connected outbound call, pauses the Enrollment and puts the Thread in Todo. Sending a paused Enrollment's existing Drafts is refused. On resume, the next Step is due immediately.
 - **Finish**: Completed (set automatically when the last Step is done), Unsubscribed (blocks every Sequence), or Canceled. (Renamed from Opted out / Other at the PRD gates, 2026-10-16.) Finishing deletes the Enrollment's unsent Step Drafts; `z` undoes.
 - **Steps page**: a rail entry showing the count of Due Steps.
-- **Agent commands**: `universal-inbox steps` lists Due Steps as Markdown with Person context, and `universal-inbox enroll PERSON SEQUENCE` enrolls. Neither sends, completes, or finishes anything. The existing `draft` commands edit Step Drafts.
+- **Agent commands**: `comms-terminal steps` lists Due Steps as Markdown with Person context, and `comms-terminal enroll PERSON SEQUENCE` enrolls. Neither sends, completes, or finishes anything. The existing `draft` commands edit Step Drafts.
 - **Send gate**: removed at the PRD gates (2026-10-16): "out of scope and unneccessarily complex. all contacts are eligible for email".
 - **Deferred**: build slices (order and boundaries), the cold send path (V1), and auto-send.
 
@@ -426,7 +426,7 @@ Jeremy confirmed this shared understanding after a grilling session. Terms are i
 
 - Lemlist MCP (`get_team_info`, `get_campaigns`: 402; `get_user_channels`), 2026-10-15. Old campaigns unreadable.
 - Attio MCP (`whoami`, `list-lists`, `list-objects`), 2026-10-15.
-- Repository: `src/universal_inbox/agent.py`, `email.py`, `docs/adr/0002-plain-integration-architecture.md`, `docs/prd.md`, `.agents/discovery/2026-10-12-new-thread-composition.md`, `.agents/prd/2026-10-13-new-thread-composition.md`.
+- Repository: `src/comms_terminal/agent.py`, `email.py`, `docs/adr/0002-plain-integration-architecture.md`, `docs/prd.md`, `.agents/discovery/2026-10-12-new-thread-composition.md`, `.agents/prd/2026-10-13-new-thread-composition.md`.
 - Memory: `~/.memory/2026-03-10-[pattern]-jeremy-sales-approach.md`, `2026-04-23-[pref]-adhd-workday-structure.md`, `2026-03-16-[pref]-never-send-messages-on-behalf.md`. QMD search failed; files were searched directly.
 - Outline: "Top of Funnel Sequencing" (`9da6ae59-4185-4dec-b824-d3e974580a97`), 2026-10-16.
 - Lemlist MCP `get_tasks` and `get_inbox_conversations` (sentOnly), 2026-10-16.

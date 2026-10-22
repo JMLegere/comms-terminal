@@ -1,0 +1,42 @@
+# Comms Terminal service: public hooks (/hooks/email, /hooks/slack), the console's reply socket, and wake().
+# Install and credentials: docs/runbook.md. Root-managed system unit that runs as jerry (docs/prd.md §4).
+
+[Unit]
+Description=Comms Terminal (hooks, reply socket, wake)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=jerry
+Group=jerry
+Environment=COMMS_TERMINAL_DB=/home/jerry/.local/share/comms-terminal/inbox.db
+ExecStart=/home/jerry/.local/bin/comms-terminal --socket /run/comms-terminal/inbox.sock serve --host 127.0.0.1 --port 8787 --files-host 192.168.0.107
+Restart=on-failure
+RestartSec=5
+
+# The reply socket lives here; the service creates it 0600 for jerry (NFR-4).
+RuntimeDirectory=comms-terminal
+RuntimeDirectoryMode=0700
+
+# Secrets, decrypted by systemd into $CREDENTIALS_DIRECTORY; never in the environment or on disk in clear (NFR-5).
+# Slack's two secrets are added by the drop-in deploy/comms-terminal.service.d/slack.conf once Slack is
+# connected; until then /hooks/slack answers 503 and Slack replies are refused.
+LoadCredentialEncrypted=email-hook-secret:/etc/credstore.encrypted/comms-terminal.email-hook-secret
+LoadCredentialEncrypted=resend-api-key:/etc/credstore.encrypted/comms-terminal.resend-api-key
+
+# Hardening: read-only system and home, except the database directory.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/jerry/.local/share/comms-terminal
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

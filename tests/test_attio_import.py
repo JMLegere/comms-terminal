@@ -2,7 +2,7 @@
 
 from datetime import datetime, timezone
 
-from universal_inbox import attio, inbox
+from comms_terminal import attio, inbox
 from test_composition import AT, PHONE, SELF, db, incoming  # noqa: F401  (db is a fixture)
 
 
@@ -73,7 +73,7 @@ def test_recent_people_keeps_interactions_creations_and_edits_since_the_cutoff()
 
 def test_attio_people_route():
     from types import SimpleNamespace
-    from universal_inbox import serve
+    from comms_terminal import serve
     assert serve.handle_attio_people(b'{"days": 89}', None)[0] == 503
     assert serve.handle_attio_people(b'{}', SimpleNamespace(client=None))[0] == 400
     context = SimpleNamespace(client=FakeAttio({"people": [], "companies": []}))

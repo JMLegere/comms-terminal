@@ -5,9 +5,9 @@ from rich.text import Text
 from textual.widgets import DataTable, Static
 
 from test_console import run, seeded
-from universal_inbox import inbox
-from universal_inbox.icons import ICON
-from universal_inbox.tui import Console, ThreadsPage
+from comms_terminal import inbox
+from comms_terminal.icons import ICON
+from comms_terminal.tui import Console, ThreadsPage
 
 
 EXPECTED = {

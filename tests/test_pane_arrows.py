@@ -3,8 +3,8 @@
 from textual.widgets import Input, TextArea
 
 from test_console import page, run, seeded
-from universal_inbox import inbox
-from universal_inbox.tui import Ask, CaseCard, Console, ReplyBox, ThreadsPage
+from comms_terminal import inbox
+from comms_terminal.tui import Ask, CaseCard, Console, ReplyBox, ThreadsPage
 
 
 async def check_editor_arrows(app, pilot, field):

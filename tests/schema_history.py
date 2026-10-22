@@ -1,6 +1,6 @@
 """Fake an older database from a fresh one: undo the migrations after `version`, newest first."""
 
-from universal_inbox import inbox
+from comms_terminal import inbox
 
 UNDO = {
     24: "DROP TABLE events; DROP TABLE event_provider;",

@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from universal_inbox import files, inbox
+from comms_terminal import files, inbox
 
 
 def test_activities_are_append_only_except_content_clearing_after_delete():

@@ -3,7 +3,7 @@
 from datetime import datetime, timezone
 from email.message import EmailMessage
 
-from universal_inbox import email as em, files, inbox, render
+from comms_terminal import email as em, files, inbox, render
 
 
 def html_mail(html: str, subject="Hello", text=None, **parts) -> bytes:
@@ -133,7 +133,7 @@ def test_reply_quotes_the_last_inbound_message_gmail_style():
 
 
 def test_older_messages_collapse_after_jeremys_last_reply():
-    from universal_inbox.tui import default_open
+    from comms_terminal.tui import default_open
     msgs = [{"who": w} for w in ("Ana", "You", "Ana", "You", "Ana", "Bo")]
     assert default_open(msgs) == {4, 5}
     assert default_open([{"who": "You"}]) == {0}

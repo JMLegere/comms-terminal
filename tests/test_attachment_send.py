@@ -6,7 +6,7 @@ import urllib.error
 
 import pytest
 
-from universal_inbox import email, fastmail, files, inbox, platforms, quo, serve, slack
+from comms_terminal import email, fastmail, files, inbox, platforms, quo, serve, slack
 from test_composition import AT, SELF, db, envelope, incoming  # noqa: F401  (db is a fixture)
 
 PDF = b"%PDF-1.4 contract"

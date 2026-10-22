@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from universal_inbox import email, files, inbox
+from comms_terminal import email, files, inbox
 from test_email_reconcile import SCHEMA3
 from test_schema_equivalence import shape
 

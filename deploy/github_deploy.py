@@ -27,8 +27,8 @@ import uuid
 
 
 REPOSITORY_ID = 1414867332
-REPOSITORY = "JMLegere/universal-inbox"
-GIT_URL = "https://github.com/JMLegere/universal-inbox.git"
+REPOSITORY = "JMLegere/comms-terminal"
+GIT_URL = "https://github.com/JMLegere/comms-terminal.git"
 REF = "refs/heads/main"
 # https://docs.github.com/en/webhooks/webhook-events-and-payloads#payload-cap
 MAX_BODY = 25 * 1024 * 1024
@@ -38,29 +38,29 @@ IMAGE = re.compile(r"sha256:[0-9a-f]{64}\Z")
 STAMP = re.compile(r"[0-9]{1,12} [0-9a-f]{7,40}\Z")
 RELEASE = re.compile(r"[0-9a-f]{40}-[0-9a-f]{12}\Z")
 DOCKER = "/usr/bin/docker"
-DOCKERFILE = "/opt/universal-inbox-deploy/Dockerfile"
-CONTAINER_RUNTIME = "/opt/universal-inbox-deploy/container_runtime.py"
-MANAGED_LABEL = "io.universal-inbox.managed=true"
-CHECK_LABEL = "io.universal-inbox.migration-check=true"
+DOCKERFILE = "/opt/comms-terminal-deploy/Dockerfile"
+CONTAINER_RUNTIME = "/opt/comms-terminal-deploy/container_runtime.py"
+MANAGED_LABEL = "io.comms-terminal.managed=true"
+CHECK_LABEL = "io.comms-terminal.migration-check=true"
 
 
 @dataclass
 class Config:
-    state: str = "/var/lib/universal-inbox-deploy"
-    repo: str = "/home/jerry/.local/opt/universal-inbox-deploy-repo"
-    releases: str = "/home/jerry/.local/opt/universal-inbox-releases"
-    current: str = "/home/jerry/.local/opt/universal-inbox-current"
-    db: str = "/home/jerry/.local/share/universal-inbox/inbox.db"
-    lock: str = "/var/lib/universal-inbox-deploy/app.lock"
-    uv: str = "/opt/universal-inbox-deploy/uv"
+    state: str = "/var/lib/comms-terminal-deploy"
+    repo: str = "/home/jerry/.local/opt/comms-terminal-deploy-repo"
+    releases: str = "/home/jerry/.local/opt/comms-terminal-releases"
+    current: str = "/home/jerry/.local/opt/comms-terminal-current"
+    db: str = "/home/jerry/.local/share/comms-terminal/inbox.db"
+    lock: str = "/var/lib/comms-terminal-deploy/app.lock"
+    uv: str = "/opt/comms-terminal-deploy/uv"
     user: str = "jerry"
     home: str = "/home/jerry"
-    service: str = "universal-inbox.service"
-    socket: str = "/run/universal-inbox/inbox.sock"
+    service: str = "comms-terminal.service"
+    socket: str = "/run/comms-terminal/inbox.sock"
     bootstrap_sha: str = ""
     runtime: str = "native"
-    container_name: str = "universal-inbox"
-    container_secrets: str = "/run/universal-inbox-secrets"
+    container_name: str = "comms-terminal"
+    container_secrets: str = "/run/comms-terminal-secrets"
 
     @classmethod
     def load(cls, path):
@@ -77,14 +77,14 @@ class Config:
             raise ValueError("invalid deployment runtime")
         if config.runtime == "container":
             state, home = Path(config.state), Path(config.home)
-            if (config.container_name != "universal-inbox"
+            if (config.container_name != "comms-terminal"
                     or not Path(config.container_secrets).is_absolute()
                     or Path(config.releases) != state / "releases"
                     or Path(config.current) != state / "current"
                     or Path(config.lock) != state / "app.lock"
                     or Path(config.repo).parent != state / "builds"
-                    or Path(config.db) != home / ".local/share/universal-inbox/inbox.db"
-                    or config.socket != "/run/universal-inbox/inbox.sock"
+                    or Path(config.db) != home / ".local/share/comms-terminal/inbox.db"
+                    or config.socket != "/run/comms-terminal/inbox.sock"
                     or any("," in str(value) for value in (state, home, config.container_secrets))):
                 raise ValueError("invalid container deployment layout")
         return config
@@ -303,7 +303,7 @@ def restore(checkpoint, database):
 
 CHECK_DATABASE = """
 import sys
-from universal_inbox import inbox
+from comms_terminal import inbox
 def check_database(path):
     db = inbox.connect(path)
     try:
@@ -454,7 +454,7 @@ class Updater:
         self.as_user([c.uv, "sync", "--frozen", "--no-dev", "--no-editable", "--python", "/usr/bin/python3"],
                      cwd=release, extra={"UV_PROJECT_ENVIRONMENT": str(environment)}, timeout=900)
         self.as_user([c.uv, "pip", "check", "--python", environment / "bin/python"])
-        self.as_user([environment / "bin/universal-inbox", "--help"])
+        self.as_user([environment / "bin/comms-terminal", "--help"])
         # Every operation on the jerry-owned worktree (including backup and cleanup) stays unprivileged.
         disposable = release / ".migration-check.db"
         self.as_user([environment / "bin/python", "-c", CHECK_SNAPSHOT, c.db, disposable])
@@ -716,7 +716,7 @@ class ContainerUpdater(Updater):
         if not self.container_state(self.check_name):
             return
         label = self.command([DOCKER, "container", "inspect", "--format",
-                              '{{index .Config.Labels "io.universal-inbox.migration-check"}}',
+                              '{{index .Config.Labels "io.comms-terminal.migration-check"}}',
                               self.check_name])
         if label != "true":
             raise DeploymentError("unmanaged migration-check container")
@@ -803,11 +803,11 @@ class ContainerUpdater(Updater):
         self.git("--git-dir=" + self.config.repo, "worktree", "add", "--detach", str(worktree), sha)
         # The statusline's version; the build context has no .git to read it from (build_hook.py).
         stamp = self.git("--git-dir=" + self.config.repo, "log", "-1", "--format=%ct %h", sha).strip()
-        build_arg = ["--build-arg", "UNIVERSAL_INBOX_BUILD=" + stamp] if STAMP.fullmatch(stamp) else []
+        build_arg = ["--build-arg", "COMMS_TERMINAL_BUILD=" + stamp] if STAMP.fullmatch(stamp) else []
         with tempfile.TemporaryDirectory(prefix="image-", dir=self.status) as output:
             iidfile = Path(output) / "image.id"
             self.command([DOCKER, "build", "--file", DOCKERFILE, "--iidfile", str(iidfile), *build_arg,
-                          "--label", MANAGED_LABEL, "--label", "io.universal-inbox.sha=" + sha,
+                          "--label", MANAGED_LABEL, "--label", "io.comms-terminal.sha=" + sha,
                           str(worktree)], timeout=900)
             image = iidfile.read_text().strip()
             if not IMAGE.fullmatch(image):
@@ -816,7 +816,7 @@ class ContainerUpdater(Updater):
         release.mkdir(mode=0o755)
         atomic_json(release / "image.json", {"image": image, "sha": sha})
         sync_directory(release.parent)
-        self.image_command(image, "/opt/venv/bin/universal-inbox", ["--help"])
+        self.image_command(image, "/opt/venv/bin/comms-terminal", ["--help"])
         with self.check_directory() as directory:
             disposable = directory / "inbox.db"
             snapshot(self.config.db, disposable)
@@ -907,7 +907,7 @@ def update(config):
                     updater.save(record, "failed-post-writer")
                 atomic_json(updater.status / "last-failure.json", {**record, "outcome": "failed"})
                 # Only a fixed error label reaches logs. Detailed phase/checkpoint paths stay private.
-                print("universal-inbox update failed; inspect private deployment status", file=sys.stderr)
+                print("comms-terminal update failed; inspect private deployment status", file=sys.stderr)
             # Terminal failures are consumed (no PathExists spin). Process death leaves recoverable work.
             queue.complete()
     return int(failed)
@@ -916,7 +916,7 @@ def update(config):
 def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("command", choices=("serve", "update"))
-    parser.add_argument("--config", default="/etc/universal-inbox-deploy/config.json")
+    parser.add_argument("--config", default="/etc/comms-terminal-deploy/config.json")
     args = parser.parse_args(argv)
     config = Config.load(args.config)
     if args.command == "update":

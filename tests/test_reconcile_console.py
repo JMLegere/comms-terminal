@@ -5,8 +5,8 @@ from datetime import datetime, timedelta, timezone
 
 from textual.widgets import Input, OptionList, TextArea
 
-from universal_inbox import inbox
-from universal_inbox.tui import CaseCard, Console, Pick, ReplyBox
+from comms_terminal import inbox
+from comms_terminal.tui import CaseCard, Console, Pick, ReplyBox
 
 
 FIRST = "<first@example.test>"

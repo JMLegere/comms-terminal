@@ -2,7 +2,7 @@
 
 from datetime import datetime, timezone
 
-from universal_inbox import inbox, render, slack
+from comms_terminal import inbox, render, slack
 
 ME = "U0ME"
 

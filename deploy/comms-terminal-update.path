@@ -1,0 +1,10 @@
+[Unit]
+Description=Watch accepted Comms Terminal deployment notifications
+
+[Path]
+PathExists=/var/lib/comms-terminal-deploy/queue/pending
+PathExists=/var/lib/comms-terminal-deploy/queue/in-progress
+Unit=comms-terminal-update.service
+
+[Install]
+WantedBy=multi-user.target

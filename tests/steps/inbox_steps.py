@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 from pytest_bdd import given, parsers, then, when
 
-from universal_inbox import inbox
+from comms_terminal import inbox
 
 EMAIL, SLACK = 1, 2
 MAILBOX = "jeremy@agentmaple.com"

@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from universal_inbox import email, files, inbox
+from comms_terminal import email, files, inbox
 
 AT = datetime(2026, 10, 12, 10, tzinfo=timezone.utc)
 SELF = "me@example.test"

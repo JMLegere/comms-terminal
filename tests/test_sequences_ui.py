@@ -7,8 +7,8 @@ import pytest
 from textual.widgets import DataTable, Input, OptionList, TextArea
 
 from test_console import run, seeded
-from universal_inbox import inbox, sequences as sq
-from universal_inbox.tui import Ask, Console, PeoplePage, Pick, PersonPage, SequencesPage, StepEditor, TasksPage
+from comms_terminal import inbox, sequences as sq
+from comms_terminal.tui import Ask, Console, PeoplePage, Pick, PersonPage, SequencesPage, StepEditor, TasksPage
 
 
 @pytest.fixture(autouse=True)
@@ -89,7 +89,7 @@ def test_sequences_page_makes_a_sequence_edits_a_step_and_archives(tmp_path):
 
 
 def test_steps_selection_survives_a_refresh_and_an_unchanged_editor_never_saves(tmp_path):
-    """A refresh (a service write, a CommsTerminal snapshot) keeps the selected Step and its typed text; leaving an
+    """A refresh (a service write, a Comms Terminal snapshot) keeps the selected Step and its typed text; leaving an
     editor with no edits writes nothing (.agents/issues/2026-10-19-steps-cursor-jumps-back-to-step-1.md)."""
     path, _ = seeded(tmp_path)
     db, s = calls(path)
@@ -270,7 +270,7 @@ def test_tasks_filter_menu_and_copy_for_agent(tmp_path, monkeypatch):
     sq.enroll(db, people[0], s)
     sq.enroll(db, people[1], other)
     copied, seen = [], {}
-    import universal_inbox.tui as tui
+    import comms_terminal.tui as tui
     monkeypatch.setattr(tui, "copy_for_agent", lambda app, text, what: copied.append(text))
 
     async def scenario(app, pilot):

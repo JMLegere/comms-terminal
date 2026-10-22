@@ -1,4 +1,4 @@
-# Discovery: phone calls in Universal Inbox
+# Discovery: phone calls in Comms Terminal
 
 Started as "a phone dialer in the inbox"; this file was `2026-10-15-phone-dialer.md` until the topic narrowed to Phone calls.
 
@@ -17,12 +17,12 @@ Started as "a phone dialer in the inbox"; this file was `2026-10-15-phone-dialer
 
 ### Seed (confirmed 2026-10-15)
 
-- Topic: phone calls in Universal Inbox on the Work number (Quo).
+- Topic: phone calls in Comms Terminal on the Work number (Quo).
 - Need, in Jeremy's words: "id like to add a phone dialer into the inbox".
 - Known:
   - The SMS discovery (`2026-10-12-sms.md`) put calls and voicemail out of scope and chose Quo only for the Work number, (506) 832-4154.
   - The console is a Textual TUI that Jeremy runs over SSH on Workbox (`docs/design/console.md` §1), so the terminal session has no local microphone or speaker.
-  - Quo already delivers Texts through `/hooks/quo` (`src/universal_inbox/quo.py`).
+  - Quo already delivers Texts through `/hooks/quo` (`src/comms_terminal/quo.py`).
 - Early solution idea (Phase 3 candidate): a dialer inside the inbox.
 
 ### Findings
@@ -60,12 +60,12 @@ Started as "a phone dialer in the inbox"; this file was `2026-10-15-phone-dialer
 #### From the repository, for call Activity (2026-10-15)
 
 - The live Quo webhook (ID `43687`) is on the new webhook API, scoped to `PN2ppcGyMM`, and subscribes only to message events (`docs/runbook.md` §3b). Call events need adding to it.
-- Activity `kind` is limited to `MESSAGE`, `EDIT`, `DELETE` by a CHECK constraint (`src/universal_inbox/schema.sql`); a call kind needs a schema migration.
+- Activity `kind` is limited to `MESSAGE`, `EDIT`, `DELETE` by a CHECK constraint (`src/comms_terminal/schema.sql`); a call kind needs a schema migration.
 - An SMS Channel is the peer's number, threaded with a 7-day quiet gap (`GLOSSARY.md` Thread), so a call on the same number would join that Thread.
 
 #### From the repository (2026-10-15)
 
-- Console links already open in Mani's browser with ctrl+shift+click through Ghostty (`src/universal_inbox/tui.py`, help row "open a link in your browser"; `o` shows a Thread's native link).
+- Console links already open in Mani's browser with ctrl+shift+click through Ghostty (`src/comms_terminal/tui.py`, help row "open a link in your browser"; `o` shows a Thread's native link).
 - People hold phone numbers as Identities (`GLOSSARY.md`: Person, Identity).
 
 #### From public research (2026-10-15, sub-agent; sources in Sources)
@@ -179,7 +179,7 @@ Strategies for getting Quo calls into Threads. All of them stay inside the appro
 flowchart LR
   J([Jeremy]) -- calls in --> Q[Quo apps]
   C([Caller]) -- calls --> Q
-  Q -- "B, D: call webhooks" --> UI[Universal Inbox]
+  Q -- "B, D: call webhooks" --> UI[Comms Terminal]
   UI -- "C, D: list calls and transcripts" --> QA[Quo API]
   UI --> T[Thread + Todo]
 ```
@@ -234,7 +234,7 @@ flowchart LR
 flowchart LR
   J([Jeremy]) -- "places and answers calls" --> Q[Quo: Work number and apps]
   P([Customer, field user, teammate]) -- calls --> Q
-  Q -- "signed call events" --> UI[Universal Inbox]
+  Q -- "signed call events" --> UI[Comms Terminal]
   UI -- "fetch call or transcript by ID" --> Q
   J -- "reads Threads and Todo over SSH" --> UI
 ```
@@ -298,10 +298,10 @@ flowchart TB
 | 2026-10-15 | Phase 3 option set (A–D) approved | Jeremy, ask tool | Accepted | — |
 | 2026-10-15 | Agent recommends B, with D's reconcile poll held back until the one-week check shows a missing call | Agent | Superseded by approval below | — |
 | 2026-10-15 | Strategy B chosen, with D deferred until a missing call is found; diagrams and open risks approved; forwarded or AI-handled calls read as missed | Jeremy, ask tool | Accepted | Options A, C; D for now |
-| 2026-10-15 | Built on Jeremy's "implement this". A Phone call is stored as a MESSAGE Activity with `call` data (direction, outcome, length) and a one-line summary as content. A Call transcript is an EDIT targeting the call, recorded as Jeremy's so it never moves Status. No schema migration. A transcript that arrives before its call gets HTTP 503, so Quo delivers it again | Agent (`src/universal_inbox/quo.py`, `inbox.py`, `tests/test_quo.py`) | Built; webhook update and deploy pending | — |
+| 2026-10-15 | Built on Jeremy's "implement this". A Phone call is stored as a MESSAGE Activity with `call` data (direction, outcome, length) and a one-line summary as content. A Call transcript is an EDIT targeting the call, recorded as Jeremy's so it never moves Status. No schema migration. A transcript that arrives before its call gets HTTP 503, so Quo delivers it again | Agent (`src/comms_terminal/quo.py`, `inbox.py`, `tests/test_quo.py`) | Built; webhook update and deploy pending | — |
 
 ## 11. Sources
 
-- `.agents/discovery/2026-10-12-sms.md`, `docs/design/console.md`, `src/universal_inbox/quo.py`, `src/universal_inbox/tui.py`, `GLOSSARY.md` (read 2026-10-15).
-- `src/universal_inbox/fastmail.py` (10-minute Sent poll pattern), `src/universal_inbox/inbox.py` (ingest drops repeats by message ID), 2026-10-15.
+- `.agents/discovery/2026-10-12-sms.md`, `docs/design/console.md`, `src/comms_terminal/quo.py`, `src/comms_terminal/tui.py`, `GLOSSARY.md` (read 2026-10-15).
+- `src/comms_terminal/fastmail.py` (10-minute Sent poll pattern), `src/comms_terminal/inbox.py` (ingest drops repeats by message ID), 2026-10-15.
 - Public web research sub-agent, 2026-10-15 (no account calls): Quo v1 OpenAPI spec (openphone-public-api-prod S3), quo.com/docs/2026-03-30 (introduction, webhooks-event-payloads, versioning, llms-full.txt changelog), quo.com/docs/mdx/mcp/tools.md, support.quo.com (deep-linking, click-to-call, HubSpot, Salesforce), twilio.com (Voice JS SDK, verified caller ID, Call resource), developers.telnyx.com (WebRTC JS SDK, verified numbers), developers.dialpad.com (call, users initiate_call). Limits: absence of a Quo Chrome click-to-call extension is unverified; Quo port-out terms not found.

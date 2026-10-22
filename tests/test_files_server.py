@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from universal_inbox import files, inbox, main, serve
+from comms_terminal import files, inbox, main, serve
 
 NOW = datetime(2026, 10, 15, 15, 0, tzinfo=timezone.utc)
 

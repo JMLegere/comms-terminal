@@ -7,7 +7,7 @@ import urllib.error
 
 import pytest
 
-from universal_inbox import linear, tana
+from comms_terminal import linear, tana
 
 EMAIL, DOMAIN = "ana@acme.com", "acme.com"
 

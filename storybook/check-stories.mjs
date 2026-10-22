@@ -139,7 +139,7 @@ assert.deepEqual(manifest.columns, [187, 80]);
 assert.equal(manifest.font.family, 'VictorMono Nerd Font');
 assert.equal(manifest.font.path, '/fonts/VictorMonoNerdFont-Regular.ttf');
 assert.equal(manifest.font.sha256, hash(await readFile(local(`./public${manifest.font.path}`))), 'Local font hash mismatch');
-assert.equal(manifest.source.tui_sha256, hash(await readFile(local('../src/universal_inbox/tui.py'))), 'Captures do not match current Textual source');
+assert.equal(manifest.source.tui_sha256, hash(await readFile(local('../src/comms_terminal/tui.py'))), 'Captures do not match current Textual source');
 const expectedScenes = [
   ...catalog.map(scene => ({ id: scene.id, state: scene.exportName, kind: 'mock' })),
   ...references.map(scene => ({ ...scene, kind: 'reference' })),

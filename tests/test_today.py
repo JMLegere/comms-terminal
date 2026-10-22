@@ -2,7 +2,7 @@
 not shown through them, and what comes next. Times are fixed: Monday 2026-10-19, 10:00 in Halifax."""
 
 from test_sequences import DAY, ME, MONDAY, clock, db, person, secret  # noqa: F401  (fixtures)
-from universal_inbox import inbox, sequences as sq
+from comms_terminal import inbox, sequences as sq
 
 
 def thread_of(db, pid):

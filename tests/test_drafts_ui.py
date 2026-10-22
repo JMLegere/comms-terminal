@@ -14,8 +14,8 @@ from textual.worker import get_current_worker
 from test_console import run, seeded
 from test_pane_arrows import check_editor_arrows
 from test_reconcile_console import bridge_console, seed_console
-from universal_inbox import files, inbox, serve
-from universal_inbox.tui import (DRAFT_FIELDS, Console, DraftConnection, DraftSendError, DraftsPage,
+from comms_terminal import files, inbox, serve
+from comms_terminal.tui import (DRAFT_FIELDS, Console, DraftConnection, DraftSendError, DraftsPage,
                                  Pick, ReplyBox, ReplyError, ThreadsPage, VIEW_NAMES)
 
 

@@ -1,6 +1,6 @@
 """Attio, a read-only Context source (FR-13b): matching, fields, open deals and tasks, and the section."""
 
-from universal_inbox import attio, serve
+from comms_terminal import attio, serve
 
 ME = "m1"
 
@@ -86,7 +86,7 @@ def test_context_summarizes_people_companies_open_deals_and_tasks():
 
 
 def test_section_and_service_route():
-    from universal_inbox.tui import attio_markup
+    from comms_terminal.tui import attio_markup
     fake = FakeAttio()
     client = attio.Client("t")
     client.call = fake.call

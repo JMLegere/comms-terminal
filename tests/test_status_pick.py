@@ -1,8 +1,8 @@
 """Change status from the queue: Investigating comes first, and the cursor moves on to the next Thread."""
 
 from test_console import run, seeded
-from universal_inbox import inbox
-from universal_inbox.tui import Console, Pick, ThreadsPage
+from comms_terminal import inbox
+from comms_terminal.tui import Console, Pick, ThreadsPage
 
 
 def test_investigating_first_and_cursor_moves_on(tmp_path):

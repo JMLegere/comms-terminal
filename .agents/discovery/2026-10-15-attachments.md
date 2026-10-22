@@ -15,7 +15,7 @@
 
 ### Seed (confirmed 2026-10-15)
 
-- Topic: Attachments in Universal Inbox across Email (Gmail, Fastmail), Slack, and SMS (Quo).
+- Topic: Attachments in Comms Terminal across Email (Gmail, Fastmail), Slack, and SMS (Quo).
 - Need, in Jeremy's words: "i want to add support for attachments".
 - Known: `GLOSSARY.md` defines Attachment as a file sent with a message, seen in the console and fetched from the Platform. Received Attachments show as chips (name, type, size) that open the message in Gmail, because Gmail's per-attachment link needs an internal ID that a forwarded copy lacks (PRD decisions #105–#109, #114). Sending Attachments is deferred (`docs/requirements.md`).
 - Earlier answers the same day (grilling round 1): cover both directions, receiving first; all three Platforms in scope.
@@ -23,7 +23,7 @@
 
 ### Findings
 
-#### From the codebase (2026-10-15, sub-agent; paths under `src/universal_inbox/`)
+#### From the codebase (2026-10-15, sub-agent; paths under `src/comms_terminal/`)
 
 Inbound, per Platform:
 
@@ -147,7 +147,7 @@ Jeremy works his Threads in the inbox console (on Workbox, reached from Mani). H
 
 ## Options
 
-Fact used by every option (`deploy/universal-inbox.service`, `docs/runbook.md` D3): the service listens on `127.0.0.1:8787`. The Cloudflare Tunnel publishes only `^/hooks/(email|slack|quo)$`. Links Mani can open therefore need either a Workbox LAN listener (Mani has a direct `/32` route to `192.168.0.107`) or a new tunnel path behind authentication.
+Fact used by every option (`deploy/comms-terminal.service`, `docs/runbook.md` D3): the service listens on `127.0.0.1:8787`. The Cloudflare Tunnel publishes only `^/hooks/(email|slack|quo)$`. Links Mani can open therefore need either a Workbox LAN listener (Mani has a direct `/32` route to `192.168.0.107`) or a new tunnel path behind authentication.
 
 ### S0 — Baseline: do nothing
 
@@ -253,7 +253,7 @@ Approved 2026-10-15: **S1, copy on arrival into one Attachment store.** File lin
 
 ```mermaid
 flowchart LR
-  J[Jeremy<br/>terminal and browser on Mani] -->|reads, replies, attaches| UI[Universal Inbox]
+  J[Jeremy<br/>terminal and browser on Mani] -->|reads, replies, attaches| UI[Comms Terminal]
   J -->|pastes images through| H[Herdr remote client]
   H -->|stages image file| UI
   UI -->|file links, upload page| J
@@ -269,7 +269,7 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-  subgraph Universal Inbox
+  subgraph Comms Terminal
     ING[Ingestion] --> TS[(Triage store)]
     ING --> AS[(Attachment store)]
     CON[Console UI] --> TS

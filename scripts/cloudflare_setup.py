@@ -5,7 +5,7 @@ Reads a scoped API token from --token-file (never printed). It needs:
   Zone agentmaple.com: Zone Read, DNS Edit, Zone Settings Edit (enables Email Routing), Email Routing Rules Edit
 
 Creates, when missing:
-  1. A remotely managed tunnel "universal-inbox" whose only public paths are /hooks/{email,slack,quo,resend}.
+  1. A remotely managed tunnel "comms-terminal" whose only public paths are /hooks/{email,slack,quo,resend}.
      Its run token goes to --tunnel-token-out (0600) for `cloudflared service install` (runbook §6.1).
   2. DNS: hooks.agentmaple.com → the tunnel (proxied CNAME).
   3. Email Routing for inbox.agentmaple.com (Cloudflare adds that subdomain's MX and SPF; the apex is untouched).
@@ -13,7 +13,7 @@ Creates, when missing:
   5. The routing rules jeremy@inbox.agentmaple.com (Gmail) and fastmail@inbox.agentmaple.com (Fastmail, #113)
      → the Worker.
 
-    uv run python scripts/cloudflare_setup.py --token-file ~/.config/universal-inbox/cloudflare-token
+    uv run python scripts/cloudflare_setup.py --token-file ~/.config/comms-terminal/cloudflare-token
     uv run python scripts/cloudflare_setup.py --token-file … --email-secret-file … --apply
 
 For an existing deployment, do not use --apply to add Resend alone: it also replaces the tunnel ingress
@@ -32,7 +32,7 @@ from pathlib import Path
 
 ZONE, HOOKS, INBOX = "agentmaple.com", "hooks.agentmaple.com", "inbox.agentmaple.com"
 ADDRESSES = ("jeremy@inbox.agentmaple.com", "fastmail@inbox.agentmaple.com")  # Gmail's forward, Fastmail's rule
-TUNNEL, WORKER = "universal-inbox", "universal-inbox-email"
+TUNNEL, WORKER = "comms-terminal", "comms-terminal-email"
 ROOT = Path(__file__).resolve().parents[1]
 API = "https://api.cloudflare.com/client/v4"
 
@@ -60,7 +60,7 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--token-file", required=True)
     ap.add_argument("--email-secret-file", help="the email-hook-secret value (needed with --apply)")
-    ap.add_argument("--tunnel-token-out", default=str(Path.home() / ".config/universal-inbox/tunnel-token"))
+    ap.add_argument("--tunnel-token-out", default=str(Path.home() / ".config/comms-terminal/tunnel-token"))
     ap.add_argument("--apply", action="store_true")
     a = ap.parse_args(argv)
     if a.apply and not a.email_secret_file:
@@ -113,7 +113,7 @@ def main(argv=None) -> int:
     if not dns:
         cf.call("POST", f"/zones/{zone_id}/dns_records", {"type": "CNAME", "name": HOOKS, "proxied": True,
                                                           "content": f"{tunnel_id}.cfargotunnel.com",
-                                                          "comment": "Universal Inbox hooks (Cloudflare Tunnel)"})
+                                                          "comment": "Comms Terminal hooks (Cloudflare Tunnel)"})
         print(f"  DNS {HOOKS} created")
 
     # 3. Email Routing on the subdomain only
@@ -132,7 +132,7 @@ def main(argv=None) -> int:
     # 5. Routing rule
     for address in missing:
         cf.call("POST", f"/zones/{zone_id}/email/routing/rules", {
-            "name": "Universal Inbox", "enabled": True,
+            "name": "Comms Terminal", "enabled": True,
             "matchers": [{"type": "literal", "field": "to", "value": address}],
             "actions": [{"type": "worker", "value": [WORKER]}]})
         print(f"  routing rule {address} → {WORKER} created")

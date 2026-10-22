@@ -2,7 +2,7 @@
 
 from datetime import datetime, timezone
 
-from universal_inbox import inbox
+from comms_terminal import inbox
 
 AT = datetime(2026, 10, 12, 9, tzinfo=timezone.utc)
 
@@ -144,7 +144,7 @@ def test_people_count_blocked_identities_of_total():
 def test_people_list_groups_by_first_letter_and_folds(tmp_path):
     from textual.widgets import DataTable
     from test_console import run, seeded
-    from universal_inbox.tui import Console, PeoplePage, initial
+    from comms_terminal.tui import Console, PeoplePage, initial
     assert [initial(n) for n in ("Émile", "ana", "+1506", "")] == ["E", "A", "#", "#"]
     path, _ = seeded(tmp_path)
     app, seen = Console(path), {}

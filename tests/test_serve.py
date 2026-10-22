@@ -13,10 +13,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from universal_inbox import inbox, serve
+from comms_terminal import inbox, serve
 import pytest
 
-from universal_inbox.tui import ReplyError, _post, socket_reply
+from comms_terminal.tui import ReplyError, _post, socket_reply
 
 
 class Sender:
@@ -112,7 +112,7 @@ def test_service_runs_with_email_only(tmp_path, monkeypatch):
     import urllib.error
     import urllib.request
     import threading as _threading
-    from universal_inbox import serve as _serve
+    from comms_terminal import serve as _serve
     creds = tmp_path / "creds"
     creds.mkdir()
     (creds / "email-hook-secret").write_text("e" * 64)
@@ -168,7 +168,7 @@ def test_slack_hook_without_a_connection_answers_503(tmp_path, monkeypatch):
 def test_email_post_sends_a_user_agent_and_returns_provider_errors():
     """Resend sits behind Cloudflare, which 403s Python's default User-Agent; errors keep the provider's message."""
     from http.server import BaseHTTPRequestHandler, HTTPServer
-    from universal_inbox import email as _email
+    from comms_terminal import email as _email
     seen = {}
 
     class H(BaseHTTPRequestHandler):
@@ -189,7 +189,7 @@ def test_email_post_sends_a_user_agent_and_returns_provider_errors():
     status, body = _email._post(f"http://127.0.0.1:{srv.server_address[1]}/emails", {}, {"x": 1})
     srv.server_close()
     assert status == 403 and body["message"] == "The agentmaple.com domain is not verified"
-    assert seen["ua"].startswith("universal-inbox/")
+    assert seen["ua"].startswith("comms-terminal/")
 
 
 def test_email_hook_logs_its_outcome_without_content(caplog):
@@ -197,7 +197,7 @@ def test_email_hook_logs_its_outcome_without_content(caplog):
     import hashlib as _h
     import hmac as _hm
     import logging
-    from universal_inbox import email as _email
+    from comms_terminal import email as _email
     db = inbox.connect()
     inbox.migrate(db)
     with db:
@@ -214,7 +214,7 @@ def test_email_hook_logs_its_outcome_without_content(caplog):
     bounce = (b"From: Mail Delivery Subsystem <mailer-daemon@googlemail.com>\r\nTo: me@x.io\r\n"
               b"Subject: Delivery Status Notification (Failure)\r\nMessage-ID: <dsn1@google.com>\r\n"
               b"Auto-Submitted: auto-replied\r\n\r\nsecret body")
-    with caplog.at_level(logging.INFO, logger="universal_inbox.email"):
+    with caplog.at_level(logging.INFO, logger="comms_terminal.email"):
         assert post(bounce) == 204
         assert post(bounce.replace(b"Auto-Submitted: auto-replied\r\n", b"")) == 204
     lines = [r.getMessage() for r in caplog.records]
@@ -617,7 +617,7 @@ def test_email_hook_files_mail_under_the_connection_its_forward_reached():
 
 
 def test_init_connects_each_gmail_address_with_its_own_inbound_address(tmp_path, capsys):
-    from universal_inbox import main
+    from comms_terminal import main
     path = str(tmp_path / "inbox.db")
     for _ in range(2):  # idempotent
         main.main(["--db", path, "init", "--gmail", "Jeremy@agentmaple.com", "--gmail", "jeremy@agentmaple.ai"])

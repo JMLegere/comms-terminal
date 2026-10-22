@@ -14,17 +14,17 @@
 
 ### Seed (approved 2026-10-15)
 
-- Topic: the Universal Inbox console (TUI) redraws in a way Jeremy finds disruptive.
+- Topic: the Comms Terminal console (TUI) redraws in a way Jeremy finds disruptive.
 - Need, in Jeremy's words: "the screen flashes periodically" and "i want to make it smoother, the redraws are disruptive".
 - Early solution ideas (Phase 3 candidates only): rebuild only when values change; update rows in place; skip service writes that change nothing.
 
 ### Actor and situation
 
-- Jeremy is the only user. He runs the console in Ghostty on Mani, over a direct SSH session to the host that runs it, with no tmux or other multiplexer (process chain: `universal-inbox` → `fish` → `sshd`).
+- Jeremy is the only user. He runs the console in Ghostty on Mani, over a direct SSH session to the host that runs it, with no tmux or other multiplexer (process chain: `comms-terminal` → `fish` → `sshd`).
 - The console stays open all day. The disruption hits in every mode he uses: reading a long thread, scanning or moving through the list, typing a reply, and glancing at it while idle (Jeremy, 2026-10-15).
 - He sees the whole screen flash, about once a minute (Jeremy, 2026-10-15).
 
-### Redraw triggers in the code (`src/universal_inbox/tui.py`)
+### Redraw triggers in the code (`src/comms_terminal/tui.py`)
 
 | Trigger | Cadence | What redraws |
 |---|---|---|
@@ -220,11 +220,11 @@ Chosen (approved 2026-10-15): **B — change-gated chrome refresh**.
 
 ```mermaid
 C4Context
-    title Universal Inbox console — context
+    title Comms Terminal console — context
     Person(jeremy, "Jeremy", "Triages Threads all day")
-    System(console, "Universal Inbox console", "Interactive triage screen")
+    System(console, "Comms Terminal console", "Interactive triage screen")
     System_Ext(term, "Jeremy's terminal session", "Remote terminal on Mani, over SSH")
-    System(service, "Universal Inbox service", "Syncs platforms, wakes snoozes, checks connection health")
+    System(service, "Comms Terminal service", "Syncs platforms, wakes snoozes, checks connection health")
     System_Ext(platforms, "Messaging platforms", "Email, Slack, Quo")
     System_Ext(context, "Context sources", "Linear, Tana")
     Rel(jeremy, term, "Reads and types in")
@@ -238,10 +238,10 @@ C4Context
 
 ```mermaid
 C4Container
-    title Universal Inbox — containers
+    title Comms Terminal — containers
     Person(jeremy, "Jeremy")
     System_Ext(term, "Terminal session")
-    Container_Boundary(ui, "Universal Inbox") {
+    Container_Boundary(ui, "Comms Terminal") {
         Container(console, "Console UI", "", "Rail, status line, thread list, thread pane")
         ContainerDb(store, "Triage store", "", "Threads, messages, connections, health inputs")
         Container(sync, "Sync and health service", "", "Writes platform events, wakes, health results")
@@ -300,7 +300,7 @@ C4Component
 
 ## Sources
 
-- `src/universal_inbox/tui.py`, `serve.py`, `fastmail.py`, `inbox.py` (`wake`), `health.py` on `dev` at `e53ec04` plus local changes.
-- Live DB `~/.local/share/universal-inbox/inbox.db`: `PRAGMA data_version` sampled read-only for 30 s and 130 s.
+- `src/comms_terminal/tui.py`, `serve.py`, `fastmail.py`, `inbox.py` (`wake`), `health.py` on `dev` at `e53ec04` plus local changes.
+- Live DB `~/.local/share/comms-terminal/inbox.db`: `PRAGMA data_version` sampled read-only for 30 s and 130 s.
 - pty probe of the installed console (Textual 8.2.8) against a DB copy. Limits: no service socket, so context sources stayed hidden; one terminal size; a simulated Ghostty sync reply rather than real Ghostty.
 - Jeremy's answers, 2026-10-15.

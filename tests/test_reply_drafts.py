@@ -5,7 +5,7 @@ import sqlite3
 import pytest
 
 from test_console import seed_demo  # puts scripts/ on the path
-from universal_inbox import inbox
+from comms_terminal import inbox
 from test_attachment_send import FakeSender
 
 
@@ -81,7 +81,7 @@ def test_deleted_reply_draft_restores_under_its_thread(seeded):
 def test_reply_text_survives_a_console_restart_and_shows_on_the_drafts_page(seeded):
     from textual.widgets import DataTable, TextArea
     from test_console import run
-    from universal_inbox.tui import Console, DraftsPage, ReplyBox
+    from comms_terminal.tui import Console, DraftsPage, ReplyBox
     path, ids = seeded
     seen = {}
 
@@ -118,7 +118,7 @@ def test_reply_text_survives_a_console_restart_and_shows_on_the_drafts_page(seed
 
 def test_agent_drafts_list_labels_reply_drafts(seeded, capsys):
     from types import SimpleNamespace
-    from universal_inbox import agent
+    from comms_terminal import agent
     path, ids = seeded
     db = inbox.connect(path)
     d = inbox.save_reply_draft(db, ids["ana"], "Hi Ana,")
@@ -162,7 +162,7 @@ def test_version_18_moves_files_staged_on_a_reply_draft_to_its_thread(seeded):
 
 def test_console_says_to_restart_once_the_database_outgrows_its_code(seeded):
     from test_console import run
-    from universal_inbox.tui import Console
+    from comms_terminal.tui import Console
     path, _ = seeded
     seen = {}
 
@@ -181,7 +181,7 @@ def test_console_says_to_restart_once_the_database_outgrows_its_code(seeded):
 
 
 def test_agent_draft_new_with_a_thread_makes_its_reply_draft(seeded, capsys):
-    from universal_inbox import agent
+    from comms_terminal import agent
     path, ids = seeded
     db = inbox.connect(path)
     out = agent.draft(db, "new", {"body": "Hi Ana, Tuesday works."}, None, None, ids["ana"])

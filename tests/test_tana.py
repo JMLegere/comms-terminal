@@ -2,7 +2,7 @@
 
 from datetime import datetime, timezone
 
-from universal_inbox import mcp, serve, tana
+from comms_terminal import mcp, serve, tana
 
 NOW = datetime(2026, 10, 13, 17, 0, tzinfo=timezone.utc)
 ORG, PERSON = "tana:text:org", "tana:text:person"
@@ -89,7 +89,7 @@ def test_socket_route_reports_not_connected_and_errors():
 
 
 def test_section_markup():
-    from universal_inbox.tui import tana_markup
+    from comms_terminal.tui import tana_markup
     text = tana_markup(tana.context(FakeTana(), ["laila@nbif.ca"], ["nbif.ca"], NOW))
     for part in ("Laïla Thériault", "NBIF — investment", "Send deck", "NBIF Interview", "Diligence next steps",
                  "Observations", "Wants milestones"):
@@ -101,7 +101,7 @@ def test_section_markup():
 
 def test_console_treats_a_service_without_tana_as_not_connected(tmp_path):
     import threading
-    from universal_inbox.tui import socket_context
+    from comms_terminal.tui import socket_context
     sock = str(tmp_path / "s.sock")
     old = serve.UnixHTTPServer(sock, serve._handler({}))  # a service from before /tana: HTML 404
     threading.Thread(target=old.serve_forever, daemon=True).start()

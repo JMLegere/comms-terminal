@@ -8,7 +8,7 @@ import urllib.error
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 
-from universal_inbox import email, files, inbox, main, quo, render, serve, slack
+from comms_terminal import email, files, inbox, main, quo, render, serve, slack
 
 NOW = datetime(2026, 10, 15, 15, 0, tzinfo=timezone.utc)
 PDF, PNG = b"%PDF-1.7 contract", b"\x89PNG logo"
