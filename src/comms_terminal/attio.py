@@ -3,8 +3,8 @@
 The service reads Attio's REST API with a read-only workspace access token (the `attio-token` credential)
 and answers the console's POST /attio with what Attio knows about a page's email addresses and Organization
 domains: the matching People and Companies with every filled field (less a short list of noise, `SKIP`),
-the lists they are on with those entries' fields, their deals that are not Lost, and the open tasks on any of
-them (most of Jeremy's tasks hang off a deal).
+the lists they are on with those entries' fields, and the open tasks on any of them. Attio has no Deals
+object since 2026-10-22; Companies carry their own stage.
 Nothing is written to Attio. Answers are cached for five minutes, like Tana's.
 """
 
@@ -20,11 +20,10 @@ API = "https://api.attio.com/v2"
 # Fields that repeat what the page already shows, or say little: identifiers, images, audit stamps, the
 # legacy strength score, social handles, and the first and per-channel interactions (last and next stay).
 SKIP = {"record_id", "name", "email_addresses", "domains", "avatar_url", "logo_url", "created_at", "created_by",
-        "associated_deals", "associated_people", "associated_company", "team", "strongest_connection_strength_legacy",
+        "associated_people", "associated_company", "team", "strongest_connection_strength_legacy",
         "twitter_follower_count", "angellist", "facebook", "instagram", "twitter", "first_interaction",
         "first_email_interaction", "first_calendar_interaction", "last_email_interaction",
         "last_calendar_interaction", "next_calendar_interaction", "entry_id", "parent_record", "parent_object"}
-CLOSED = {"Lost"}  # deal stages that are not open
 
 
 class AttioError(Exception):
@@ -136,30 +135,14 @@ def context(client, emails, domains) -> dict:
     people = {p["id"]["record_id"]: p for e in emails for p in _query(client, "people", {"email_addresses": e})}
     companies = {c["id"]["record_id"]: c for d in domains for c in _query(client, "companies", {"domains": d})}
     names = {rid: _title(r["values"]) for rid, r in {**people, **companies}.items()}
-    deals = {}
-    for obj, ids, attr in (("companies", companies, "associated_company"), ("people", people, "associated_people")):
-        for rid in ids:
-            for d in _query(client, "deals", {attr: {"target_object": obj, "target_record_id": rid}}):
-                deals[d["id"]["record_id"]] = d
-    names |= {rid: _title(d["values"]) for rid, d in deals.items()}
 
     def record(obj, r):
         rid = r["id"]["record_id"]
         return {"id": rid, "title": _title(r["values"]), "url": r.get("web_url"),
                 "fields": _fields(client, r["values"], client.titles("objects", obj), names) + _lists(client, obj, rid, names)}
 
-    open_deals = []
-    for rid, d in deals.items():
-        stage = _one(client, (d["values"].get("stage") or [{}])[0], names)
-        if stage in CLOSED:
-            continue
-        v = d["values"]
-        open_deals.append({"id": rid, "title": _title(v), "url": d.get("web_url"), "stage": stage,
-                           "value": _one(client, (v.get("value") or [{}])[0], names),
-                           "owner": _one(client, (v.get("owner") or [{}])[0], names),
-                           "lists": [x[0] for x in _lists(client, "deals", rid, names)]})
-    tasks, open_ids = {}, {d["id"] for d in open_deals}
-    for obj, ids in (("people", people), ("companies", companies), ("deals", {k: deals[k] for k in open_ids})):
+    tasks = {}
+    for obj, ids in (("people", people), ("companies", companies)):
         for rid in ids:
             for t in client.call(f"/tasks?linked_object={obj}&linked_record_id={rid}&is_completed=false&limit=50")["data"]:
                 tasks[t["id"]["task_id"]] = {
@@ -167,10 +150,10 @@ def context(client, emails, domains) -> dict:
                     "due": (t.get("deadline_at") or "")[:10],
                     "assignees": [client.member(a.get("referenced_actor_id")) for a in t.get("assignees") or []
                                   if a.get("referenced_actor_type") == "workspace-member"],
-                    "url": (people.get(rid) or companies.get(rid) or deals.get(rid) or {}).get("web_url")}
+                    "url": (people.get(rid) or companies.get(rid) or {}).get("web_url")}
     return {"people": [record("people", p) for p in people.values()],
             "companies": [record("companies", c) for c in companies.values()],
-            "deals": open_deals, "tasks": sorted(tasks.values(), key=lambda t: t["due"] or "9999")}
+            "tasks": sorted(tasks.values(), key=lambda t: t["due"] or "9999")}
 
 
 def _all(client, obj) -> list[dict]:

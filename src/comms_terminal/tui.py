@@ -2258,7 +2258,7 @@ def wrapped(text: str, width: int, indent: int = 0, style: str = "", url: str | 
 
 def attio_markup(ctx: dict | None, error: str | None = None, width: int = 26) -> str:
     """The Attio section (FR-13b): each Person and Company with its filled fields stacked as label then value
-    (like the column's own entries), its open deals, and open tasks."""
+    (like the column's own entries), and open tasks."""
     cut = lambda text, n=140: text if len(text) <= n else text[:n - 1].rstrip() + "…"  # noqa: E731
     if error:
         return f"[#c14a4a]{ICON['broken']} Attio unavailable: {escape(error)}[/]"
@@ -2274,11 +2274,6 @@ def attio_markup(ctx: dict | None, error: str | None = None, width: int = 26) ->
                 url = v if v.startswith("http") else None
                 v = re.sub(r"^https?://(www\.)?", "", v) if url else cut(v)
                 lines += wrapped(FIELD_LABELS.get(k, k.lower()), width, 2, "#928374") + wrapped(v, width, 2, url=url)
-    if ctx["deals"]:
-        lines += ["", box_head("", "open deals")]
-    for d in ctx["deals"]:
-        facts = [x for x in (d["stage"], d["value"], d["owner"], *d["lists"]) if x]
-        lines += wrapped(d["title"], width, url=d.get("url")) + wrapped(" · ".join(facts), width, 2, "#928374")
     if ctx["tasks"]:
         lines += ["", box_head("", "open tasks")]
     for t in ctx["tasks"]:
