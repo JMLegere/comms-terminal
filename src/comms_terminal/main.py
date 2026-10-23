@@ -69,7 +69,7 @@ def main(argv=None) -> None:
     a = p.parse_args(argv)
     Path(a.db).parent.mkdir(parents=True, exist_ok=True)
 
-    if a.cmd in ("threads", "thread", "drafts", "draft", "tasks", "enroll", "events"):
+    if a.cmd in ("threads", "thread", "drafts", "draft", "tasks", "enroll", "events", "pipeline"):
         from . import inbox
         db = inbox.connect(a.db)
         inbox.migrate(db)

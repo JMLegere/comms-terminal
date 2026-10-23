@@ -45,7 +45,7 @@ from textual.widgets import DataTable, DirectoryTree, Input, OptionList, Static,
 from textual.widgets.option_list import Option
 from textual.worker import WorkerCancelled, get_current_worker
 
-from . import calendar as cal, files, inbox, render, sequences
+from . import calendar as cal, files, inbox, pipeline, render, sequences
 from .health import problem
 from .icons import ICON
 from .platforms import E164, FORMATS, PLATFORMS

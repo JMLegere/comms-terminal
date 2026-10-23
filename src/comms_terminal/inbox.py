@@ -24,7 +24,7 @@ from typing import Protocol, Sequence
 
 from . import files, platforms
 
-SCHEMA_VERSION = 24
+SCHEMA_VERSION = 25
 WAIT = timedelta(days=4)  # Waiting for them ends after this with no reply: back to Todo to follow up (#116)
 EMAIL_CONFIRMATION_PENDING = "Email confirmation pending; wait for its sent receipt before replying."
 MIGRATIONS = {  # version -> statement that upgrades an existing database to it
@@ -364,6 +364,39 @@ CREATE TABLE event_provider (
   ok_at     TEXT,                          -- last good fetch, written when fetches start failing
   failures  INTEGER NOT NULL DEFAULT 0,    -- failed fetches in a row
   error     TEXT
+) STRICT;""",
+    25: """CREATE TABLE pipeline_log (
+  id              INTEGER PRIMARY KEY,
+  organization_id INTEGER NOT NULL REFERENCES organizations (id),
+  pipeline        TEXT NOT NULL CHECK (pipeline IN ('REVENUE', 'FUNDRAISING')),
+  kind            TEXT NOT NULL CHECK (kind IN ('STAGE', 'VALUE', 'UNDO')),
+  stage           TEXT,
+  value           INTEGER,
+  undoes          INTEGER REFERENCES pipeline_log (id),
+  effective_at    TEXT NOT NULL,             -- when it happened (backdated when seeding)
+  recorded_at     TEXT NOT NULL,
+  CHECK ((kind = 'STAGE') = (stage IS NOT NULL) AND (kind = 'VALUE') = (value IS NOT NULL)
+         AND (kind = 'UNDO') = (undoes IS NOT NULL))
+) STRICT;
+CREATE INDEX pipeline_log_org ON pipeline_log (organization_id, pipeline, effective_at);
+CREATE TRIGGER pipeline_log_no_delete BEFORE DELETE ON pipeline_log
+BEGIN
+  SELECT RAISE(ABORT, 'the pipeline log is append-only');
+END;
+CREATE TRIGGER pipeline_log_no_update BEFORE UPDATE ON pipeline_log
+BEGIN
+  SELECT RAISE(ABORT, 'the pipeline log is append-only');
+END;
+CREATE TABLE pipeline_targets (
+  pipeline TEXT PRIMARY KEY CHECK (pipeline IN ('REVENUE', 'FUNDRAISING')),
+  amount   INTEGER NOT NULL CHECK (amount > 0),
+  due      TEXT NOT NULL                     -- YYYY-MM-DD
+) STRICT;
+CREATE TABLE planning_priors (
+  pipeline TEXT NOT NULL CHECK (pipeline IN ('REVENUE', 'FUNDRAISING')),
+  stage    TEXT NOT NULL,
+  rate     REAL NOT NULL CHECK (rate > 0 AND rate <= 1),
+  PRIMARY KEY (pipeline, stage)
 ) STRICT;""",
 }
 

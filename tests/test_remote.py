@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from comms_terminal import files, inbox, remote, serve, tui
+from comms_terminal import files, inbox, pipeline, remote, serve, tui
 
 
 class LocalLink:
@@ -57,7 +57,7 @@ def service(tmp_path):
 @pytest.fixture
 def laptop(service, tmp_path, monkeypatch):
     path, _, sock, _ = service
-    for name in ("inbox", "sequences", "files"):
+    for name in ("inbox", "sequences", "pipeline", "files"):
         monkeypatch.setattr(tui, name, getattr(tui, name))
     monkeypatch.setattr(files, "file_url", files.file_url)
     link = LocalLink(sock)
@@ -99,6 +99,23 @@ def test_a_create_waits_for_the_service_id_and_the_copy_agrees(service, laptop):
     tui.inbox.act(db, tid, inbox.SetCase(new_title="Fix login"))  # a new Case inside act is a create too
     assert inbox.get_thread(sdb, tid).case_id == inbox.get_thread(db, tid).case_id is not None
     assert not rem.fresh.is_set()  # ids matched: no resync needed
+
+
+def test_pipeline_changes_reach_the_service_and_undo_by_its_id(service, laptop):
+    _, sdb, _, _ = service
+    rem, syncer, db, _ = laptop
+    with sdb:
+        org = sdb.execute("INSERT INTO organizations (domain, name, created_at) VALUES ('acme.com', 'Acme',"
+                          " '2026-10-01T00:00:00+00:00')").lastrowid
+    syncer.apply(db, syncer.once())
+    entry = tui.pipeline.set_stage(db, org, "REVENUE", "Selection")
+    tui.pipeline.set_value(db, org, "REVENUE", "90k")
+    assert pipeline.current(sdb, org)["REVENUE"]["stage"] == "Selection" == pipeline.current(db, org)["REVENUE"]["stage"]
+    tui.pipeline.undo(db, entry)
+    rem.drain()
+    assert pipeline.current(sdb, org)["REVENUE"] == {"stage": None, "since": None, "value": 90_000}
+    with pytest.raises(pipeline.Refused, match="Awareness"):
+        tui.pipeline.set_stage(db, org, "REVENUE", "Discovery")
 
 
 def test_a_service_change_arrives_as_a_new_snapshot(service, laptop):

@@ -1,10 +1,10 @@
 """Comms Terminal's local console (ADR 0004): the console runs on Jeremy's laptop against a copy of the service's
 database and raw messages, so a keypress never waits on the network. The service stays the only writer.
 
-Service side: POST /call runs one allowlisted inbox/sequences/files function; POST /sync answers with a
+Service side: POST /call runs one allowlisted inbox/sequences/pipeline/files function; POST /sync answers with a
 consistent database snapshot once the database has changed since the caller's copy; POST /raw returns raw
 messages by name. Laptop side: one SSH master connection (started with the console) carries each request to the
-service socket through a tiny relay; `install` swaps the console's inbox/sequences/files for proxies that apply
+service socket through a tiny relay; `install` swaps the console's inbox/sequences/pipeline/files for proxies that apply
 a write locally at once and send it in order, and `Syncer` keeps the copy current.
 
 `files/` and `files-secret` stay on the service: Attachment links come signed in each snapshot.
@@ -24,7 +24,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from . import files, inbox, sequences
+from . import files, inbox, pipeline, sequences
 
 LOG = logging.getLogger("comms_terminal.remote")
 
@@ -47,9 +47,10 @@ CALLS = {
     "sequences.undo_task": "write",
     "sequences.create_sequence": "create", "sequences.add_step": "create", "sequences.enroll": "create",
     "sequences.task_new_thread": "create", "sequences.complete_task": "create", "sequences.skip_task": "create",
+    "pipeline.undo": "write", "pipeline.set_stage": "create", "pipeline.set_value": "create",  # undo takes the id
     "files.store_file": "service", "files.upload_url": "service",
 }
-MODULES = {"inbox": inbox, "sequences": sequences, "files": files}
+MODULES = {"inbox": inbox, "sequences": sequences, "pipeline": pipeline, "files": files}
 
 
 def creates(name: str, db, args, kwargs) -> bool:
@@ -72,7 +73,8 @@ def creates(name: str, db, args, kwargs) -> bool:
 DATACLASSES = {c.__name__: c for c in (inbox.Done, inbox.Snooze, inbox.Wait, inbox.Investigate, inbox.MarkTodo,
                                        inbox.Ignore, inbox.Unignore, inbox.SetCase, inbox.Reopen, inbox.Thread)}
 ERRORS = {c.__name__: c for c in (inbox.DraftConflict, inbox.StaleThreadSnapshot, inbox.SendUnknown,
-                                  inbox.SendFailed, inbox.IdentityTaken, sequences.Refused, ValueError, KeyError)}
+                                  inbox.SendFailed, inbox.IdentityTaken, sequences.Refused, pipeline.Refused, ValueError,
+                                  KeyError)}
 
 
 def encode(v):
@@ -445,6 +447,7 @@ def install(tui, remote: Remote, caps: dict):
     """Point the console module at the service: proxies for its writes, and no local file store."""
     tui.inbox = proxy(remote, inbox, "inbox")
     tui.sequences = proxy(remote, sequences, "sequences")
+    tui.pipeline = proxy(remote, pipeline, "pipeline")
     tui.files = proxy(remote, files, "files")
     files.file_url = signed_urls(caps)  # Attachment bytes and files-secret stay on the service (ADR 0004)
 

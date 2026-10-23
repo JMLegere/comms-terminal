@@ -1,11 +1,11 @@
 """Commands for a terminal agent: Threads, Drafts, and Due Tasks as Markdown, changes to a Draft, enrolling a
-Person in a Sequence, and Jeremy's calendar Events. Nothing here sends, completes, or finishes; Jeremy does that from the console (FR-SEQ-22)."""
+Person in a Sequence, Jeremy's calendar Events, and Pipelines (show, Target, priors, Stage and Value). Nothing here sends, completes, or finishes; Jeremy does that from the console (FR-SEQ-22)."""
 
 import json
 import sys
 from datetime import date, datetime, timedelta
 
-from . import calendar, files, inbox, sequences
+from . import calendar, files, inbox, pipeline, sequences
 from .platforms import PLATFORMS
 from .tui import (CONTEXT_SOURCES, DRAFT_FIELDS, ReplyError, connection_label, draft_history, draft_text,
                   socket_context, staged_files, task_markdown, thread_addresses, thread_text)
@@ -38,6 +38,24 @@ def add_parsers(sub):
     v.add_argument("--last", type=int, metavar="N", help="the last N Events that already started, newest first")
     v.add_argument("--deleted", action="store_true", help="include Deleted Events (gone from Google, kept here)")
     v.add_argument("--json", action="store_true", help="one JSON object per line")
+    p = sub.add_parser("pipeline", help="a Pipeline's math as Markdown, or set a Target, prior, Stage, or Value")
+    ps = p.add_subparsers(dest="pipeline_cmd", required=True)
+    for name in ("revenue", "fundraising"):
+        ps.add_parser(name, help=f"the {name.title()} Pipeline as Markdown")
+    t = ps.add_parser("target", help="set a Pipeline's Target: TTM revenue (Revenue) or round size (Fundraising)")
+    t.add_argument("pipeline")
+    t.add_argument("amount", help="CAD, e.g. 1000000 or 1m")
+    t.add_argument("--by", required=True, type=date.fromisoformat, help="due date, YYYY-MM-DD")
+    t = ps.add_parser("prior", help="set or clear a Planning prior: an assumed Conversion rate for one Stage")
+    t.add_argument("pipeline")
+    t.add_argument("stage")
+    t.add_argument("rate", help="percent, e.g. 20, or none to clear")
+    for kind, what in (("stage", "move an Organization to a Stage"), ("value", "set an Organization's Value")):
+        t = ps.add_parser(kind, help=what)
+        t.add_argument("org", help="a domain or exact Organization name")
+        t.add_argument("pipeline")
+        t.add_argument(kind, help="a Stage name" if kind == "stage" else "CAD, e.g. 90000 or 90k")
+        t.add_argument("--at", help="backdate it: YYYY-MM-DD (seeding past Stages)")
 
 
 def run(a, db):
@@ -61,13 +79,40 @@ def run(a, db):
             print(enroll(db, a.person, a.sequence, getattr(a, "start", None)))
         elif a.cmd == "events":
             print(events(db, a), end="")
+        elif a.cmd == "pipeline":
+            print(pipeline_cmd(db, a), end="")
         else:
             changes = {k: getattr(a, k) for k in ("to", "cc", "subject", "body") if getattr(a, k) is not None}
             if changes.get("body") == "-":
                 changes["body"] = sys.stdin.read()
             print(draft(db, a.id, changes, a.revision, a.connection, getattr(a, "thread", None)), end="")
-    except (KeyError, ValueError, inbox.DraftConflict) as e:  # sequences.Refused is a ValueError
+    except (KeyError, ValueError, inbox.DraftConflict) as e:  # sequences.Refused, pipeline.Refused are ValueErrors
         raise SystemExit(f"comms-terminal {a.cmd}: {e.args[0] if e.args else e}") from e
+
+
+def pipeline_cmd(db, a) -> str:
+    c = a.pipeline_cmd
+    if c in ("revenue", "fundraising"):
+        return pipeline.markdown(pipeline.math(db, pipeline.parse_pipeline(c)))
+    p = pipeline.parse_pipeline(a.pipeline)
+    if c == "target":
+        pipeline.set_target(db, p, a.amount, a.by)
+        t = pipeline.target(db, p)
+        return f"{pipeline.NAMES[p]} Target: CAD {t['amount']:,} by {t['due']}\n"
+    if c == "prior":
+        rate = None if a.rate.lower() == "none" else a.rate
+        pipeline.set_prior(db, p, a.stage, rate)
+        stage = pipeline.parse_stage(p, a.stage)
+        return f"{pipeline.NAMES[p]} {stage} prior: {'cleared' if rate is None else a.rate + '%'}\n"
+    org = pipeline.find_org(db, a.org)
+    if c == "stage":
+        done = pipeline.set_stage(db, org["id"], p, a.stage, a.at)
+    else:
+        done = pipeline.set_value(db, org["id"], p, a.value, a.at)
+    now = pipeline.current(db, org["id"])[p]
+    value = "no Value" if now["value"] is None else f"CAD {now['value']:,}"
+    return (f"{org['name']} ({org['domain']}) {pipeline.NAMES[p]}: {now['stage'] or 'no Stage'}, {value}"
+            + ("" if done else " (unchanged)") + "\n")
 
 
 def thread(db, thread_id, socket) -> str:
