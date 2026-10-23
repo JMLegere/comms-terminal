@@ -76,7 +76,7 @@ Workbox
 
 - Every region is its own rounded, bordered panel with its title on the border (herdr); the focused panel's border turns accent blue.
 - **Today** (FR-14b; `.agents/prd/2026-10-17-today-view.md`): the rail's first line, above every section, with the count of what it lists. The page stacks three bordered lists: Todo Threads (grouped by Case), Due Tasks (title in red with the overdue count), and the Drafts not shown through them; a list with nothing in it hides, and when all are empty it says All clear with the next wake and the next Task. Each list fits its rows (Threads up to half the height, Tasks and Drafts up to a third), and the bottom list shown takes the spare height. `↓`/`↑` run on from one list into the next, `tab` jumps; the list holding the cursor fills the right pane, and the statusline reads `TODAY › THREADS` (or TASKS, DRAFTS) with that list's keys.
-- **Rail** sections: `threads` (Todo, Snoozed, Done, Ignored, All, with counts), `cases` (Todo, Snoozed, Done, Ignored, with counts of Cases by rolled-up Status, #120), `browse` (People, Organizations, Channels), `connections` (one line per Connection with its health icon). The current item has an accent bar. Status views live in the rail; there are no tabs above the list.
+- **Rail** sections: `threads` (Todo, Snoozed, Done, Ignored, All, with counts), `cases` (Todo, Snoozed, Done, Ignored, with counts of Cases by rolled-up Status, #120), `outreach` (Tasks, Sequences), `pipeline` (Revenue, Fundraising, with % of Target), `browse` (People, Organizations, Channels), `connections` (one line per Connection with its health icon). The current item has an accent bar. Status views live in the rail; there are no tabs above the list.
 - **Main panel**: the selected rail item's list, or a full Thread, Person, Organization, Case, or Connection page.
 - **Preview panel**: a single click on a Thread (or `space`) opens it read-only beside the list; `j`/`k` keep the preview in step; a second click, a double click, or `enter` opens it full; `esc` closes the preview.
 - **Details panel**: with a full Thread open, the Person, Organization, Case, and Channel sit in their own bordered panel on the right.
@@ -177,6 +177,24 @@ Thread, Person, Organization, and Case pages show separate details-column sectio
 - **Bottom bar**: `now` Event and minutes left, then `next` Event and when; clicking it opens the Calendar. A failing Event provider shows Google Calendar broken; the Calendar shows its copy "as of" the last good fetch.
 - **Keys**: grid `h`/`l` day, `j`/`k` week, `{`/`}` month, `t` today, `tab` or `enter` the day pane; day pane `j`/`k`, `enter` open, `o` join link, `tab`/`esc` back to the grid; Event details `o` join link, `esc` back. `←`/`→` move between grid and day pane.
 
+### Pipeline (ADR 0006, approved 2026-10-23)
+
+Terms follow `GLOSSARY.md` (Pipeline, Stage, Value, Target, Conversion rate, Time in Stage, Conversion to Impact, Weighted pipeline, Required volume, Pace, Constraint, Planning prior). The page shows the math only; it sets no Tasks.
+
+- **Rail**: a `pipeline` group right below `outreach` (Tasks, Sequences), with one line per Pipeline: Revenue and Fundraising. Each line shows projected ÷ Target as a percentage (`Revenue 32%`), or `—` when the Pipeline has no Target yet.
+- **Page**: the summary and the Stage table on the left; the selected Stage's Organizations in a pane on the right, the same shape as a Status view and its Thread pane. `←`/`→` move between them.
+- **Summary**: the Target line (`Target  CAD 1,000,000 TTM by 2028-09-30`); a bar of projected ÷ Target, solid for paying, shaded for the Weighted pipeline, light for the gap, with the percentage; the paying amount and count, and the Weighted pipeline amount; the gap as new customers needed at the average Value; the date new customers must reach Impact by (2027-10-01) and the weeks left; and the Constraint (`Selection → Commit (CR 25%)`).
+- **Stage table**: Stage, Orgs, CR, Time, →Impact, in, need, pace. Pace is in − need with its sign (`-5` red, `+0` green). The Constraint row is bold and ends with `◀ constraint`. A Planning prior shows grey with a `p` (`20%p`); a number with no data shows `—`. Rows for the ending Stages follow (Impact/Expansion, Lost, Churned) with counts only, and a legend line closes the table: `trailing 90 days · p Planning prior · — no data`. Fundraising uses its own Stages, with →Closed in place of →Impact and Closed and Passed as ending rows.
+- **Organizations pane**: Organization, Value, days in Stage, and last msg (time since the latest message with anyone at that Organization), longest in Stage first. `enter` opens the Organization.
+- **Narrow**: below about 110 columns the pane hides, and `enter` on a Stage opens its Organizations as a page; `esc` returns.
+- **Organization page**: a `Pipeline` section in the properties column, above Attio: each Pipeline's Stage and days in it, Value, then the Stage and Value changes, newest first, with `(s stage · v value)`.
+- **Setting a Stage** (`s`, on an Organization page or row): for an Organization in exactly one Pipeline, the picker lists that Pipeline's Stages with the current one marked, plus `Fundraising…` (or `Revenue…`) to switch; in neither or both, it asks for the Pipeline first. A toast confirms (`Chestnut → Commit. z undo`).
+- **Setting Value** (`v`): a prompt `Value · Chestnut (Revenue) — CAD, next 12 months` that accepts `90k` or `90000`.
+- **Organizations list**: adds Stage and Value columns. Stage shows the Revenue Stage, or the Fundraising Stage when the Organization has no Revenue Stage.
+- **Empty states**: no Target: the table still shows counts and rates, and the summary reads `No Target yet: comms-terminal pipeline target fundraising 1500000 --by 2027-06-30`. No Organizations: `No Organizations in Fundraising yet. Press s on an Organization to add one.`
+- **Keys**: `j`/`k` rows, `←`/`→` panes, `enter` open, `s` Stage, `v` Value, `y` copy the summary, Stage table, and Organizations per Stage as Markdown. `comms-terminal pipeline revenue` (or `fundraising`) prints the same Markdown.
+- **Refresh**: live, like every other page.
+
 ## 4. Keys
 
 **Decision #93**: Gmail-style where Gmail has an equivalent.
@@ -200,6 +218,9 @@ Rendered with Textual's test driver (`run_test`, SVG screenshots) and once in a 
 5. Send failure: box stays open with the error.
 6. Health BROKEN in the sidebar.
 7. Person record with a blocked Identity.
+8. Revenue Pipeline with priors, `—` cells, a Constraint row, and negative and positive Pace, wide (160 columns) and narrow (100 columns, pane hidden).
+9. Fundraising Pipeline with no Target, and a Pipeline with no Organizations.
+10. Organization page Pipeline section with history; the Stage picker for an Organization in one Pipeline and in none.
 
 ## 6. Development
 

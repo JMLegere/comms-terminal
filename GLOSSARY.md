@@ -191,6 +191,10 @@ _Avoid_: Velocity, Δt (in prose), Cycle time (that spans several Stages)
 How many Organizations must enter a Stage each week to reach the Target, worked backwards from the Target through each later Stage's Conversion rate and Time in Stage.
 _Avoid_: Quota, Input quota
 
+**Pace**:
+How far a Stage's actual weekly entries sit above or below its Required volume, as a signed number: -5 means five fewer Organizations a week than the Target needs.
+_Avoid_: Shortfall, Health
+
 **Constraint**:
 The Stage whose Conversion rate most limits progress toward the Target right now.
 _Avoid_: Bottleneck
