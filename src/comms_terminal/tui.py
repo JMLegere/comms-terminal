@@ -110,6 +110,9 @@ ModalScreen { background: #7c6f64 25%; align: center middle; }
 #daylist > .option-list--option-highlighted { background: #f5edca; text-style: none; }
 #daylist:focus > .option-list--option-highlighted { background: #eee0b7; color: #4f3829; }
 #eventscroll { height: 1fr; padding: 1 1; }
+#plsummary { height: auto; padding: 1 0 0 0; }
+#pllegend { height: auto; }
+#plorgs { height: 1fr; padding: 1 0; }
 #thread { display: none; }
 #thread.open { display: block; width: 3fr; }
 .threadempty, .sidetext { padding: 1 1; }
@@ -580,6 +583,9 @@ HELP = [  # (group, [(keys, what it does)]) — the full key map; Gmail-style wh
                 ("delete", "in the reply's file list: remove the highlighted file"),
                 ("; / :", "expand / collapse every message (click a message or ••• to toggle one)"),
                 ("ctrl+shift+click", "open a link in your browser (shift lets Ghostty take the click)")]),
+    ("Pipeline", [("enter", "Stage row: its Organizations · Organization: open it"),
+                  ("s", "set an Organization's Stage (z undoes)"), ("v", "set its Revenue Value or Fundraising Value"),
+                  ("y", "copy the Pipeline's math as Markdown for an agent")]),
     ("Drafts", [("n", "start a blank draft"), ("enter", "edit the selected draft"), ("x", "delete the selected draft (z undoes)"),
                 ("y", "copy the draft and its recipients' threads as Markdown for an agent"),
                 ("ctrl+s", "save exact fields and body"), ("esc", "save and return to the list"),
@@ -829,6 +835,12 @@ def health_ok(connection) -> bool:
     return problem(connection) is None
 
 
+def rail_share(db, p: str) -> str:
+    """Projected ÷ Target for the rail (FR-PL-20); — without a Target."""
+    s = pipeline.math(db, p, orgs=False)["summary"]
+    return f"{s['share'] * 100:.0f}%" if s["target"] else "—"
+
+
 class Rail(OptionList):
     """Side rail (herdr/Plain style): threads and cases sections with their Status views, browse, and connections."""
     can_focus = True
@@ -869,6 +881,8 @@ class Rail(OptionList):
         due = len(sequences.tasks_due(db))
         opts += [gap, header("sequence", "outreach"), item("tasks", "tasks", "Tasks", due or ""),
                  item("sequences", "sequence", "Sequences", sum(1 for q in sequences.sequences(db) if not q["archived_at"]))]
+        opts += [gap, header("pipeline", "pipeline")] + [
+            item(f"pipeline:{p.lower()}", p.lower(), pipeline.NAMES[p], rail_share(db, p)) for p in pipeline.PIPELINES]
         opts += [gap, header("inbox", "browse"),
                  item("people", "people", "People", inbox.people_count(db)),
                  item("organizations", "organizations", "Organizations",
@@ -3419,16 +3433,23 @@ class PeoplePage(TablePage):
                 self.query_one(DataTable).move_cursor(row=rows[0])
 
 
+def org_stage_cells(held: dict) -> tuple[str, str]:
+    """Stage and Value for the Organizations list: Revenue's, else Fundraising's (FR-PL-29)."""
+    s = next((held[p] for p in pipeline.PIPELINES if held.get(p, {}).get("stage")), None)
+    return (escape(s["stage"]), pipeline.money(s["value"]) if s["value"] is not None else "") if s else ("", "")
+
+
 class OrganizationsPage(TablePage):
     RAIL = "organizations"
     TITLE = f"{ICON['organizations']} organizations"
-    COLUMNS = ("", "Domain", "People", "Todo")
+    COLUMNS = ("", "Domain", "People", "Todo", "Stage", "Value")
     EMPTY = "No organizations yet. They form from company email domains."
 
     def rows(self):
+        states = pipeline.states(self.app.db)
         return [(o, (f"[#654735]{ICON['organization']}[/]", f"[b]{escape(o['domain'])}[/]",
                      f"[#928374]{ICON['people']} {o['people']}[/]",
-                     f"[#45707a]{ICON['TODO']} {o['todo']}[/]" if o["todo"] else ""))
+                     f"[#45707a]{ICON['TODO']} {o['todo']}[/]" if o["todo"] else "", *org_stage_cells(states.get(o["id"], {}))))
                 for o in inbox.organizations(self.app.db)]
 
     def open(self, o):
@@ -3495,9 +3516,11 @@ class ThreadListPage(TablePage):
 
 
 class OrganizationPage(ThreadListPage):
-    """An Organization: its Threads in the list, its people in the right pane (Jeremy, 2026-10-12)."""
+    """An Organization: its Threads in the list; its Pipeline section and people in the right pane (Jeremy,
+    2026-10-12; FR-PL-26). s and v set its Stage and Value."""
     RAIL = "organizations"
     SIDE = f"{ICON['people']} people"
+    BINDINGS = ThreadListPage.BINDINGS + [Binding("s", "stage", "stage"), Binding("v", "value", "value")]
 
     def __init__(self, domain):
         super().__init__()
@@ -3506,17 +3529,332 @@ class OrganizationPage(ThreadListPage):
     def threads(self):
         return inbox.organization_view(self.app.db, self.domain)["threads"]
 
+    def org(self) -> dict:
+        r = self.app.db.execute("SELECT id, domain, name FROM organizations WHERE domain = ?", (self.domain,)).fetchone()
+        return dict(r) if r else None
+
+    def action_stage(self):
+        o = self.org()
+        if o:
+            set_org_stage(self.app, o)
+
+    def action_value(self):
+        o = self.org()
+        if o:
+            set_org_value(self.app, o)
+
     def refresh_data(self):
         super().refresh_data()
         if self.app.main.current is not self:
             return
         people = inbox.organization_view(self.app.db, self.domain)["people"]
         emails = [i["value"] for p in people for i in p["identities"] if i["kind"] == "email"]
-        self.app.main.show_side("\n\n".join(
+        o = self.org()
+        self.app.main.show_side((pipeline_section(self.app.db, o["id"]) + "\n\n" if o else "") + "\n\n".join(
             f"[@click=app.open_person({p['id']})][b underline]{escape(p['name'])}[/][/]\n"
             + "\n".join(f"[#928374]{ICON[IDENTITY_ICON[i['kind']]]} {escape(i['value'])}[/]"
                         for i in p["identities"])
             for p in people) or "[#928374]No people yet.[/]", tana=(emails, [self.domain]))
+
+
+# --- Pipelines (ADR 0006; docs/design/console.md § Pipeline) ------------------------------------------------
+
+PIPELINE_NARROW = 110  # columns below which a Pipeline page drops its Organizations pane
+
+
+def org_pipelines(db, org_id: int) -> list[str]:
+    """The Pipelines an Organization holds a Stage in."""
+    return [p for p, s in pipeline.current(db, org_id).items() if s["stage"]]
+
+
+def choose_pipeline(app, org: dict, then, what: str):
+    """In exactly one Pipeline: that one; in neither or both: ask (FR-PL-27, FR-PL-28)."""
+    held = org_pipelines(app.db, org["id"])
+    if len(held) == 1:
+        then(held[0])
+        return
+    app.push_screen(Pick(f"{what} · {org['name']}", [(p, f"{ICON[p.lower()]} {pipeline.NAMES[p]}")
+                                                    for p in pipeline.PIPELINES]),
+                    lambda p: p and then(p))
+
+
+def set_org_stage(app, org: dict, p: str | None = None):
+    """s: the Pipeline's Stages, the current one marked, plus a switch to the other Pipeline."""
+    if p is None:
+        choose_pipeline(app, org, lambda q: set_org_stage(app, org, q), "Stage")
+        return
+    now = pipeline.current(app.db, org["id"]).get(p, {}).get("stage")
+    other = next(q for q in pipeline.PIPELINES if q != p)
+    opts = [(s, f"{'▸ ' if s == now else '  '}{s}" + ("  [#928374](current)[/]" if s == now else ""))
+            for s in pipeline.STAGES[p]] + [(f"pipeline:{other}", f"  [#928374]{pipeline.NAMES[other]}…[/]")]
+
+    def chosen(stage):
+        if stage is None:
+            return
+        if stage.startswith("pipeline:"):
+            set_org_stage(app, org, stage.split(":")[1])
+            return
+        try:
+            entry = pipeline.set_stage(app.db, org["id"], p, stage)
+        except pipeline.Refused as e:
+            app.notify(f"Not changed: {e}", severity="error")
+            return
+        if entry is not None:
+            app.offer_undo(f"{org['name']} → {stage}.", lambda: pipeline.undo(app.db, entry))
+        app.main.refresh_all()
+    app.push_screen(Pick(f"Stage · {org['name']} ({pipeline.NAMES[p]})", opts), chosen)
+
+
+def set_org_value(app, org: dict):
+    """v: the Organization's Revenue Value or Fundraising Value; Value belongs to the Pipeline, not the Stage."""
+    def ask(p):
+        hint = "CAD, next 12 months, e.g. 90k" if p == pipeline.REVENUE else "CAD cheque, e.g. 250k"
+
+        def typed(text):
+            if text is None:
+                return
+            try:
+                entry = pipeline.set_value(app.db, org["id"], p, text)
+            except pipeline.Refused as e:
+                app.notify(f"Not changed: {e}", severity="error")
+                return
+            if entry is not None:
+                app.offer_undo(f"{org['name']}: {pipeline.NAMES[p]} Value CAD {pipeline.parse_amount(text):,}.",
+                               lambda: pipeline.undo(app.db, entry))
+            app.main.refresh_all()
+        app.push_screen(Ask(f"{pipeline.NAMES[p]} Value · {org['name']}", hint), typed)
+    choose_pipeline(app, org, ask, "Value")
+
+
+def pipeline_section(db, org_id: int) -> str:
+    """The Organization page's Pipeline section (FR-PL-26)."""
+    g, now = PALETTE["grey1"], datetime.now(timezone.utc)
+    out = [f"[b]{ICON['pipeline']} Pipeline[/]"]
+    for p, s in pipeline.current(db, org_id).items():
+        stage = f"{s['stage']} · {(now - s['since']).days}d" if s["stage"] else f"[{g}]no Stage[/]"
+        value = f"CAD {s['value']:,}" if s["value"] is not None else f"[{g}]no Value[/]"
+        out.append(f"{pipeline.NAMES[p]}  {stage}\n[{g}]{pipeline.NAMES[p]} Value[/]  {value}")
+    if len(out) == 1:
+        out.append(f"[{g}]In no Pipeline yet.[/]")
+    for h in pipeline.history(db, org_id)[:8]:
+        if h["kind"] == "STAGE":
+            change = f"{h['old']} → {h['new']}" if h["old"] else h["new"]
+        else:
+            change = f"Value {pipeline.money(h['old'])} → {pipeline.money(h['new'])}" if h["old"] is not None \
+                else f"Value {pipeline.money(h['new'])}"
+        out.append(f"[{g}]  {h['at'].astimezone():%Y-%m-%d}  {escape(change)}[/]")
+    out.append(f"[{g}]  (s stage · v value)[/]")
+    return "\n".join(out)
+
+
+def pipeline_bar(s: dict, width: int = 30) -> str:
+    """Projected ÷ Target: █ paying, ▓ weighted, ░ the gap; the glyphs carry it without colour."""
+    amount = s["target"]["amount"]
+    paid = min(width, round(width * s["paying"] / amount))
+    weighted = min(width - paid, round(width * s["weighted"] / amount))
+    return (f"[{PALETTE['green']}]{'█' * paid}[/][{PALETTE['aqua']}]{'▓' * weighted}[/]"
+            f"[{PALETTE['grey0']}]{'░' * (width - paid - weighted)}[/]  [b]{s['share'] * 100:.0f}%[/]")
+
+
+def pipeline_summary(m: dict) -> str:
+    s, g, name = m["summary"], PALETTE["grey1"], m["name"].lower()
+    t = s["target"]
+    lines = []
+    if not t:
+        lines.append(f"[{g}]No Target yet:[/] comms-terminal pipeline target {name} AMOUNT --by DATE")
+    else:
+        what = "TTM" if m["pipeline"] == pipeline.REVENUE else "round"
+        lines += [f"[{g}]Target[/]  [b]CAD {t['amount']:,}[/] {what} by {t['due']}", pipeline_bar(s),
+                  f"[{PALETTE['green']}]█[/] paying CAD {pipeline.money(s['paying'])} ({s['paying_count']})   "
+                  f"[{PALETTE['aqua']}]▓[/] weighted CAD {pipeline.money(s['weighted'])}"]
+        need = (f" = {s['customers']} new at CAD {pipeline.money(s['average'])}" if s["customers"] is not None
+                else f" [{g}](no paying {m['paying_stage']} Value yet to size it)[/]")
+        lines += [f"gap CAD {pipeline.money(s['gap'])}{need}",
+                  f"[{g}]must reach {m['paying_stage']} by {s['deadline']} ({s['weeks']:.0f} weeks)[/]"]
+    c = s["constraint"]
+    if c:
+        rate = pipeline.pct(c["rate"]) + ("p" if c["prior"] else "")
+        lines.append(f"constraint: [b]{c['stage']} → {c['next']}[/] (CR {rate})")
+    return "\n".join(lines)
+
+
+def pace_cell(x) -> str:
+    if x is None:
+        return f"[{PALETTE['grey1']}]—[/]"
+    return f"[{PALETTE['red'] if x < 0 else PALETTE['green']}]{pipeline.signed(x)}[/]"
+
+
+class PipelineOrgs(ClickTable):
+    """The Organizations pane of a Pipeline page: enter opens one; s and v set its Stage and Value."""
+    BINDINGS = [Binding("s", "stage", "stage"), Binding("v", "value", "value"),
+                Binding("escape", "stages", show=False)]
+
+    def org(self):
+        rows = getattr(self, "orgs", [])
+        return rows[self.cursor_row] if rows and self.cursor_row < len(rows) else None
+
+    def on_data_table_row_selected(self, event):
+        event.stop()
+        o = self.org()
+        if o:
+            self.app.main.open(lambda: OrganizationPage(o["domain"]))
+
+    def action_stage(self):
+        o = self.org()
+        if o:
+            set_org_stage(self.app, o)
+
+    def action_value(self):
+        o = self.org()
+        if o:
+            set_org_value(self.app, o)
+
+    def action_stages(self):
+        self.app.main.current.focus_first()
+
+
+def org_rows(orgs: list, now) -> list[tuple]:
+    g = PALETTE["grey1"]
+    return [(escape(o["name"]), pipeline.money(o["value"]), f"{o['days']}d",
+             f"[{g}]{when(o['last_message'].isoformat(), now) if o['last_message'] else '—'}[/]") for o in orgs]
+
+
+class PipelinePage(Page):
+    """One Pipeline's math (FR-PL-21..25): the summary and Stage table, the selected Stage's Organizations in the
+    right pane (or, narrow, a page of their own)."""
+    BINDINGS = [Binding("j", "down", "move", key_display="j/k"), Binding("k", "up", show=False),
+                Binding("y", "copy", "copy for agent")]
+    COLUMNS = ("Stage", "Orgs", "CR", "Time", "→Impact", "in", "need", "pace", "")
+
+    def __init__(self, p: str):
+        super().__init__()
+        self.p, self.RAIL = p, f"pipeline:{p.lower()}"
+        self.TITLE = f"{ICON[p.lower()]} pipeline · {pipeline.NAMES[p].lower()}"
+        try:
+            self.narrow = self.app.size.width < PIPELINE_NARROW
+        except Exception:  # noqa: BLE001 - no app yet (tests building pages directly)
+            self.narrow = False
+        self.SIDE = "" if self.narrow else f"{ICON['organizations']} organizations"
+        self.m, self.rows = None, []
+
+    def compose(self) -> ComposeResult:
+        yield Static(id="plsummary")
+        yield ClickTable(id="table", cursor_type="row")
+        yield Static(id="pllegend")
+
+    def on_mount(self):
+        cols = list(self.COLUMNS)
+        cols[4] = f"→{pipeline.PAYING[self.p][0]}"
+        self.query_one("#table", DataTable).add_columns(*cols)
+        if not self.narrow:
+            orgs = PipelineOrgs(id="plorgs", cursor_type="row")
+            self.app.main.query_one("#thread").mount(orgs)
+            orgs.add_columns("Organization", "Value", "stage", "last msg")
+        self.refresh_data()
+
+    def refresh_data(self):
+        db, g = self.app.db, PALETTE["grey1"]
+        self.m = m = pipeline.math(db, self.p)
+        self.query_one("#plsummary", Static).update(pipeline_summary(m))
+        table = self.query_one("#table", DataTable)
+        row = table.cursor_row
+        table.clear()
+        self.rows = m["stages"] + m["ending"]
+        for r in m["stages"]:
+            cr = pipeline.pct(r["rate"]) if r["rate"] is not None else \
+                f"[{g}]{pipeline.pct(r['prior'])}p[/]" if r["prior"] else f"[{g}]—[/]"
+            bold = "b " if r["constraint"] else ""
+            table.add_row(f"[{bold}#654735]{r['stage']}[/]", str(len(r["orgs"])), cr, pipeline.weeks(r["time"]),
+                          pipeline.pct(r["to_paying"]), pipeline.num(r["entries"]), pipeline.num(r["need"]),
+                          pace_cell(r["pace"]),
+                          ("[b #c14a4a]◀[/]" if self.narrow else "[b #c14a4a]◀ constraint[/]") if r["constraint"] else "")
+        for r in m["ending"]:
+            table.add_row(f"[{g}]{r['stage']}[/]", f"[{g}]{len(r['orgs'])}[/]", *[""] * 7)
+        table.move_cursor(row=min(row or 0, len(self.rows) - 1))
+        empty = not any(r["orgs"] for r in self.rows)
+        self.query_one("#pllegend", Static).update(
+            f"[{g}]trailing 90 days · p Planning prior · — no data[/]" + (
+                f"\n\n[{g}]No Organizations in {m['name']} yet. Press s on an Organization to add one.[/]"
+                if empty else ""))
+        self.show_stage()
+
+    def stage_row(self):
+        t = self.query_one("#table", DataTable)
+        return self.rows[t.cursor_row] if self.rows and t.cursor_row < len(self.rows) else None
+
+    def show_stage(self):
+        r = self.stage_row()
+        lists = self.app.main.query(PipelineOrgs)
+        if self.narrow or r is None or not lists:
+            return
+        orgs = lists.first()
+        keep = orgs.cursor_row
+        orgs.clear()
+        orgs.orgs = r["orgs"]
+        for cells in org_rows(r["orgs"], self.m["now"]):
+            orgs.add_row(*cells)
+        if not r["orgs"]:
+            orgs.add_row(f"[{PALETTE['grey1']}]None in {r['stage']}.[/]", "", "", "")
+        orgs.show_cursor = bool(r["orgs"])
+        if r["orgs"]:
+            orgs.move_cursor(row=min(keep or 0, len(r["orgs"]) - 1))
+        self.app.main.query_one("#thread").border_title = pill(
+            f"{ICON['organizations']} {r['stage'].lower()} · {len(r['orgs'])}", "green")
+
+    def on_data_table_row_highlighted(self, event):
+        if event.data_table.id == "table":
+            self.show_stage()
+
+    def on_data_table_row_selected(self, event):
+        if event.data_table.id != "table":
+            return
+        r = self.stage_row()
+        if r is None:
+            return
+        if self.narrow:
+            self.app.main.open(lambda: PipelineStagePage(self.p, r["stage"]))
+        else:
+            self.app.main.query_one(PipelineOrgs).focus()
+
+    def action_down(self):
+        self.query_one("#table", DataTable).action_cursor_down()
+
+    def action_up(self):
+        self.query_one("#table", DataTable).action_cursor_up()
+
+    def action_copy(self):
+        copy_for_agent(self.app, pipeline.markdown(self.m) + f"\nFresh copy: `comms-terminal pipeline "
+                       f"{self.m['name'].lower()}`\n", f"the {self.m['name']} Pipeline")
+
+
+class PipelineStagePage(TablePage):
+    """Narrow terminals: one Stage's Organizations as a page (FR-PL-25)."""
+    BINDINGS = TablePage.BINDINGS + [Binding("s", "stage", "stage"), Binding("v", "value", "value")]
+    COLUMNS = ("Organization", "Value", "stage", "last msg")
+
+    def __init__(self, p: str, stage: str):
+        super().__init__()
+        self.p, self.stage, self.RAIL = p, stage, f"pipeline:{p.lower()}"
+        self.TITLE = f"{ICON[p.lower()]} {pipeline.NAMES[p].lower()} · {stage.lower()}"
+        self.EMPTY = f"None in {stage}."
+
+    def rows(self):
+        m = pipeline.math(self.app.db, self.p)
+        orgs = next(r["orgs"] for r in m["stages"] + m["ending"] if r["stage"] == self.stage)
+        return list(zip(orgs, org_rows(orgs, m["now"])))
+
+    def open(self, o):
+        self.app.main.open(lambda: OrganizationPage(o["domain"]))
+
+    def action_stage(self):
+        o = self.selected()
+        if o:
+            set_org_stage(self.app, o)
+
+    def action_value(self):
+        o = self.selected()
+        if o:
+            set_org_value(self.app, o)
 
 
 class PersonPage(Page):
@@ -3815,7 +4153,8 @@ class StatusLine(Static):
         sec = main.section
         mode = VIEW_NAMES[app.view].upper() if sec.startswith("view:") else (
             f"CASES · {inbox.CASE_VIEWS[app.case_view].upper()}" if sec.startswith("cases:") else
-            "CONNECTION" if sec.startswith("conn:") else sec.upper())
+            "CONNECTION" if sec.startswith("conn:") else
+            f"PIPELINE · {sec.split(':')[1].upper()}" if sec.startswith("pipeline:") else sec.upper())
         if sec == "today" and main.list is not None and main.list.KIND and main.list.selectable_rows():
             mode += f" › {main.list.KIND.upper()}"
         if len(main.stack) > 1 and main.page is not None:  # deeper than the rail section: say where
@@ -5658,6 +5997,12 @@ class MainScreen(Screen):
         if self.rail.has_focus:
             if direction > 0:
                 self.focus_list()
+        elif isinstance(self.current, PipelinePage) and self.query(PipelineOrgs):
+            orgs = self.query_one(PipelineOrgs)
+            if direction > 0 and not orgs.has_focus:
+                orgs.focus()
+            elif direction < 0:
+                self.current.focus_first() if orgs.has_focus else self.rail.focus()
         elif isinstance(self.current, CalendarPage):
             if direction > 0 and not isinstance(self.focused, DayList):
                 self.query_one(DayList).focus()
@@ -5701,6 +6046,9 @@ class MainScreen(Screen):
         elif target.startswith("cases:"):
             self.app.case_view = int(target.split(":")[1])
             self.stack = [CasesPage]
+        elif target.startswith("pipeline:"):
+            p = target.split(":")[1].upper()
+            self.stack = [lambda: PipelinePage(p)]
         else:
             self.stack = [SECTIONS[target]]
         self._show()
@@ -5788,7 +6136,7 @@ class MainScreen(Screen):
         self.showing, self.side_text = None, None
         pane.set_class(bool(page.SIDE), "open")
         main.set_class(bool(page.SIDE), "split")
-        main.set_class(isinstance(page, CalendarPage), "wide")
+        main.set_class(isinstance(page, (CalendarPage, PipelinePage)), "wide")
         pane.border_title = pill(page.SIDE, "green") if page.SIDE else ""
         main.mount(page)
         main.border_title = pill(page.TITLE, "blue")

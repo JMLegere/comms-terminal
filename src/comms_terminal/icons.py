@@ -68,6 +68,9 @@ ICON = {
     "today": "\U000f05a8",          # md-white_balance_sunny: Today, the console's home
     "tasks": "\U000f05c7",          # md-format_list_checks
     "sequence": "\U000f027b",       # md-format_list_numbered
+    "pipeline": "\U000f0236",       # md-filter_variant (the Bowtie, ADR 0006)
+    "revenue": "\U000f0116",        # md-cash_multiple
+    "fundraising": "\U000f1890",    # md-hand_coin_outline
     "enrollment": "\U000f027b",     # an Enrollment Step: same as sequence
     "call": "\U000f0df0",           # md-phone_outgoing_outline
     "linkedin": "\U000f033b",       # md-linkedin

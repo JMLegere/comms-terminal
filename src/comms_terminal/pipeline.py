@@ -7,7 +7,7 @@ highest Stage counts as passing every earlier one, and a rate with no data is No
 Planning priors stand in only for Required volume and the Constraint. Nothing here sets Tasks.
 
 Interface: parse_pipeline, parse_stage, parse_amount, find_org, set_stage, set_value, undo, set_target, target,
-set_prior, priors, current, history, math, markdown.
+set_prior, priors, current, states, history, math, markdown.
 """
 
 import math as _m
@@ -195,6 +195,14 @@ def current(db, org_id: int) -> dict:
     return {p: s for (_, p), s in _state(_entries(db, org_id=org_id)).items()}
 
 
+def states(db) -> dict:
+    """{org_id: {pipeline: {stage, since, value}}} for every Organization with an entry (Organizations list)."""
+    out = {}
+    for (o, p), s in _state(_entries(db)).items():
+        out.setdefault(o, {})[p] = s
+    return out
+
+
 def history(db, org_id: int) -> list[dict]:
     """Stage and Value changes, newest first, each with what it replaced."""
     out, last = [], {}
@@ -243,15 +251,17 @@ def _last_messages(db) -> dict:
     return {r["domain"]: datetime.fromisoformat(r["at"]) for r in rows}
 
 
-def math(db, pipeline: str, now: datetime | None = None) -> dict:
-    """Everything a Pipeline page shows. A pure function of the log, Target, priors, and `now`."""
+def math(db, pipeline: str, now: datetime | None = None, orgs: bool = True) -> dict:
+    """Everything a Pipeline page shows. A pure function of the log, Target, priors, and `now`.
+    `orgs=False` skips each Organization's row details (the rail needs only the summary)."""
     now = now or _now()
     today = now.astimezone(LOCAL).date()
     chain, opens = _chain(pipeline), OPEN[pipeline]
     rows = _entries(db, pipeline)
     state = {o: s for (o, _), s in _state(rows).items() if s["stage"]}
-    orgs = {r["id"]: r for r in db.execute("SELECT * FROM organizations")}
-    last = _last_messages(db)
+    want_rows = orgs
+    orgs = {r["id"]: r for r in db.execute("SELECT * FROM organizations")} if want_rows else {}
+    last = _last_messages(db) if want_rows and state else {}
 
     # When each Organization first reached each chain Stage; a jump reaches the skipped Stages at the same time
     reached, ends = {}, {}  # org -> {index: time}; org -> time it left the chain (Lost, Passed)
@@ -333,6 +343,8 @@ def math(db, pipeline: str, now: datetime | None = None) -> dict:
                 "days": (now - s["since"]).days, "last_message": last.get(orgs[o]["domain"])}
 
     def members(stages):
+        if not want_rows:
+            return [{"id": o} for o in state if state[o]["stage"] in stages]
         return sorted((org_row(o) for o in state if state[o]["stage"] in stages), key=lambda r: (-r["days"], r["name"]))
 
     stages = [{"stage": s, "orgs": members((s,)), "rate": rates[s], "prior": used[s][0] if used[s][1] else None,
@@ -370,6 +382,8 @@ def num(x) -> str:
         return "—"
     if isinstance(x, str):
         return x
+    if round(x, 1) == 0:
+        return "0"
     return f"{x:.0f}" if abs(x) >= 10 else f"{x:.1f}".replace("0.", ".") if abs(x) < 1 else f"{x:.1f}"
 
 

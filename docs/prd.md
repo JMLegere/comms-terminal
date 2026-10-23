@@ -46,7 +46,7 @@ Source: discovery doc §Context.
 - Plain keyboard, plus reply keys.
 - No notifications.
 
-**Non-goals.** Task management (Linear), CRM pipeline, meeting notes (Tana), and auto-replies.
+**Non-goals.** Task management (Linear), a CRM (Attio stays the CRM; Organization Stage moved here, ADR 0006), meeting notes (Tana), and auto-replies.
 
 **Deferred.**
 - Tool comments, WhatsApp, LinkedIn.
@@ -191,6 +191,10 @@ Status key in brackets:
 ### Sequences
 
 - **FR-SEQ** [C]: Outreach Sequences run inside Comms Terminal (ADR 0003): Jeremy edits Sequences of Steps, enrolls one Person at a time, and works each Enrollment's Due Tasks on the Tasks page; anything inbound from the Person pauses their Enrollments. Requirements FR-SEQ-1–24 and acceptance scenarios AS-SEQ-1–17 are in the Sequencing PRD (`.agents/prd/2026-10-16-sequencing.md`); FR-SEQ-25 and AS-SEQ-18 (Start date) are in `.agents/prd/2026-10-19-enrollment-start-date.md`; the interface names (Enroll, Due Tasks, Complete Task, Skip Task, Pause, Resume, Finish) are in `docs/design/api-and-database.md` §2.
+
+### Pipeline
+
+- **FR-PL** [C]: Each Organization holds a Stage and a Value in the Revenue and Fundraising Pipelines, set by Jeremy in the console (`s`, `v`) or the `pipeline` CLI and kept in an append-only log (ADR 0006). A Pipeline page per Pipeline works the Winning by Design Bowtie backwards from its Target: Conversion rate, Time in Stage, Conversion to Impact, Required volume, Pace, and the Constraint, with Planning priors only where no rate is measured. It sets no Tasks and does not read or write Attio. Detail: `.agents/prd/2026-10-23-pipeline.md` (FR-PL-1..40); design: `docs/design/console.md` § Pipeline.
 
 ### Non-functional
 
