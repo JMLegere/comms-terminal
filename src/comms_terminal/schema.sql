@@ -376,9 +376,3 @@ CREATE TABLE pipeline_targets (
   amount   INTEGER NOT NULL CHECK (amount > 0),
   due      TEXT NOT NULL                     -- YYYY-MM-DD
 ) STRICT;
-CREATE TABLE planning_priors (
-  pipeline TEXT NOT NULL CHECK (pipeline IN ('REVENUE', 'FUNDRAISING')),
-  stage    TEXT NOT NULL,
-  rate     REAL NOT NULL CHECK (rate > 0 AND rate <= 1),
-  PRIMARY KEY (pipeline, stage)
-) STRICT;

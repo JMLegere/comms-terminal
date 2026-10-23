@@ -33,7 +33,6 @@ def seeded(tmp_path):
         if value:
             pl.set_value(db, org[domain], R, value)
     pl.set_target(db, R, "1m", "2028-09-30")
-    pl.set_prior(db, R, "Prioritization", 20)
     return path, db, org
 
 
@@ -87,7 +86,7 @@ def test_revenue_page_rail_table_pane_and_stage_change_with_undo(tmp_path):
     assert any("Revenue" in r and "%" in r for r in seen["rail"])
     assert seen["page"] is PipelinePage
     assert "CAD 1,000,000" in seen["summary"] and "constraint" in seen["summary"]
-    assert "Selection" in seen["stages"][3] and "Impact/Expansion" in seen["stages"][6]
+    assert "Selection" in seen["stages"][3] and "Impact" in seen["stages"][6]
     assert seen["pane"] == ["acme.com"]
     assert seen["focus"] is PipelineOrgs
     assert seen["picker"] is Pick and seen["after"] == "Commit"

@@ -2,12 +2,14 @@
 Fundraising, and the Bowtie math worked backwards from each Pipeline's Target.
 
 Every Stage and Value change is appended to `pipeline_log`; the current Stage and Value are the latest entries
-not undone. Rates follow Metabase's method (BI cards 59, 60, 86): a trailing 90-day cohort, an Organization's
-highest Stage counts as passing every earlier one, and a rate with no data is None (shown `—`) with no fallback.
-Planning priors stand in only for Required volume and the Constraint. Nothing here sets Tasks.
+not undone. The math follows Winning by Design's "The Bowtie: A Proposed Standard" v1.0: conversion rates
+(CR = output ÷ input) over the last 12 months, an Organization's highest Stage counting as passing every earlier
+one, retention (GRR, CR7) and expansion (CR8) from Value changes, NRR = GRR × (1 + expansion), and the
+backward plan from the Target. A rate with no data falls back to the standard's Table 6.2 benchmark for the
+average deal size, marked as such; observed rates never mix with benchmarks. Nothing here sets Tasks.
 
 Interface: parse_pipeline, parse_stage, parse_amount, find_org, set_stage, set_value, undo, set_target, target,
-set_prior, priors, current, states, history, math, markdown.
+benchmark, current, states, history, math, markdown.
 """
 
 import math as _m
@@ -27,10 +29,19 @@ OPEN = {REVENUE: ("Awareness", "Education", "Prioritization", "Selection", "Comm
 PAYING = {REVENUE: ("Impact", "Expansion"), FUNDRAISING: ("Closed",)}
 ENDING = {REVENUE: ("Lost", "Churned"), FUNDRAISING: ("Passed",)}
 STAGES = {p: OPEN[p] + PAYING[p] + ENDING[p] for p in PIPELINES}
-# Rows after the Stage table: counts only (design § Pipeline)
-END_ROWS = {REVENUE: (("Impact/Expansion", ("Impact", "Expansion")), ("Lost", ("Lost",)), ("Churned", ("Churned",))),
+# Rows after the Stage table (design § Pipeline); Impact and Expansion carry retention and expansion
+END_ROWS = {REVENUE: (("Impact", ("Impact",)), ("Expansion", ("Expansion",)), ("Lost", ("Lost",)),
+                      ("Churned", ("Churned",))),
             FUNDRAISING: (("Closed", ("Closed",)), ("Passed", ("Passed",)))}
-WINDOW = timedelta(days=90)
+WINDOW = timedelta(days=365)  # the standard's last-12-month trendlines (p. 30)
+# The standard's Table 6.2 (p. 28): SaaS benchmarks by ACV band, in percent. Columns map to our Stages:
+# CR1 Awareness, CR2 Education, CR3 Prioritization, CR4 Selection (win rate), CR6 Onboarding (1 - onboarding
+# churn), CR7 retention (GRR), CR8 expansion. CR5 is price discount, which Value already nets out. The standard's
+# Mutual Commit is the win (VM5) and its next loss is onboarding churn, so Commit → Onboarding counts as 100%.
+BENCH_KEYS = ("Awareness", "Education", "Prioritization", "Selection", "Commit", "Onboarding", "GRR", "Expansion")
+BENCHMARKS = ((1_000, (5, 10, 65, 15, 100, 90, 90, 5)), (5_000, (7, 12, 70, 17, 100, 92, 92, 10)),
+              (15_000, (8, 15, 80, 20, 100, 93, 95, 15)), (50_000, (9, 18, 90, 25, 100, 94, 96, 20)),
+              (150_000, (10, 20, 95, 30, 100, 98, 97, 25)), (None, (None, None, 100, 35, 100, 99, 98, 30)))
 
 
 class Refused(ValueError):
@@ -145,25 +156,12 @@ def target(db, pipeline: str) -> dict | None:
     return {"amount": r["amount"], "due": date.fromisoformat(r["due"])} if r else None
 
 
-def set_prior(db, pipeline: str, stage: str, rate) -> None:
-    """A Planning prior in percent (`20`), or None to clear it."""
-    stage = parse_stage(pipeline, stage)
-    if stage not in OPEN[pipeline]:
-        raise Refused(f"priors are for open Stages: {', '.join(OPEN[pipeline])}")
-    with db:
-        if rate is None:
-            db.execute("DELETE FROM planning_priors WHERE pipeline = ? AND stage = ?", (pipeline, stage))
-            return
-        r = float(rate)
-        if not 0 < r <= 100:
-            raise Refused("a prior is a percentage above 0 and at most 100")
-        db.execute("INSERT OR REPLACE INTO planning_priors (pipeline, stage, rate) VALUES (?, ?, ?)",
-                   (pipeline, stage, r / 100))
-
-
-def priors(db, pipeline: str) -> dict:
-    return {r["stage"]: r["rate"] for r in
-            db.execute("SELECT stage, rate FROM planning_priors WHERE pipeline = ?", (pipeline,))}
+def benchmark(pipeline: str, acv) -> dict:
+    """The Table 6.2 row for a deal size (Revenue only): {Stage or GRR or Expansion: rate}."""
+    if pipeline != REVENUE or not acv:
+        return {}
+    row = next(r for top, r in BENCHMARKS if top is None or acv <= top)
+    return {k: v / 100 for k, v in zip(BENCH_KEYS, row) if v is not None}
 
 
 def _entries(db, pipeline=None, org_id=None) -> list:
@@ -252,7 +250,7 @@ def _last_messages(db) -> dict:
 
 
 def math(db, pipeline: str, now: datetime | None = None, orgs: bool = True) -> dict:
-    """Everything a Pipeline page shows. A pure function of the log, Target, priors, and `now`.
+    """Everything a Pipeline page shows. A pure function of the log, Target, and `now`.
     `orgs=False` skips each Organization's row details (the rail needs only the summary)."""
     now = now or _now()
     today = now.astimezone(LOCAL).date()
@@ -307,35 +305,68 @@ def math(db, pipeline: str, now: datetime | None = None, orgs: bool = True) -> d
         return p
 
     to_paying = {s: product(opens[i:], rates.get) for i, s in enumerate(opens)}
-    prior = priors(db, pipeline)
-    used = {s: (rates[s], False) if rates[s] is not None else (prior.get(s), s in prior) for s in opens}
 
-    paying = [o for o, s in state.items() if s["stage"] in PAYING[pipeline]]
+    # Retention (CR7, GRR) and expansion (CR8) over the window: Value held by customers paying at its start
+    # against what they hold now; churned or lost customers hold nothing (the standard's p. 21)
+    then = {o: st for (o, _), st in _state([e for e in rows if datetime.fromisoformat(e["effective_at"]) <= start
+                                             ]).items()}
+    base = retained = grown = 0
+    for o, st in then.items():
+        if st["stage"] in PAYING[pipeline] and st["value"]:
+            now_st = state.get(o, {})
+            v = now_st.get("value") or 0 if now_st.get("stage") in PAYING[pipeline] else 0
+            base, retained, grown = base + st["value"], retained + min(v, st["value"]), grown + max(0, v - st["value"])
+    grr = retained / base if base else None
+    expansion = grown / retained if retained else None
+
+    paying = [o for o, st in state.items() if st["stage"] in PAYING[pipeline]]
     paying_value = sum(state[o]["value"] or 0 for o in paying)
+    average = paying_value / len(paying) if paying and paying_value else None
+    values = [st["value"] for st in state.values() if st["value"]]
+    acv = average or (sum(values) / len(values) if values else None)  # the deal size that picks the benchmark row
+    bench = benchmark(pipeline, acv)
+    used = {s: (rates[s], False) if rates[s] is not None else (bench.get(s), s in bench) for s in opens}
+    used["GRR"] = (grr, False) if grr is not None else (bench.get("GRR"), "GRR" in bench)
+    used["Expansion"] = (expansion, False) if expansion is not None else (bench.get("Expansion"), "Expansion" in bench)
+    nrr = used["GRR"][0] * (1 + used["Expansion"][0]) if used["GRR"][0] is not None and \
+        used["Expansion"][0] is not None else None
+
     weighted = sum((state[o]["value"] or 0) * (to_paying[state[o]["stage"]] or 0)
                    for o in state if state[o]["stage"] in opens)
-    average = paying_value / len(paying) if paying and paying_value else None
     goal = target(db, pipeline)
     summary = {"target": goal, "paying": paying_value, "paying_count": len(paying), "weighted": weighted,
-               "projected": paying_value + weighted, "average": average}
+               "average": average, "grr": used["GRR"], "expansion": used["Expansion"], "nrr": nrr,
+               "nrr_benchmark": used["GRR"][1] or used["Expansion"][1], "kept": paying_value,
+               "projected": paying_value + weighted, "acv": acv if bench else None}
     need = {s: None for s in opens}
     if goal:
         deadline = _deadline(pipeline, goal["due"])
-        gap = max(0, goal["amount"] - summary["projected"])
+        # Value is next-12-month revenue: the window's year is that times NRR for each year until it starts
+        years = max(0.0, (deadline - today).days / 365)
+        kept = paying_value * nrr ** years if nrr is not None and pipeline == REVENUE else paying_value
+        projected = kept + weighted
+        gap = max(0, goal["amount"] - projected)
         customers = _m.ceil(gap / average) if average else None
         weeks = (deadline - today).days / 7
-        summary.update(gap=gap, customers=customers, deadline=deadline, weeks=weeks,
-                       share=summary["projected"] / goal["amount"])
+        summary.update(kept=kept, projected=projected, gap=gap, customers=customers, deadline=deadline,
+                       weeks=weeks, years=years, share=projected / goal["amount"])
         for i, s in enumerate(opens):
             through = product(opens[i:], lambda x: used[x][0])
             ahead = sum(times[x] if times[x] is not None else 1 for x in opens[i:]) / 7
             if customers is None or not through:
                 continue
             need[s] = "late" if weeks - ahead <= 0 else customers / through / (weeks - ahead)
-    rated = [(used[s][0], i, s) for i, s in enumerate(opens) if used[s][0] is not None]
-    constraint = min(rated)[2] if rated else None
-    summary["constraint"] = constraint and {"stage": constraint, "next": chain[opens.index(constraint) + 1],
-                                            "rate": used[constraint][0], "prior": used[constraint][1]}
+
+    # The constraint: the measured rate furthest below its benchmark (the standard's p. 28); without
+    # benchmarks (Fundraising), the lowest measured rate
+    measured = [(s, rates[s]) for s in opens if rates[s] is not None] + \
+        [(k, v) for k, v in (("GRR", grr), ("Expansion", expansion)) if v is not None]
+    scored = [(r / bench[k] if bench else r, i, k, r) for i, (k, r) in enumerate(measured)
+              if not bench or (bench.get(k) and k != "Commit")]  # Commit's 100% only carries the chain
+    constraint = min(scored)[2] if scored else None
+    nxt = {s: chain[opens.index(s) + 1] for s in opens} | {"GRR": "retained", "Expansion": "expanded"}
+    summary["constraint"] = constraint and {"stage": constraint, "next": nxt[constraint],
+                                            "rate": dict(measured)[constraint], "benchmark": bench.get(constraint)}
 
     def org_row(o):
         s = state[o]
@@ -347,11 +378,16 @@ def math(db, pipeline: str, now: datetime | None = None, orgs: bool = True) -> d
             return [{"id": o} for o in state if state[o]["stage"] in stages]
         return sorted((org_row(o) for o in state if state[o]["stage"] in stages), key=lambda r: (-r["days"], r["name"]))
 
-    stages = [{"stage": s, "orgs": members((s,)), "rate": rates[s], "prior": used[s][0] if used[s][1] else None,
-               "time": times[s], "to_paying": to_paying[s], "entries": entries[s], "need": need[s],
+    stages = [{"stage": s, "orgs": members((s,)), "rate": rates[s], "benchmark": bench.get(s),
+               "used": used[s][0], "assumed": used[s][1], "time": times[s], "to_paying": to_paying[s],
+               "entries": entries[s], "need": need[s],
                "pace": entries[s] - need[s] if isinstance(need[s], float) else None,
                "constraint": s == constraint} for s in opens]
-    ending = [{"stage": label, "orgs": members(group)} for label, group in END_ROWS[pipeline]]
+    right = {"Impact": "GRR", "Expansion": "Expansion"}  # rows that carry retention and expansion
+    ending = [{"stage": label, "orgs": members(group), "measure": right.get(label),
+               "rate": dict(measured).get(right.get(label)), "benchmark": bench.get(right.get(label)),
+               "constraint": right.get(label) == constraint and constraint is not None}
+              for label, group in END_ROWS[pipeline]]
     return {"pipeline": pipeline, "name": NAMES[pipeline], "paying_stage": chain[-1], "now": now,
             "summary": summary, "stages": stages, "ending": ending}
 
@@ -391,34 +427,58 @@ def signed(x) -> str:
     return "—" if x is None else ("+" if x >= 0 else "-") + num(abs(x))
 
 
+def rate_text(rate, used, assumed) -> str:
+    """A measured rate, else its benchmark marked `b`, else `—`."""
+    return pct(rate) if rate is not None else f"{pct(used)}b" if assumed and used is not None else "—"
+
+
+def marked(pair) -> str:
+    """(rate, from a benchmark) as `96%` or `96%b`."""
+    rate, assumed = pair
+    return pct(rate) + ("b" if assumed and rate is not None else "")
+
+
+def constraint_text(c) -> str:
+    name = {"GRR": "Retention (GRR)", "Expansion": "Expansion"}.get(c["stage"], f"{c['stage']} → {c['next']}")
+    return f"{name}: {pct(c['rate'])}" + (f" vs {pct(c['benchmark'])} benchmark" if c["benchmark"] else "")
+
+
 def markdown(m: dict) -> str:
     """The Pipeline page as Markdown, for `y` and `comms-terminal pipeline` (FR-PL-31)."""
     s, name = m["summary"], m["name"]
     lines = [f"# {name} Pipeline", ""]
     t = s["target"]
     if not t:
-        lines.append(f"No Target yet: comms-terminal pipeline target {name.lower()} AMOUNT --by YYYY-MM-DD")
+        lines.append(f"No Target yet: comms-terminal pipeline target {name.lower()} AMOUNT --by DATE")
     else:
         what = "TTM revenue" if m["pipeline"] == REVENUE else "round"
         lines += [f"- Target: CAD {t['amount']:,} {what} by {t['due']}",
                   f"- Projected: CAD {s['projected']:,.0f} ({s['share'] * 100:.0f}%): paying CAD {s['paying']:,}"
-                  f" ({s['paying_count']}), weighted CAD {s['weighted']:,.0f}",
+                  f" ({s['paying_count']}) → CAD {s['kept']:,.0f} in the window, weighted new CAD {s['weighted']:,.0f}",
                   f"- Gap: CAD {s['gap']:,.0f}"
                   + (f" = {s['customers']} new at CAD {s['average']:,.0f}" if s["customers"] is not None else ""),
                   f"- Must reach {m['paying_stage']} by {s['deadline']} ({s['weeks']:.0f} weeks)"]
-    c = s["constraint"]
-    if c:
-        lines.append(f"- Constraint: {c['stage']} → {c['next']} (CR {pct(c['rate'])}{'p' if c['prior'] else ''})")
-    lines += ["", f"| Stage | Orgs | CR | Time | →{m['paying_stage']} | in/wk | need/wk | pace |",
-              "|---|---|---|---|---|---|---|---|"]
+    if m["pipeline"] == REVENUE:
+        b = "b" if s["nrr_benchmark"] else ""
+        lines.append(f"- Retention: GRR {marked(s['grr'])}, expansion {marked(s['expansion'])}, NRR {pct(s['nrr'])}{b}")
+    if s["acv"]:
+        lines.append(f"- Benchmarks: WbD Bowtie Standard Table 6.2, ACV around CAD {s['acv']:,.0f}")
+    if s["constraint"]:
+        lines.append(f"- Constraint: {constraint_text(s['constraint'])}")
+    lines += ["", f"| Stage | Orgs | CR | bench | Time | →{m['paying_stage']} | in/wk | need/wk | pace |",
+              "|---|---|---|---|---|---|---|---|---|"]
     for r in m["stages"]:
-        cr = pct(r["rate"]) if r["rate"] is not None else (pct(r["prior"]) + "p" if r["prior"] else "—")
-        lines.append(f"| {r['stage']}{' ◀ constraint' if r['constraint'] else ''} | {len(r['orgs'])} | {cr} |"
+        lines.append(f"| {r['stage']}{' ◀ constraint' if r['constraint'] else ''} | {len(r['orgs'])} |"
+                     f" {rate_text(r['rate'], r['used'], r['assumed'])} | {pct(r['benchmark'])} |"
                      f" {weeks(r['time'])} | {pct(r['to_paying'])} | {num(r['entries'])} | {num(r['need'])} |"
                      f" {signed(r['pace'])} |")
     for r in m["ending"]:
-        lines.append(f"| {r['stage']} | {len(r['orgs'])} | | | | | | |")
-    lines += ["", "trailing 90 days · p Planning prior · — no data", ""]
+        measure = {"GRR": "GRR ", "Expansion": "expansion "}.get(r["measure"], "")
+        rate = f"{measure}{pct(r['rate'])}" if r["measure"] else ""
+        bench = pct(r["benchmark"]) if r["measure"] else ""
+        lines.append(f"| {r['stage']}{' ◀ constraint' if r['constraint'] else ''} | {len(r['orgs'])} | {rate} |"
+                     f" {bench} | | | | | |")
+    lines += ["", "last 12 months · b WbD benchmark (Table 6.2) · — no data", ""]
     for r in m["stages"] + m["ending"]:
         if r["orgs"]:
             lines.append(f"## {r['stage']}")

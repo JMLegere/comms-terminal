@@ -1,5 +1,5 @@
 """Commands for a terminal agent: Threads, Drafts, and Due Tasks as Markdown, changes to a Draft, enrolling a
-Person in a Sequence, Jeremy's calendar Events, and Pipelines (show, Target, priors, Stage and Value). Nothing here sends, completes, or finishes; Jeremy does that from the console (FR-SEQ-22)."""
+Person in a Sequence, Jeremy's calendar Events, and Pipelines (show, Target, Stage and Value). Nothing here sends, completes, or finishes; Jeremy does that from the console (FR-SEQ-22)."""
 
 import json
 import sys
@@ -38,7 +38,7 @@ def add_parsers(sub):
     v.add_argument("--last", type=int, metavar="N", help="the last N Events that already started, newest first")
     v.add_argument("--deleted", action="store_true", help="include Deleted Events (gone from Google, kept here)")
     v.add_argument("--json", action="store_true", help="one JSON object per line")
-    p = sub.add_parser("pipeline", help="a Pipeline's math as Markdown, or set a Target, prior, Stage, or Value")
+    p = sub.add_parser("pipeline", help="a Pipeline's math as Markdown, or set a Target, Stage, or Value")
     ps = p.add_subparsers(dest="pipeline_cmd", required=True)
     for name in ("revenue", "fundraising"):
         ps.add_parser(name, help=f"the {name.title()} Pipeline as Markdown")
@@ -46,10 +46,6 @@ def add_parsers(sub):
     t.add_argument("pipeline")
     t.add_argument("amount", help="CAD, e.g. 1000000 or 1m")
     t.add_argument("--by", required=True, type=date.fromisoformat, help="due date, YYYY-MM-DD")
-    t = ps.add_parser("prior", help="set or clear a Planning prior: an assumed Conversion rate for one Stage")
-    t.add_argument("pipeline")
-    t.add_argument("stage")
-    t.add_argument("rate", help="percent, e.g. 20, or none to clear")
     for kind, what in (("stage", "move an Organization to a Stage"), ("value", "set an Organization's Value")):
         t = ps.add_parser(kind, help=what)
         t.add_argument("org", help="a domain or exact Organization name")
@@ -99,11 +95,6 @@ def pipeline_cmd(db, a) -> str:
         pipeline.set_target(db, p, a.amount, a.by)
         t = pipeline.target(db, p)
         return f"{pipeline.NAMES[p]} Target: CAD {t['amount']:,} by {t['due']}\n"
-    if c == "prior":
-        rate = None if a.rate.lower() == "none" else a.rate
-        pipeline.set_prior(db, p, a.stage, rate)
-        stage = pipeline.parse_stage(p, a.stage)
-        return f"{pipeline.NAMES[p]} {stage} prior: {'cleared' if rate is None else a.rate + '%'}\n"
     org = pipeline.find_org(db, a.org)
     if c == "stage":
         done = pipeline.set_stage(db, org["id"], p, a.stage, a.at)

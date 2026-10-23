@@ -194,7 +194,7 @@ Status key in brackets:
 
 ### Pipeline
 
-- **FR-PL** [C]: Each Organization holds a Stage and a Value in the Revenue and Fundraising Pipelines, set by Jeremy in the console (`s`, `v`) or the `pipeline` CLI and kept in an append-only log (ADR 0006). A Pipeline page per Pipeline works the Winning by Design Bowtie backwards from its Target: Conversion rate, Time in Stage, Conversion to Impact, Required volume, Pace, and the Constraint, with Planning priors only where no rate is measured. It sets no Tasks and does not read or write Attio. Detail: `.agents/prd/2026-10-23-pipeline.md` (FR-PL-1..40); design: `docs/design/console.md` § Pipeline.
+- **FR-PL** [C]: Each Organization holds a Stage and a Value in the Revenue and Fundraising Pipelines, set by Jeremy in the console (`s`, `v`) or the `pipeline` CLI and kept in an append-only log (ADR 0006). A Pipeline page per Pipeline works Winning by Design's Bowtie Standard v1.0 backwards from its Target over the last 12 months: Conversion rate, Time in Stage, Conversion to Impact, Retention rate (GRR), Expansion rate, Net retention, Required volume, Pace, and the Constraint (the measured rate furthest below its benchmark), with the standard's Table 6.2 benchmarks only where no rate is measured. It sets no Tasks and does not read or write Attio. Detail: `.agents/prd/2026-10-23-pipeline.md` (FR-PL-1..40); design: `docs/design/console.md` § Pipeline.
 
 ### Non-functional
 

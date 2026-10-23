@@ -1,6 +1,6 @@
 """Pipelines (.agents/prd/2026-10-23-pipeline.md): the log, undo, and the Bowtie math worked by hand.
 Times are fixed: Friday 2026-10-23, 13:00 in Halifax; Revenue Target CAD 1M TTM by 2028-09-30 (343 days to
-the 2027-10-01 Impact deadline)."""
+the 2027-10-01 Impact deadline). Math: WbD's Bowtie Standard v1.0."""
 
 from datetime import date, datetime, timedelta, timezone
 
@@ -112,53 +112,74 @@ def test_math_by_hand(five):
     assert rows["Awareness"]["to_paying"] == pytest.approx(0.2)
     s = m["summary"]
     assert (s["paying"], s["paying_count"], s["average"]) == (120_000, 1, 120_000)
+    # Nobody paid a year ago: GRR and expansion are the ACV <= 150k benchmarks (97%, 25%)
+    assert s["grr"] == (0.97, True) and s["expansion"] == (0.25, True)
+    assert s["nrr"] == pytest.approx(0.97 * 1.25)
+    assert s["kept"] == pytest.approx(120_000 * (0.97 * 1.25) ** (343 / 365))
     assert s["weighted"] == pytest.approx(60_000 * 0.5 + 30_000 / 3)  # C has no Value
-    assert (s["gap"], s["customers"], s["deadline"], s["weeks"]) == (pytest.approx(840_000), 7, date(2027, 10, 1), pytest.approx(WEEKS))
-    assert s["constraint"] == {"stage": "Commit", "next": "Onboarding", "rate": 0.5, "prior": False}
+    gap = 1_000_000 - s["kept"] - s["weighted"]
+    assert (s["gap"], s["customers"], s["deadline"], s["weeks"]) == (
+        pytest.approx(gap), -(-gap // 120_000), date(2027, 10, 1), pytest.approx(WEEKS))
+    # The constraint: the measured rate furthest below its benchmark (Onboarding 100% vs 98% is the least
+    # margin; Commit has no real benchmark)
+    assert s["constraint"] == {"stage": "Onboarding", "next": "Impact", "rate": 1, "benchmark": 0.98}
+    n = s["customers"]
     # need = customers / rates through the paying Stage / (weeks left - Time in the Stages ahead)
-    assert rows["Onboarding"]["need"] == pytest.approx(7 / 1 / (WEEKS - 20 / 7))
-    assert rows["Commit"]["need"] == pytest.approx(7 / 0.5 / (WEEKS - 27.5 / 7))
-    assert rows["Awareness"]["need"] == pytest.approx(7 / 0.2 / (WEEKS - 82.5 / 7))
-    assert rows["Awareness"]["entries"] == pytest.approx(5 / (90 / 7))
+    assert rows["Onboarding"]["need"] == pytest.approx(n / 1 / (WEEKS - 20 / 7))
+    assert rows["Commit"]["need"] == pytest.approx(n / 0.5 / (WEEKS - 27.5 / 7))
+    assert rows["Awareness"]["need"] == pytest.approx(n / 0.2 / (WEEKS - 82.5 / 7))
+    assert rows["Awareness"]["entries"] == pytest.approx(5 / (365 / 7))
     assert rows["Awareness"]["pace"] == pytest.approx(rows["Awareness"]["entries"] - rows["Awareness"]["need"])
     assert [(r["stage"], [o["domain"] for o in r["orgs"]]) for r in m["ending"]] == [
-        ("Impact/Expansion", ["d.com"]), ("Lost", ["e.com"]), ("Churned", [])]
+        ("Impact", ["d.com"]), ("Expansion", []), ("Lost", ["e.com"]), ("Churned", [])]
     assert [o["domain"] for o in rows["Awareness"]["orgs"]] == ["c.com"]
+
+
+def test_retention_and_expansion_from_value_changes(db):
+    """CR7 (GRR) and CR8 (expansion) over the last 12 months, for customers paying at its start."""
+    p, q, r = org(db, "p.com"), org(db, "q.com"), org(db, "r.com")
+    for o, value in ((p, 100_000), (q, 50_000), (r, 50_000)):
+        pl.set_stage(db, o, R, "Impact", at=NOW - 400 * DAY)
+        pl.set_value(db, o, R, value, at=NOW - 400 * DAY)
+    pl.set_value(db, p, R, "120k", at=NOW - 100 * DAY)  # expanded
+    pl.set_stage(db, q, R, "Churned", at=NOW - 50 * DAY)  # gone
+    pl.set_value(db, r, R, "30k", at=NOW - 20 * DAY)  # downgraded
+    s = pl.math(db, R)["summary"]
+    assert s["grr"] == (pytest.approx(130 / 200), False)
+    assert s["expansion"] == (pytest.approx(20 / 130), False)
+    assert s["nrr"] == pytest.approx(130 / 200 * (1 + 20 / 130))  # = (retained + expansion) / base
 
 
 @pytest.fixture
 def thin(db):
-    """One old customer outside the 90-day window; one new Organization stuck in Education."""
+    """One customer paying since before the 12-month window; one new Organization stuck in Education."""
     y, x = org(db, "y.com"), org(db, "x.com")
-    walk(db, y, (200, "Impact"))
-    pl.set_value(db, y, R, "100k", at=NOW - 200 * DAY)
+    walk(db, y, (400, "Impact"))
+    pl.set_value(db, y, R, "100k", at=NOW - 400 * DAY)
     walk(db, x, (20, "Awareness"), (10, "Education"))
     pl.set_target(db, R, 1_000_000, date(2028, 9, 30))
     return db
 
 
-def test_no_data_and_planning_priors(thin):
-    rows = {r["stage"]: r for r in pl.math(thin, R)["stages"]}
-    assert rows["Prioritization"]["rate"] is None and rows["Prioritization"]["need"] is None
-    for stage, rate in (("Prioritization", 20), ("Selection", 50), ("Commit", 50), ("Onboarding", 100)):
-        pl.set_prior(thin, R, stage, rate)
+def test_benchmarks_fill_missing_rates(thin):
     m = pl.math(thin, R)
     rows = {r["stage"]: r for r in m["stages"]}
-    assert rows["Prioritization"]["rate"] is None and rows["Prioritization"]["prior"] == 0.2
-    assert rows["Prioritization"]["to_paying"] is None  # priors never feed observed numbers
-    assert rows["Prioritization"]["need"] == pytest.approx(9 / 0.05 / (WEEKS - 4 / 7))  # missing Time = 1 day
-    assert rows["Education"]["need"] is None  # observed 0%: nobody gets through
+    assert rows["Prioritization"]["rate"] is None and rows["Prioritization"]["used"] == 0.95  # ACV <= 150k
+    assert rows["Prioritization"]["assumed"] and rows["Prioritization"]["to_paying"] is None  # never mixed
+    assert m["summary"]["grr"] == (1.0, False) and m["summary"]["expansion"] == (0.0, False)
+    assert (m["summary"]["kept"], m["summary"]["customers"]) == (pytest.approx(100_000), 9)
+    assert rows["Prioritization"]["need"] == pytest.approx(9 / (0.95 * 0.30 * 1.0 * 0.98) / (WEEKS - 4 / 7))
+    assert rows["Education"]["need"] is None  # measured 0%: nobody gets through
     assert m["summary"]["constraint"]["stage"] == "Education"
-    assert "| Prioritization | 0 | 20%p |" in pl.markdown(m)
+    out = pl.markdown(m)
+    assert "| Prioritization | 0 | 95%b | 95% |" in out and "NRR 100%" in out
 
 
 def test_late_and_no_target(thin):
     m = pl.math(thin, pl.FUNDRAISING)
-    assert m["summary"]["target"] is None
+    assert m["summary"]["target"] is None and m["summary"]["acv"] is None  # no benchmarks for Fundraising
     assert "No Target yet: comms-terminal pipeline target fundraising" in pl.markdown(m)
     pl.set_target(thin, R, "1m", "2027-10-25")  # Impact deadline 2026-10-26: three days left
-    for stage in ("Prioritization", "Selection", "Commit", "Onboarding"):
-        pl.set_prior(thin, R, stage, 50)
     rows = {r["stage"]: r for r in pl.math(thin, R)["stages"]}
     assert rows["Onboarding"]["need"] != "late" and rows["Prioritization"]["need"] == "late"
 
@@ -178,11 +199,9 @@ def test_cli(tmp_path, capsys):
     run("stage", "STMEC", "revenue", "selection", "--at", "2026-09-01")
     run("value", "stmec.example", "revenue", "45k")
     assert capsys.readouterr().out.splitlines()[-1] == "STMEC (stmec.example) Revenue: Selection, CAD 45,000"
-    run("prior", "revenue", "commit", "40")
-    assert "Commit prior: 40%" in capsys.readouterr().out
     run("revenue")
     out = capsys.readouterr().out
-    assert "- STMEC (stmec.example): CAD 45k" in out and "| Commit | 0 | 40%p |" in out
+    assert "- STMEC (stmec.example): CAD 45k" in out and "| Commit | 0 | 100%b | 100% |" in out
     with pytest.raises(SystemExit, match="Awareness, Education"):
         run("stage", "STMEC", "revenue", "Discovery")
     with pytest.raises(SystemExit, match="no Organization"):

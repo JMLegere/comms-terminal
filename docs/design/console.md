@@ -179,12 +179,12 @@ Thread, Person, Organization, and Case pages show separate details-column sectio
 
 ### Pipeline (ADR 0006, approved 2026-10-23)
 
-Terms follow `GLOSSARY.md` (Pipeline, Stage, Value, Target, Conversion rate, Time in Stage, Conversion to Impact, Weighted pipeline, Required volume, Pace, Constraint, Planning prior). The page shows the math only; it sets no Tasks.
+Terms follow `GLOSSARY.md` (Pipeline, Stage, Value, Target, Conversion rate, Time in Stage, Conversion to Impact, Weighted pipeline, Required volume, Pace, Constraint, Benchmark, Retention rate, Expansion rate, Net retention). The math is Winning by Design's Bowtie Standard v1.0. The page shows the math only; it sets no Tasks.
 
 - **Rail**: a `pipeline` group right below `outreach` (Tasks, Sequences), with one line per Pipeline: Revenue and Fundraising. Each line shows projected ÷ Target as a percentage (`Revenue 32%`), or `—` when the Pipeline has no Target yet.
 - **Page**: the summary and the Stage table on the left; the selected Stage's Organizations in a pane on the right, the same shape as a Status view and its Thread pane. `←`/`→` move between them.
-- **Summary**: the Target line (`Target  CAD 1,000,000 TTM by 2028-09-30`); a bar of projected ÷ Target, solid for paying, shaded for the Weighted pipeline, light for the gap, with the percentage; the paying amount and count, and the Weighted pipeline amount; the gap as new customers needed at the average Value; the date new customers must reach Impact by (2027-10-01) and the weeks left; and the Constraint (`Selection → Commit (CR 25%)`).
-- **Stage table**: Stage, Orgs, CR, Time, →Impact, in, need, pace. Pace is in − need with its sign (`-5` red, `+0` green). The Constraint row is bold and ends with `◀ constraint`. A Planning prior shows grey with a `p` (`20%p`); a number with no data shows `—`. Rows for the ending Stages follow (Impact/Expansion, Lost, Churned) with counts only, and a legend line closes the table: `trailing 90 days · p Planning prior · — no data`. Fundraising uses its own Stages, with →Closed in place of →Impact and Closed and Passed as ending rows.
+- **Summary**: the Target line (`Target  CAD 1,000,000 TTM by 2028-09-30`); a bar of projected ÷ Target, solid for paying, shaded for the Weighted pipeline, light for the gap, with the percentage; the paying Value and count with what it becomes in the Target's window (`paying CAD 60k (1) → 72k in window`, grown by Net retention for each year until the window starts) and the Weighted pipeline; the gap as new customers needed at the average Value; the date new customers must reach Impact by and the weeks left; `retention GRR 97%b · expansion 25%b · NRR 121%b`; and the Constraint with its benchmark (`Selection → Commit: 20% vs 30% benchmark`).
+- **Stage table**: Stage, Orgs, CR, bench, Time, →Impact, in, need, pace, over the last 12 months. Pace is in − need with its sign (`-5` red, `+0` green). The Constraint row is bold and ends with `◀`. A missing rate shows its Benchmark grey with a `b` (`95%b`); with neither, `—`. Rows for the right side follow: Impact with GRR, Expansion with the Expansion rate, each beside its benchmark, then Lost and Churned with counts; a legend closes the table: `last 12 months · b WbD benchmark (Table 6.2) · — no data`. Fundraising uses its own Stages, with →Closed and Closed and Passed as ending rows, and has no benchmarks.
 - **Organizations pane**: Organization, Value, days in Stage, and last msg (time since the latest message with anyone at that Organization), longest in Stage first. `enter` opens the Organization.
 - **Narrow**: below about 110 columns the pane hides, and `enter` on a Stage opens its Organizations as a page; `esc` returns.
 - **Organization page**: a `Pipeline` section in the properties column, above Attio: each Pipeline's Stage and days in it, its Revenue Value or Fundraising Value, then the Stage and Value changes, newest first, with `(s stage · v value)`.
@@ -218,7 +218,7 @@ Rendered with Textual's test driver (`run_test`, SVG screenshots) and once in a 
 5. Send failure: box stays open with the error.
 6. Health BROKEN in the sidebar.
 7. Person record with a blocked Identity.
-8. Revenue Pipeline with priors, `—` cells, a Constraint row, and negative and positive Pace, wide (160 columns) and narrow (100 columns, pane hidden).
+8. Revenue Pipeline with benchmark cells, `—` cells, a Constraint row, and negative and positive Pace, wide (160 columns) and narrow (100 columns, pane hidden).
 9. Fundraising Pipeline with no Target, and a Pipeline with no Organizations.
 10. Organization page Pipeline section with history; the Stage picker for an Organization in one Pipeline and in none.
 

@@ -3665,16 +3665,18 @@ def pipeline_summary(m: dict) -> str:
     else:
         what = "TTM" if m["pipeline"] == pipeline.REVENUE else "round"
         lines += [f"[{g}]Target[/]  [b]CAD {t['amount']:,}[/] {what} by {t['due']}", pipeline_bar(s),
-                  f"[{PALETTE['green']}]█[/] paying CAD {pipeline.money(s['paying'])} ({s['paying_count']})   "
-                  f"[{PALETTE['aqua']}]▓[/] weighted CAD {pipeline.money(s['weighted'])}"]
+                  f"[{PALETTE['green']}]█[/] paying CAD {pipeline.money(s['paying'])} ({s['paying_count']})"
+                  f" → {pipeline.money(s['kept'])} in window   "
+                  f"[{PALETTE['aqua']}]▓[/] weighted new CAD {pipeline.money(s['weighted'])}"]
         need = (f" = {s['customers']} new at CAD {pipeline.money(s['average'])}" if s["customers"] is not None
                 else f" [{g}](no paying {m['paying_stage']} Value yet to size it)[/]")
         lines += [f"gap CAD {pipeline.money(s['gap'])}{need}",
                   f"[{g}]must reach {m['paying_stage']} by {s['deadline']} ({s['weeks']:.0f} weeks)[/]"]
-    c = s["constraint"]
-    if c:
-        rate = pipeline.pct(c["rate"]) + ("p" if c["prior"] else "")
-        lines.append(f"constraint: [b]{c['stage']} → {c['next']}[/] (CR {rate})")
+    if m["pipeline"] == pipeline.REVENUE:
+        lines.append(f"[{g}]retention[/] GRR {pipeline.marked(s['grr'])} · expansion {pipeline.marked(s['expansion'])}"
+                     f" · NRR {pipeline.pct(s['nrr'])}{'b' if s['nrr_benchmark'] else ''}")
+    if s["constraint"]:
+        lines.append(f"constraint: [b]{escape(pipeline.constraint_text(s['constraint']))}[/]")
     return "\n".join(lines)
 
 
@@ -3724,7 +3726,7 @@ class PipelinePage(Page):
     right pane (or, narrow, a page of their own)."""
     BINDINGS = [Binding("j", "down", "move", key_display="j/k"), Binding("k", "up", show=False),
                 Binding("y", "copy", "copy for agent")]
-    COLUMNS = ("Stage", "Orgs", "CR", "Time", "→Impact", "in", "need", "pace", "")
+    COLUMNS = ("Stage", "Orgs", "CR", "bench", "Time", "→Impact", "in", "need", "pace", "")
 
     def __init__(self, p: str):
         super().__init__()
@@ -3744,7 +3746,7 @@ class PipelinePage(Page):
 
     def on_mount(self):
         cols = list(self.COLUMNS)
-        cols[4] = f"→{pipeline.PAYING[self.p][0]}"
+        cols[5] = f"→{pipeline.PAYING[self.p][0]}"
         self.query_one("#table", DataTable).add_columns(*cols)
         if not self.narrow:
             orgs = PipelineOrgs(id="plorgs", cursor_type="row")
@@ -3760,20 +3762,25 @@ class PipelinePage(Page):
         row = table.cursor_row
         table.clear()
         self.rows = m["stages"] + m["ending"]
+        mark = "[b #c14a4a]◀[/]"  # the summary names the constraint; the row is bold and marked
         for r in m["stages"]:
             cr = pipeline.pct(r["rate"]) if r["rate"] is not None else \
-                f"[{g}]{pipeline.pct(r['prior'])}p[/]" if r["prior"] else f"[{g}]—[/]"
+                f"[{g}]{pipeline.pct(r['used'])}b[/]" if r["assumed"] else f"[{g}]—[/]"
             bold = "b " if r["constraint"] else ""
-            table.add_row(f"[{bold}#654735]{r['stage']}[/]", str(len(r["orgs"])), cr, pipeline.weeks(r["time"]),
+            table.add_row(f"[{bold}#654735]{r['stage']}[/]", str(len(r["orgs"])), cr,
+                          f"[{g}]{pipeline.pct(r['benchmark'])}[/]", pipeline.weeks(r["time"]),
                           pipeline.pct(r["to_paying"]), pipeline.num(r["entries"]), pipeline.num(r["need"]),
-                          pace_cell(r["pace"]),
-                          ("[b #c14a4a]◀[/]" if self.narrow else "[b #c14a4a]◀ constraint[/]") if r["constraint"] else "")
+                          pace_cell(r["pace"]), mark if r["constraint"] else "")
         for r in m["ending"]:
-            table.add_row(f"[{g}]{r['stage']}[/]", f"[{g}]{len(r['orgs'])}[/]", *[""] * 7)
+            label = {"GRR": "GRR ", "Expansion": "exp "}.get(r["measure"], "")
+            rate = f"{label}{pipeline.pct(r['rate'])}" if r["measure"] else ""
+            table.add_row(f"[{g}]{r['stage']}[/]", f"[{g}]{len(r['orgs'])}[/]", rate,
+                          f"[{g}]{pipeline.pct(r['benchmark'])}[/]" if r["measure"] else "", *[""] * 5,
+                          mark if r["constraint"] else "")
         table.move_cursor(row=min(row or 0, len(self.rows) - 1))
         empty = not any(r["orgs"] for r in self.rows)
         self.query_one("#pllegend", Static).update(
-            f"[{g}]trailing 90 days · p Planning prior · — no data[/]" + (
+            f"[{g}]last 12 months · b WbD benchmark (Table 6.2) · — no data[/]" + (
                 f"\n\n[{g}]No Organizations in {m['name']} yet. Press s on an Organization to add one.[/]"
                 if empty else ""))
         self.show_stage()

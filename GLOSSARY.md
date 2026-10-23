@@ -168,8 +168,8 @@ What one Organization is worth in a Pipeline: its Revenue Value or its Fundraisi
 _Avoid_: Deal value, ACV, ARR, MRR
 
 **Revenue Value**:
-The revenue expected from an Organization over the next twelve months, one-off fees included; for a paying customer, its trailing-twelve-month revenue grown at its trailing growth rate.
-_Avoid_: FARR (when meaning this number), Contract value
+The revenue expected from an Organization over the next twelve months, one-off fees included (FARR).
+_Avoid_: ARR, ACV, Contract value
 
 **Fundraising Value**:
 The cheque an investor Organization has committed or is expected to commit.
@@ -204,12 +204,24 @@ How far a Stage's actual weekly entries sit above or below its Required volume, 
 _Avoid_: Shortfall, Health
 
 **Constraint**:
-The Stage whose Conversion rate most limits progress toward the Target right now.
+The measured rate, of a Stage or of retention or expansion, that sits furthest below its Benchmark.
 _Avoid_: Bottleneck
 
-**Planning prior**:
-A Conversion rate Jeremy assumes for a Stage, used for Required volume only where no measured rate exists, and always shown as assumed.
-_Avoid_: Benchmark, Default rate
+**Benchmark**:
+A Conversion rate, Retention rate, or Expansion rate from Winning by Design's Bowtie Standard (Table 6.2), chosen by average deal size. It stands in where Agent Maple has no measured rate, and is always shown as a benchmark.
+_Avoid_: Planning prior, Prior, Default rate
+
+**Retention rate**:
+The share of the Value that customers paying a year ago still hold today, after churn and downgrades (GRR).
+_Avoid_: Logo retention, Renewal rate
+
+**Expansion rate**:
+How much the retained customers' Value grew over the same year, as a share of what they kept.
+_Avoid_: Upsell rate
+
+**Net retention**:
+Retention rate times one plus Expansion rate: how a year changes the Value of today's customers (NRR).
+_Avoid_: Net dollar retention
 
 **Pipeline view**:
 The console page that shows one Pipeline's math against its Target. Each Pipeline has its own. It sets no Tasks.

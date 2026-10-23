@@ -24,7 +24,7 @@ from typing import Protocol, Sequence
 
 from . import files, platforms
 
-SCHEMA_VERSION = 25
+SCHEMA_VERSION = 26
 WAIT = timedelta(days=4)  # Waiting for them ends after this with no reply: back to Todo to follow up (#116)
 EMAIL_CONFIRMATION_PENDING = "Email confirmation pending; wait for its sent receipt before replying."
 MIGRATIONS = {  # version -> statement that upgrades an existing database to it
@@ -398,6 +398,7 @@ CREATE TABLE planning_priors (
   rate     REAL NOT NULL CHECK (rate > 0 AND rate <= 1),
   PRIMARY KEY (pipeline, stage)
 ) STRICT;""",
+    26: "DROP TABLE planning_priors;",  # Table 6.2 benchmarks replace Planning priors
 }
 
 # ponytail: fixed list; extend when a free-mail sender forms an Organization by mistake.

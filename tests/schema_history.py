@@ -3,6 +3,12 @@
 from comms_terminal import inbox
 
 UNDO = {
+    26: """CREATE TABLE planning_priors (
+  pipeline TEXT NOT NULL CHECK (pipeline IN ('REVENUE', 'FUNDRAISING')),
+  stage    TEXT NOT NULL,
+  rate     REAL NOT NULL CHECK (rate > 0 AND rate <= 1),
+  PRIMARY KEY (pipeline, stage)
+) STRICT;""",
     25: "DROP TABLE planning_priors; DROP TABLE pipeline_targets; DROP TABLE pipeline_log;",
     24: "DROP TABLE events; DROP TABLE event_provider;",
     23: "DROP INDEX connections_inbound; ALTER TABLE connections DROP COLUMN inbound;",
