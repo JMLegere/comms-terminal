@@ -62,8 +62,8 @@ _Avoid_: Commitment, Issue, Project, Ticket
 ## Triage
 
 **Status**:
-Where a Thread stands, as in Plain: Todo, Snoozed, or Done. Every Thread also has one Status detail. A Case's Status is the roll-up of its Threads' Statuses.
-_Avoid_: State, Stage
+Where a Thread stands, as in Plain: Todo, Snoozed, or Done. Every Thread also has one Status detail. A Case's Status is the roll-up of its Threads' Statuses. An Organization's place in a Pipeline is its Stage, not a Status.
+_Avoid_: State
 
 **Status detail**:
 The reason within a Status, as in Plain: Needs first response, Needs next response, or Investigating (Todo); Waiting for them or Paused for later (Snoozed); Done or Ignored (Done).
@@ -149,6 +149,59 @@ _Avoid_: Concession, Discount, Incentive, Sweetener
 **Play**:
 One deliberate use of a Lever, Sequence, or sales recipe on one deal, recorded with its result.
 _Avoid_: Tactic, Attempt
+
+## Pipeline
+
+**Pipeline**:
+One staged flow of Organizations toward an outcome: Revenue (customers, toward revenue) or Fundraising (investors, toward a round). Each has its own Stages and its own Target.
+_Avoid_: Funnel, Deal list, Bowtie (when meaning the Revenue Pipeline itself)
+
+**Stage**:
+Where an Organization stands in one Pipeline. Revenue Stages follow the Bowtie: Awareness, Education, Prioritization, Selection, Commit, Onboarding, Impact, Expansion, then Lost or Churned. An Organization enters Impact when its first payment arrives; Onboarding means signed but not yet paying. Fundraising Stages: Research, Outreach, Meeting, Diligence, Soft commit, Closed, Passed. An Organization with no Stage is in no Pipeline, and it may hold a Stage in each Pipeline at once. Jeremy sets every Stage change himself.
+_Avoid_: Status, Account Stage (Attio's name for it), Deal stage
+
+**Stage history**:
+The record of every Stage an Organization has held in a Pipeline and when it entered and left each one.
+
+**Value**:
+What one Organization is worth in a Pipeline. In Revenue: the revenue expected from it over the next twelve months, one-off fees included; for a paying customer, its trailing-twelve-month revenue grown at its trailing growth rate. In Fundraising: its committed cheque.
+_Avoid_: Deal value, ACV, ARR, MRR, FARR (when meaning this number)
+
+**Target**:
+The outcome a Pipeline works backwards from, with a date: revenue over the trailing twelve months for Revenue, a round size for Fundraising.
+_Avoid_: Goal (when meaning this number), Quota
+
+**Conversion to Impact**:
+The share of Organizations that held a Stage and later reached Impact, measured from Stage history. Each Stage has its own.
+_Avoid_: Win rate, Close rate, Stage conversion (that is one Stage to the next)
+
+**Weighted pipeline**:
+The revenue the open Organizations are expected to bring: each one's Value weighted by its Stage's Conversion to Impact.
+_Avoid_: Forecast, Expected pipeline
+
+**Conversion rate**:
+The share of Organizations in a Stage that move on to the next Stage, measured from Stage history.
+_Avoid_: CR (in prose), Stage conversion
+
+**Time in Stage**:
+How long Organizations stay in a Stage before moving on, measured from Stage history.
+_Avoid_: Velocity, Δt (in prose), Cycle time (that spans several Stages)
+
+**Required volume**:
+How many Organizations must enter a Stage each week to reach the Target, worked backwards from the Target through each later Stage's Conversion rate and Time in Stage.
+_Avoid_: Quota, Input quota
+
+**Constraint**:
+The Stage whose Conversion rate most limits progress toward the Target right now.
+_Avoid_: Bottleneck
+
+**Planning prior**:
+A Conversion rate Jeremy assumes for a Stage, used for Required volume only where no measured rate exists, and always shown as assumed.
+_Avoid_: Benchmark, Default rate
+
+**Pipeline view**:
+The console page that shows one Pipeline's math against its Target. Each Pipeline has its own. It sets no Tasks.
+_Avoid_: Dashboard, Execution view
 
 ## Sources
 
