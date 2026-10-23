@@ -164,8 +164,16 @@ _Avoid_: Status, Account Stage (Attio's name for it), Deal stage
 The record of every Stage an Organization has held in a Pipeline and when it entered and left each one.
 
 **Value**:
-What one Organization is worth in a Pipeline. In Revenue: the revenue expected from it over the next twelve months, one-off fees included; for a paying customer, its trailing-twelve-month revenue grown at its trailing growth rate. In Fundraising: its committed cheque.
-_Avoid_: Deal value, ACV, ARR, MRR, FARR (when meaning this number)
+What one Organization is worth in a Pipeline: its Revenue Value or its Fundraising Value. Value belongs to the Organization's place in the Pipeline, not to its Stage; Jeremy sets it by hand.
+_Avoid_: Deal value, ACV, ARR, MRR
+
+**Revenue Value**:
+The revenue expected from an Organization over the next twelve months, one-off fees included; for a paying customer, its trailing-twelve-month revenue grown at its trailing growth rate.
+_Avoid_: FARR (when meaning this number), Contract value
+
+**Fundraising Value**:
+The cheque an investor Organization has committed or is expected to commit.
+_Avoid_: Ticket, Check size
 
 **Target**:
 The outcome a Pipeline works backwards from, with a date: revenue over the trailing twelve months for Revenue, a round size for Fundraising.
