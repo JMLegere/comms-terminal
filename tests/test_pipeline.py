@@ -184,6 +184,26 @@ def test_late_and_no_target(thin):
     assert rows["Onboarding"]["need"] != "late" and rows["Prioritization"]["need"] == "late"
 
 
+def test_this_week_bullets(five):
+    m = pl.math(five, R)
+    top = m["stages"][0]
+    assert m["summary"]["constraint"]["stage"] == "Onboarding" and not m["stages"][5]["orgs"]
+    assert pl.this_week(m) == [
+        "Find accounts for Onboarding",
+        f"Add {-(-(top['need'] - top['entries']) // 1):.0f} accounts to Awareness this week"
+        f" (need {pl.num(top['need'])} a week, getting {pl.num(top['entries'])})",
+        "Set a Value for C: the math leaves them out"]
+
+
+def test_this_week_moves_the_accounts_sitting_in_the_constraint(db):
+    a, b = org(db, "a.com", "Acme"), org(db, "b.com", "Bolt")
+    walk(db, a, (40, "Selection"), (20, "Commit"), (10, "Onboarding"), value="10k")
+    walk(db, b, (30, "Selection"), value="10k")
+    m = pl.math(db, R)  # Onboarding: 0 of 1 reached Impact, against a 93% benchmark
+    assert pl.this_week(m)[:2] == ["Set a Target: comms-terminal pipeline target revenue AMOUNT --by DATE",
+                                   "Move Acme from Onboarding to Impact"]
+
+
 def test_cli(tmp_path, capsys):
     from comms_terminal import main
     path = str(tmp_path / "inbox.db")

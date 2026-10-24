@@ -182,17 +182,25 @@ Thread, Person, Organization, and Case pages show separate details-column sectio
 Terms follow `GLOSSARY.md` (Pipeline, Stage, Value, Target, Conversion rate, Time in Stage, Conversion to Impact, Weighted pipeline, Required volume, Pace, Constraint, Benchmark, Retention rate, Expansion rate, Net retention). The math is Winning by Design's Bowtie Standard v1.0. The page shows the math only; it sets no Tasks.
 
 - **Rail**: a `pipeline` group right below `outreach` (Tasks, Sequences), with one line per Pipeline: Revenue and Fundraising. Each line shows projected ÷ Target as a percentage (`Revenue 32%`), or `—` when the Pipeline has no Target yet.
-- **Page**: the summary and the Stage table on the left; the selected Stage's Organizations in a pane on the right, the same shape as a Status view and its Thread pane. `←`/`→` move between them.
-- **Summary**: the Target line (`Target  CAD 1,000,000 TTM by 2028-09-30`); a bar of projected ÷ Target, solid for paying, shaded for the Weighted pipeline, light for the gap, with the percentage; the paying Value and count with what it becomes in the Target's window (`paying CAD 60k (1) → 72k in window`, grown by Net retention for each year until the window starts) and the Weighted pipeline; the gap as new customers needed at the average Value; the date new customers must reach Impact by and the weeks left; `retention GRR 97%b · expansion 25%b · NRR 121%b`; and the Constraint with its benchmark (`Selection → Commit: 20% vs 30% benchmark`).
-- **Stage table**: Stage, Orgs, CR, bench, Time, →Impact, in, need, pace, over the last 12 months. Pace is in − need with its sign (`-5` red, `+0` green). The Constraint row is bold and ends with `◀`. A missing rate shows its Benchmark grey with a `b` (`95%b`); with neither, `—`. Rows for the right side follow: Impact with GRR, Expansion with the Expansion rate, each beside its benchmark, then Lost and Churned with counts; a legend closes the table: `last 12 months · b WbD benchmark (Table 6.2) · — no data`. Fundraising uses its own Stages, with →Closed and Closed and Passed as ending rows, and has no benchmarks.
-- **Organizations pane**: Organization, Value, days in Stage, and last msg (time since the latest message with anyone at that Organization), longest in Stage first. `enter` opens the Organization.
-- **Narrow**: below about 110 columns the pane hides, and `enter` on a Stage opens its Organizations as a page; `esc` returns.
+- **Page** (revised 2026-10-24, `.agents/discovery/2026-10-24-pipeline-page-layout.md`): one full-width page, action first. No right pane. The page scrolls vertically, top to bottom:
+  1. **This week**, beside **Progress** (stacked below 140 columns).
+     - This week: bullets the math produces (never Tasks), in this order:
+       - the Constraint's lever ("Move St Mary's from Onboarding to Impact", or "Find accounts for Onboarding" when the Stage is empty);
+       - the input at the top Stage ("Add 2 accounts to Awareness this week (need 1.8 a week, getting .1)");
+       - accounts the math cannot count yet ("Set a Value for LCL Excavation: the math leaves them out");
+       - "Set a Target: …" when there is none.
+     - Progress: a gauge of projected ÷ Target (█ customers today, ▓ likely from open accounts, ░ gap), the Target and date, the gap in new customers at the average Value, the Impact deadline, and "customers keep 96% and grow 20% a year (net 115%)".
+  2. **Constraint**: a red label, then the step in plain words: "Onboarding → Impact: 67% convert (benchmark 94%)".
+  3. **Bowtie**: every Stage left to right, aligned over the board's columns. Each shows its account count, a bar for its share of accounts, and the share moving on ("67% →", a benchmark marked `b`). Impact and Expansion read "keep 96%" and "grow 20%". The Constraint is red and bold.
+  4. **Accounts**: a board with one column per Stage in Bowtie order, all of them, including Lost and Churned. A column header shows the Stage, its count, and ◀ for the Constraint. Cards show the account, its Value (red "no Value" when unset), days in the Stage, and the last message's age. Below about 18 columns each, the board scrolls sideways.
+  5. **Weekly review**: a table with plain headers: Stage, Accounts, Convert, Benchmark, Days in Stage, Reach Impact, Need a week, Getting a week, Short by. Impact and Expansion rows show "keep" and "grow". A sentence below explains each column.
+- **Keys**: on the board, `j`/`k` move between cards and `←`/`→` move between Stages (at the left edge, to the rail); `enter` opens the account; `s` sets its Stage, `v` its Value; `y` copies the page as Markdown; `space`/`pgdn`/`pgup` scroll the page.
 - **Organization page**: a `Pipeline` section in the properties column, above Attio: each Pipeline's Stage and days in it, its Revenue Value or Fundraising Value, then the Stage and Value changes, newest first, with `(s stage · v value)`.
 - **Setting a Stage** (`s`, on an Organization page or row): for an Organization in exactly one Pipeline, the picker lists that Pipeline's Stages with the current one marked, plus `Fundraising…` (or `Revenue…`) to switch; in neither or both, it asks for the Pipeline first. A toast confirms (`Chestnut → Commit. z undo`).
 - **Setting Value** (`v`): for an Organization in exactly one Pipeline, a prompt for that Pipeline's Value (`Revenue Value · Chestnut — CAD, next 12 months`, or `Fundraising Value · … — CAD cheque`) that accepts `90k` or `90000`; in neither or both, it asks for the Pipeline first. Value belongs to the Pipeline, not to the Stage; an Organization with a Value and no Stage stays out of the math.
 - **Organizations list**: adds Stage and Value columns. Stage shows the Revenue Stage, or the Fundraising Stage when the Organization has no Revenue Stage.
 - **Empty states**: no Target: the table still shows counts and rates, and the summary reads `No Target yet: comms-terminal pipeline target fundraising 1500000 --by 2027-06-30`. No Organizations: `No Organizations in Fundraising yet. Press s on an Organization to add one.`
-- **Keys**: `j`/`k` rows, `←`/`→` panes, `enter` open, `s` Stage, `v` Value, `y` copy the summary, Stage table, and Organizations per Stage as Markdown. `comms-terminal pipeline revenue` (or `fundraising`) prints the same Markdown.
+- **CLI**: `comms-terminal pipeline revenue` (or `fundraising`) prints the page as Markdown, This week first.
 - **Refresh**: live, like every other page.
 
 ## 4. Keys
@@ -218,7 +226,7 @@ Rendered with Textual's test driver (`run_test`, SVG screenshots) and once in a 
 5. Send failure: box stays open with the error.
 6. Health BROKEN in the sidebar.
 7. Person record with a blocked Identity.
-8. Revenue Pipeline with benchmark cells, `—` cells, a Constraint row, and negative and positive Pace, wide (160 columns) and narrow (100 columns, pane hidden).
+8. Revenue Pipeline at 236×57 and 100×40: This week bullets, Progress, the Constraint, the Bowtie aligned over the board, all ten board columns (scrolling sideways when narrow), and the Weekly review.
 9. Fundraising Pipeline with no Target, and a Pipeline with no Organizations.
 10. Organization page Pipeline section with history; the Stage picker for an Organization in one Pipeline and in none.
 

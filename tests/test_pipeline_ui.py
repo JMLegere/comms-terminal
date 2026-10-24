@@ -11,8 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import seed_demo  # noqa: E402
 
 from comms_terminal import inbox, pipeline as pl  # noqa: E402
-from comms_terminal.tui import (Ask, Console, OrganizationPage, OrganizationsPage, Pick, PipelineOrgs,  # noqa: E402
-                                PipelinePage, PipelineStagePage)
+from comms_terminal.tui import (Ask, BoardColumn, Console, OrganizationPage, Pick, PipelinePage)  # noqa: E402
 
 R = pl.REVENUE
 DAY = timedelta(days=1)
@@ -51,7 +50,7 @@ def shot(app, name):
         app.save_screenshot(f"{name}.svg", os.environ["PIPELINE_SHOTS"])
 
 
-def test_revenue_page_rail_table_pane_and_stage_change_with_undo(tmp_path):
+def test_revenue_page_this_week_board_and_stage_change_with_undo(tmp_path):
     path, db, org = seeded(tmp_path)
     seen = {}
 
@@ -60,18 +59,22 @@ def test_revenue_page_rail_table_pane_and_stage_change_with_undo(tmp_path):
         await pilot.pause(0.2)
         rail = app.main.rail
         seen["rail"] = [str(rail.get_option_at_index(i).prompt) for i in range(rail.option_count)]
-        seen["page"] = type(app.main.current)
         page = app.main.current
-        seen["summary"] = str(page.query_one("#plsummary").render())
-        t = page.query_one("#table")
-        seen["stages"] = [str(t.get_row_at(i)[0]) for i in range(t.row_count)]
-        page.query_one("#table").move_cursor(row=3)  # Selection: Acme
-        await pilot.pause()
-        seen["pane"] = [o["domain"] for o in app.main.query_one(PipelineOrgs).orgs]
+        seen["page"], seen["side"] = type(page), page.SIDE
+        seen["week"] = str(page.query_one("#plweek").render())
+        seen["progress"] = str(page.query_one("#plprogress").render())
+        seen["bowtie"] = str(page.query_one("#plbowtie").render())
+        cols = list(page.query(BoardColumn))
+        seen["columns"] = [c.stage for c in cols]
+        seen["cards"] = {c.stage: [o["domain"] for o in c.orgs] for c in cols if c.orgs}
+        seen["focus"] = app.focused.stage
         shot(app, "8-revenue-wide")
 
-    async def into_pane(app, pilot):
-        seen["focus"] = type(app.focused)
+    async def moved(app, pilot):
+        seen["after right"] = app.focused.stage
+
+    async def back_left(app, pilot):
+        seen["after left"] = app.focused.stage
 
     async def pick_commit(app, pilot):
         seen["picker"] = type(app.screen)
@@ -82,41 +85,32 @@ def test_revenue_page_rail_table_pane_and_stage_change_with_undo(tmp_path):
     async def undone(app, pilot):
         seen["undone"] = pl.current(db, org["acme.com"])[R]["stage"]
 
-    run(Console(path), [open_revenue, "right", into_pane, "s", pick_commit, "z", undone])
+    run(Console(path), [open_revenue, "right", moved, "left", back_left, "s", pick_commit, "z", undone], size=(236, 57))
     assert any("Revenue" in r and "%" in r for r in seen["rail"])
-    assert seen["page"] is PipelinePage
-    assert "CAD 1,000,000" in seen["summary"] and "constraint" in seen["summary"]
-    assert "Selection" in seen["stages"][3] and "Impact" in seen["stages"][6]
-    assert seen["pane"] == ["acme.com"]
-    assert seen["focus"] is PipelineOrgs
-    assert seen["picker"] is Pick and seen["after"] == "Commit"
-    assert seen["undone"] == "Selection"
-    assert "Selection" in pl.markdown(pl.math(db, R)) and "Onboarding" not in [
-        h["new"] for h in pl.history(db, org["acme.com"])]
+    assert seen["page"] is PipelinePage and seen["side"] == ""
+    assert "THIS WEEK" in seen["week"] and "•" in seen["week"]
+    assert "CAD 1M" in seen["progress"] and "new customers must reach Impact" in seen["progress"]
+    assert "Awareness" in seen["bowtie"] and "keep" in seen["bowtie"]
+    assert seen["columns"] == ["Awareness", "Education", "Prioritization", "Selection", "Commit", "Onboarding",
+                               "Impact", "Expansion", "Lost", "Churned"]
+    assert seen["cards"] == {"Selection": ["acme.com"], "Impact": ["northwind.io"], "Awareness": ["globex.com"]}
+    assert seen["focus"] == "Awareness" and seen["after right"] == "Education" and seen["after left"] == "Awareness"
+    assert seen["picker"] is Pick and seen["after"] is not None
 
 
-def test_narrow_stage_opens_as_a_page(tmp_path):
+def test_board_scrolls_sideways_when_narrow(tmp_path):
     path, _, _ = seeded(tmp_path)
     seen = {}
 
     async def open_revenue(app, pilot):
         app.main.go("pipeline:revenue")
         await pilot.pause(0.2)
-        seen["pane"] = bool(app.main.query(PipelineOrgs))
-        app.main.current.query_one("#table").move_cursor(row=3)
+        board = app.main.current.query_one("#plboard")
+        seen["overflow"] = board.virtual_size.width > board.size.width
         shot(app, "8-revenue-narrow")
 
-    async def opened(app, pilot):
-        seen["page"] = type(app.main.current)
-        seen["rows"] = [o["domain"] for o, _ in app.main.current.items]
-
-    async def back(app, pilot):
-        seen["back"] = type(app.main.current)
-
-    run(Console(path), [open_revenue, "enter", opened, "escape", back], size=(100, 40))
-    assert seen["pane"] is False
-    assert seen["page"] is PipelineStagePage and seen["rows"] == ["acme.com"]
-    assert seen["back"] is PipelinePage
+    run(Console(path), [open_revenue], size=(100, 40))
+    assert seen["overflow"]
 
 
 def test_fundraising_without_target_or_organizations(tmp_path):
@@ -127,15 +121,15 @@ def test_fundraising_without_target_or_organizations(tmp_path):
         app.main.go("pipeline:fundraising")
         await pilot.pause(0.2)
         page = app.main.current
-        seen["summary"] = str(page.query_one("#plsummary").render())
-        seen["legend"] = str(page.query_one("#pllegend").render())
+        seen["week"] = str(page.query_one("#plweek").render())
+        seen["progress"] = str(page.query_one("#plprogress").render())
         rail = app.main.rail
         seen["rail"] = [str(rail.get_option_at_index(i).prompt) for i in range(rail.option_count)]
         shot(app, "9-fundraising-empty")
 
-    run(Console(path), [open_fundraising])
-    assert "No Target yet" in seen["summary"] and "pipeline target fundraising" in seen["summary"]
-    assert "No Organizations in Fundraising yet" in seen["legend"]
+    run(Console(path), [open_fundraising], size=(236, 57))
+    assert "Set a Target: comms-terminal pipeline target fundraising" in seen["week"]
+    assert "No Target yet" in seen["progress"]
     assert any("Fundraising" in r and "—" in r for r in seen["rail"])
 
 
