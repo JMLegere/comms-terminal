@@ -184,6 +184,19 @@ def test_late_and_no_target(thin):
     assert rows["Onboarding"]["need"] != "late" and rows["Prioritization"]["need"] == "late"
 
 
+def test_on_track_and_coverage(five):
+    m = pl.math(five, R)
+    s, top = m["summary"], m["stages"][0]
+    assert s["coverage"] == pytest.approx(s["weighted"] / (1_000_000 - s["kept"]))
+    assert pl.on_track(m) == ("Behind pace", f"need {pl.num(top['need'])} new Awareness accounts a week,"
+                                             f" getting {pl.num(top['entries'])}")
+    pl.set_target(five, R, "100k", "2028-09-30")  # customers and open accounts already cover it
+    m = pl.math(five, R)
+    assert m["summary"]["coverage"] is None and pl.on_track(m)[0] == "On track"
+    pl.set_target(five, R, "1m", "2027-10-25")  # too close for new Awareness accounts
+    assert pl.on_track(pl.math(five, R))[0] == "Off track"
+
+
 def test_this_week_bullets(five):
     m = pl.math(five, R)
     top = m["stages"][0]

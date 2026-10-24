@@ -850,9 +850,10 @@ def health_ok(connection) -> bool:
 
 
 def rail_share(db, p: str) -> str:
-    """Projected ÷ Target for the rail (FR-PL-20); — without a Target."""
-    s = pipeline.math(db, p, orgs=False)["summary"]
-    return f"{s['share'] * 100:.0f}%" if s["target"] else "—"
+    """The on-track verdict for the rail (FR-PL-20); — without a Target."""
+    verdict = pipeline.on_track(pipeline.math(db, p, orgs=False))
+    return {"Behind pace": "behind", "Off track": "late", "Pace unknown": "—"}.get(
+        verdict[0], verdict[0].lower()) if verdict else "—"
 
 
 class Rail(OptionList):
@@ -3689,11 +3690,15 @@ def pipeline_progress(m: dict) -> str:
     if not t:
         return "\n".join([f"[{PALETTE['grey1']}]No Target yet.[/]", "Set one from the command line (This week)."])
     what = "TTM revenue" if m["pipeline"] == pipeline.REVENUE else "raised"
-    out = [f"[b {PALETTE['blue']}]{s['share'] * 100:.0f}%[/]  {pipeline_bar(s, 24, label=False)}", "",
+    verdict, why = pipeline.on_track(m)
+    tone = {"On track": "green", "On pace": "green", "Pace unknown": "grey1"}.get(verdict, "red")
+    out = [f"[b {PALETTE[tone]}]{verdict.upper()}[/]", why, "",
+           f"[b]{s['share'] * 100:.0f}%[/] projected  {pipeline_bar(s, 24, label=False)}", "",
            kv("Target", f"[b]CAD {pipeline.money(t['amount'])}[/] {what} by {t['due']}"),
            kv("Projected", f"CAD {pipeline.money(s['projected'])}"),
            kv("Today", f"[green]█[/] customers CAD {pipeline.money(s['paying'])} ({s['paying_count']})"),
-           kv("Likely", f"[aqua]▓[/] from open accounts CAD {pipeline.money(s['weighted'])}"),
+           kv("Coverage", f"[aqua]▓[/] open CAD {pipeline.money(s['weighted'])} covers"
+                          f" {pipeline.pct(s['coverage'])} of CAD {pipeline.money(s['new'])} needed"),
            kv("Gap", f"[b]{s['customers']} new customers[/] at CAD {pipeline.money(s['average'])}"
               if s["customers"] is not None else f"CAD {pipeline.money(s['gap'])}"),
            kv("Deadline", f"reach {m['paying_stage']} by {s['deadline']} ({s['weeks']:.0f} weeks)")]

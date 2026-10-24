@@ -86,9 +86,10 @@ def test_revenue_page_this_week_board_and_stage_change_with_undo(tmp_path):
         seen["undone"] = pl.current(db, org["acme.com"])[R]["stage"]
 
     run(Console(path), [open_revenue, "right", moved, "left", back_left, "s", pick_commit, "z", undone], size=(236, 57))
-    assert any("Revenue" in r and "%" in r for r in seen["rail"])
+    assert any("Revenue" in r and "behind" in r for r in seen["rail"])
     assert seen["page"] is PipelinePage and seen["side"] == ""
     assert seen["week"].startswith("1  ") and "accounts to Awareness" in seen["week"]
+    assert seen["progress"].startswith(("BEHIND PACE", "ON PACE")) and "Coverage" in seen["progress"]
     assert "CAD 1M" in seen["progress"] and "reach Impact by 2027-10-01" in seen["progress"]
     assert seen["heads"][0].startswith("Awareness\n1") and "keep" in seen["heads"][6]
     assert seen["columns"] == ["Awareness", "Education", "Prioritization", "Selection", "Commit", "Onboarding",

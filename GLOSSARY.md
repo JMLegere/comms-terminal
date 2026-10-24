@@ -203,6 +203,14 @@ _Avoid_: Quota, Input quota
 How far a Stage's actual weekly entries sit above or below its Required volume, as a signed number: -5 means five fewer Organizations a week than the Target needs.
 _Avoid_: Shortfall, Health
 
+**On track**:
+Whether the Pipeline will reach its Target in time, judged by the top Stage's Pace: on pace when new Organizations enter it as fast as the Target needs, behind pace when slower, on track when customers and open Organizations already cover the Target, and off track when new Organizations can no longer reach the paying Stage by the deadline.
+_Avoid_: Health, Status
+
+**Coverage**:
+The Weighted pipeline as a share of the revenue that new customers still have to add to reach the Target.
+_Avoid_: Pipeline ratio
+
 **Constraint**:
 The measured rate, of a Stage or of retention or expansion, that sits furthest below its Benchmark.
 _Avoid_: Bottleneck

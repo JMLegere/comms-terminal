@@ -189,7 +189,7 @@ Terms follow `GLOSSARY.md` (Pipeline, Stage, Value, Target, Conversion rate, Tim
        - the input at the top Stage ("Add 2 accounts to Awareness / need 1.8 a week, getting 0.1");
        - accounts with no Value ("Set a Value for …");
        - "Set a Target" when there is none.
-     - Progress: the share of the Target as the one big number, with a gauge (█ customers today, ▓ likely from open accounts, ░ gap). Then aligned label–value lines: Target, Projected, Today, Likely, Gap (new customers at the average Value), Deadline, and Customers (keep, grow, net).
+     - Progress: the On-track verdict first (On track, On pace, Behind pace, Off track, or Pace unknown), coloured, with its reason: the top Stage's need a week against what it gets. Then the share of the Target projected, with a gauge (█ customers today, ▓ likely from open accounts, ░ gap). Then aligned label–value lines: Target, Projected, Today, Coverage, Gap (new customers at the average Value), Deadline, and Customers (keep, grow, net). The rail shows the verdict in short: on track, on pace, behind, late, or —.
   2. **CONSTRAINT**: a red-bordered box with one line, for example "Onboarding → Impact   67% move on   benchmark 94%".
   3. **ACCOUNTS**: the board, one column per Stage in Bowtie order, all of them, including Lost and Churned.
      - Each column header carries the Bowtie: the Stage, then its count and what moves on from it ("1  75% →", "2  keep 96%b"). The Constraint's header is red and marked ◀.

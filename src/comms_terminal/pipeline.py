@@ -348,8 +348,10 @@ def math(db, pipeline: str, now: datetime | None = None, orgs: bool = True) -> d
         gap = max(0, goal["amount"] - projected)
         customers = _m.ceil(gap / average) if average else None
         weeks = (deadline - today).days / 7
+        new = goal["amount"] - kept  # what open and future accounts must add
         summary.update(kept=kept, projected=projected, gap=gap, customers=customers, deadline=deadline,
-                       weeks=weeks, years=years, share=projected / goal["amount"])
+                       weeks=weeks, years=years, share=projected / goal["amount"], new=max(0, new),
+                       coverage=weighted / new if new > 0 else None)
         for i, s in enumerate(opens):
             through = product(opens[i:], lambda x: used[x][0])
             ahead = sum(times[x] if times[x] is not None else 1 for x in opens[i:]) / 7
@@ -451,6 +453,22 @@ def names(orgs, most=3) -> str:
     return n[0] if len(n) == 1 else ", ".join(n[:-1]) + " and " + n[-1]
 
 
+def on_track(m: dict) -> tuple[str, str] | None:
+    """The verdict on the Target: the top Stage's Pace, since the backward plan already counts the open
+    accounts and the rates below it. None without a Target."""
+    s, top = m["summary"], m["stages"][0]
+    if not s["target"]:
+        return None
+    if s["gap"] == 0:
+        return "On track", "customers and open accounts cover the Target"
+    if top["need"] == "late":
+        return "Off track", f"new {top['stage']} accounts can no longer reach {m['paying_stage']} by {s['deadline']}"
+    if top["pace"] is None:
+        return "Pace unknown", "not enough Stage history or Value yet"
+    verdict = "On pace" if top["pace"] >= 0 else "Behind pace"
+    return verdict, f"need {num(top['need'])} new {top['stage']} accounts a week, getting {num(top['entries'])}"
+
+
 def this_week(m: dict) -> list[tuple[str, str]]:
     """What the math says to do this week, as (action, why) pairs in plain words (never Tasks): the
     constraint's lever, the input the backward plan needs at the top Stage, and accounts the math cannot count."""
@@ -484,7 +502,8 @@ def this_week(m: dict) -> list[tuple[str, str]]:
 def markdown(m: dict) -> str:
     """The Pipeline page as Markdown, for `y` and `comms-terminal pipeline` (FR-PL-31)."""
     s, name = m["summary"], m["name"]
-    lines = [f"# {name} Pipeline", "", "This week:"] + [f"- {a} ({why})" for a, why in this_week(m)] + [""]
+    verdict = on_track(m)
+    lines = [f"# {name} Pipeline", ""] + ([f"**{verdict[0]}**: {verdict[1]}", ""] if verdict else []) + ["This week:"] + [f"- {a} ({why})" for a, why in this_week(m)] + [""]
     t = s["target"]
     if not t:
         lines.append(f"No Target yet: comms-terminal pipeline target {name.lower()} AMOUNT --by DATE")
@@ -493,6 +512,8 @@ def markdown(m: dict) -> str:
         lines += [f"- Target: CAD {t['amount']:,} {what} by {t['due']}",
                   f"- Projected: CAD {s['projected']:,.0f} ({s['share'] * 100:.0f}%): paying CAD {s['paying']:,}"
                   f" ({s['paying_count']}) → CAD {s['kept']:,.0f} in the window, weighted new CAD {s['weighted']:,.0f}",
+                  f"- Coverage: weighted open accounts cover {pct(s['coverage'])} of the CAD {s['new']:,.0f}"
+                  f" still to add",
                   f"- Gap: CAD {s['gap']:,.0f}"
                   + (f" = {s['customers']} new at CAD {s['average']:,.0f}" if s["customers"] is not None else ""),
                   f"- Must reach {m['paying_stage']} by {s['deadline']} ({s['weeks']:.0f} weeks)"]
