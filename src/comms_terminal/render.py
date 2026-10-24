@@ -16,7 +16,7 @@ from datetime import date, datetime, timezone
 from email import message_from_bytes, policy
 from html.parser import HTMLParser
 from pathlib import Path
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 from zoneinfo import ZoneInfo
 
 from rich.markup import escape
@@ -79,9 +79,15 @@ def domain(href: str) -> str:
     return host.lower().removeprefix("www.")
 
 
+def target(href: str) -> str:
+    """A URL for `[link='…']`: Textual ends a quoted value at the next quote and has no escape, so quotes,
+    brackets, whitespace and control characters are percent-encoded (existing %-escapes are kept)."""
+    return quote(href, safe=":/?#@!$&()*+,;=%~")
+
+
 def link(href: str, label: str = "") -> str:
     """Clickable label (markup) plus a dim `↗ domain` hint; a bare URL becomes `↗ domain`."""
-    safe = href.replace("'", "%27").replace("[", "%5B").replace("]", "%5D").replace(" ", "%20")
+    safe = target(href)
     d = domain(href)
     if not plain(label).strip() or re.fullmatch(r"(https?://|www\.)\S+", plain(label).strip()):
         return f"[link='{safe}'][underline]↗ {escape(d or href)}[/underline][/link]"

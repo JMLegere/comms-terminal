@@ -1327,7 +1327,7 @@ class ThreadsPage(Page, ThreadActions):
     def action_link(self):
         tv = self.app.main.thread_view
         link = tv and native_link(tv.view)
-        self.app.notify(f"[link='{link}']{link}[/link]" if link else "No link for this thread.")
+        self.app.notify(f"[link='{render.target(link)}']{escape(link)}[/link]" if link else "No link for this thread.")
 
     def action_scroll_thread(self, direction):
         tv = self.app.main.thread_view
@@ -1557,7 +1557,7 @@ def attach(host, owner) -> None:
             app.push_screen(PickFile(), lambda path: stage_file(host, owner, path) if path and host.is_attached else None)
         elif choice == "upload":
             url = files.upload_url(app.db, owner, *app.files)
-            app.notify(f"Upload from Mani (ctrl+shift+click; works for 1 hour): [link='{url}']{url}[/link]", timeout=60)
+            app.notify(f"Upload from Mani (ctrl+shift+click; works for 1 hour): [link='{render.target(url)}']{escape(url)}[/link]", timeout=60)
     app.push_screen(Pick("Attach", [("workbox", f"{ICON['attachment']} File on Workbox…"),
                                     ("upload", f"{ICON['open']} Upload from Mani")]), chosen)
 
@@ -2112,7 +2112,7 @@ def message_widgets(v, st: dict | None = None, raw=None) -> list:
         parts += message_images(m, set(render.IMG.findall(body.text + "\n" + body.trimmed)))
         files = message_files(m, body)
         if files:  # each chip opens its stored copy (FR-A5), or the message in its service
-            chips = [f"[link='{a['url'] or ''}'][#45707a]{ICON['attachment']} "
+            chips = [f"[link='{render.target(a['url'] or '')}'][#45707a]{ICON['attachment']} "
                      f"{render.chip(a['name'], a['type'], a['size'])}[/][/link]"
                      + (f" [{dim}]· not copied[/]" if a["state"] in ("pending", "failed") else "") for a in files]
             parts.append(MessageText("\n".join(chips), classes="mchips"))
@@ -2232,7 +2232,7 @@ def thread_head(v) -> str:
     link, plat = native_link(v), v["channel"]["platform"]
     if link:
         p = PLATFORMS[plat]
-        head += f"\n[#928374]{ICON[p.icon]} [link='{link}']open in {p.title}[/link] {ICON['open']} (o)[/]"
+        head += f"\n[#928374]{ICON[p.icon]} [link='{render.target(link)}']open in {p.title}[/link] {ICON['open']} (o)[/]"
     return head
 
 
@@ -2249,7 +2249,7 @@ def box_head(icon, text) -> str:
 def tana_markup(ctx: dict | None, error: str | None = None, width: int = 26) -> str:
     """The Tana section (FR-13a): records, then Meetings with their summary and linked documents by type."""
     head = box_head
-    link = lambda r, text=None: (f"[link='{r['url']}'][underline]{escape(text or r['title'] or 'untitled')}[/]"  # noqa: E731
+    link = lambda r, text=None: (f"[link='{render.target(r['url'])}'][underline]{escape(text or r['title'] or 'untitled')}[/]"  # noqa: E731
                                  "[/link]")
     lines = []
     if error:
@@ -2267,7 +2267,7 @@ def tana_markup(ctx: dict | None, error: str | None = None, width: int = 26) -> 
         lines += [f"{when_}[#928374]{escape(stamp(m['start']))}[/]", f"[b]{link(m)}[/]"]
         if m["summary"]:
             text = m["summary"] if len(m["summary"]) <= 140 else m["summary"][:139].rstrip() + "…"
-            text = f"[link='{m['summary_url']}']{escape(text)}[/link]" if m["summary_url"] else escape(text)
+            text = f"[link='{render.target(m['summary_url'])}']{escape(text)}[/link]" if m["summary_url"] else escape(text)
             lines.append(f"[#928374]{ICON['summary']} {text}[/]")
         groups: dict[str, list] = {}
         for d in m["linked"]:
@@ -2291,7 +2291,7 @@ def wrapped(text: str, width: int, indent: int = 0, style: str = "", url: str | 
     out = []
     for row in textwrap.wrap(text, max(8, width - indent)) or [""]:
         t = escape(row)
-        t = f"[link='{url}'][underline]{t}[/][/link]" if url else t
+        t = f"[link='{render.target(url)}'][underline]{t}[/][/link]" if url else t
         out.append(" " * indent + (f"[{style}]{t}[/]" if style else t))
     return out
 
@@ -4525,7 +4525,7 @@ class CasePage(Page, ThreadActions):
 
     def action_link(self):
         link = self.views and native_link(self.views[self.sel])
-        self.app.notify(f"[link='{link}']{link}[/link]" if link else "No link for this thread.")
+        self.app.notify(f"[link='{render.target(link)}']{escape(link)}[/link]" if link else "No link for this thread.")
 
     def action_scroll(self, direction):
         a = self.query_one(".activity")
@@ -5800,7 +5800,7 @@ class DayList(OptionList):
     def action_join(self):
         i = self.selected_item()
         url = i and i.get("join_url")
-        self.app.notify(f"[link='{url}']{escape(url)}[/link]" if url else "No join link for this.")
+        self.app.notify(f"[link='{render.target(url)}']{escape(url)}[/link]" if url else "No join link for this.")
 
     def action_grid(self):
         self.app.main.query_one(MonthGrid).focus()
@@ -5915,7 +5915,7 @@ class EventPage(Page):
         if e["location"]:
             out.append(escape(e["location"]))
         if e["join_url"]:
-            out.append(f"[{b['grey1']}]Join[/] [link='{e['join_url']}']{escape(e['join_url'])}[/link]  [{b['grey1']}](o)[/]")
+            out.append(f"[{b['grey1']}]Join[/] [link='{render.target(e['join_url'])}']{escape(e['join_url'])}[/link]  [{b['grey1']}](o)[/]")
         mine = cal.me(db)
         if e["organizer"]:
             out.append(f"[{b['grey1']}]Organizer[/] {self.who(e['organizer']['email'], e['organizer']['name'])}")
@@ -5955,7 +5955,7 @@ class EventPage(Page):
 
     def action_join(self):
         url = self.event["join_url"]
-        self.app.notify(f"[link='{url}']{escape(url)}[/link]" if url else "No join link for this Event.")
+        self.app.notify(f"[link='{render.target(url)}']{escape(url)}[/link]" if url else "No join link for this Event.")
 
     def action_scroll(self, step):
         self.query_one("#eventscroll").scroll_relative(y=step * 3, animate=False)

@@ -83,3 +83,13 @@ def test_agent_commands_read_threads_and_change_drafts_by_revision(tmp_path, cap
     with pytest.raises(SystemExit, match="changed since"):  # a stale revision never overwrites newer words
         cli("draft", str(d["id"]), "--revision", "1", "--body", "stale")
     assert inbox.get_draft(db, d["id"])["revision"] == 2
+
+
+def test_link_targets_cannot_break_or_inject_markup():
+    from textual.content import Content
+    from comms_terminal import render
+    for url in ["https://a.test/st-mary's", "https://a.test/x\nnext", "https://a.test/a b[c]",
+                "https://a.test/x'][link='https://evil.example']"]:
+        styles = [str(s.style) for s in Content.from_markup(f"[link='{render.target(url)}']x[/link]").spans]
+        assert len(styles) == 1 and styles[0].startswith("link='https://a.test/") and "\n" not in styles[0]
+    assert render.target("https://a.test/a%20b?q=1&r=2#f") == "https://a.test/a%20b?q=1&r=2#f"

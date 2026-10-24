@@ -82,3 +82,13 @@ def test_section_and_service_route():
         assert part in text
     assert "nothing in Attio" in attio_markup({"people": [], "companies": [], "tasks": []})
     assert serve.handle_context(b"{}", None, "Attio") == (503, {"error": "Attio is not connected"})
+
+
+def test_section_survives_a_quote_in_a_field_url():
+    from textual.content import Content
+    from comms_terminal.tui import attio_markup
+    url = "https://linkedin.com/company/st-mary's-entertainment-centre"
+    ctx = {"people": [], "tasks": [], "companies": [{"title": "St Mary's", "url": None, "fields": [["LinkedIn", url]]}]}
+    markup = attio_markup(ctx, width=80)
+    Content.from_markup(markup)  # raised MarkupError when the quote ended the link value
+    assert f"[link='{url.replace(chr(39), '%27')}']" in markup
