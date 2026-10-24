@@ -182,18 +182,20 @@ Thread, Person, Organization, and Case pages show separate details-column sectio
 Terms follow `GLOSSARY.md` (Pipeline, Stage, Value, Target, Conversion rate, Time in Stage, Conversion to Impact, Weighted pipeline, Required volume, Pace, Constraint, Benchmark, Retention rate, Expansion rate, Net retention). The math is Winning by Design's Bowtie Standard v1.0. The page shows the math only; it sets no Tasks.
 
 - **Rail**: a `pipeline` group right below `outreach` (Tasks, Sequences), with one line per Pipeline: Revenue and Fundraising. Each line shows projected ÷ Target as a percentage (`Revenue 32%`), or `—` when the Pipeline has no Target yet.
-- **Page** (revised 2026-10-24, `.agents/discovery/2026-10-24-pipeline-page-layout.md`): one full-width page, action first. No right pane. The page scrolls vertically, top to bottom:
-  1. **This week**, beside **Progress** (stacked below 140 columns).
-     - This week: bullets the math produces (never Tasks), in this order:
-       - the Constraint's lever ("Move St Mary's from Onboarding to Impact", or "Find accounts for Onboarding" when the Stage is empty);
-       - the input at the top Stage ("Add 2 accounts to Awareness this week (need 1.8 a week, getting .1)");
-       - accounts the math cannot count yet ("Set a Value for LCL Excavation: the math leaves them out");
-       - "Set a Target: …" when there is none.
-     - Progress: a gauge of projected ÷ Target (█ customers today, ▓ likely from open accounts, ░ gap), the Target and date, the gap in new customers at the average Value, the Impact deadline, and "customers keep 96% and grow 20% a year (net 115%)".
-  2. **Constraint**: a red label, then the step in plain words: "Onboarding → Impact: 67% convert (benchmark 94%)".
-  3. **Bowtie**: every Stage left to right, aligned over the board's columns. Each shows its account count, a bar for its share of accounts, and the share moving on ("67% →", a benchmark marked `b`). Impact and Expansion read "keep 96%" and "grow 20%". The Constraint is red and bold.
-  4. **Accounts**: a board with one column per Stage in Bowtie order, all of them, including Lost and Churned. A column header shows the Stage, its count, and ◀ for the Constraint. Cards show the account, its Value (red "no Value" when unset), days in the Stage, and the last message's age. Below about 18 columns each, the board scrolls sideways.
-  5. **Weekly review**: a table with plain headers: Stage, Accounts, Convert, Benchmark, Days in Stage, Reach Impact, Need a week, Getting a week, Short by. Impact and Expansion rows show "keep" and "grow". A sentence below explains each column.
+- **Page** (revised 2026-10-24, `.agents/discovery/2026-10-24-pipeline-page-layout.md`; boxes after Jeremy's "formatting and visual hierarchy - hard to scan and parse"): one full-width page with no right pane, action first. Each section is a titled, rounded box in the console's panel style, so the page reads as a grid. The page scrolls vertically, top to bottom:
+  1. **THIS WEEK**, beside **PROGRESS** (stacked below 140 columns).
+     - This week: numbered actions in bold, each with its reason in grey under it. The math produces them; they are never Tasks. In order:
+       - the Constraint's lever ("Move St Mary's Entertainment Centre / Onboarding → Impact, the constraint", or "Find accounts for Onboarding" when the Stage is empty);
+       - the input at the top Stage ("Add 2 accounts to Awareness / need 1.8 a week, getting 0.1");
+       - accounts with no Value ("Set a Value for …");
+       - "Set a Target" when there is none.
+     - Progress: the share of the Target as the one big number, with a gauge (█ customers today, ▓ likely from open accounts, ░ gap). Then aligned label–value lines: Target, Projected, Today, Likely, Gap (new customers at the average Value), Deadline, and Customers (keep, grow, net).
+  2. **CONSTRAINT**: a red-bordered box with one line, for example "Onboarding → Impact   67% move on   benchmark 94%".
+  3. **ACCOUNTS**: the board, one column per Stage in Bowtie order, all of them, including Lost and Churned.
+     - Each column header carries the Bowtie: the Stage, then its count and what moves on from it ("1  75% →", "2  keep 96%b"). The Constraint's header is red and marked ◀.
+     - Cards show the account, its Value (red "no Value" when unset), days in the Stage, and the last message's age.
+     - Below about 18 columns each, the board scrolls sideways.
+  4. **WEEKLY REVIEW**: a table with plain headers: Stage, Accounts, Convert, Benchmark, Days in Stage, Reach Impact, Need a week, Getting a week, Short by. Impact and Expansion rows show "keep" and "grow"; the Constraint's row is red. One line below explains the columns.
 - **Keys**: on the board, `j`/`k` move between cards and `←`/`→` move between Stages (at the left edge, to the rail); `enter` opens the account; `s` sets its Stage, `v` its Value; `y` copies the page as Markdown; `space`/`pgdn`/`pgup` scroll the page.
 - **Organization page**: a `Pipeline` section in the properties column, above Attio: each Pipeline's Stage and days in it, its Revenue Value or Fundraising Value, then the Stage and Value changes, newest first, with `(s stage · v value)`.
 - **Setting a Stage** (`s`, on an Organization page or row): for an Organization in exactly one Pipeline, the picker lists that Pipeline's Stages with the current one marked, plus `Fundraising…` (or `Revenue…`) to switch; in neither or both, it asks for the Pipeline first. A toast confirms (`Chestnut → Commit. z undo`).

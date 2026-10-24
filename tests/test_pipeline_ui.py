@@ -63,7 +63,7 @@ def test_revenue_page_this_week_board_and_stage_change_with_undo(tmp_path):
         seen["page"], seen["side"] = type(page), page.SIDE
         seen["week"] = str(page.query_one("#plweek").render())
         seen["progress"] = str(page.query_one("#plprogress").render())
-        seen["bowtie"] = str(page.query_one("#plbowtie").render())
+        seen["heads"] = [str(h.render()) for h in page.query(".plcolhead")]
         cols = list(page.query(BoardColumn))
         seen["columns"] = [c.stage for c in cols]
         seen["cards"] = {c.stage: [o["domain"] for o in c.orgs] for c in cols if c.orgs}
@@ -88,9 +88,9 @@ def test_revenue_page_this_week_board_and_stage_change_with_undo(tmp_path):
     run(Console(path), [open_revenue, "right", moved, "left", back_left, "s", pick_commit, "z", undone], size=(236, 57))
     assert any("Revenue" in r and "%" in r for r in seen["rail"])
     assert seen["page"] is PipelinePage and seen["side"] == ""
-    assert "THIS WEEK" in seen["week"] and "•" in seen["week"]
-    assert "CAD 1M" in seen["progress"] and "new customers must reach Impact" in seen["progress"]
-    assert "Awareness" in seen["bowtie"] and "keep" in seen["bowtie"]
+    assert seen["week"].startswith("1  ") and "accounts to Awareness" in seen["week"]
+    assert "CAD 1M" in seen["progress"] and "reach Impact by 2027-10-01" in seen["progress"]
+    assert seen["heads"][0].startswith("Awareness\n1") and "keep" in seen["heads"][6]
     assert seen["columns"] == ["Awareness", "Education", "Prioritization", "Selection", "Commit", "Onboarding",
                                "Impact", "Expansion", "Lost", "Churned"]
     assert seen["cards"] == {"Selection": ["acme.com"], "Impact": ["northwind.io"], "Awareness": ["globex.com"]}
@@ -128,7 +128,7 @@ def test_fundraising_without_target_or_organizations(tmp_path):
         shot(app, "9-fundraising-empty")
 
     run(Console(path), [open_fundraising], size=(236, 57))
-    assert "Set a Target: comms-terminal pipeline target fundraising" in seen["week"]
+    assert "Set a Target" in seen["week"] and "pipeline target fundraising" in seen["week"]
     assert "No Target yet" in seen["progress"]
     assert any("Fundraising" in r and "—" in r for r in seen["rail"])
 

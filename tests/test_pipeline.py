@@ -189,10 +189,10 @@ def test_this_week_bullets(five):
     top = m["stages"][0]
     assert m["summary"]["constraint"]["stage"] == "Onboarding" and not m["stages"][5]["orgs"]
     assert pl.this_week(m) == [
-        "Find accounts for Onboarding",
-        f"Add {-(-(top['need'] - top['entries']) // 1):.0f} accounts to Awareness this week"
-        f" (need {pl.num(top['need'])} a week, getting {pl.num(top['entries'])})",
-        "Set a Value for C: the math leaves them out"]
+        ("Find accounts for Onboarding", "it is the constraint: 100% move on (benchmark 98%)"),
+        (f"Add {-(-(top['need'] - top['entries']) // 1):.0f} accounts to Awareness",
+         f"need {pl.num(top['need'])} a week, getting {pl.num(top['entries'])}"),
+        ("Set a Value for C", "the math leaves them out until then")]
 
 
 def test_this_week_moves_the_accounts_sitting_in_the_constraint(db):
@@ -200,8 +200,8 @@ def test_this_week_moves_the_accounts_sitting_in_the_constraint(db):
     walk(db, a, (40, "Selection"), (20, "Commit"), (10, "Onboarding"), value="10k")
     walk(db, b, (30, "Selection"), value="10k")
     m = pl.math(db, R)  # Onboarding: 0 of 1 reached Impact, against a 93% benchmark
-    assert pl.this_week(m)[:2] == ["Set a Target: comms-terminal pipeline target revenue AMOUNT --by DATE",
-                                   "Move Acme from Onboarding to Impact"]
+    assert pl.this_week(m)[:2] == [("Set a Target", "comms-terminal pipeline target revenue AMOUNT --by DATE"),
+                                   ("Move Acme", "Onboarding → Impact, the constraint")]
 
 
 def test_cli(tmp_path, capsys):

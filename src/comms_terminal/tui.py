@@ -110,19 +110,18 @@ ModalScreen { background: #7c6f64 25%; align: center middle; }
 #daylist > .option-list--option-highlighted { background: #f5edca; text-style: none; }
 #daylist:focus > .option-list--option-highlighted { background: #eee0b7; color: #4f3829; }
 #eventscroll { height: 1fr; padding: 1 1; }
-#plscroll { height: 1fr; }
-#pltop { height: auto; padding: 1 0 0 0; }
-#plweek { width: 3fr; height: auto; }
-#plprogress { width: 2fr; height: auto; }
-#pltop.-stacked #plweek, #pltop.-stacked #plprogress { width: 1fr; }
-#pltop.-stacked #plprogress { margin: 1 0 0 0; }
-#plconstraint { height: auto; margin: 1 0 0 0; }
-#plbowtiescroll { height: auto; margin: 1 0 0 0; }
-#plbowtie { width: auto; height: auto; }
-.plhead { height: auto; margin: 1 0 0 0; }
-#plboard { height: auto; max-height: 18; }
+#plscroll { height: 1fr; padding: 1 0 0 0; }
+.plbox { height: auto; border: round #a89984; border-title-align: left; border-title-color: #45707a;
+         padding: 0 1; margin: 0 0 1 0; }
+.plred { border: round #c14a4a; border-title-color: #c14a4a; }
+#pltop { height: auto; }
+#plweekbox { width: 3fr; margin: 0 1 1 0; }
+#plprogressbox { width: 2fr; }
+#pltop.-stacked #plweekbox, #pltop.-stacked #plprogressbox { width: 1fr; margin: 0 0 1 0; }
+#plweek, #plprogress, #plconstraint { height: auto; }
+#plboard { height: auto; max-height: 20; }
 .plcol { width: 18; height: auto; margin: 0 1 0 0; }
-.plcolhead { height: 2; border-bottom: solid #ebdbb2; }
+.plcolhead { height: 3; border-bottom: solid #ebdbb2; }
 .plcards { height: auto; max-height: 16; background: #f9f5d7; border: none; padding: 0; }
 .plcards > .option-list--option-highlighted { background: #f9f5d7; text-style: none; }
 .plcards:focus > .option-list--option-highlighted { background: #eee0b7; color: #4f3829; }
@@ -3662,13 +3661,14 @@ def pipeline_section(db, org_id: int) -> str:
     return "\n".join(out)
 
 
-def pipeline_bar(s: dict, width: int = 30) -> str:
+def pipeline_bar(s: dict, width: int = 30, label: bool = True) -> str:
     """Projected ÷ Target: █ paying, ▓ weighted, ░ the gap; the glyphs carry it without colour."""
     amount = s["target"]["amount"]
     paid = min(width, round(width * s["paying"] / amount))
     weighted = min(width - paid, round(width * s["weighted"] / amount))
     return (f"[{PALETTE['green']}]{'█' * paid}[/][{PALETTE['aqua']}]{'▓' * weighted}[/]"
-            f"[{PALETTE['grey0']}]{'░' * (width - paid - weighted)}[/]  [b]{s['share'] * 100:.0f}%[/]")
+            f"[{PALETTE['grey0']}]{'░' * (width - paid - weighted)}[/]"
+            + (f"  [b]{s['share'] * 100:.0f}%[/]" if label else ""))
 
 
 def pace_cell(x) -> str:
@@ -3677,82 +3677,75 @@ def pace_cell(x) -> str:
     return f"[{PALETTE['red'] if x < 0 else PALETTE['green']}]{pipeline.signed(x)}[/]"
 
 
+def kv(label: str, value: str, width: int = 11) -> str:
+    """One aligned 'label  value' line for the Progress box."""
+    return f"[{PALETTE['grey1']}]{label:<{width}}[/]{value}"
+
+
 def pipeline_progress(m: dict) -> str:
-    """The PROGRESS block: the gauge, the Target, where the Value comes from, the gap, and retention."""
-    s, g = m["summary"], PALETTE["grey1"]
+    """The Progress box: the share of the Target as the one big number, then aligned facts."""
+    s = m["summary"]
     t = s["target"]
-    out = [f"[b {PALETTE['blue']}]PROGRESS[/]"]
     if not t:
-        return "\n".join(out + [f"[{g}]No Target yet. Set one with[/]",
-                                f"comms-terminal pipeline target {m['name'].lower()} AMOUNT --by DATE"])
+        return "\n".join([f"[{PALETTE['grey1']}]No Target yet.[/]", "Set one from the command line (This week)."])
     what = "TTM revenue" if m["pipeline"] == pipeline.REVENUE else "raised"
-    out += [pipeline_bar(s),
-            f"of [b]CAD {pipeline.money(t['amount'])}[/] {what} by {t['due']}",
-            f"[{PALETTE['green']}]█[/] customers today CAD {pipeline.money(s['paying'])} ({s['paying_count']})"
-            + (f", CAD {pipeline.money(s['kept'])} by then" if m["pipeline"] == pipeline.REVENUE else ""),
-            f"[{PALETTE['aqua']}]▓[/] likely from open accounts CAD {pipeline.money(s['weighted'])}",
-            f"[{PALETTE['grey0']}]░[/] gap CAD {pipeline.money(s['gap'])}"
-            + (f": {s['customers']} new customers at CAD {pipeline.money(s['average'])}" if s["customers"] is not None
-               else ""),
-            f"[{g}]new customers must reach {m['paying_stage']} by {s['deadline']} ({s['weeks']:.0f} weeks)[/]"]
+    out = [f"[b {PALETTE['blue']}]{s['share'] * 100:.0f}%[/]  {pipeline_bar(s, 24, label=False)}", "",
+           kv("Target", f"[b]CAD {pipeline.money(t['amount'])}[/] {what} by {t['due']}"),
+           kv("Projected", f"CAD {pipeline.money(s['projected'])}"),
+           kv("Today", f"[green]█[/] customers CAD {pipeline.money(s['paying'])} ({s['paying_count']})"),
+           kv("Likely", f"[aqua]▓[/] from open accounts CAD {pipeline.money(s['weighted'])}"),
+           kv("Gap", f"[b]{s['customers']} new customers[/] at CAD {pipeline.money(s['average'])}"
+              if s["customers"] is not None else f"CAD {pipeline.money(s['gap'])}"),
+           kv("Deadline", f"reach {m['paying_stage']} by {s['deadline']} ({s['weeks']:.0f} weeks)")]
     if m["pipeline"] == pipeline.REVENUE:
         b = "b" if s["nrr_benchmark"] else ""
-        out.append(f"[{g}]customers keep {pipeline.marked(s['grr'])} and grow {pipeline.marked(s['expansion'])} a year"
-                   f" (net {pipeline.pct(s['nrr'])}{b})[/]")
-    return "\n".join(out)
+        out.append(kv("Customers", f"keep {pipeline.marked(s['grr'])}, grow {pipeline.marked(s['expansion'])}"
+                                   f" a year (net {pipeline.pct(s['nrr'])}{b})"))
+    return "\n".join(out).replace("[green]", f"[{PALETTE['green']}]").replace("[aqua]", f"[{PALETTE['aqua']}]")
 
 
 def pipeline_week(m: dict) -> str:
-    bullets = pipeline.this_week(m) or ["Nothing short this week."]
-    return "\n".join([f"[b {PALETTE['blue']}]THIS WEEK[/]"] + [f"[b]•[/] {escape(b)}" for b in bullets])
+    """The This week box: numbered actions in bold, each with its reason under it."""
+    items = pipeline.this_week(m)
+    if not items:
+        return f"[{PALETTE['grey1']}]Nothing short this week.[/]"
+    return "\n".join(f"[b {PALETTE['blue']}]{n}[/]  [b]{escape(act)}[/]\n   [{PALETTE['grey1']}]{escape(why)}[/]"
+                     for n, (act, why) in enumerate(items, 1))
 
 
 def pipeline_constraint(m: dict) -> str:
     c = m["summary"]["constraint"]
     if not c:
-        return f"[{PALETTE['grey1']}]No constraint yet: no Stage has a measured rate.[/]"
-    what = {"GRR": "customers keep", "Expansion": "customers grow"}.get(c["stage"], "convert")
+        return f"[{PALETTE['grey1']}]None yet: no Stage has a measured rate.[/]"
+    what = {"GRR": "customers keep", "Expansion": "customers grow"}.get(c["stage"], "move on")
     name = {"GRR": "Retention", "Expansion": "Expansion"}.get(c["stage"], f"{c['stage']} → {c['next']}")
-    return (f"[b {PALETTE['bg0']} on {PALETTE['red']}] CONSTRAINT [/]  [b]{escape(name)}[/]: {pipeline.pct(c['rate'])}"
-            f" {what}" + (f" [{PALETTE['grey1']}](benchmark {pipeline.pct(c['benchmark'])})[/]" if c["benchmark"] else ""))
+    return (f"[b]{escape(name)}[/]   [b {PALETTE['red']}]{pipeline.pct(c['rate'])}[/] {what}"
+            + (f"   [{PALETTE['grey1']}]benchmark {pipeline.pct(c['benchmark'])}[/]" if c["benchmark"] else ""))
 
 
-def pipeline_bowtie(m: dict, width: int = 12) -> str:
-    """The Bowtie strip: each Stage left to right with its account count, a bar for its share of accounts,
-    and the share converting out of it (the constraint arrow marked)."""
-    g, c = PALETTE["grey1"], m["summary"]["constraint"]
-    right = [r for r in m["ending"] if r["measure"]]
-    cells = [(r["stage"], len(r["orgs"]), r) for r in m["stages"]] + [(r["stage"], len(r["orgs"]), r) for r in right]
-    most = max([n for _, n, _ in cells] + [1])
-
-    def rate(r):
-        if "measure" in r:  # Impact (retention) or Expansion
-            word = "keep" if r["measure"] == "GRR" else "grow"
-            used = r["rate"] if r["rate"] is not None else r["benchmark"]
-            mark = "" if r["rate"] is not None else "b"
-            return f"{word} {pipeline.pct(used)}{mark}" if used is not None else "—"
-        if r["rate"] is not None:
-            return f"{pipeline.pct(r['rate'])} →"
-        return f"{pipeline.pct(r['used'])}b →" if r["assumed"] else "— →"
-
-    def hot(r):
-        return c is not None and (r.get("constraint") or (r.get("measure") and r["measure"] == c["stage"]))
-
-    names = "".join(f"{name[:width - 1]:<{width}}" for name, _, _ in cells)
-    counts = "".join(f"[b]{n:<{width}}[/]" for _, n, _ in cells)
-    bars = "".join(f"[{PALETTE['blue']}]{('█' * max(1 if n else 0, round((width - 3) * n / most))):<{width}}[/]"
-                   for _, n, _ in cells)
-    rates = "".join((f"[b {PALETTE['red']}]{rate(r):<{width}}[/]" if hot(r) else f"[{g}]{rate(r):<{width}}[/]")
-                    for _, _, r in cells)
-    return "\n".join([f"[b {PALETTE['blue']}]BOWTIE[/]  [{g}]accounts in each Stage, and the share moving on"
-                      f" (last 12 months; b = benchmark)[/]", names, counts, bars, rates])
+def column_head(r: dict, hot: bool) -> str:
+    """A board column's header: the Stage, then its count and what moves on from it (the Bowtie)."""
+    g = PALETTE["grey1"]
+    if r.get("measure"):
+        used = r["rate"] if r["rate"] is not None else r["benchmark"]
+        word = "keep" if r["measure"] == "GRR" else "grow"
+        flow = f"{word} {pipeline.pct(used)}{'' if r['rate'] is not None else 'b'}" if used is not None else ""
+    elif "rate" in r and "used" in r:
+        flow = (f"{pipeline.pct(r['rate'])} →" if r["rate"] is not None else
+                f"{pipeline.pct(r['used'])}b →" if r["assumed"] else "— →")
+    else:
+        flow = ""
+    colour = PALETTE["red"] if hot else "#654735"
+    mark = " ◀" if hot else ""
+    return (f"[b {colour}]{r['stage']}{mark}[/]\n[b]{len(r['orgs'])}[/]"
+            + (f"  [{PALETTE['red'] if hot else g}]{flow}[/]" if flow else ""))
 
 
 def card(o: dict, now) -> str:
     g = PALETTE["grey1"]
     value = f"CAD {pipeline.money(o['value'])}" if o["value"] is not None else f"[{PALETTE['red']}]no Value[/]"
     last = when(o["last_message"].isoformat(), now) if o["last_message"] else "—"
-    return f"[b]{escape(o['name'])}[/]\n{value} · {o['days']} days\n[{g}]last message {last}[/]"
+    return f"[b]{escape(o['name'])}[/]\n{value} · {o['days']}d\n[{g}]last message {last}[/]"
 
 
 class BoardColumn(OptionList):
@@ -3774,7 +3767,7 @@ class BoardColumn(OptionList):
             if i < len(orgs) - 1:
                 self.add_option(None)  # a separator line between cards
         if not orgs:
-            self.add_option(Option(f"[{PALETTE['grey1']}]none[/]", disabled=True))
+            self.add_option(Option(f"[{PALETTE['grey0']}]·[/]", disabled=True))
         else:
             self.highlighted = min(keep or 0, self.option_count - 1)
 
@@ -3799,9 +3792,17 @@ class BoardColumn(OptionList):
             set_org_value(self.app, o)
 
 
+def box(title: str, *children, id=None, classes="") -> Vertical:
+    """A titled, bordered section (the console's panel style)."""
+    b = Vertical(*children, id=id, classes=f"plbox {classes}".strip())
+    b.border_title = f"[b]{title}[/]"
+    return b
+
+
 class PipelinePage(Page):
-    """One Pipeline, action first (.agents/discovery/2026-10-24-pipeline-page-layout.md): This week and Progress,
-    the Constraint, the Bowtie strip, the Accounts board (every Stage in Bowtie order), then the Weekly review."""
+    """One Pipeline, action first (.agents/discovery/2026-10-24-pipeline-page-layout.md): boxes for This week and
+    Progress, the Constraint, the Accounts board (each Stage once, its header carrying the Bowtie's count and
+    conversion), and the Weekly review."""
     BINDINGS = [Binding("y", "copy", "copy for agent"), Binding("pagedown", "scroll(1)", show=False),
                 Binding("pageup", "scroll(-1)", show=False), Binding("space", "scroll(1)", show=False)]
     WEEKLY = ("Stage", "Accounts", "Convert", "Benchmark", "Days in Stage", "Reach {paid}", "Need a week",
@@ -3815,23 +3816,17 @@ class PipelinePage(Page):
         self.m = None
 
     def compose(self) -> ComposeResult:
+        cols = [Vertical(Static(id=f"plhead{i}", classes="plcolhead"),
+                         BoardColumn(stage, id=f"plcol{i}", classes="plcards"), classes="plcol")
+                for i, stage in enumerate(self.columns)]
         with VerticalScroll(id="plscroll"):
-            with Horizontal(id="pltop"):
-                yield Static(id="plweek")
-                yield Static(id="plprogress")
-            yield Static(id="plconstraint")
-            with HorizontalScroll(id="plbowtiescroll"):  # one line per row; narrow terminals scroll it sideways
-                yield Static(id="plbowtie")
-            yield Static(f"[b {PALETTE['blue']}]ACCOUNTS[/]  [{PALETTE['grey1']}]enter opens · s Stage · v Value ·"
-                         " ←/→ next Stage[/]", classes="plhead")
-            with HorizontalScroll(id="plboard"):
-                for i, stage in enumerate(self.columns):
-                    with Vertical(classes="plcol"):
-                        yield Static(id=f"plhead{i}", classes="plcolhead")
-                        yield BoardColumn(stage, id=f"plcol{i}", classes="plcards")
-            yield Static(f"[b {PALETTE['blue']}]WEEKLY REVIEW[/]", classes="plhead")
-            yield DataTable(id="plweekly", cursor_type="none", show_cursor=False)
-            yield Static(id="pllegend")
+            yield Horizontal(box("THIS WEEK", Static(id="plweek"), id="plweekbox"),
+                             box("PROGRESS", Static(id="plprogress"), id="plprogressbox"), id="pltop")
+            yield box("CONSTRAINT", Static(id="plconstraint"), classes="plred")
+            yield box("ACCOUNTS  ·  each Stage, how many move on  ·  enter opens · s Stage · v Value · ←/→",
+                      HorizontalScroll(*cols, id="plboard"))
+            yield box("WEEKLY REVIEW", DataTable(id="plweekly", cursor_type="none", show_cursor=False),
+                      Static(id="pllegend"))
 
     def on_mount(self):
         paid = pipeline.PAYING[self.p][0]
@@ -3851,14 +3846,12 @@ class PipelinePage(Page):
         self.query_one("#plweek", Static).update(pipeline_week(m))
         self.query_one("#plprogress", Static).update(pipeline_progress(m))
         self.query_one("#plconstraint", Static).update(pipeline_constraint(m))
-        self.query_one("#plbowtie", Static).update(pipeline_bowtie(m, getattr(self, "col_width", 11) + 1))
         rows = {r["stage"]: r for r in m["stages"] + m["ending"]}
         c = m["summary"]["constraint"]
         for i, stage in enumerate(self.columns):
             r = rows[stage]
-            hot = c is not None and (r.get("constraint") or r.get("measure") == c["stage"])
-            head = f"[b]{stage}[/] · {len(r['orgs'])}" + (f" [b {PALETTE['red']}]◀[/]" if hot else "")
-            self.query_one(f"#plhead{i}", Static).update(head)
+            hot = c is not None and bool(r.get("constraint") or (r.get("measure") and r["measure"] == c["stage"]))
+            self.query_one(f"#plhead{i}", Static).update(column_head(r, hot))
             self.query_one(f"#plcol{i}", BoardColumn).show(r["orgs"], m["now"])
         table = self.query_one("#plweekly", DataTable)
         table.clear()
@@ -3866,35 +3859,33 @@ class PipelinePage(Page):
             convert = pipeline.pct(r["rate"]) if r["rate"] is not None else \
                 f"[{g}]{pipeline.pct(r['used'])} (benchmark)[/]" if r["assumed"] else f"[{g}]no data[/]"
             days = f"{r['time']:.0f}" if r["time"] is not None else "—"
-            name = f"[b]{r['stage']}[/]" if r["constraint"] else r["stage"]
+            name = f"[b {PALETTE['red']}]{r['stage']} ◀[/]" if r["constraint"] else r["stage"]
+            short = f"[{PALETTE['red']}]{pipeline.num(-r['pace'])}[/]" if r["pace"] is not None and r["pace"] < 0 \
+                else f"[{g}]—[/]"
             table.add_row(name, str(len(r["orgs"])), convert, pipeline.pct(r["benchmark"]), days,
-                          pipeline.pct(r["to_paying"]), pipeline.num(r["need"]), pipeline.num(r["entries"]),
-                          f"[{PALETTE['red']}]{pipeline.num(-r['pace'])}[/]" if r["pace"] is not None and r["pace"] < 0
-                          else f"[{g}]—[/]")
+                          pipeline.pct(r["to_paying"]), pipeline.num(r["need"]), pipeline.num(r["entries"]), short)
         for r in m["ending"]:
             if r["measure"]:
                 word = "keep" if r["measure"] == "GRR" else "grow"
                 rate = f"{word} {pipeline.pct(r['rate'])}" if r["rate"] is not None else f"[{g}]no data[/]"
                 table.add_row(r["stage"], str(len(r["orgs"])), rate, pipeline.pct(r["benchmark"]), *[""] * 5)
         self.query_one("#pllegend", Static).update(
-            f"[{g}]Convert: share of accounts that moved on to the next Stage over the last 12 months. Benchmark:"
-            " Winning by Design's Bowtie Standard, Table 6.2, for this deal size. Need and Getting: accounts entering"
-            " the Stage per week. Short by: how many more a week the Target needs.[/]")
+            f"[{g}]Convert: share of accounts that moved on to the next Stage in the last 12 months · Benchmark:"
+            " Winning by Design's Bowtie Standard, Table 6.2 · Need and Getting: accounts entering the Stage a week"
+            " · Short by: how many more a week the Target needs[/]")
 
     def on_resize(self, event):
-        """Share the width among the board's columns; below 18 each, the board scrolls sideways. The Bowtie
-        strip uses the same width, so each Stage sits above its column."""
+        """Stack This week over Progress when narrow; share the width among the board's columns, which scroll
+        sideways below 18 each."""
         stacked = event.size.width < 140
         top = self.query_one("#pltop")
         top.styles.layout = "vertical" if stacked else "horizontal"
         top.set_class(stacked, "-stacked")
         cols = list(self.query(".plcol"))
         if cols:
-            self.col_width = max(18, (event.size.width - 4) // len(cols) - 1)
+            each = max(18, (event.size.width - 8) // len(cols) - 1)
             for c in cols:
-                c.styles.width = self.col_width
-            if self.m:
-                self.query_one("#plbowtie", Static).update(pipeline_bowtie(self.m, self.col_width + 1))
+                c.styles.width = each
 
     def action_scroll(self, step):
         s = self.query_one("#plscroll", VerticalScroll)

@@ -420,7 +420,7 @@ def num(x) -> str:
         return x
     if round(x, 1) == 0:
         return "0"
-    return f"{x:.0f}" if abs(x) >= 10 else f"{x:.1f}".replace("0.", ".") if abs(x) < 1 else f"{x:.1f}"
+    return f"{x:.0f}" if abs(x) >= 10 else f"{x:.1f}"
 
 
 def signed(x) -> str:
@@ -451,40 +451,40 @@ def names(orgs, most=3) -> str:
     return n[0] if len(n) == 1 else ", ".join(n[:-1]) + " and " + n[-1]
 
 
-def this_week(m: dict) -> list[str]:
-    """What the math says to do this week, as plain sentences (never Tasks): the constraint's lever, the
-    input the backward plan needs at the top Stage, and accounts the math cannot count yet."""
+def this_week(m: dict) -> list[tuple[str, str]]:
+    """What the math says to do this week, as (action, why) pairs in plain words (never Tasks): the
+    constraint's lever, the input the backward plan needs at the top Stage, and accounts the math cannot count."""
     s, out = m["summary"], []
     if not s["target"]:
-        out.append(f"Set a Target: comms-terminal pipeline target {m['name'].lower()} AMOUNT --by DATE")
+        out.append(("Set a Target", f"comms-terminal pipeline target {m['name'].lower()} AMOUNT --by DATE"))
     c = s["constraint"]
+    vs = f" (benchmark {pct(c['benchmark'])})" if c and c["benchmark"] else ""
     if c and c["stage"] == "GRR":
-        out.append(f"Protect retention: customers kept {pct(c['rate'])} of their Value"
-                   + (f" (benchmark {pct(c['benchmark'])})" if c["benchmark"] else ""))
+        out.append(("Protect retention", f"customers kept {pct(c['rate'])} of their Value{vs}"))
     elif c and c["stage"] == "Expansion":
-        out.append(f"Grow existing customers: expansion {pct(c['rate'])}"
-                   + (f" (benchmark {pct(c['benchmark'])})" if c["benchmark"] else ""))
+        out.append(("Grow existing customers", f"expansion {pct(c['rate'])}{vs}"))
     elif c:
         row = next(r for r in m["stages"] if r["stage"] == c["stage"])
-        out.append(f"Move {names(row['orgs'])} from {c['stage']} to {c['next']}" if row["orgs"]
-                   else f"Find accounts for {c['stage']}")
+        out.append((f"Move {names(row['orgs'])}", f"{c['stage']} → {c['next']}, the constraint") if row["orgs"]
+                   else (f"Find accounts for {c['stage']}", f"it is the constraint: {pct(c['rate'])} move on{vs}"))
     top = m["stages"][0]
     if top["need"] == "late":
-        out.append(f"New {top['stage']} accounts can no longer reach {m['paying_stage']} by {s['deadline']}")
+        out.append((f"Too late for new {top['stage']} accounts",
+                    f"they can no longer reach {m['paying_stage']} by {s['deadline']}"))
     elif isinstance(top["need"], float) and top["pace"] < 0:
-        out.append(f"Add {_m.ceil(top['need'] - top['entries'])} accounts to {top['stage']} this week"
-                   f" (need {num(top['need'])} a week, getting {num(top['entries'])})")
+        out.append((f"Add {_m.ceil(top['need'] - top['entries'])} accounts to {top['stage']}",
+                    f"need {num(top['need'])} a week, getting {num(top['entries'])}"))
     live = m["stages"] + [r for r in m["ending"] if r["stage"] not in ENDING[m["pipeline"]]]  # not Lost, Churned
     missing = [o for r in live for o in r["orgs"] if o.get("value") is None and "name" in o]
     if missing:
-        out.append(f"Set a Value for {names(missing)}: the math leaves them out")
+        out.append((f"Set a Value for {names(missing)}", "the math leaves them out until then"))
     return out
 
 
 def markdown(m: dict) -> str:
     """The Pipeline page as Markdown, for `y` and `comms-terminal pipeline` (FR-PL-31)."""
     s, name = m["summary"], m["name"]
-    lines = [f"# {name} Pipeline", "", "This week:"] + [f"- {b}" for b in this_week(m)] + [""]
+    lines = [f"# {name} Pipeline", "", "This week:"] + [f"- {a} ({why})" for a, why in this_week(m)] + [""]
     t = s["target"]
     if not t:
         lines.append(f"No Target yet: comms-terminal pipeline target {name.lower()} AMOUNT --by DATE")
