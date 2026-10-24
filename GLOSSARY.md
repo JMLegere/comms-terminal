@@ -26,7 +26,7 @@ The monotonically increasing version of a saved Draft, checked before a later sa
 Stored Threads matching an exact email or phone destination, whether or not it is linked to a Person; it makes no claim about external messages.
 
 **Activity**:
-A timestamped, never-rewritten record of a message received or sent in a Thread, a Phone call, or an edit or deletion of one.
+A timestamped, never-rewritten record of a message received or sent in a Thread, a Phone call, a Meeting, or an edit or deletion of one.
 _Avoid_: Event, Interaction, Message (when meaning the record)
 
 **Audit entry**:
@@ -66,7 +66,7 @@ Where a Thread stands, as in Plain: Todo, Snoozed, or Done. Every Thread also ha
 _Avoid_: State
 
 **Status detail**:
-The reason within a Status, as in Plain: Needs first response, Needs next response, or Investigating (Todo); Waiting for them or Paused for later (Snoozed); Done or Ignored (Done).
+The reason within a Status, as in Plain: Needs first response, Needs next response, or Investigating (Todo); Waiting for them or Paused for later (Snoozed, always until a date: a follow-up date or a wake time; never indefinite); Done or Ignored (Done).
 _Avoid_: Substatus, Reason
 
 **Ignored**:
@@ -95,6 +95,14 @@ _Avoid_: Address (when it may be a Slack user), Account, Handle
 **Organization**:
 A company or group that Persons belong to.
 _Avoid_: Account, Company, Tenant
+
+**Membership**:
+A Person's place in an Organization. A Person can belong to several Organizations. It follows the Person's company email domain, never a free-mail domain such as gmail.com; Jeremy's own additions and removals always win.
+_Avoid_: Affiliation, Employment
+
+**Unattended**:
+An Organization in a Pipeline, in an open or paying Stage, whose People have no Todo or Snoozed Thread and no unfinished Enrollment, so nothing will bring it back to Jeremy.
+_Avoid_: Stalled, Dropped, No next step
 
 ## Outreach
 
@@ -238,7 +246,7 @@ _Avoid_: Dashboard, Execution view
 ## Sources
 
 **Platform**:
-The service a Connection runs through: Gmail, Fastmail, Slack, or Quo; later WhatsApp, LinkedIn, or tool comments. Each Platform has one adapter.
+The service a Connection runs through: Gmail, Fastmail, Slack, Quo, or Google Calendar (read only: Meetings come in, nothing goes out); later WhatsApp, LinkedIn, or tool comments. Each Platform has one adapter.
 _Avoid_: Medium, Channel (when meaning the service), Email (Gmail and Fastmail are separate Platforms)
 
 **Message format**:
@@ -264,12 +272,12 @@ The page that lays Calendar Items out over time, read from Jeremy's work calenda
 _Avoid_: Agenda, Schedule
 
 **Event**:
-Any entry with a date or a time on Jeremy's work calendar. Every Event is a Meeting, a Block, or an All-day Event. It is never a Thread or an Activity.
+Any entry with a date or a time on Jeremy's work calendar. Every Event is a Meeting's booking, a Block, or an All-day Event. It is never a Thread.
 _Avoid_: Appointment, Calendar entry
 
 **Meeting**:
-An Event with attendees besides Jeremy. It is context for the Persons and Organizations among its attendees; Tana adds its summary and linked documents.
-_Avoid_: Call, Thread (for a meeting)
+One synchronous conversation booked as an Event with attendees besides Jeremy, held on Google Meet, Zoom, Microsoft Teams, by phone, or in person. When an attendee is outside agentmaple.com, the Meeting is an Activity on a Thread: the Thread of its Event, or of its repeating series. A new such Thread starts in Todo, and the Thread goes to Todo when the Meeting ends or is cancelled or declined. Tana adds its summary and linked documents, which never change the Thread's Status. Only Meetings booked after Meetings became Threads join Threads.
+_Avoid_: Call (for a meeting), Appointment
 
 **Block**:
 A timed Event with no attendees besides Jeremy, such as focus time, lunch, or a reminder to himself.
@@ -287,10 +295,6 @@ _Avoid_: RSVP, Response status
 Anything placed on the Calendar: an Event, a Task on its day, a Snoozed Thread at the time it wakes, a Draft at the time it is set to send, or an Enrollment on the day it starts.
 _Avoid_: Entry, Event (for anything but an Event)
 
-**Event provider**:
-The outside service that Comms Terminal reads Events from, such as Google Calendar. It holds no Threads and is not a Platform.
-_Avoid_: Calendar provider, Integration, Connection, Context source
-
 **Deleted Event**:
-An Event that its Event provider no longer has, including one removed occurrence of a repeating Event. Comms Terminal keeps it, marked deleted.
+An Event that Google Calendar no longer has, including one removed occurrence of a repeating Event. Comms Terminal keeps it, marked deleted.
 _Avoid_: Cancelled Event, Removed Event

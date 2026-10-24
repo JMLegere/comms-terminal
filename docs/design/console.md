@@ -174,7 +174,7 @@ Thread, Person, Organization, and Case pages show separate details-column sectio
 - **Grid**: one month grid of week rows that scrolls without pages; a separator row starts each month, and a week that spans two months splits at it. It opens with two weeks above this week and the cursor on today. A cell shows the date (`today` on today), up to four Events as start hour and title (`?` unanswered, `~` maybe, declined dimmed, Deleted struck through, All-day in blue), `+N more`, and a count line: Tasks, Snoozed Threads waking, scheduled Draft sends, Enrollment starts.
 - **Day pane**: every Calendar Item of the cursor's day in time order. Enter opens it: an Event's details page, the Thread, the Task, the Draft, or the Person.
 - **Event details**: title and Invite state, time and repeat, location, join link, organizer and attendees with their answers (linked to People, with open Threads and Cases), Organizations, the description with Google's Meet/Zoom footer folded, and the Context sections for its people.
-- **Bottom bar**: `now` Event and minutes left, then `next` Event and when; clicking it opens the Calendar. A failing Event provider shows Google Calendar broken; the Calendar shows its copy "as of" the last good fetch.
+- **Bottom bar**: `now` Event and minutes left, then `next` Event and when; clicking it opens the Calendar. A failing Google Calendar feed shows Google Calendar broken; the Calendar shows its copy "as of" the last good fetch.
 - **Keys**: grid `h`/`l` day, `j`/`k` week, `{`/`}` month, `t` today, `tab` or `enter` the day pane; day pane `j`/`k`, `enter` open, `o` join link, `tab`/`esc` back to the grid; Event details `o` join link, `esc` back. `←`/`→` move between grid and day pane.
 
 ### Pipeline (ADR 0006, approved 2026-10-23)
