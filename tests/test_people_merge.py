@@ -96,6 +96,27 @@ def test_thread_lists_everyone_involved():
     assert v["organizations"] == ["acme.com", "ws.ca"]  # Agent Maple's own domain is not a counterparty
 
 
+
+def test_outbound_texts_list_who_was_texted():
+    db = setup()
+    with db:
+        db.execute("INSERT INTO connections (platform, external_id, self_id, label, connected_at)"
+                   " VALUES ('quo', 'PN1', '+15550000000', 'Quo', ?)", (AT.isoformat(),))
+    mail(db, 1, "nic@acme.com", "Nic Robichaud")
+    nic = db.execute("SELECT person_id FROM identities WHERE value = 'nic@acme.com'").fetchone()[0]
+    inbox.add_identity(db, nic, "phone", "+15550001001")
+
+    def text(n, peer, sender=None):
+        return inbox.ingest(db, inbox.Incoming(3, peer, "im", "MESSAGE", f"sms-{n}", sender, AT, "hi", [], "hi",
+                                               {"peer": peer}, channel_name=peer))
+    known, unknown = text(1, "+15550001001"), text(2, "+15550001002")
+    text(3, "+15550001001", inbox.Identity("phone", "+15550001001"))  # Nic answers
+
+    v = inbox.thread_view(db, known.id)
+    assert [p["name"] for p in v["people"]] == ["Nic Robichaud"] and v["others"] == []
+    v = inbox.thread_view(db, unknown.id)
+    assert v["people"] == [] and v["others"] == ["+15550001002"] and v["organizations"] == []
+
 def test_organizations_use_the_registrable_domain():
     db = setup()
     mail(db, 1, "no-reply@accounts.google.com", "Google Takeout")

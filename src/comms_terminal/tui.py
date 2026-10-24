@@ -2211,7 +2211,7 @@ def details_markup(v, db, related=None) -> str:
             addr = f" [#928374]{escape(ident['value'])}[/]" if ident and ident["value"] != q["name"] else ""
             block = f"[#c14a4a]{ICON['blocked']}[/] " if any(i["blocked"] for i in q["identities"]) else ""
             lines.append(f"{block}[@click=app.open_person({q['id']})][b underline]{escape(q['name'])}[/][/]{addr}")
-        lines += [f"[#928374]{ICON['email']} {escape(a)}[/]" for a in others]
+        lines += [f"[#928374]{ICON['email' if '@' in a else 'phone']} {escape(a)}[/]" for a in others]
         known = {o for q in people for o in q["organizations"]}
         orgs = [f"[@click=app.open_org('{o}')][underline]{escape(o)}[/][/]" if o in known else f"[#928374]{escape(o)}[/]"
                 for o in v.get("organizations") or sorted(known)]

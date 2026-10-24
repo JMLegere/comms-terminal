@@ -2450,7 +2450,7 @@ def thread_view(db, thread_id: int, files: tuple[str, int] | None = None) -> dic
 
 def _participants(db, acts) -> tuple[list[dict], list[str], list[str]]:
     """Everyone involved in a Thread, in order of appearance (Jeremy, 2026-10-12): Persons who wrote or were
-    addressed (To/Cc), addresses that belong to no Person yet, and all their Organizations. Jeremy's own
+    addressed (To/Cc, or a phone peer), addresses that belong to no Person yet, and all their Organizations. Jeremy's own
     addresses, and his own company's domain, are left out."""
     mine = {r[0].lower() for r in db.execute("SELECT self_id FROM connections")}
     pids, others = [], []
@@ -2461,11 +2461,12 @@ def _participants(db, acts) -> tuple[list[dict], list[str], list[str]]:
         if a["identity_id"]:
             found.append(db.execute("SELECT person_id FROM identities WHERE id = ?", (a["identity_id"],)).fetchone()[0])
         data = json.loads(a["data"])
-        for addr in [*(data.get("to") or []), *(data.get("cc") or [])]:
-            addr = addr.lower()
+        peer = data.get("peer")  # a phone Thread's other party, set even when Jeremy sent every message
+        addressed = [("email", a.lower()) for a in [*(data.get("to") or []), *(data.get("cc") or [])]]
+        for kind, addr in addressed + ([("phone", peer)] if isinstance(peer, str) else []):
             if addr in mine:
                 continue
-            r = db.execute("SELECT person_id FROM identities WHERE kind = 'email' AND value = ?", (addr,)).fetchone()
+            r = db.execute("SELECT person_id FROM identities WHERE kind = ? AND value = ?", (kind, addr)).fetchone()
             if r and r[0]:
                 found.append(r[0])
             elif addr not in others:
