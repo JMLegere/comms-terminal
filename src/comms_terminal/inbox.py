@@ -1108,9 +1108,10 @@ def transition(current: tuple[str, str] | None, event, *, has_replied: bool = Fa
             return None if status == "TODO" else fresh
         case Done():
             return ("DONE", "DONE_MANUALLY_SET")
+        case Snooze(until=None):
+            raise SnoozeNeedsDate()  # WAITING_INDEFINITELY stays readable for old rows (0 live)
         case Snooze(until=until):
-            return ("SNOOZED", "WAITING_INDEFINITELY" if until is None else "WAITING_FOR_DURATION",
-                    None if until is None else _iso(until), detail if status == "TODO" else None)
+            return ("SNOOZED", "WAITING_FOR_DURATION", _iso(until), detail if status == "TODO" else None)
         case Wait():
             return ("SNOOZED", "WAITING_FOR_CUSTOMER")
         case Investigate():
@@ -2259,6 +2260,13 @@ def _members(db) -> dict[str, set[int]]:
             "SELECT o.domain, m.person_id, m.member FROM memberships m JOIN organizations o ON o.id = m.organization_id"):
         (members.setdefault(domain, set()).add if member else members.setdefault(domain, set()).discard)(pid)
     return members
+
+
+class SnoozeNeedsDate(ValueError):
+    """A Snooze always runs until a date (GLOSSARY Snoozed; FR-OA-10)."""
+
+    def __init__(self, message: str = "a Snooze needs a date"):  # the remote copy rebuilds it from its message
+        super().__init__(message)
 
 
 class FreeMail(ValueError):

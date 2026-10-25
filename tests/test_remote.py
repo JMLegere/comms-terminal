@@ -146,6 +146,9 @@ def test_service_errors_raise_the_same_exception_and_a_rejected_write_asks_for_r
     assert inbox.get_draft(sdb, draft["id"])["body"] == "x"
     with pytest.raises(inbox.DraftConflict):
         rem.call("inbox.save_draft", (values,), {"draft_id": draft["id"], "expected_revision": 7})
+    with pytest.raises(inbox.SnoozeNeedsDate):  # FR-OA-10: the service refuses it as the console does
+        rem.call("inbox.act", (tid, inbox.Snooze()), {})
+    assert inbox.get_thread(sdb, tid).status_detail != "WAITING_INDEFINITELY"
     with pytest.raises(remote.Offline):
         rem.call("inbox.connect", (), {})  # not allowlisted
     said = []

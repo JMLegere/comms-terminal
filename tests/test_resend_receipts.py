@@ -600,7 +600,7 @@ def test_later_own_reply_stays_waiting_when_earlier_skewed_reply_receipt_arrives
 
 @pytest.mark.parametrize("kind", ["draft", "reply"])
 @pytest.mark.parametrize("action", [inbox.Wait(), inbox.Done(), inbox.Snooze(ATTEMPT + timedelta(days=7)),
-                                   inbox.Snooze(), inbox.Ignore()])
+                                   inbox.Ignore()])
 def test_later_user_triage_wins_over_receipt_causality(db, monkeypatch, kind, action):
     sent_id, incoming_id, _ = skewed_send_before_receipt(db, kind)
     monkeypatch.setattr(inbox, "_now", lambda: ATTEMPT + timedelta(hours=1))

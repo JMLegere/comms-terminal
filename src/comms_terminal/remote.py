@@ -73,7 +73,7 @@ def creates(name: str, db, args, kwargs) -> bool:
 DATACLASSES = {c.__name__: c for c in (inbox.Done, inbox.Snooze, inbox.Wait, inbox.Investigate, inbox.MarkTodo,
                                        inbox.Ignore, inbox.Unignore, inbox.SetCase, inbox.Reopen, inbox.Thread)}
 ERRORS = {c.__name__: c for c in (inbox.DraftConflict, inbox.StaleThreadSnapshot, inbox.SendUnknown,
-                                  inbox.SendFailed, inbox.IdentityTaken, inbox.FreeMail, sequences.Refused, pipeline.Refused, ValueError,
+                                  inbox.SendFailed, inbox.IdentityTaken, inbox.FreeMail, inbox.SnoozeNeedsDate, sequences.Refused, pipeline.Refused, ValueError,
                                   KeyError)}
 
 

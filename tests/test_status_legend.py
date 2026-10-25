@@ -1,5 +1,7 @@
 """Status legends through native Textual widgets; synthetic data, no providers or sends."""
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
 from rich.text import Text
 from textual.widgets import DataTable, Static
@@ -74,7 +76,7 @@ def test_status_legend_refreshes_on_same_threads_page(tmp_path):
         await pilot.pause()
         page = app.main.page
         check_legend(app, "Todo")
-        for action, name, view in ((inbox.Snooze(), "Snoozed", 1), (inbox.Done(), "Done", 2),
+        for action, name, view in ((inbox.Snooze(datetime.now(timezone.utc) + timedelta(days=1)), "Snoozed", 1), (inbox.Done(), "Done", 2),
                                    (inbox.Ignore(), "Ignored", 3), (inbox.Unignore(), "Todo", 0)):
             inbox.act(app.db, ids["ana"], action)
             app.main.open_thread(ids["ana"])  # existing pane takes refresh_data, not compose/remount

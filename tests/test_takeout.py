@@ -97,7 +97,7 @@ def test_takeout_preview_apply_threading_scope_and_repeat(tmp_path):
     snoozed = _seed(db, "snoozed-root", inbox.Snooze(UNTIL + timedelta(days=1)))
     duplicate = _seed(db, "existing", inbox.Ignore())
     untouched_done = _seed(db, "untouched-done", inbox.Done())
-    untouched_snooze = _seed(db, "untouched-snooze", inbox.Snooze())
+    untouched_snooze = _seed(db, "untouched-snooze", inbox.Snooze(UNTIL + timedelta(days=2)))
     foreign = _seed(db, "foreign-root", inbox.Wait(), connection_id=2)
     untouched = {thread_id: inbox.snapshot(db, thread_id)
                  for thread_id in (duplicate, untouched_done, untouched_snooze, foreign)}
@@ -182,7 +182,7 @@ def test_takeout_preview_apply_threading_scope_and_repeat(tmp_path):
     assert {p.name for p in (path.parent / "raw").iterdir()} == expected_raw
 
     inbox.act(db, new[_id("sent-only")]["thread_id"], inbox.Done())
-    inbox.act(db, new[_id("root")]["thread_id"], inbox.Snooze())
+    inbox.act(db, new[_id("root")]["thread_id"], inbox.Snooze(UNTIL + timedelta(days=2)))
     states = _rows(db, "threads")
     activities = _rows(db, "activities")
     db.close()

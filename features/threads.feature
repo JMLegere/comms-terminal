@@ -58,12 +58,11 @@ Feature: Threads
     And the Thread has Status "TODO" and Status Detail "CREATED"
 
   @AS-16 @FR-6d
-  Scenario: Act Snooze with no time, then the other side writes
+  Scenario: Act Snooze with no time is refused, since a Snooze always runs until a date
     Given an email Thread from "ana@acme.com" with Status "TODO" and Status Detail "CREATED"
     When Act is called with Snooze and no time
-    Then the Thread has Status "SNOOZED" and Status Detail "WAITING_INDEFINITELY"
-    When Ingest receives a reply from "ana@acme.com" on that Thread
-    Then the Thread has Status "TODO" and Status Detail "NEW_REPLY"
+    Then Act raises Snooze Needs Date
+    And the Thread has Status "TODO" and Status Detail "CREATED"
 
   @FR-6c
   Scenario: Ingest of a second message before Jeremy's first reply keeps TODO / CREATED
