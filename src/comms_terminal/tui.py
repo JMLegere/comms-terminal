@@ -7383,8 +7383,11 @@ class Console(App):
     def update_now(self):
         """The service runs another build: quit with UPDATE_EXIT, so deploy/comms-terminal-local installs that build
         and reopens, once no write is on its way and no reply text would be lost."""
-        saved = not self.is_screen_installed("main") or self.main.save_draft()  # at mount, nothing is typed yet
-        if (self.remote is None or not self.remote.idle.is_set() or not saved or self.drafts.__dict__.get("held")
+        if not self.is_screen_installed("main") or not self.main.query("#main"):  # still starting: quitting now
+            self.call_after_refresh(self.update_now)  # tore the main screen down mid-mount and exited 1, not 75
+            return
+        if (self.remote is None or not self.remote.idle.is_set() or not self.main.save_draft()
+                or self.drafts.__dict__.get("held")
                 or any(state["pending"] for state in self.reaction_states.values())):
             return
         self.exit(return_code=UPDATE_EXIT)

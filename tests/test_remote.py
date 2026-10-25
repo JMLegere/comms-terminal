@@ -358,3 +358,35 @@ def test_every_writer_the_console_calls_is_declared():
     assert sorted(c for c in called if c in found and c not in writers.WRITERS) == []
     assert remote.CALLS is writers.WRITERS and remote.CALLS["sequences.set_connection"] == "write"
     assert remote.ERRORS["pipeline.Refused"] is pipeline.Refused  # two Refused errors no longer collide
+
+
+def run_laptop_console(path, rem, syncer):
+    import asyncio
+    app, seen = tui.Console(path, remote=rem, syncer=syncer), {}
+
+    async def go():
+        async with app.run_test(size=(160, 45)) as pilot:
+            await pilot.pause(0.5)
+            seen["main"] = app.is_screen_installed("main") and bool(app.main.query("#main"))
+    asyncio.run(go())
+    return app, seen
+
+
+def test_the_console_starts_on_the_laptop_copy(service, laptop, tmp_path):
+    """Smoke: the console as `comms-terminal --remote` runs it (proxies installed, a Syncer, a first copy) opens
+    without an error; the pilot tests elsewhere start it without the laptop copy."""
+    rem, syncer, db, _ = laptop
+    db.close()
+    app, seen = run_laptop_console(str(tmp_path / "laptop" / "inbox.db"), rem, syncer)
+    assert app._exception is None and app.return_code in (None, 0) and seen == {"main": True}
+
+
+def test_a_console_older_than_the_service_quits_to_update_at_startup(service, laptop, tmp_path, monkeypatch):
+    """The service runs another build: the console quits with UPDATE_EXIT so the launcher installs it. Quitting
+    while the main screen was still mounting crashed with exit 1 (2026-10-25, laptop on ec7db66)."""
+    rem, syncer, db, _ = laptop
+    db.close()
+    syncer.service_build = "aaaaaaa"
+    monkeypatch.setattr(tui, "build_version", lambda: "2026-10-25-1855-ec7db66")
+    app, _ = run_laptop_console(str(tmp_path / "laptop" / "inbox.db"), rem, syncer)
+    assert app._exception is None and app.return_code == tui.UPDATE_EXIT
