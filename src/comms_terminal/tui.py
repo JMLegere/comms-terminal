@@ -21,9 +21,6 @@ import unicodedata
 from collections import Counter
 from collections.abc import MutableMapping
 from datetime import date, datetime, timedelta
-from email.errors import HeaderParseError
-from email.headerregistry import Address
-from email.utils import getaddresses
 from functools import cache, partial
 from importlib import resources
 from pathlib import Path
@@ -48,7 +45,7 @@ from textual.worker import WorkerCancelled, get_current_worker
 from . import calendar as cal, clock, files, inbox, pipeline, render, sequences
 from .health import problem
 from .icons import ICON
-from .platforms import E164, FORMATS, PLATFORMS
+from .platforms import FORMATS, PLATFORMS
 
 DETAIL_COLOR = {  # Status detail -> color; the label is inbox.DETAIL_LABEL, the glyph icons.ICON
     "CREATED": "#45707a", "NEW_REPLY": "#b47109", "IN_PROGRESS": "#945e80", "WAITING_FOR_CUSTOMER": "#928374",
@@ -1389,17 +1386,8 @@ def address_values(value, kind):
     for text in values:
         if not isinstance(text, str) or not text.isprintable():
             continue
-        if kind == "sms":
-            if E164.fullmatch(text):
-                yield text
-        elif kind == "email":
-            for _, address in getaddresses([text]):
-                try:
-                    parsed = Address(addr_spec=address)
-                except (ValueError, HeaderParseError):
-                    continue
-                if parsed.username and parsed.domain and address.isprintable():
-                    yield address
+        if kind in FORMATS and FORMATS[kind].addresses:
+            yield from FORMATS[kind].addresses(text)
 
 
 def local_addresses(db, kind):
@@ -1413,7 +1401,7 @@ def local_addresses(db, kind):
     for draft in db.execute('SELECT "to", cc FROM composition_drafts WHERE kind = ?', (kind,)):
         values.extend(draft)
     values.extend(row[0] for row in db.execute(
-        "SELECT value FROM identities WHERE kind = ?", ("email" if kind == "email" else "phone",)))
+        "SELECT value FROM identities WHERE kind = ?", (FORMATS[kind].identity,)))
     # ponytail: scan local envelopes; index destinations if captured history makes typing slow.
     for row in db.execute(
             "SELECT a.data, ch.native_id, ch.kind FROM thread_activities a"
@@ -1427,8 +1415,7 @@ def local_addresses(db, kind):
         except (TypeError, ValueError):
             continue
         if isinstance(data, dict):
-            values.extend(data.get(key) for key in (("from", "to", "cc") if kind == "email" else
-                                                   ("peer", "from", "to")))
+            values.extend(data.get(key) for key in FORMATS[kind].envelope)
     return sorted({address for value in values for address in address_values(value, kind)}, key=str.casefold)
 
 
@@ -1477,12 +1464,12 @@ class LocalAddressSuggester(Suggester):
                 if len(address) > len(prefix) and address[:len(prefix)].casefold() == prefix.casefold():
                     completed = value + address[len(prefix):]
                     return completed, completed
-            if kind not in ("email", "sms"):
+            if FORMATS[kind].identity is None:
                 return None
             named = self.field.app.db.execute(
                 "SELECT p.display_name, i.value FROM persons p"
                 " JOIN identities i ON i.person_id = p.id WHERE i.kind = ?"
-                " ORDER BY p.display_name, i.value", ("email" if kind == "email" else "phone",))
+                " ORDER BY p.display_name, i.value", (FORMATS[kind].identity,))
             matches = {}
             for name, text in named:
                 if not isinstance(name, str) or not name.isprintable():
@@ -1761,7 +1748,7 @@ class ReplyBox(Composer, Vertical):
         return ("thread", self.draft_key)
 
     def parent_confirmed(self):
-        return bool(self.view and self.view["channel"]["platform"] == "gmail" and self.view["messages"]
+        return bool(self.view and PLATFORMS[self.view["channel"]["platform"]].receipts and self.view["messages"]
                     and self.view["messages"][-1].get("wire_id"))
 
     def ready_hint(self):
@@ -1772,7 +1759,7 @@ class ReplyBox(Composer, Vertical):
     def set_view(self, view):
         """Refresh conversation state while preserving an open reply's selected draft and fields."""
         self.view, self.thread_id = view, view["thread"].id
-        self.display = PLATFORMS[view["channel"]["platform"]].format is not None  # a Meeting Thread takes none
+        self.display = PLATFORMS[view["channel"]["platform"]].takes_replies  # a Meeting Thread takes none
         if not self.has_class("open"):
             self.show_idle(view)
         elif self.pending_confirmation and self.parent_confirmed():
@@ -1801,7 +1788,7 @@ class ReplyBox(Composer, Vertical):
             self.open(self.view, self.mode)
 
     def open(self, view, mode="all"):
-        if PLATFORMS[view["channel"]["platform"]].format is None:  # a Meeting Thread (ADR 0007)
+        if not PLATFORMS[view["channel"]["platform"]].takes_replies:  # a Meeting Thread (ADR 0007)
             self.app.notify(inbox.NO_REPLY, severity="warning")
             return
         self.view, self.thread_id = view, view["thread"].id
@@ -2357,7 +2344,7 @@ def thread_head(v) -> str:
     link, plat = native_link(v), v["channel"]["platform"]
     if link:
         p = PLATFORMS[plat]
-        what = "join the meeting" if p.format is None else f"open in {p.title}"  # gcal: the Meeting's join link
+        what = f"open in {p.title}" if p.takes_replies else "join the meeting"  # gcal: the Meeting's join link
         head += f"\n[#928374]{ICON[p.icon]} [link='{render.target(link)}']{what}[/link] {ICON['open']} (o)[/]"
     return head
 
@@ -2699,19 +2686,15 @@ def thread_text(v, raw=None, context=None) -> str:
 
 def draft_history(db, kind, connection_id, destination, files=None) -> list | None:
     """Thread views of a Draft's Captured history; None until the recipient is exact."""
-    if kind == "slack":
-        addresses, lookup = inbox._destinations(destination, "slack"), "slack"
-        exact = len(addresses) == 1
-    elif kind == "email":
-        addresses, lookup = [a.lower() for _, a in getaddresses([destination])], "email"
-        exact = bool(addresses) and all(re.fullmatch(r"[^@\s,;<>]+@[^@\s,;<>]+", a) for a in addresses)
-    else:
-        addresses, lookup = [destination.strip()], "phone"
-        exact = bool(E164.fullmatch(addresses[0]))
+    fmt = FORMATS[kind]
+    addresses = fmt.destinations(destination)
+    exact = bool(addresses) and (fmt.cc_subject or len(addresses) == 1) and \
+        all(fmt.addresses is None or fmt.addresses(a) == [a] for a in addresses)
     if not exact:
         return None
     threads = {t.id: t for a in addresses for t in (
-        inbox.channel_threads(db, connection_id, a) if lookup == "slack" else inbox.recipient_threads(db, lookup, a))}
+        inbox.channel_threads(db, connection_id, a) if fmt.identity is None else
+        inbox.recipient_threads(db, fmt.identity, a.lower() if fmt.identity == "email" else a))}
     return [inbox.thread_view(db, t.id, files) for t in threads.values()]
 
 

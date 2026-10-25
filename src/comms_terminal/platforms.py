@@ -9,12 +9,43 @@ Pure data and string building: importable by inbox and tui without importing the
 import re
 from dataclasses import dataclass
 from datetime import timedelta
+from email.errors import HeaderParseError
+from email.headerregistry import Address
+from email.utils import getaddresses
 from typing import Callable
 from urllib.parse import quote
 
 # A +E.164 number: 7 to 15 digits. E.164 allows at most 15; the shortest assigned numbers (Niue, Saint Helena:
 # a 3-digit country code and 4 digits) have 7.
 E164 = re.compile(r"\+[1-9]\d{6,14}")
+
+
+
+def e164(number: str) -> str:
+    """The +E.164 form Quo files messages under, so replies find the Thread.
+    ponytail: bare numbers are taken as North American; type + for other countries."""
+    digits = re.sub(r"\D", "", number)
+    if number.strip().startswith("+"):
+        return "+" + digits
+    if len(digits) == 10:
+        return "+1" + digits
+    if len(digits) == 11 and digits.startswith("1"):
+        return "+" + digits
+    return number.strip()
+
+
+def email_addresses(text: str) -> list[str]:
+    """The usable email addresses in a To or Cc text; display names never count."""
+    out = []
+    for _, address in getaddresses([text]):
+        try:
+            parsed = Address(addr_spec=address)
+        except (ValueError, HeaderParseError):
+            continue
+        if parsed.username and parsed.domain and address.isprintable():
+            out.append(address)
+    return out
+
 
 EMAIL_ATTACHMENTS_LIMIT = 25 * 2**20  # D-A5: Resend takes 40 MB after Base64
 
@@ -50,13 +81,28 @@ class Format:
     cc_subject: bool            # a Draft has Cc and Subject
     can_attach: bool            # sends files (FR-A16)
     size_problem: Callable | None  # (staged files) -> why they cannot send, or None
+    destinations: Callable      # (To or Cc text) -> the exact places it names: addresses, numbers, conversation ids
+    addresses: Callable | None  # (text) -> the usable addresses in it; None where a person has no address (Slack)
+    identity: str | None        # the Identity kind of those addresses: email or phone
+    envelope: tuple             # the message data keys that hold addresses
 
 
 FORMATS = {
-    "email": Format("email", "New email", None, True, True, email_size_problem),
-    "sms": Format("SMS", "New SMS", timedelta(days=7), False, False, None),
-    "slack": Format("Slack", "New Slack message", timedelta(hours=24), False, True, slack_size_problem),
+    "email": Format("email", "New email", None, True, True, email_size_problem,
+                    lambda text: [a for _, a in getaddresses([text]) if a], email_addresses, "email",
+                    ("from", "to", "cc")),
+    "sms": Format("SMS", "New SMS", timedelta(days=7), False, False, None,
+                  lambda text: [e164(n) for n in re.split(r"[,;]+", text) if n.strip()],
+                  lambda text: [text] if E164.fullmatch(text) else [], "phone", ("peer", "from", "to")),
+    "slack": Format("Slack", "New Slack message", timedelta(hours=24), False, True, slack_size_problem,
+                    lambda text: re.findall(r"<([A-Z0-9]+)>", text),  # "#eng <C0123>": the ID is where it posts
+                    None, None, ()),
 }
+
+
+def destinations(text: str, kind: str) -> list[str]:
+    """The exact places a Draft's To or Cc text names in its Message format."""
+    return FORMATS[kind].destinations(text)
 
 
 def _gmail(m, ch):
@@ -95,6 +141,13 @@ class Platform:
     dm_where: str | None = None  # how a 1:1 Channel reads in the queue; None = "DM · name"
     can_attach: bool = True      # False where this Platform sends no files though its format can (FR-A16)
     hook_secret: str | None = None  # credential that signs its inbound webhook (serve.HOOKS); None = no webhook
+    receipts: bool = False       # it sends through Resend: a sent message's Message-ID arrives later in a receipt,
+    #                              and its mailbox Threads reconcile against those ids
+
+    @property
+    def takes_replies(self) -> bool:
+        """A Platform with no Message format only reads (Google Calendar): its Threads take no replies."""
+        return self.format is not None
 
     @property
     def sends_files(self) -> bool:
@@ -106,7 +159,7 @@ PLATFORMS = {p.name: p for p in (
     Platform("gmail", "Gmail", "google", "email", "email", True,
              "Receiving forwarded mail and sending replies.",
              "[#c14a4a]Mail may not be arriving or sending.[/] Check the forwarding rule and the Resend key; "
-             "this clears on the next successful message.", _gmail, hook_secret="email-hook-secret"),
+             "this clears on the next successful message.", _gmail, hook_secret="email-hook-secret", receipts=True),
     Platform("fastmail", "Fastmail", "fastmail", "email", "fastmail", True,
              "Receiving Fastmail's copies and sending replies through Fastmail.",
              "[#c14a4a]Fastmail may not be arriving or sending.[/] Check the Fastmail rule and re-run "
