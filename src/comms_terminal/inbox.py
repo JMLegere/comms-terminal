@@ -24,7 +24,7 @@ from typing import Protocol, Sequence
 
 from . import files, platforms
 
-SCHEMA_VERSION = 26
+SCHEMA_VERSION = 27
 WAIT = timedelta(days=4)  # Waiting for them ends after this with no reply: back to Todo to follow up (#116)
 EMAIL_CONFIRMATION_PENDING = "Email confirmation pending; wait for its sent receipt before replying."
 MIGRATIONS = {  # version -> statement that upgrades an existing database to it
@@ -399,6 +399,13 @@ CREATE TABLE planning_priors (
   PRIMARY KEY (pipeline, stage)
 ) STRICT;""",
     26: "DROP TABLE planning_priors;",  # Table 6.2 benchmarks replace Planning priors
+    27: """CREATE TABLE memberships (  -- Jeremy's own Membership changes; email domain decides the rest (GLOSSARY)
+  person_id       INTEGER NOT NULL REFERENCES persons (id),
+  organization_id INTEGER NOT NULL REFERENCES organizations (id),
+  member          INTEGER NOT NULL CHECK (member IN (0, 1)),  -- 1 added, 0 removed
+  changed_at      TEXT NOT NULL,
+  PRIMARY KEY (person_id, organization_id)
+) STRICT;""",  # Membership (ADR 0007 discovery, FR-OA-1)
 }
 
 # ponytail: fixed list; extend when a free-mail sender forms an Organization by mistake.
@@ -1239,6 +1246,8 @@ def merge_persons(db, keep: int, drop: int) -> None:
     with db:
         name = _merged_name(db, keep, drop)
         db.execute("UPDATE identities SET person_id = ? WHERE person_id = ?", (keep, drop))
+        db.execute("UPDATE OR IGNORE memberships SET person_id = ? WHERE person_id = ?", (keep, drop))
+        db.execute("DELETE FROM memberships WHERE person_id = ?", (drop,))  # keep's own change wins
         from . import sequences
         sequences.merge_people(db, keep, drop)
         db.execute("DELETE FROM persons WHERE id = ?", (drop,))
@@ -2208,10 +2217,59 @@ def recipient_threads(db, kind: str, value: str) -> list[Thread]:
 
 
 def person_organizations(db, person_id: int) -> list[str]:
+    """A Person's Organizations (Membership): those of their company email domains, plus Jeremy's additions,
+    less his removals."""
     return [r[0] for r in db.execute(
-        "SELECT DISTINCT o.domain FROM organizations o JOIN identities i"
-        " ON i.kind = 'email' AND org_key(substr(i.value, instr(i.value, '@') + 1)) = o.domain"
-        " WHERE i.person_id = ? ORDER BY o.domain", (person_id,))]
+        "SELECT o.domain FROM organizations o WHERE COALESCE("
+        " (SELECT member FROM memberships WHERE person_id = :p AND organization_id = o.id),"
+        " EXISTS (SELECT 1 FROM identities i WHERE i.person_id = :p AND i.kind = 'email'"
+        "  AND org_key(substr(i.value, instr(i.value, '@') + 1)) = o.domain))"
+        " ORDER BY o.domain", {"p": person_id})]
+
+
+def _members(db) -> dict[str, set[int]]:
+    """Every Organization's Persons by Membership: domain -> Person ids."""
+    members: dict[str, set[int]] = {}
+    for domain, pid in db.execute(
+            "SELECT DISTINCT org_key(substr(value, instr(value, '@') + 1)), person_id FROM identities"
+            " WHERE kind = 'email' AND person_id IS NOT NULL"):
+        members.setdefault(domain, set()).add(pid)
+    for domain, pid, member in db.execute(
+            "SELECT o.domain, m.person_id, m.member FROM memberships m JOIN organizations o ON o.id = m.organization_id"):
+        (members.setdefault(domain, set()).add if member else members.setdefault(domain, set()).discard)(pid)
+    return members
+
+
+class FreeMail(ValueError):
+    """A free-mail domain (gmail.com, …) is never an Organization."""
+
+
+def membership(db, person_id: int, domain: str) -> bool | None:
+    """Jeremy's own Membership change for this Person and Organization: True added, False removed, None none."""
+    r = db.execute("SELECT m.member FROM memberships m JOIN organizations o ON o.id = m.organization_id"
+                   " WHERE m.person_id = ? AND o.domain = ?", (person_id, _org(domain))).fetchone()
+    return None if r is None else bool(r[0])
+
+
+def set_membership(db, person_id: int, domain: str, member: bool | None) -> bool | None:
+    """Add (True) or remove (False) a Person from an Organization, or drop Jeremy's change (None) so the email
+    domain decides again. Creates the Organization for a new company domain. Returns the previous change, for
+    undo."""
+    domain = _org(domain.strip().lower().lstrip("@"))
+    if domain in FREE_MAIL or "." not in domain:
+        raise FreeMail(domain)
+    with db:
+        before = membership(db, person_id, domain)
+        db.execute("INSERT OR IGNORE INTO organizations (domain, name, created_at) VALUES (?, ?, ?)",
+                   (domain, domain, _iso(_now())))
+        org = db.execute("SELECT id FROM organizations WHERE domain = ?", (domain,)).fetchone()[0]
+        if member is None:
+            db.execute("DELETE FROM memberships WHERE person_id = ? AND organization_id = ?", (person_id, org))
+        else:
+            db.execute("INSERT INTO memberships (person_id, organization_id, member, changed_at) VALUES (?, ?, ?, ?)"
+                       " ON CONFLICT DO UPDATE SET member = excluded.member, changed_at = excluded.changed_at",
+                       (person_id, org, int(member), _iso(_now())))
+    return before
 
 
 def set_case_description(db, case_id: int, description: str) -> None:
@@ -2540,11 +2598,7 @@ def organizations(db) -> list[dict]:
     """Each Organization's Person, Thread, and open (Todo) Thread counts, as organization_view counts them, in
     three queries rather than a person_view per member (the Organizations list and rail)."""
     with _read_snapshot(db):
-        members: dict[str, set[int]] = {}
-        for domain, pid in db.execute(
-                "SELECT DISTINCT org_key(substr(value, instr(value, '@') + 1)), person_id FROM identities"
-                " WHERE kind = 'email' AND person_id IS NOT NULL"):
-            members.setdefault(domain, set()).add(pid)
+        members = _members(db)
         threads: dict[int, set[int]] = {}
         for pid, tid in db.execute(
                 "SELECT DISTINCT i.person_id, COALESCE(t.merged_into, t.id) FROM thread_activities a"
@@ -2561,6 +2615,19 @@ def organizations(db) -> list[dict]:
         return out
 
 
+def find_people(db, text: str, limit: int = 20) -> list[tuple[int, str]]:
+    """Persons whose Identity is exactly `text` (an address, number, or Slack ID), else whose name contains it."""
+    text = text.strip()
+    exact = db.execute("SELECT DISTINCT p.id, p.display_name FROM persons p JOIN identities i ON i.person_id = p.id"
+                       " WHERE lower(i.value) = lower(?)", (text,)).fetchall()
+    if exact or not text:
+        return [tuple(r) for r in exact]
+    return [tuple(r) for r in db.execute(
+        "SELECT p.id, p.display_name FROM persons p WHERE instr(lower(p.display_name), lower(?)) > 0"
+        " AND EXISTS (SELECT 1 FROM identities i WHERE i.person_id = p.id) ORDER BY p.display_name LIMIT ?",
+        (text, limit))]
+
+
 def people_count(db) -> int:
     """len(people(db)), without building each Person (the rail)."""
     return db.execute("SELECT COUNT(*) FROM persons p WHERE EXISTS"
@@ -2568,11 +2635,15 @@ def people_count(db) -> int:
 
 
 def organization_view(db, domain: str) -> dict:
-    """An Organization's Persons (by email domain) and their Threads."""
+    """An Organization's Persons (by Membership) and their Threads."""
     with _read_snapshot(db):
         pids = [r[0] for r in db.execute(
             "SELECT DISTINCT person_id FROM identities WHERE kind = 'email' AND person_id IS NOT NULL"
             " AND org_key(substr(value, instr(value, '@') + 1)) = ?", (domain,))]
+        for pid, member in db.execute("SELECT m.person_id, m.member FROM memberships m JOIN organizations o"
+                                      " ON o.id = m.organization_id WHERE o.domain = ? ORDER BY m.changed_at",
+                                      (domain,)):
+            pids = [p for p in pids if p != pid] + ([pid] if member else [])
         persons = [person_view(db, pid) for pid in pids]
         threads = {t.id: t for p in persons for t in p["threads"]}
         return {"domain": domain, "people": persons, "threads": sorted(threads.values(), key=lambda t: t.id)}

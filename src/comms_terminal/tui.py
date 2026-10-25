@@ -599,6 +599,7 @@ HELP = [  # (group, [(keys, what it does)]) — the full key map; Gmail-style wh
                 ("ctrl+shift+click", "open a link in your browser (shift lets Ghostty take the click)")]),
     ("Pipeline", [("enter", "open the account under the cursor"), ("← / →", "the next Stage on the board"),
                   ("s", "set an Organization's Stage (z undoes)"), ("v", "set its Revenue Value or Fundraising Value"),
+                  ("p", "Organization page: add or remove its People (z undoes)"),
                   ("y", "copy the Pipeline's math as Markdown for an agent")]),
     ("Drafts", [("n", "start a blank draft"), ("enter", "edit the selected draft"), ("x", "delete the selected draft (z undoes)"),
                 ("y", "copy the draft and its recipients' threads as Markdown for an agent"),
@@ -625,7 +626,7 @@ HELP = [  # (group, [(keys, what it does)]) — the full key map; Gmail-style wh
     ("People", [("drag", "drop one person on another to merge them: preview, then Accept or Cancel"),
                 ("g", "merge the selected person into another (same preview)")]),
     ("Person", [("n", "rename the person"), ("b", "block or unblock the identity"), ("a", "add an identity"),
-                ("x", "remove the identity")]),
+                ("x", "remove the identity"), ("o", "add to or remove from an Organization (z undoes)")]),
     ("Channels", [("a", "add a rule"), ("x", "delete the selected rule")]),
     ("General", [("?", "this help"), ("q", "quit")]),
 ]
@@ -3530,12 +3531,25 @@ class ThreadListPage(TablePage):
         self.app.main.open_thread(t.id)
 
 
+def set_member(app, person_id: int, name: str, domain: str, member: bool):
+    """Membership (GLOSSARY): Jeremy adds a Person to an Organization or removes them; z undoes."""
+    try:
+        before = inbox.set_membership(app.db, person_id, domain, member)
+    except inbox.FreeMail:
+        app.notify(f"Not added: {domain} is a free-mail or incomplete domain, never an Organization.", severity="error")
+        return
+    app.offer_undo(f"Added {name} to {domain}." if member else f"Removed {name} from {domain}.",
+                   lambda: inbox.set_membership(app.db, person_id, domain, before))
+    app.main.refresh_all()
+
+
 class OrganizationPage(ThreadListPage):
     """An Organization: its Threads in the list; its Pipeline section and people in the right pane (Jeremy,
     2026-10-12; FR-PL-26). s and v set its Stage and Value."""
     RAIL = "organizations"
     SIDE = f"{ICON['people']} people"
-    BINDINGS = ThreadListPage.BINDINGS + [Binding("s", "stage", "stage"), Binding("v", "value", "value")]
+    BINDINGS = ThreadListPage.BINDINGS + [Binding("s", "stage", "stage"), Binding("v", "value", "value"),
+                                          Binding("p", "people", "people")]
 
     def __init__(self, domain):
         super().__init__()
@@ -3557,6 +3571,31 @@ class OrganizationPage(ThreadListPage):
         o = self.org()
         if o:
             set_org_value(self.app, o)
+
+    def action_people(self):
+        people = inbox.organization_view(self.app.db, self.domain)["people"]
+        options = [("add", "+ add a Person…")] + [(str(p["id"]), f"− remove {p['name']}") for p in people]
+        names = {str(p["id"]): p["name"] for p in people}
+
+        def found(text):
+            matches = inbox.find_people(self.app.db, text or "")
+            if not text:
+                return
+            if not matches:
+                self.app.notify(f"No Person matches {text}. Add the address to a Person first.", severity="error")
+            elif len(matches) == 1:
+                set_member(self.app, matches[0][0], matches[0][1], self.domain, True)
+            else:
+                self.app.push_screen(Pick(f"Add to {self.domain}", [(str(i), n) for i, n in matches]),
+                                     lambda pid: pid and set_member(self.app, int(pid), dict(matches)[int(pid)],
+                                                                    self.domain, True))
+
+        def picked(choice):
+            if choice == "add":
+                self.app.push_screen(Ask(f"Add a Person to {self.domain}", "email address, phone number, or name"), found)
+            elif choice:
+                set_member(self.app, int(choice), names[choice], self.domain, False)
+        self.app.push_screen(Pick(f"People · {self.domain}", options), picked)
 
     def refresh_data(self):
         super().refresh_data()
@@ -3917,7 +3956,8 @@ class PersonPage(Page):
                 Binding("k", "up", show=False), Binding("b", "block", "block / unblock"),
                 Binding("n", "rename", "rename"), Binding("a", "add", "add identity"),
                 Binding("x", "remove", "remove identity"), Binding("s", "enroll", "enroll in Sequence"),
-                Binding("r", "resume", "resume"), Binding("f", "finish", "finish")]
+                Binding("r", "resume", "resume"), Binding("f", "finish", "finish"),
+                Binding("o", "organizations", "organizations")]
 
     def __init__(self, person_id: int):
         super().__init__()
@@ -3963,6 +4003,18 @@ class PersonPage(Page):
 
     def action_enroll(self):
         enroll_person(self.app, self.person_id, self.person["name"])
+
+    def action_organizations(self):
+        p = self.person
+        options = [("add", "+ add to an Organization…")] + [(d, f"− remove from {d}") for d in p["organizations"]]
+
+        def picked(choice):
+            if choice == "add":
+                self.app.push_screen(Ask(f"Add {p['name']} to an Organization", "company domain, such as lclexcavation.com"),
+                                     lambda text: text and set_member(self.app, self.person_id, p["name"], text, True))
+            elif choice:
+                set_member(self.app, self.person_id, p["name"], choice, False)
+        self.app.push_screen(Pick(f"Organizations · {p['name']}", options), picked)
 
     def action_resume(self):
         resume_enrollment(self.app, self.person_id)

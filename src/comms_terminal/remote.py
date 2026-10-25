@@ -38,7 +38,7 @@ CALLS = {
     "inbox.unstage": "write", "inbox.rename_person": "write", "inbox.merge_persons": "write",
     "inbox.remove_identity": "write", "inbox.delete_channel_rule": "write",
     "inbox.stage": "create", "inbox.create_case": "create", "inbox.block": "create", "inbox.add_identity": "create",
-    "inbox.add_channel_rule": "create",
+    "inbox.add_channel_rule": "create", "inbox.set_membership": "create",  # may create the Organization
     "sequences.rename_sequence": "write", "sequences.archive_sequence": "write",
     "sequences.restore_sequence": "write", "sequences.delete_sequence": "write",
     "sequences.undelete_sequence": "write", "sequences.delete_step": "write", "sequences.restore_step": "write",
@@ -73,7 +73,7 @@ def creates(name: str, db, args, kwargs) -> bool:
 DATACLASSES = {c.__name__: c for c in (inbox.Done, inbox.Snooze, inbox.Wait, inbox.Investigate, inbox.MarkTodo,
                                        inbox.Ignore, inbox.Unignore, inbox.SetCase, inbox.Reopen, inbox.Thread)}
 ERRORS = {c.__name__: c for c in (inbox.DraftConflict, inbox.StaleThreadSnapshot, inbox.SendUnknown,
-                                  inbox.SendFailed, inbox.IdentityTaken, sequences.Refused, pipeline.Refused, ValueError,
+                                  inbox.SendFailed, inbox.IdentityTaken, inbox.FreeMail, sequences.Refused, pipeline.Refused, ValueError,
                                   KeyError)}
 
 

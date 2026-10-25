@@ -113,6 +113,13 @@ CREATE TABLE organizations (
   name       TEXT NOT NULL,
   created_at TEXT NOT NULL
 ) STRICT;
+CREATE TABLE memberships (  -- Jeremy's own Membership changes; email domain decides the rest (GLOSSARY)
+  person_id       INTEGER NOT NULL REFERENCES persons (id),
+  organization_id INTEGER NOT NULL REFERENCES organizations (id),
+  member          INTEGER NOT NULL CHECK (member IN (0, 1)),  -- 1 added, 0 removed
+  changed_at      TEXT NOT NULL,
+  PRIMARY KEY (person_id, organization_id)
+) STRICT;
 
 CREATE TABLE activities (
   id          INTEGER PRIMARY KEY,
