@@ -178,6 +178,7 @@ The Calendar (FR-13d, ADR 0005) reads the primary calendar's **Secret address in
 - **Oracle**: the unit's `LoadCredentialEncrypted=google-calendar-ics:comms-terminal.google-calendar-ics` and `container_runtime.py`'s optional list admit it. Install the address with `systemd-creds encrypt --name=google-calendar-ics - /etc/credstore.encrypted/comms-terminal.google-calendar-ics` (stdin, mode 0600), then `systemctl daemon-reload` and `systemctl restart comms-terminal`. Without the credential the service runs without the Calendar loop and the Calendar says no Event provider is connected.
 - **Check**: the journal shows `calendar changed` once; `comms-terminal events` lists this week. Healthy fetches write nothing, so a quiet calendar sends the laptop console no new copy.
 - **Rotate**: Reset the secret address in Google, encrypt the new one over the old file, and restart. Until then fetches fail (404) and the Calendar shows Google Calendar broken after three tries.
+- **Meetings** (ADR 0007): with the credential, the service creates the `gcal` Connection (`Google Calendar` under connections) the first time it starts, and that moment is go-live: only Events first seen after it become Meeting Threads, so nothing is backfilled. A Meeting Thread needs an attendee outside Agent Maple. The journal shows `meetings recorded: N` after a calendar change that booked, cancelled, or declined one; held occurrences are recorded by the minute's wake pass. Removing the credential stops new Meeting Activities; the Connection and its Threads stay.
 
 ## 3. Connect Slack
 
