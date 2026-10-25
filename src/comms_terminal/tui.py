@@ -50,17 +50,12 @@ from .health import problem
 from .icons import ICON
 from .platforms import E164, FORMATS, PLATFORMS
 
-DETAIL_STYLE = {  # Status detail -> (color, label); the glyph comes from icons.ICON
-    "CREATED": ("#45707a", "Needs first response"),
-    "NEW_REPLY": ("#b47109", "Needs next response"),
-    "IN_PROGRESS": ("#945e80", "Investigating"),
-    "WAITING_FOR_CUSTOMER": ("#928374", "Waiting for them"),
-    "WAITING_FOR_DURATION": ("#928374", "Paused for later"),
-    "WAITING_INDEFINITELY": ("#928374", "Paused for later"),
-    "DONE_MANUALLY_SET": ("#6c782e", "Done"),
-    "IGNORED": ("#a89984", "Ignored"),
+DETAIL_COLOR = {  # Status detail -> color; the label is inbox.DETAIL_LABEL, the glyph icons.ICON
+    "CREATED": "#45707a", "NEW_REPLY": "#b47109", "IN_PROGRESS": "#945e80", "WAITING_FOR_CUSTOMER": "#928374",
+    "WAITING_FOR_DURATION": "#928374", "WAITING_INDEFINITELY": "#928374", "DONE_MANUALLY_SET": "#6c782e",
+    "IGNORED": "#a89984",
 }
-GLYPH = {d: (ICON[d], color, label) for d, (color, label) in DETAIL_STYLE.items()}
+GLYPH = {d: (ICON[d], color, inbox.DETAIL_LABEL[d]) for d, color in DETAIL_COLOR.items()}
 VIEW_NAMES = list(inbox.VIEWS)  # Todo, Snoozed, Done, Ignored, All
 VIEW_ICON = {"Todo": ("TODO", "#45707a"), "Snoozed": ("SNOOZED", "#928374"), "Done": ("DONE", "#6c782e"),
              "Ignored": ("IGNORED_VIEW", "#a89984"), "All": ("threads", "#654735")}
@@ -4493,7 +4488,7 @@ class CasePage(Page, ThreadActions):
         threads = [v["thread"] for v in self.views]
         ids = [t.id for t in threads]
         self.sel = ids.index(keep) if keep in ids else max(0, min(self.sel, len(self.views) - 1))
-        status = inbox.case_status([t.status_detail for t in threads])  # rolled up from its Threads (#120)
+        status = inbox.rollup([t.status_detail for t in threads])  # rolled up from its Threads (#120)
         icon_name, color = VIEW_ICON[status]
         self.query_one(".casehead").update(
             f"[b #45707a]{escape(case['title'])}[/]\n[{color}]{ICON[icon_name]} {status}[/]"

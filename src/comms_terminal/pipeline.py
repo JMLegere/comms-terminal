@@ -240,7 +240,7 @@ def _deadline(pipeline, due: date) -> date:
         return due.replace(year=due.year - 1, day=28) + timedelta(days=1)
 
 
-ROLLUP = ("Todo", "Snoozed", "Done")  # earliest first, as a Case rolls up its Threads
+ROLLUP = ("Todo", "Snoozed", "Done")  # an Organization's roll-up order: an Ignored Thread holds nothing open
 
 
 def attention(db) -> dict:
@@ -259,7 +259,7 @@ def attention(db) -> dict:
         return {}
     members, threads = inbox._members(db), inbox.person_thread_ids(db)
     status = {r["id"]: r for r in db.execute(  # one grouped scan: a subquery per Thread on the view took 390 ms live
-        "SELECT t.id, t.status, COALESCE(t.follow_up_at, t.snoozed_until) AS wakes, m.last FROM threads t"
+        "SELECT t.id, t.status_detail, COALESCE(t.follow_up_at, t.snoozed_until) AS wakes, m.last FROM threads t"
         " LEFT JOIN (SELECT thread_id, max(occurred_at) AS last FROM thread_activities WHERE kind = 'MESSAGE'"
         " GROUP BY thread_id) m ON m.thread_id = t.id WHERE t.merged_into IS NULL")}
     enrolled: dict[int, list] = {}  # person -> the next Task due of each unfinished Enrollment (None if paused)
@@ -273,9 +273,11 @@ def attention(db) -> dict:
             continue
         pids = members.get(domain, set())
         rows = [status[t] for t in set().union(*(threads.get(p, set()) for p in pids)) if t in status]
-        found = {r["status"] for r in rows} | ({"SNOOZED"} if any(p in enrolled for p in pids) else set())
-        rollup = next((v for v in ROLLUP if v.upper() in found), "Done")
-        wakes = [datetime.fromisoformat(r["wakes"]) for r in rows if r["status"] == "SNOOZED" and r["wakes"]] + \
+        found = {r["status_detail"] for r in rows} | \
+            ({"WAITING_FOR_DURATION"} if any(p in enrolled for p in pids) else set())  # an Enrollment is Snoozed
+        rollup = inbox.rollup(found, ROLLUP, "Done")
+        snoozed = inbox.VIEWS["Snoozed"]
+        wakes = [datetime.fromisoformat(r["wakes"]) for r in rows if r["status_detail"] in snoozed and r["wakes"]] + \
             [datetime.fromisoformat(d) for p in pids for d in enrolled.get(p, []) if d]
         last = [r["last"] for r in rows if r["last"]]
         live = any(st in OPEN[p] + PAYING[p] for p, st in held[o].items())

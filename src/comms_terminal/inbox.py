@@ -2429,12 +2429,23 @@ def view_counts(db) -> dict[str, int]:
     return {name: sum(rows.get(d, 0) for d in details) for name, details in VIEWS.items()}
 
 
+DETAIL_LABEL = {  # Status detail -> how Jeremy reads it (GLOSSARY)
+    "CREATED": "Needs first response",
+    "NEW_REPLY": "Needs next response",
+    "IN_PROGRESS": "Investigating",
+    "WAITING_FOR_CUSTOMER": "Waiting for them",
+    "WAITING_FOR_DURATION": "Paused for later",
+    "WAITING_INDEFINITELY": "Paused for later",
+    "DONE_MANUALLY_SET": "Done",
+    "IGNORED": "Ignored",
+}
 CASE_VIEWS = ("Todo", "Snoozed", "Done", "Ignored")  # a Case's Status, earliest first (#120)
 
 
-def case_status(details) -> str:
-    """A Case's Status: the earliest of its Threads' views in CASE_VIEWS order; Todo with no Threads."""
-    return next((v for v in CASE_VIEWS if any(d in VIEWS[v] for d in details)), "Todo")
+def rollup(details, order=CASE_VIEWS, empty="Todo") -> str:
+    """The earliest Status view in `order` holding any of these Status details, `empty` if none does. A Case rolls
+    up its Threads (#120); an Organization its People's Threads, Ignored ones left out (FR-OA-4)."""
+    return next((v for v in order if any(d in VIEWS[v] for d in details)), empty)
 
 
 @writer("create")
@@ -2457,7 +2468,7 @@ def case_queue(db, view: str | None = None) -> list[dict]:
     out = []
     for c in found.values():
         details = [d for d, _ in c["threads"]]
-        status = case_status(details)
+        status = rollup(details)
         times = [at for d, at in c["threads"] if d in VIEWS[status]] or [c["created_at"]]
         out.append({"id": c["id"], "title": c["title"], "status": status,
                     "counts": {v: sum(d in VIEWS[v] for d in details) for v in CASE_VIEWS},

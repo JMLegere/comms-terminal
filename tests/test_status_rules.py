@@ -37,3 +37,12 @@ def test_transition(current, event, kwargs, expected):
 def test_a_snooze_always_has_a_date():  # FR-OA-10
     with pytest.raises(SnoozeNeedsDate):
         transition(("TODO", "CREATED"), Snooze())
+
+
+def test_one_rollup_for_cases_and_organizations():
+    """A Case and an Organization roll up Status details by the same rule; an Organization leaves Ignored out."""
+    from comms_terminal import inbox, pipeline
+    assert inbox.rollup(["DONE_MANUALLY_SET", "WAITING_FOR_CUSTOMER"]) == "Snoozed"
+    assert inbox.rollup(["IGNORED"]) == "Ignored" and inbox.rollup([]) == "Todo"
+    assert inbox.rollup(["IGNORED"], pipeline.ROLLUP, "Done") == "Done"
+    assert set(inbox.DETAIL_LABEL) == set(inbox.VIEWS["All"])  # every Status detail has a label
