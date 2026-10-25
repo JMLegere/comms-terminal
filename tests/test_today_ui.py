@@ -8,7 +8,7 @@ import pytest
 from textual.widgets import DataTable
 
 from test_console import run, seeded
-from comms_terminal import inbox, sequences as sq
+from comms_terminal import clock as comms_clock, inbox, sequences as sq
 from comms_terminal.icons import ICON
 from comms_terminal.tui import ChannelsPage, Console, DraftsPage, StatusLine, TaskPane, ThreadsPage, ThreadView, TodayPage
 
@@ -18,8 +18,7 @@ MONDAY = datetime(2026, 10, 19, 13, 0, tzinfo=timezone.utc)
 @pytest.fixture(autouse=True)
 def clock(monkeypatch):
     at = [MONDAY]
-    monkeypatch.setattr(inbox, "_now", lambda: at[0])
-    monkeypatch.setattr(sq, "_now", lambda: at[0])
+    monkeypatch.setattr(comms_clock, "now", lambda: at[0])
     return at
 
 

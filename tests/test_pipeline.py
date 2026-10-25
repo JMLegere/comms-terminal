@@ -6,7 +6,7 @@ from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
-from comms_terminal import inbox, pipeline as pl
+from comms_terminal import clock, inbox, pipeline as pl
 
 NOW = datetime(2026, 10, 23, 16, 0, tzinfo=timezone.utc)
 DAY = timedelta(days=1)
@@ -16,8 +16,7 @@ WEEKS = 343 / 7
 
 @pytest.fixture
 def db(monkeypatch):
-    monkeypatch.setattr(inbox, "_now", lambda: NOW)
-    monkeypatch.setattr(pl, "_now", lambda: NOW)
+    monkeypatch.setattr(clock, "now", lambda: NOW)
     db = inbox.connect()
     inbox.migrate(db)
     return db

@@ -3,7 +3,7 @@
 import asyncio
 import re
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -11,7 +11,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import seed_demo  # noqa: E402
 
-from comms_terminal import inbox  # noqa: E402
+from comms_terminal import clock, inbox  # noqa: E402
 from comms_terminal.tui import (HELP, CasePage, CasesPage, Console, OrganizationPage, PeoplePage, PersonPage,  # noqa: E402
                                  ReplyError, ThreadsPage)
 
@@ -161,7 +161,9 @@ def test_click_selects_and_shows_the_thread_beside_the_list(tmp_path):
     assert seen["focus"] == "table" and seen["view"] == 1 and seen["focus_after_rail"] == "table"
 
 
-def test_thread_pane_follows_the_keyboard(tmp_path):
+def test_thread_pane_follows_the_keyboard(tmp_path, monkeypatch):
+    from comms_terminal import tui
+    monkeypatch.setattr(tui, "PREVIEW_GAP", 0)  # each move paints at once; the hold-to-scroll debounce is real time
     path, _ = seeded(tmp_path)
     app, seen = Console(path), {}
 
@@ -625,7 +627,7 @@ def test_snoozed_rows_show_time_left():
     assert left((now - timedelta(minutes=1)).isoformat(), now) == "now" and left(None, now) == "—"
 
 
-def test_snoozed_countdown_ticks_in_the_list(tmp_path):
+def test_snoozed_countdown_ticks_in_the_list(tmp_path, monkeypatch):
     path, _ = seeded(tmp_path)
     app, seen = Console(path), []
 
@@ -634,14 +636,16 @@ def test_snoozed_countdown_ticks_in_the_list(tmp_path):
         i = next(i for i, r in enumerate(rows) if r.get("status") == "SNOOZED" and r["until"])
         seen.append(str(table.get_cell_at((i, 3))))
 
-    async def wait(app, pilot):
-        await pilot.pause(1.2)
+    async def wait(app, pilot):  # five seconds on, one tick: no waiting on the wall clock
+        later = clock.now() + timedelta(seconds=5)
+        monkeypatch.setattr(clock, "now", lambda: later)
+        app.tick_countdowns()
 
     run(app, ["3", read, wait, read])
     assert seen[0] != seen[1] and seen[1].endswith("s[/]")
 
 
-def test_snoozed_status_counts_down_on_case_cards_and_thread_header(tmp_path):
+def test_snoozed_status_counts_down_on_case_cards_and_thread_header(tmp_path, monkeypatch):
     path, _ = seeded(tmp_path)
     db = inbox.connect(path)
     snoozed = next(r for r in inbox.queue(db, "Snoozed") if r["until"])
@@ -659,8 +663,10 @@ def test_snoozed_status_counts_down_on_case_cards_and_thread_header(tmp_path):
     async def card(app, pilot):
         seen["card"].append(page(app).query_one("CaseCard").border_subtitle)
 
-    async def wait(app, pilot):
-        await pilot.pause(1.2)
+    async def wait(app, pilot):  # five seconds on, one tick
+        later = clock.now() + timedelta(seconds=5)
+        monkeypatch.setattr(clock, "now", lambda: later)
+        app.tick_countdowns()
 
     run(app, ["3", head, wait, head, open_case, card, wait, card])
     for a, b in (seen["head"], seen["card"]):

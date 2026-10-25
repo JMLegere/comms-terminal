@@ -18,7 +18,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from statistics import median
 from zoneinfo import ZoneInfo
 
-from . import inbox
+from . import clock, inbox
 from .writers import writer
 
 LOCAL = ZoneInfo("America/Halifax")  # Jeremy's days (main.LOCAL_TZ)
@@ -48,9 +48,6 @@ BENCHMARKS = ((1_000, (5, 10, 65, 15, 100, 90, 90, 5)), (5_000, (7, 12, 70, 17, 
 class Refused(ValueError):
     """A Pipeline change or input the rules do not allow; the message says why."""
 
-
-def _now() -> datetime:
-    return datetime.now(timezone.utc)
 
 
 def _tx(db):
@@ -100,14 +97,14 @@ def find_org(db, text: str):
 def _effective(at) -> str:
     """Now, or a backdated date or time; a future one is refused."""
     if at is None:
-        return inbox._iso(_now())
+        return clock.iso(clock.now())
     if isinstance(at, str):
         at = date.fromisoformat(at) if len(at) == 10 else datetime.fromisoformat(at)
     if not isinstance(at, datetime):
         at = datetime.combine(at, time(), LOCAL)
-    if at > _now():
+    if at > clock.now():
         raise Refused(f"{at.date()} is in the future")
-    return inbox._iso(at.astimezone(timezone.utc))
+    return clock.iso(at.astimezone(timezone.utc))
 
 
 def _append(db, org_id, pipeline, kind, at=None, stage=None, value=None, undoes=None) -> int:
@@ -116,7 +113,7 @@ def _append(db, org_id, pipeline, kind, at=None, stage=None, value=None, undoes=
         return db.execute(
             "INSERT INTO pipeline_log (organization_id, pipeline, kind, stage, value, undoes, effective_at,"
             " recorded_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (org_id, pipeline, kind, stage, value, undoes, _effective(at), inbox._iso(_now()))).lastrowid
+            (org_id, pipeline, kind, stage, value, undoes, _effective(at), clock.iso(clock.now()))).lastrowid
 
 
 @writer("create")
@@ -243,7 +240,7 @@ def _deadline(pipeline, due: date) -> date:
         return due.replace(year=due.year - 1, day=28) + timedelta(days=1)
 
 
-ROLLUP = ("Todo", "Snoozed", "Done")  # earliest first, as a Case rolls up its Threads
+ROLLUP = ("Todo", "Snoozed", "Done")  # an Organization's roll-up order: an Ignored Thread holds nothing open
 
 
 def attention(db) -> dict:
@@ -262,7 +259,7 @@ def attention(db) -> dict:
         return {}
     members, threads = inbox._members(db), inbox.person_thread_ids(db)
     status = {r["id"]: r for r in db.execute(  # one grouped scan: a subquery per Thread on the view took 390 ms live
-        "SELECT t.id, t.status, COALESCE(t.follow_up_at, t.snoozed_until) AS wakes, m.last FROM threads t"
+        "SELECT t.id, t.status_detail, COALESCE(t.follow_up_at, t.snoozed_until) AS wakes, m.last FROM threads t"
         " LEFT JOIN (SELECT thread_id, max(occurred_at) AS last FROM thread_activities WHERE kind = 'MESSAGE'"
         " GROUP BY thread_id) m ON m.thread_id = t.id WHERE t.merged_into IS NULL")}
     enrolled: dict[int, list] = {}  # person -> the next Task due of each unfinished Enrollment (None if paused)
@@ -276,9 +273,11 @@ def attention(db) -> dict:
             continue
         pids = members.get(domain, set())
         rows = [status[t] for t in set().union(*(threads.get(p, set()) for p in pids)) if t in status]
-        found = {r["status"] for r in rows} | ({"SNOOZED"} if any(p in enrolled for p in pids) else set())
-        rollup = next((v for v in ROLLUP if v.upper() in found), "Done")
-        wakes = [datetime.fromisoformat(r["wakes"]) for r in rows if r["status"] == "SNOOZED" and r["wakes"]] + \
+        found = {r["status_detail"] for r in rows} | \
+            ({"WAITING_FOR_DURATION"} if any(p in enrolled for p in pids) else set())  # an Enrollment is Snoozed
+        rollup = inbox.rollup(found, ROLLUP, "Done")
+        snoozed = inbox.VIEWS["Snoozed"]
+        wakes = [datetime.fromisoformat(r["wakes"]) for r in rows if r["status_detail"] in snoozed and r["wakes"]] + \
             [datetime.fromisoformat(d) for p in pids for d in enrolled.get(p, []) if d]
         last = [r["last"] for r in rows if r["last"]]
         live = any(st in OPEN[p] + PAYING[p] for p, st in held[o].items())
@@ -301,7 +300,7 @@ def unattended(db) -> list[dict]:
 def math(db, pipeline: str, now: datetime | None = None, orgs: bool = True) -> dict:
     """Everything a Pipeline page shows. A pure function of the log, Target, and `now`.
     `orgs=False` skips each Organization's row details (the rail needs only the summary)."""
-    now = now or _now()
+    now = now or clock.now()
     today = now.astimezone(LOCAL).date()
     chain, opens = _chain(pipeline), OPEN[pipeline]
     rows = _entries(db, pipeline)

@@ -7,7 +7,7 @@ import pytest
 from textual.widgets import DataTable, Input, OptionList, TextArea
 
 from test_console import run, seeded
-from comms_terminal import inbox, sequences as sq
+from comms_terminal import clock, inbox, sequences as sq
 from comms_terminal.tui import Ask, Console, PeoplePage, Pick, PersonPage, SequencesPage, StepEditor, TasksPage
 
 
@@ -17,8 +17,7 @@ def weekday(monkeypatch):
     were Monday. The clock still moves (the pause toast compares times), only shifted by whole days."""
     day = datetime.now(sq.LOCAL).weekday()
     shift = timedelta(days=7 - day if day >= 5 else 0)
-    monkeypatch.setattr(inbox, "_now", lambda: datetime.now(timezone.utc) + shift)
-    monkeypatch.setattr(sq, "_now", lambda: datetime.now(timezone.utc) + shift)
+    monkeypatch.setattr(clock, "now", lambda: datetime.now(timezone.utc) + shift)
 
 
 def choose(app, option_id):
@@ -209,7 +208,7 @@ def test_person_page_shows_both_enrollments_resumes_and_finishes(tmp_path):
     ana = next(p["id"] for p in inbox.people(db) if p["name"] == "Ana Ruiz")
     sq.enroll(db, ana, s)
     sq.enroll(db, ana, other)
-    sq.pause_person(db, ana, inbox._now(), "replied")
+    sq.pause_person(db, ana, clock.now(), "replied")
     db.commit()  # pause_person runs inside ingest's transaction
     seen = {}
 
@@ -251,7 +250,7 @@ def test_a_pause_from_the_service_shows_a_toast(tmp_path):
 
     async def scenario(app, pilot):
         app.toast_pauses()
-        sq.pause_person(db, ana, inbox._now(), "replied")  # the service's connection
+        sq.pause_person(db, ana, clock.now(), "replied")  # the service's connection
         db.commit()
         app.check_changes()
         await pilot.pause()

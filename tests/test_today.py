@@ -2,6 +2,8 @@
 not shown through them, and what comes next. Times are fixed: Monday 2026-10-19, 10:00 in Halifax."""
 
 from test_sequences import DAY, ME, MONDAY, clock, db, person, secret  # noqa: F401  (fixtures)
+from datetime import datetime
+
 from comms_terminal import inbox, sequences as sq
 
 
@@ -45,5 +47,5 @@ def test_next_wake_and_next_task_say_what_comes_next(db, clock):
     sq.complete_task(db, inbox.today(db)["tasks"][0]["id"])
     t = inbox.today(db)
     assert t["tasks"] == []
-    assert sq._at(t["next_wake"]) == MONDAY + 2 * DAY
-    assert sq._at(t["next_task"]).astimezone(sq.LOCAL).date() == (MONDAY + DAY).astimezone(sq.LOCAL).date()
+    assert datetime.fromisoformat(t["next_wake"]) == MONDAY + 2 * DAY
+    assert datetime.fromisoformat(t["next_task"]).astimezone(sq.LOCAL).date() == (MONDAY + DAY).astimezone(sq.LOCAL).date()

@@ -3,9 +3,9 @@ Person in a Sequence, Jeremy's calendar Events, and Pipelines (show, Target, Sta
 
 import json
 import sys
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 
-from . import calendar, files, inbox, pipeline, sequences
+from . import calendar, clock, files, inbox, pipeline, sequences
 from .platforms import PLATFORMS
 from .tui import (CONTEXT_SOURCES, DRAFT_FIELDS, ReplyError, connection_label, draft_history, draft_text,
                   socket_context, staged_files, task_markdown, thread_addresses, thread_text)
@@ -161,7 +161,7 @@ def enroll(db, person: str, sequence: str, start: str | None = None) -> str:
     match = [q for q in sequences.sequences(db) if str(q["id"]) == sequence or q["name"].lower() == sequence.lower()]
     if len(match) != 1:
         raise ValueError(f"no Sequence matches {sequence!r}")
-    now = sequences._now()
+    now = clock.now()
     day = sequences.parse_start(start, now) if start else None
     if start and day is None:
         raise ValueError(f"--start {start!r} is neither YYYY-MM-DD nor a number of days")
@@ -183,8 +183,8 @@ def events(db, a) -> str:
     if a.query:
         found = [e for e in found if a.query.lower() in e["title"].lower()]
     if a.last:
-        now = datetime.now().astimezone()
-        found = [e for e in found if calendar._local(e["start"]) <= now][::-1][:a.last]
+        now = clock.local()
+        found = [e for e in found if clock.local(e["start"]) <= now][::-1][:a.last]
     if a.json:
         return "".join(json.dumps({**{k: e[k] for k in ("id", "kind", "all_day", "title", "location", "join_url",
                                                           "organizer", "attendees", "state", "repeats", "deleted_at")},
@@ -193,7 +193,7 @@ def events(db, a) -> str:
 
 
 def event_line(e) -> str:
-    start, end = calendar._local(e["start"]), calendar._local(e["end"])
+    start, end = clock.local(e["start"]), clock.local(e["end"])
     when = f"{start:%Y-%m-%d %a} all day" if e["all_day"] else f"{start:%Y-%m-%d %a %H:%M}-{end:%H:%M}"
     who = e["organizer"]["email"] + " (organizer)" if e["organizer"] else ""
     more = f" +{len(e['attendees']) - 1}" if len(e["attendees"]) > 1 else ""

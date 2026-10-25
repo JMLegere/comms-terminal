@@ -5,7 +5,7 @@ from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
-from comms_terminal import inbox, sequences as sq
+from comms_terminal import clock as comms_clock, inbox, sequences as sq
 from test_attachment_send import FakeSender
 
 ME = "jeremy@agentmaple.example"
@@ -21,8 +21,7 @@ class Clock:
 @pytest.fixture
 def clock(monkeypatch):
     c = Clock()
-    monkeypatch.setattr(inbox, "_now", lambda: c.at)
-    monkeypatch.setattr(sq, "_now", lambda: c.at)
+    monkeypatch.setattr(comms_clock, "now", lambda: c.at)
     return c
 
 
@@ -205,7 +204,7 @@ def test_inbound_reply_pauses_and_resume_makes_the_next_task_due(db):  # AS-SEQ-
                    " VALUES (3, 'quo', '+15065550000', '+15065550000', 'Quo', ?)", (MONDAY.isoformat(),))
     call = {"direction": "outgoing", "outcome": "connected", "length": 70}
     inbox.ingest(db, inbox.Incoming(3, "+15065550101", "im", "MESSAGE", "AC1", None, MONDAY + 3 * DAY + timedelta(hours=1),
-                                    "Outgoing call, 1m 10s", data={"peer": "+15065550101", "call": call}))
+                                    "Outgoing call, 1m 10s", data={"peer": "+15065550101", "call": call}, synchronous="call"))
     assert sq.enrollments(db, dana)[0]["pause_reason"] == "call"
 
 

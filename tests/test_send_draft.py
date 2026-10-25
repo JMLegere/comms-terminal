@@ -9,7 +9,7 @@ import pytest
 from datetime import timedelta
 from types import SimpleNamespace
 
-from comms_terminal import email, inbox, quo, serve, slack
+from comms_terminal import clock, email, inbox, quo, serve, slack
 from test_composition import AT, PEER, PHONE, SELF, db, envelope, incoming  # noqa: F401  (db is a fixture)
 
 RESEND_ID = "0a1b2c3d-1234-4000-8000-123456789abc"
@@ -348,7 +348,7 @@ def test_slack_draft_joins_a_dm_inside_24_hours_and_starts_one_after(db, monkeyp
     t = inbox.send_draft(db, d["id"], d["revision"], FakeSlackSender("D1:2.0"))
     assert t.id == earlier.id and t.status_detail == "WAITING_FOR_CUSTOMER"
     later = AT + timedelta(hours=25)
-    monkeypatch.setattr(inbox, "_now", lambda: later)
+    monkeypatch.setattr(clock, "now", lambda: later)
     d = slack_draft(db, "Sam <D1>", body="New topic")
     t = inbox.send_draft(db, d["id"], d["revision"], FakeSlackSender("D1:3.0"))
     assert t.id != earlier.id and t.title == "New topic" and t.status_detail == "WAITING_FOR_CUSTOMER"

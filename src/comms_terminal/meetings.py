@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 
 import icalendar
 
-from . import calendar as cal, inbox
+from . import calendar as cal, clock, inbox
 
 EXTERNAL = "google-calendar"  # the Connection's external_id
 NOT_PEOPLE = ("calendar.google.com",)  # rooms and group calendars: resource.calendar.google.com, …
@@ -29,7 +29,7 @@ def connect(db) -> int:
     """The Google Calendar Connection, created the first time the service has the calendar credential."""
     with db:
         db.execute("INSERT OR IGNORE INTO connections (platform, external_id, self_id, label, connected_at)"
-                   " VALUES ('gcal', ?, ?, 'Google Calendar', ?)", (EXTERNAL, EXTERNAL, cal._now()))
+                   " VALUES ('gcal', ?, ?, 'Google Calendar', ?)", (EXTERNAL, EXTERNAL, clock.now().isoformat(timespec="seconds")))
     return db.execute("SELECT id FROM connections WHERE external_id = ?", (EXTERNAL,)).fetchone()[0]
 
 
@@ -69,22 +69,19 @@ def _record(db, c, o: dict, what: str, people: list[dict], rid: str, at: datetim
             key: str = "") -> inbox.Thread | None:
     """One Meeting Activity on the UID's Thread; None when it is already recorded (the native id repeats)."""
     sender = sender or people[0]
-    start, end = cal._local(o["start"]), cal._local(o["end"])
+    start, end = clock.local(o["start"]), clock.local(o["end"])
     meeting = {"what": what, "where": where(o), "start": start.isoformat(), "end": end.isoformat(),
                "join": o["join_url"], "uid": o["uid"], "rid": rid,
                "attendees": [{"email": a["email"], "name": a["name"], "state": a["state"]} for a in o["attendees"]]}
     names = ", ".join(p["name"] or p["email"] for p in people)
     content = "\n".join([f"{WHAT[what]} · {o['title']}", f"{meeting['where']} · {start:%a %b %-d %H:%M}–{end:%H:%M}"]
                         + ([f"Join: {o['join_url']}"] if o["join_url"] else []) + [f"With: {names}"])
-    with db:
-        for p in people:  # every outside attendee is a Participant, so Membership and the roll-up see them
-            if p is not sender:
-                inbox._identity_for(db, inbox.Identity("email", p["email"], p["name"] or None))
-        return inbox._ingest(db, inbox.Incoming(
-            c["id"], o["uid"], "meeting", "MESSAGE", f"gcal:{o['uid']}:{rid}:{what}{key}",
-            inbox.Identity("email", sender["email"], sender["name"] or None), at, content, title=o["title"],
-            data={"meeting": meeting, "to": [p["email"] for p in people if p is not sender]},
-            channel_name=o["title"]))
+    others = [p for p in people if p is not sender]  # every outside attendee is a Participant (FR-OA-15)
+    return inbox.ingest(db, inbox.Incoming(
+        c["id"], o["uid"], "meeting", "MESSAGE", f"gcal:{o['uid']}:{rid}:{what}{key}",
+        inbox.Identity("email", sender["email"], sender["name"] or None), at, content, title=o["title"],
+        data={"meeting": meeting, "to": [p["email"] for p in others]}, channel_name=o["title"],
+        synchronous="meeting", participants=tuple(inbox.Identity("email", p["email"], p["name"] or None) for p in others)))
 
 
 def _parse(ics: str, mine, series=frozenset()) -> dict:
@@ -104,7 +101,7 @@ def synced(db, now: datetime | None = None) -> int:
     c = _connection(db)
     if c is None:
         return 0
-    now, mine, n = now or inbox._now(), cal.me(db), 0
+    now, mine, n = now or clock.now(), cal.me(db), 0
     known = _threads(db, c)
     # Booked (FR-OA-12): a UID first seen after go-live, declined and unanswered invites included
     for uid, ics in db.execute(
@@ -115,7 +112,7 @@ def synced(db, now: datetime | None = None) -> int:
         o = _parse(ics, mine)
         if people := _outside(o, mine):
             n += _record(db, c, o, "booked", people, "", now) is not None
-            known[uid] = {"created_at": inbox._iso(now)}
+            known[uid] = {"created_at": clock.iso(now)}
     # Cancelled and declined (FR-OA-14): only what changed after the Thread began
     for uid, rows in _rows(db, known).items():
         booked = _booked_states(db, c, uid)
@@ -160,13 +157,13 @@ def held(db, now: datetime | None = None) -> int:
     known = _threads(db, c)
     if not known:
         return 0
-    now, mine, n = now or inbox._now(), cal.me(db), 0
-    local = cal._local(now)
+    now, mine, n = now or clock.now(), cal.me(db), 0
+    local = clock.local(now)
     for o in cal.expand(db, (local - HELD_WINDOW).date(), local.date() + timedelta(days=1), deleted=False):
         t = known.get(o["uid"])
         if t is None or o["all_day"] or o["state"] == "DECLINED":
             continue
-        end = cal._local(o["end"])
+        end = clock.local(o["end"])
         if datetime.fromisoformat(t["created_at"]) < end <= local and (people := _outside(o, mine)):
             n += _record(db, c, o, "held", people, cal._rid(o["start"]), end) is not None
     return n

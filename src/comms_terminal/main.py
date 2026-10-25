@@ -4,8 +4,9 @@
 import argparse
 import os
 import time
-from datetime import datetime, timezone
 from pathlib import Path
+
+from . import clock
 
 
 TRUECOLOR_TERMS = ("ghostty", "kitty", "wezterm", "alacritty", "foot", "truecolor", "direct")
@@ -84,7 +85,7 @@ def main(argv=None) -> None:
         from .platforms import PLATFORMS
         db = inbox.connect(a.db)
         inbox.migrate(db)
-        now = datetime.now(timezone.utc).isoformat()
+        now = clock.now().isoformat()
         with db:
             new = [*(("gmail", g.lower(), None, email.inbound_for(g)) for g in a.gmail),
                    ("fastmail", a.fastmail and a.fastmail.lower(), None, fastmail.INBOUND),

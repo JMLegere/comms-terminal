@@ -128,8 +128,9 @@ Undo snapshots capture the complete triage state, including `follow_up_at`, the 
 Case operations (#120), used from the Cases views and grouped Thread views:
 
 ```python
-def case_status(details: list[str]) -> str
-    # The earliest of the Threads' views in the order Todo, Snoozed, Done, Ignored; "Todo" with no Threads.
+def rollup(details, order=CASE_VIEWS, empty="Todo") -> str
+    # The earliest of the Threads' views in `order` (a Case: Todo, Snoozed, Done, Ignored); `empty` with none.
+    # An Organization's roll-up uses Todo, Snoozed, Done and "Done" when empty: Ignored Threads hold nothing open.
 def create_case(db, title: str) -> int        # a Case with no Threads yet
 def case_queue(db, view: str | None = None) -> list[dict]
     # Cases with their rolled-up status and Thread counts per view; filtered to one view when given.

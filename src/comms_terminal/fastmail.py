@@ -13,9 +13,9 @@ the one-time import reads Inbox and Sent as text.
 import logging
 import threading
 import urllib.error
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
-from . import inbox
+from . import clock, inbox
 from .email import handle_hook  # noqa: F401 - Fastmail's copies arrive at /hooks/email (serve.HOOKS)
 from .mcp import McpClient, McpError
 
@@ -135,7 +135,7 @@ def poll_loop(db_path: str, client, stop: threading.Event, every: float = 600) -
 
 def import_recent(db, client, connection, days: int) -> int:
     """One-time import (Jeremy, 2026-10-12): the last `days` of Inbox and Sent, every Thread left in Todo."""
-    since = datetime.now(timezone.utc) - timedelta(days=days)
+    since = clock.now() - timedelta(days=days)
     tids = {inbox.get_thread(db, tid).id for tid in
             sync(db, client, connection, since, identities(client), limit=50, pages=40)}
     for tid in tids:

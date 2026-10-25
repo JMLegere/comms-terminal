@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from comms_terminal import inbox, sequences
+from comms_terminal import clock as comms_clock, inbox, sequences
 from comms_terminal.tui import audit_markup
 
 NOW = datetime(2026, 10, 15, 15, 0, tzinfo=timezone.utc)
@@ -30,7 +30,7 @@ def test_status_and_case_changes_are_logged_with_their_cause(monkeypatch):
                    " VALUES ('gmail', 'me@x.io', 'me@x.io', 'Email', ?)", (NOW.isoformat(),))
     minutes = iter(range(1, 1000))
     clock = lambda: NOW + timedelta(minutes=next(minutes))  # noqa: E731
-    monkeypatch.setattr(inbox, "_now", clock)
+    monkeypatch.setattr(comms_clock, "now", clock)
     t = inbox.ingest(db, mail("<a@acme.com>", NOW))
     assert entries(db, t.id) == []  # a new Thread's Status is not a change
     inbox.act(db, t.id, inbox.Wait())
@@ -72,7 +72,7 @@ def test_case_feed_shows_threads_joining_and_leaving_and_description_edits(monke
         db.execute("INSERT INTO connections (platform, external_id, self_id, label, connected_at)"
                    " VALUES ('gmail', 'me@x.io', 'me@x.io', 'Email', ?)", (NOW.isoformat(),))
     minutes = iter(range(1, 1000))
-    monkeypatch.setattr(inbox, "_now", lambda: NOW + timedelta(minutes=next(minutes)))
+    monkeypatch.setattr(comms_clock, "now", lambda: NOW + timedelta(minutes=next(minutes)))
     a = inbox.ingest(db, mail("<a@acme.com>", NOW))
     b = inbox.ingest(db, mail("<b@acme.com>", NOW, inbox.Identity("email", "bo@acme.com")))
     renewal, other = inbox.create_case(db, "Renewal"), inbox.create_case(db, "Other")
@@ -95,7 +95,7 @@ def test_case_feed_shows_threads_joining_and_leaving_and_description_edits(monke
 
 @pytest.fixture
 def slack_thread(monkeypatch):
-    monkeypatch.setattr(inbox, "_now", lambda: NOW)
+    monkeypatch.setattr(comms_clock, "now", lambda: NOW)
     db = inbox.connect()
     inbox.migrate(db)
     with db:
@@ -201,7 +201,7 @@ def test_blocked_phone_calls_keep_existing_creation_and_reopen_rules(slack_threa
     inbox.block(db, "phone", "+15555550101")
     call = inbox.Incoming(2, "+15555550101", "im", "MESSAGE", "call-1",
                           inbox.Identity("phone", "+15555550101"), NOW - timedelta(minutes=2), "Missed call",
-                          data={"peer": "+15555550101", "call": {"direction": "incoming", "outcome": "missed", "length": 0}})
+                          data={"peer": "+15555550101", "call": {"direction": "incoming", "outcome": "missed", "length": 0}}, synchronous="call")
     thread = inbox.ingest(db, call)
     assert (thread.status, thread.status_detail) == ("DONE", "IGNORED")
     assert entries(db, thread.id) == [("STATUS", "blocked", None, "IGNORED", None)]

@@ -6,8 +6,9 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from comms_terminal import email, files, inbox
+from comms_terminal import clock, email, files, inbox
 from test_email_reconcile import SCHEMA3
+from schema_history import changed_since
 from test_schema_equivalence import shape
 
 AT = datetime(2026, 10, 1, 10, tzinfo=timezone.utc)
@@ -35,7 +36,7 @@ def add_connections(db):
 
 @pytest.fixture
 def db(tmp_path, monkeypatch):
-    monkeypatch.setattr(inbox, "_now", lambda: AT)
+    monkeypatch.setattr(clock, "now", lambda: AT)
     db = inbox.connect(str(tmp_path / "inbox.db"))
     inbox.migrate(db)
     add_connections(db)
@@ -65,17 +66,17 @@ def test_draft_create_save_reopen_keeps_exact_full_envelope(db, monkeypatch, kin
     before = old_rows(db)
     blank = inbox.save_draft(db, envelope(kind))
     assert {k: blank[k] for k in envelope(kind)} == envelope(kind)
-    assert blank["revision"] == 1 and blank["created_at"] == blank["updated_at"] == inbox._iso(AT)
+    assert blank["revision"] == 1 and blank["created_at"] == blank["updated_at"] == clock.iso(AT)
     values = envelope(kind, connection_id=connection_id, sender="  edited sender  ",
                       to=" unfinished destination ", body="  exact text\r\n\n ")
     if kind == "email":
         values |= {"subject": " Edited subject ", "cc": "  Other <OTHER@ACME.TEST>  "}
-    monkeypatch.setattr(inbox, "_now", lambda: AT + timedelta(minutes=1))
+    monkeypatch.setattr(clock, "now", lambda: AT + timedelta(minutes=1))
     saved = inbox.save_draft(db, values, draft_id=blank["id"], expected_revision=1)
     assert {k: saved[k] for k in values} == values
     assert saved["id"] == blank["id"] and saved["revision"] == 2
     assert saved["created_at"] == blank["created_at"]
-    assert saved["updated_at"] == inbox._iso(AT + timedelta(minutes=1))
+    assert saved["updated_at"] == clock.iso(AT + timedelta(minutes=1))
     assert datetime.fromisoformat(saved["updated_at"]).utcoffset() == timedelta(0)
     path = db.execute("PRAGMA database_list").fetchone()[2]
     db.close()
@@ -167,7 +168,7 @@ def test_draft_list_latest_update_then_id_and_connection_format_change(db, monke
     one = inbox.save_draft(db, envelope(connection_id=1))
     two = inbox.save_draft(db, envelope("sms", connection_id=3))
     assert inbox.list_drafts(db) == [two, one]
-    monkeypatch.setattr(inbox, "_now", lambda: AT + timedelta(minutes=1))
+    monkeypatch.setattr(clock, "now", lambda: AT + timedelta(minutes=1))
     changed = inbox.save_draft(db, envelope("sms", connection_id=3, to=PEER),
                                draft_id=one["id"], expected_revision=1)
     assert inbox.list_drafts(db) == [changed, two]
@@ -201,8 +202,7 @@ def test_v8_draft_migration_matches_fresh_preserves_old_rows_aliases_guards_and_
         inbox.migrate(fresh)
         assert old.execute("PRAGMA user_version").fetchone()[0] == inbox.SCHEMA_VERSION
         assert shape(old) == shape(fresh)
-        changed = ("persons", "connections", "channels", "audit_log")  # 17: persons.unsubscribed_at;
-        # 23: connections.inbound; 28: the gcal, meeting, and meeting-cause CHECKs
+        changed = changed_since(8)
         assert {k: v for k, v in shape(old).items() if k in old_shape and k[1] not in changed} == \
             {k: v for k, v in old_shape.items() if k[1] not in changed}
         assert {k: v for k, v in old_rows(old).items() if k in before} == before  # later migrations may add tables

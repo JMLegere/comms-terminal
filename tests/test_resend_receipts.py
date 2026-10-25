@@ -11,7 +11,7 @@ from urllib.parse import quote
 
 import pytest
 
-from comms_terminal import email, files, inbox, platforms
+from comms_terminal import clock, email, files, inbox, platforms
 from test_email_reconcile import (  # noqa: F401
     AT, OTHER, SELF, RecordingSender, activities, db, historical, incoming,
     message_ids, persisted, raw_bytes, triage,
@@ -252,7 +252,7 @@ def test_receipt_merge_preserves_cases_latest_triage_old_ids_and_immutable_activ
     child = inbox.ingest(db, incoming("<child@test>", [WIRE], occurred_at=ATTEMPT + timedelta(minutes=1)))
     case = inbox.act(db, parent.id, inbox.SetCase(new_title="Shared")).case_id
     other = inbox.act(db, child.id, inbox.SetCase(new_title="Conflicting")).case_id
-    monkeypatch.setattr(inbox, "_now", lambda: ATTEMPT + timedelta(hours=1))
+    monkeypatch.setattr(clock, "now", lambda: ATTEMPT + timedelta(hours=1))
     inbox.act(db, child.id, inbox.Snooze(ATTEMPT + timedelta(days=7)))
     state, physical, raw = triage(db, child.id), activities(db), raw_bytes(db)
     receipt(db)
@@ -381,7 +381,7 @@ def test_initial_send_preserves_incoming_and_user_triage_before_local_record(db,
                 receipt(db)
             # Provider clock may lag: arrival/high-water, not timestamps alone, protects new work.
             child = inbox.ingest(db, incoming("<early@test>", [WIRE], occurred_at=ATTEMPT - timedelta(seconds=1)))
-            monkeypatch.setattr(inbox, "_now", lambda: ATTEMPT + timedelta(hours=1))
+            monkeypatch.setattr(clock, "now", lambda: ATTEMPT + timedelta(hours=1))
             inbox.act(db, child.id, inbox.SetCase(new_title="Arrived during send"))
             if action is not None:
                 inbox.act(db, child.id, action)
@@ -395,7 +395,7 @@ def test_initial_send_preserves_incoming_and_user_triage_before_local_record(db,
     assert triage(db, result.id) == seen["state"]
     assert result.case_id is not None
     outgoing = db.execute("SELECT occurred_at FROM activities WHERE native_id = ?", (MARKER,)).fetchone()
-    assert outgoing[0] == inbox._iso(ATTEMPT)
+    assert outgoing[0] == clock.iso(ATTEMPT)
 
 
 @pytest.mark.parametrize("reference", ["<root@test>", WIRE], ids=["unchanged-todo", "new-receipt-parent"])
@@ -412,13 +412,13 @@ def test_reply_preserves_inbound_arrival_even_when_todo_detail_does_not_change(d
             seen["id"], seen["state"] = child.id, triage(db, child.id)
             if not receipt_first:
                 receipt(db)
-            monkeypatch.setattr(inbox, "_now", lambda: ATTEMPT + timedelta(hours=1))
+            monkeypatch.setattr(clock, "now", lambda: ATTEMPT + timedelta(hours=1))
             return MARKER
 
     result = inbox.reply(db, root.id, "Accepted", RacingSender())
     assert inbox.get_thread(db, seen["id"]).id == result.id == root.id
     assert triage(db, result.id) == seen["state"]
-    assert db.execute("SELECT occurred_at FROM activities WHERE native_id = ?", (MARKER,)).fetchone()[0] == inbox._iso(ATTEMPT)
+    assert db.execute("SELECT occurred_at FROM activities WHERE native_id = ?", (MARKER,)).fetchone()[0] == clock.iso(ATTEMPT)
 
 
 @pytest.mark.parametrize("action", [inbox.Investigate(), inbox.Done(), inbox.Snooze(ATTEMPT + timedelta(days=7))])
@@ -428,14 +428,14 @@ def test_reply_preserves_user_triage_during_provider_call(db, monkeypatch, actio
 
     class RacingSender(RecordingSender):
         def send(self, *args, **kwargs):
-            monkeypatch.setattr(inbox, "_now", lambda: ATTEMPT + timedelta(hours=1))
+            monkeypatch.setattr(clock, "now", lambda: ATTEMPT + timedelta(hours=1))
             inbox.act(db, root.id, action)
             seen["state"] = triage(db, root.id)
             return MARKER
 
     result = inbox.reply(db, root.id, "Accepted", RacingSender())
     assert triage(db, result.id) == seen["state"]
-    assert db.execute("SELECT occurred_at FROM activities WHERE native_id = ?", (MARKER,)).fetchone()[0] == inbox._iso(ATTEMPT)
+    assert db.execute("SELECT occurred_at FROM activities WHERE native_id = ?", (MARKER,)).fetchone()[0] == clock.iso(ATTEMPT)
 
 
 @pytest.mark.parametrize("platform", ["quo", "slack"])
@@ -463,7 +463,7 @@ def test_non_gmail_start_uses_completion_time_and_joins_inbound_during_provider_
     class RacingSender:
         def start(self, *args, **kwargs):
             seen["incoming"] = inbox.ingest(db, inc).id
-            monkeypatch.setattr(inbox, "_now", lambda: completed)
+            monkeypatch.setattr(clock, "now", lambda: completed)
             return native_id
 
         def conversation(self, channel):
@@ -472,7 +472,7 @@ def test_non_gmail_start_uses_completion_time_and_joins_inbound_during_provider_
     result = inbox.send_draft(db, d["id"], d["revision"], RacingSender())
     assert result.id == seen["incoming"]
     assert inbox.view_counts(db)["All"] == 1
-    assert db.execute("SELECT occurred_at FROM activities WHERE native_id = ?", (native_id,)).fetchone()[0] == inbox._iso(completed)
+    assert db.execute("SELECT occurred_at FROM activities WHERE native_id = ?", (native_id,)).fetchone()[0] == clock.iso(completed)
     data = json.loads(db.execute("SELECT data FROM activities WHERE native_id = ?", (native_id,)).fetchone()[0])
     assert "seen_through_activity_id" not in data
 
@@ -496,13 +496,13 @@ def test_non_gmail_reply_retains_completion_time(db, monkeypatch, platform):
 
     class SlowSender(RecordingSender):
         def send(self, *args, **kwargs):
-            monkeypatch.setattr(inbox, "_now", lambda: completed)
+            monkeypatch.setattr(clock, "now", lambda: completed)
             return "<completed@test>"
 
     result = inbox.reply(db, root.id, "Reply", SlowSender())
     assert result.status_detail == "WAITING_FOR_CUSTOMER"
-    assert db.execute("SELECT occurred_at FROM activities WHERE native_id = '<completed@test>'").fetchone()[0] == inbox._iso(completed)
-    assert triage(db, result.id)[2] == inbox._iso(completed)
+    assert db.execute("SELECT occurred_at FROM activities WHERE native_id = '<completed@test>'").fetchone()[0] == clock.iso(completed)
+    assert triage(db, result.id)[2] == clock.iso(completed)
     data = json.loads(db.execute("SELECT data FROM activities WHERE native_id = '<completed@test>'").fetchone()[0])
     assert "seen_through_activity_id" not in data
 
@@ -578,7 +578,7 @@ def test_late_receipt_after_local_record_and_restart_uses_exact_reply_causality_
 @pytest.mark.parametrize("kind", ["draft", "reply"])
 def test_later_own_reply_stays_waiting_when_earlier_skewed_reply_receipt_arrives(db, tmp_path, monkeypatch, kind):
     sent_id, incoming_id, _ = skewed_send_before_receipt(db, kind)
-    monkeypatch.setattr(inbox, "_now", lambda: ATTEMPT + timedelta(hours=1))
+    monkeypatch.setattr(clock, "now", lambda: ATTEMPT + timedelta(hours=1))
 
     class LaterSender(RecordingSender):
         def send(self, *args, **kwargs):
@@ -603,7 +603,7 @@ def test_later_own_reply_stays_waiting_when_earlier_skewed_reply_receipt_arrives
                                    inbox.Ignore()])
 def test_later_user_triage_wins_over_receipt_causality(db, monkeypatch, kind, action):
     sent_id, incoming_id, _ = skewed_send_before_receipt(db, kind)
-    monkeypatch.setattr(inbox, "_now", lambda: ATTEMPT + timedelta(hours=1))
+    monkeypatch.setattr(clock, "now", lambda: ATTEMPT + timedelta(hours=1))
     inbox.act(db, sent_id, action)
     state = triage(db, sent_id)
     receipt(db)
@@ -625,7 +625,7 @@ def test_ordinary_nonreceipt_merge_keeps_existing_date_based_triage_reducer(db):
 @pytest.mark.parametrize("kind", ["draft", "reply"])
 def test_overlapping_two_sends_keep_second_unseen_reply_after_late_first_receipt(db, tmp_path, monkeypatch, kind):
     first_id, incoming_id, state = skewed_send_before_receipt(db, kind)
-    monkeypatch.setattr(inbox, "_now", lambda: ATTEMPT + timedelta(hours=1))
+    monkeypatch.setattr(clock, "now", lambda: ATTEMPT + timedelta(hours=1))
     high_water = db.execute("SELECT max(id) FROM activities").fetchone()[0]
 
     class OverlappingSender(RecordingSender):
