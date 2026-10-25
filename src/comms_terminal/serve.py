@@ -22,7 +22,7 @@ from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from . import attio, calendar, email, fastmail, files, inbox, linear, mcp, platforms, quo, slack, tana
+from . import attio, calendar, email, fastmail, files, inbox, linear, mcp, meetings, platforms, quo, slack, tana
 
 
 def credential(name: str) -> bytes | None:
@@ -703,6 +703,7 @@ def wake_loop(db_path: str, stop: threading.Event, every: float = 60, kick: thre
         try:
             now = datetime.now(timezone.utc)
             inbox.wake(db, now)
+            meetings.held(db, now)  # an ended Meeting occurrence puts its Thread in Todo (FR-OA-13)
             if senders is not None:
                 send_due(db, senders, now)
             inbox.reconcile_resend_receipts(db)
@@ -754,6 +755,11 @@ def calendar_loop(db_path: str, url: str, stop: threading.Event, every: float = 
         try:
             if calendar.sync(db, calendar.fetch(url)):
                 log.info("calendar changed")
+                try:  # bookings, cancellations, declines (FR-OA-12, FR-OA-14); a failure is not the feed's
+                    if n := meetings.synced(db):
+                        log.info("meetings recorded: %d", n)
+                except Exception as e:  # noqa: BLE001
+                    log.info("meetings not recorded: %s", e)
             ok_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
             calendar.record_ok(db)
         except Exception as e:  # noqa: BLE001 - one failed fetch must not stop the loop
@@ -775,6 +781,8 @@ def run(db_path: str, socket_path: str, host: str, port: int, files_host: str | 
     fm = fastmail_client(db)
     senders = Senders({"fastmail": fm} if fm is not None else {})
     contexts = {"tana": tana_context(db), "attio": attio_context(db), "linear": linear_context(db)}
+    if credential(calendar.CREDENTIAL):
+        meetings.connect(db)  # go-live: only Events first seen from now become Meeting Threads
     db.close()
     stop, kick = threading.Event(), threading.Event()
     servers = [hooks_server(db_path, host, port, kick=kick), reply_server(db_path, socket_path, senders, contexts)]

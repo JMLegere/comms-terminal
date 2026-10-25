@@ -3,6 +3,7 @@
 from comms_terminal import inbox
 
 UNDO = {
+    28: "",  # widens three CHECKs (gcal, meeting); the rebuilt tables keep their columns
     27: "DROP TABLE memberships;",
     26: """CREATE TABLE planning_priors (
   pipeline TEXT NOT NULL CHECK (pipeline IN ('REVENUE', 'FUNDRAISING')),

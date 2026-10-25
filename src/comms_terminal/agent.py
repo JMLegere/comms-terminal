@@ -134,6 +134,8 @@ def draft(db, ref, changes, revision, connection_id, thread_id=None) -> str:
         if c is None:
             raise ValueError("a new Draft needs --connection: an id from `comms-terminal drafts`")
         kind = PLATFORMS[c["platform"]].format
+        if kind is None:
+            raise ValueError(f"{PLATFORMS[c['platform']].title} sends nothing: pick an email, SMS, or Slack Connection")
         values = dict(connection_id=c["id"], kind=kind, sender=c["self_id"] or "", to="", cc="",
                       subject="" if kind == "email" else None, body="")
         d = inbox.save_draft(db, values | changes)

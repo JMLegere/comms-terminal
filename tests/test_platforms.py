@@ -14,8 +14,9 @@ def test_e164_takes_7_to_15_digits_after_plus():
 
 def test_files_quiet_windows_and_draft_fields_per_format():
     assert {n: p.sends_files for n, p in PLATFORMS.items()} == \
-        {"gmail": True, "fastmail": False, "slack": True, "quo": False}
+        {"gmail": True, "fastmail": False, "slack": True, "quo": False, "gcal": False}
     assert {n: f.quiet for n, f in FORMATS.items()} == \
         {"email": None, "sms": timedelta(days=7), "slack": timedelta(hours=24)}
     assert [n for n, f in FORMATS.items() if f.cc_subject] == ["email"]
-    assert all(p.format in FORMATS for p in PLATFORMS.values())
+    assert all(p.format in FORMATS for n, p in PLATFORMS.items() if n != "gcal")
+    assert PLATFORMS["gcal"].format is None  # Google Calendar only reads (ADR 0007): no message format

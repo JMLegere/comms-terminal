@@ -1728,6 +1728,7 @@ class ReplyBox(Composer, Vertical):
     def set_view(self, view):
         """Refresh conversation state while preserving an open reply's selected draft and fields."""
         self.view, self.thread_id = view, view["thread"].id
+        self.display = PLATFORMS[view["channel"]["platform"]].format is not None  # a Meeting Thread takes none
         if not self.has_class("open"):
             self.show_idle(view)
         elif self.pending_confirmation and self.parent_confirmed():
@@ -1756,6 +1757,9 @@ class ReplyBox(Composer, Vertical):
             self.open(self.view, self.mode)
 
     def open(self, view, mode="all"):
+        if PLATFORMS[view["channel"]["platform"]].format is None:  # a Meeting Thread (ADR 0007)
+            self.app.notify(inbox.NO_REPLY, severity="warning")
+            return
         self.view, self.thread_id = view, view["thread"].id
         if self.has_class("open"):
             self.query_one(TextArea).focus()
@@ -2038,7 +2042,7 @@ def gutter_row(gutter: str, content, cls: str = ""):
 
 
 AUDIT_CAUSE = {"action": "you", "reply": "you wrote", "message": "they wrote", "edit": "they edited",
-               "delete": "they deleted a message", "call": "a call", "reopen": "import", "blocked": "blocked sender",
+               "delete": "they deleted a message", "call": "a call", "meeting": "a meeting", "reopen": "import", "blocked": "blocked sender",
                "undo": "undone"}
 
 
@@ -2234,7 +2238,8 @@ def thread_head(v) -> str:
     link, plat = native_link(v), v["channel"]["platform"]
     if link:
         p = PLATFORMS[plat]
-        head += f"\n[#928374]{ICON[p.icon]} [link='{render.target(link)}']open in {p.title}[/link] {ICON['open']} (o)[/]"
+        what = "join the meeting" if p.format is None else f"open in {p.title}"  # gcal: the Meeting's join link
+        head += f"\n[#928374]{ICON[p.icon]} [link='{render.target(link)}']{what}[/link] {ICON['open']} (o)[/]"
     return head
 
 

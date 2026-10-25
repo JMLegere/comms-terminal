@@ -1,6 +1,6 @@
 CREATE TABLE connections (
   id                INTEGER PRIMARY KEY,
-  platform          TEXT NOT NULL CHECK (platform IN ('gmail', 'fastmail', 'slack', 'quo')),  -- platforms.py
+  platform          TEXT NOT NULL CHECK (platform IN ('gmail', 'fastmail', 'slack', 'quo', 'gcal')),  -- platforms.py
   external_id       TEXT NOT NULL UNIQUE,  -- email address, Slack team ID, or Quo Work number
   self_id           TEXT NOT NULL,         -- Jeremy's address, Slack user ID, or Work number
   label             TEXT NOT NULL,
@@ -19,7 +19,7 @@ CREATE TABLE channels (
   native_id     TEXT NOT NULL,
   name          TEXT,
   kind          TEXT NOT NULL
-    CHECK (kind IN ('mailbox', 'channel', 'private', 'im', 'mpim')),
+    CHECK (kind IN ('mailbox', 'channel', 'private', 'im', 'mpim', 'meeting')),  -- meeting: one Event UID (ADR 0007)
   UNIQUE (connection_id, native_id)
 ) STRICT;
 
@@ -159,7 +159,7 @@ CREATE TABLE audit_log (
   occurred_at TEXT NOT NULL,
   kind        TEXT NOT NULL CHECK (kind IN ('STATUS', 'CASE')),
   cause       TEXT NOT NULL CHECK (cause IN ('action', 'reply', 'message', 'edit', 'delete', 'call',
-                                             'woke', 'reopen', 'blocked', 'undo')),
+                                             'woke', 'reopen', 'blocked', 'undo', 'meeting')),
   old_detail  TEXT,
   new_detail  TEXT,
   case_id     INTEGER REFERENCES cases (id),
