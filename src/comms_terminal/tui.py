@@ -512,8 +512,10 @@ def glyph(detail: str) -> str:
 
 
 def conn_name(c) -> str:
-    """How a Connection is named: its address or number, else its Platform's name."""
-    p = PLATFORMS[c["platform"]]
+    """Address or number, else Platform name; an unsupported Connection keeps its stored label."""
+    p = PLATFORMS.get(c["platform"])
+    if p is None:
+        return c["label"] or c["platform"]
     return c["external_id"] if p.by_address else p.title
 
 
@@ -521,7 +523,8 @@ IDENTITY_ICON = {"email": "email", "slack_user": "slack", "phone": "phone"}
 
 
 def conn_icon(c) -> str:
-    return ICON[PLATFORMS[c["platform"]].icon]
+    p = PLATFORMS.get(c["platform"])
+    return ICON[p.icon if p else "connection"]
 
 
 def is_email(view: dict) -> bool:
@@ -848,7 +851,7 @@ class ThreadActions:
 # --- layout: side rail + main panel -----------------------------------------
 
 def health_ok(connection) -> bool:
-    return problem(connection) is None
+    return connection["platform"] in PLATFORMS and problem(connection) is None
 
 
 def rail_share(db, p: str) -> str:
@@ -4187,11 +4190,16 @@ class ConnectionPage(Page):
 
     def refresh_data(self):
         c = next(c for c in inbox.connections(self.app.db) if c["id"] == self.connection_id)
+        p = PLATFORMS.get(c["platform"])
         ok = health_ok(c)
-        state = f"[#6c782e]{ICON['ok']} OK[/]" if ok else f"[#c14a4a]{ICON['broken']} BROKEN[/]"
+        state = (f"[#6c782e]{ICON['ok']} OK[/]" if ok else
+                 f"[#c14a4a]{ICON['broken']} {'BROKEN' if p else 'UNAVAILABLE'}[/]")
+        description = (p.healthy if ok else p.broken) if p else (
+            f"This client does not support the {escape(c['platform'])} platform. "
+            "Update Comms Terminal to use this connection.")
         detail = problem(c) or "None."
         self.query_one("#conn").update(
-            f"[b]{conn_icon(c)} {escape(conn_name(c))}[/]  {state}\n{PLATFORMS[c['platform']].healthy if ok else PLATFORMS[c['platform']].broken}\n\n"
+            f"[b]{conn_icon(c)} {escape(conn_name(c))}[/]  {state}\n{description}\n\n"
             f"[#928374]account[/]\n{escape(c['external_id'])}\n\n"
             f"[#928374]connected[/]\n{stamp(c['connected_at'])}\n\n"
             f"[#928374]last health check[/]\n{stamp(c['probed_at']) or 'Never.'}\n\n[#928374]problem[/]\n{escape(detail)}")
@@ -4296,9 +4304,10 @@ class StatusLine(Static):
         if (why := cal.broken(app.db)):
             parts.append(f"[b {b['bg0']} on {b['red']}] {ICON['broken']} Google Calendar broken [/]")
         for c in inbox.connections(app.db):
-            # Icon only while healthy (the rail names each account); a broken one says which, in full.
+            # Icon only while healthy; name broken or unsupported Connections in full.
             parts.append(f"[{b['grey1']}]{conn_icon(c)}[/] [{b['green']}]{ICON['ok']}[/]" if health_ok(c) else
-                         f"[b {b['bg0']} on {b['red']}] {ICON['broken']} {escape(conn_name(c))} broken [/]")
+                         f"[b {b['bg0']} on {b['red']}] {ICON['broken']} {escape(conn_name(c))} "
+                         f"{'broken' if c['platform'] in PLATFORMS else 'unavailable'} [/]")
         for key, st in app.source_state.items():  # Context sources, shown apart from Connections (FR-13a, FR-13b)
             title, icon = CONTEXT_SOURCES[key][:2]
             if st == "ok":
