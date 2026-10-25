@@ -117,6 +117,8 @@ Draft reads return a dictionary containing integer `id` and `revision`, the comp
 
 Canonical-dependent Thread, Person, Case, and Organization read models use one coherent read snapshot, including nested record lookups. `thread_view` includes `_members` from that same snapshot, keeping cached membership aligned with its canonical Thread and message history.
 
+**Message revision** (`inbox.thread_view`, reaction execution in progress): every reduced message keeps `id` as its original MESSAGE Activity ID and adds `revision`, initially that ID and then the latest applicable EDIT/DELETE Activity ID. This read-only value comes from the existing immutable ledger; it adds no database column, migration, or reaction Activity. A reaction change supplies the displayed/checked revision so a known edit requires review and a deletion prevents a write.
+
 Fastmail sync results resolve to canonical IDs at completion. Recent imports deduplicate those canonical IDs before triage, count logical Threads, and use combined `thread_activities` history to detect prior replies.
 
 Undo snapshots capture the complete triage state, including `follow_up_at`, the current canonical `id`, and `_members`: a sorted list of that canonical ID plus all retired alias IDs. One SQL read captures the state and membership together; requesting a snapshot through an old ID returns the current canonical snapshot.
@@ -536,12 +538,54 @@ Four exact hook routes compose this listener; absent optional credentials return
 
 ### Local reply socket (console)
 
-The console is a terminal app (`docs/design/console.md`, decisions #71–#75). It calls `inbox` directly for everything except sending.
+The console is a terminal app (`docs/design/console.md`, decisions #71–#75). Sending, Context source reads, and Slack reaction requests use the credential-owning service's private socket, directly or through the existing SSH relay. Provider credentials stay in the service.
 
 - **`POST /reply`** on the service's Unix socket `$XDG_RUNTIME_DIR/comms-terminal.sock` (mode 0600, owned by `jerry`).
   - Body: JSON `{"thread_id", "text", "to", "cc"}`.
   - `200 {"status", "status_detail"}` after `inbox.reply` succeeds; `504 {"error"}` on `SendUnknown` before its `SendFailed` base class maps to 502; `400 {"error"}` for a pre-send pending parent/Attachment problem; `404` for an unknown Thread. Failed/pending/unknown sends retain work; no automatic retry.
   - Only the service holds the Resend key and Slack token (NFR-5).
+
+### Slack reaction interface
+
+**Settled local execution contract, 2026-10-25: implementation in progress; integrated behavior is not yet verified.** These exact interface titles are used by Slack acceptance steps:
+
+- **Slack Identity** (`SlackClient.identity()`): read the authenticated Slack workspace/user. Both must match the intended Connection's `external_id`/`self_id` before reaction reads or writes. The existing global user token supplies no per-Connection identity proof; missing/mismatched identity fails closed.
+- **Slack Reaction Snapshot** (`SlackClient.reaction_snapshot(channel, ts, self_id)`): read one source message and return groups `{name, count, mine}`. `count` is Slack's all-participant total, never the length of its partial `users` list; `mine` is authenticated-user membership. A valid matching message with omitted optional `reactions` or an empty list is empty success; explicit null, malformed data, or an invalid/missing item is unavailable. Preserve all returned emoji names as escaped data, with shortcode fallback.
+- **Slack Reaction Change** (`SlackSender.change_reaction(channel, ts, name, op)`): one explicit `add` or `remove` for `+1` (Like), `pray` (Thanks), or `eyes` (Looking). A documented already-present/already-absent response confirms desired membership with `changed=false`; it does not claim this request caused a change. No mutation retry.
+- **Slack Reactions** (`serve.handle_slack_reactions(db, body, senders)`): private `POST /slack-reactions` on the existing 0600 Unix socket/SSH relay. It derives channel/timestamp from captured message ownership, validates identity/revision, and performs no ledger or work-state mutation. It remains outside public ingress and the remote optimistic `/call` queue.
+
+Request examples (synthetic IDs):
+
+```json
+{"op":"read","thread_id":7,"message_id":11,"connection_id":3}
+{"op":"add","thread_id":7,"message_id":11,"connection_id":3,"name":"+1","expected_revision":11}
+```
+
+`remove` uses the same change shape. Every request is a JSON object with explicit supported `op` and positive integer IDs; `message_id` means the original MESSAGE Activity ID, never Slack's timestamp or an edit ID. Changes additionally require supported `name` and positive integer `expected_revision`; reads omit both change-only keys. Reject omitted, null, boolean, string, zero/negative or malformed IDs/revision, unsupported values, and extra fields, including caller-supplied channel, timestamp or user. There is no newest-message, default-Connection or implicit-toggle resolution.
+
+Resolve the canonical Thread and require that the original non-deleted Slack message belongs to it and its Channel/Connection. Derive the exact Slack channel/ts server-side; compare authenticated team/user to that Connection. Recheck the derived revision immediately before a change. Known changes require review; captured revision checks cannot prevent an unseen concurrent source change.
+
+Success results echo the validated target and revision:
+
+```json
+{"outcome":"ready","thread_id":7,"message_id":11,"connection_id":3,"revision":11,"groups":[{"name":"+1","count":7,"mine":true}]}
+{"outcome":"confirmed","op":"add","name":"+1","thread_id":7,"message_id":11,"connection_id":3,"revision":11,"mine":true,"changed":true}
+```
+
+For a confirmed remove, `mine=false`. Failure results contain `outcome` (`unavailable`, `refused`, `unknown`, or `review_required`), safe `error` text, and validated target fields when available. Never return credentials, message bodies, private reactor lists, or raw provider errors.
+
+| HTTP | Typed outcome | Meaning |
+|---|---|---|
+| 200 | `ready` / `confirmed` | Successful snapshot / definitive desired membership |
+| 400 | `refused` | Invalid request; no change dispatched |
+| 409 | `review_required` | Captured revision changed; review before a fresh gesture |
+| 502 | `refused` | Definitive source rejection |
+| 503 | `unavailable` | Read/service capability unavailable; unknown membership is not absence |
+| 504 | `unknown` | Mutation may have reached Slack; preserve uncertainty |
+
+The UI injects blocking `reactions(payload) -> dict` through `socket_slack_reactions` and invokes it off the event loop. It checks echoed target/revision and operation generation; typed outcome, rather than HTTP status alone, drives feedback. A missing route in an older service disables the capability. Relay failure after possible dispatch remains unknown; no response replays a key or a write.
+
+Snapshots and pending/results are session-only, bound to the original source-message/Connection. Coalesce duplicate reads, bound background work, and prevent overlapping changes to the same target. Recovery reads that original pair; a read of another default target cannot resolve it. A successful recovery proves current membership, not causality. After a confirmed change, failed count refresh leaves the write confirmed and totals unavailable/stale. Restart requires a fresh source check and new explicit gesture, with no durable reaction mirror, attempt table, queue, or polling loop.
 
 ## 7. Decisions and open points
 

@@ -2497,12 +2497,14 @@ def thread_view(db, thread_id: int, files: tuple[str, int] | None = None) -> dic
                 who, _ = _sender(db, a["identity_id"]) if a["identity_id"] else ("You", None)
                 m = {"id": a["id"], "who": who, "at": a["occurred_at"], "content": a["content"], "edited": False,
                      "deleted": False, "native_id": a["native_id"], "data": json.loads(a["data"])}
+                m["revision"] = a["id"]
                 if ch["platform"] == "gmail":
                     m["wire_id"] = _gmail_wire_id(db, a["native_id"], ch["connection_id"], a["identity_id"])
                 by_id[a["id"]] = m
                 msgs.append(m)
             elif a["target_id"] in by_id:
                 m = by_id[a["target_id"]]
+                m["revision"] = a["id"]
                 if a["kind"] == "EDIT" and "call" in m["data"]:  # a Call transcript goes under the call's summary
                     m["content"] = m["content"].partition("\n")[0] + "\n\n" + (a["content"] or "")
                 elif a["kind"] == "EDIT":

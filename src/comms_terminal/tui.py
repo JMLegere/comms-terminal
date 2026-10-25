@@ -179,6 +179,9 @@ DataTable > .datatable--header { background: #f9f5d7; color: #928374; }
 .mlines { margin: 0 0 1 0; }
 .mline { width: 1fr; text-wrap: nowrap; text-overflow: ellipsis; }
 .card .msg { background: #f9f5d7; }
+.msg.react-selected { border-left: outer #45707a; background: #eee0b7; padding-left: 1; }
+.reaction-chips, .reaction-choices, .reaction-feedback { height: auto; }
+.reaction-chips, .reaction-feedback { margin-top: 1; }
 .composer { height: auto; border: round #a89984; background: #f9f5d7; padding: 0 1; margin: 1 2 1 0; }
 .composer > .idle { height: auto; color: #928374; }
 .composer.open > .idle { display: none; }
@@ -404,6 +407,24 @@ def socket_slack_conversations(socket_path):
     return fetch
 
 
+def socket_slack_reactions(socket_path):
+    """One private source request, over the existing Unix socket or SSH command; never queued or retried."""
+    def fetch(payload):
+        changing = payload["op"] != "read"
+        try:
+            status, body = _post(socket_path, "/slack-reactions", payload)
+        except ReplyError as e:
+            outcome = "unknown" if changing and e.status != 503 else "unavailable"
+            return {"outcome": outcome, "error": "Reaction service unavailable."}
+        if isinstance(body, dict) and body.get("outcome") in (
+                "ready", "confirmed", "unavailable", "refused", "unknown", "review_required"):
+            return body
+        outcome = ("review_required" if status == 409 else "refused" if status == 400 else
+                   "unknown" if changing and status != 404 else "unavailable")
+        return {"outcome": outcome, "error": "Reaction service unavailable."}
+    return fetch
+
+
 def socket_reply(socket_path):
     """Reply function that calls POST /reply on the service's local socket; a lost response means the outcome
     is unknown (504)."""
@@ -591,6 +612,8 @@ HELP = [  # (group, [(keys, what it does)]) — the full key map; Gmail-style wh
 ("m", "ignore: it stays out of Todo (m again un-ignores)"), ("x", "ignore, as m does"),
                 ("l", "add to a case"), ("s", "change status: investigating, needs a response"),
                 ("p", "open the person"), ("o", "open in Gmail, Fastmail, or Slack"), ("z", "undo the last change"),
+                ("v", "React: j/k or arrows select an open Slack message; 1/2/3 choose; esc exits"),
+                ("f5", "refresh reaction snapshots for the current Thread or selected Case card"),
                 ("y", "copy the thread, its people, and Attio/Tana context as Markdown for an agent (file paths too)"),
                 ("f", "forward the newest message as a new email draft, its files attached"),
                 ("ctrl+o", "in a reply: attach a file on Workbox, or upload one from Mani (not SMS or Fastmail)"),
@@ -683,6 +706,12 @@ class ThreadActions:
 
     def next_thread_id(self):
         return None
+
+    def action_react(self):
+        self.app.enter_react()
+
+    def action_refresh_reactions(self):
+        self.app.schedule_reaction_snapshot(self.current_thread_id(), force=True)
 
     def _act(self, action, message):
         tid = self.current_thread_id()
@@ -1084,6 +1113,7 @@ THREAD_KEYS = [  # Thread actions, Gmail-style (decision #93); shared by the Thr
     Binding("m", "ignore", "ignore"), Binding("l", "case", "case"), Binding("s", "status", "status"),
     Binding("p", "person", show=False), Binding("o", "link", show=False), Binding("y", "copy", "copy for agent"),
     Binding("f", "forward", show=False), Binding("x", "ignore", show=False),  # x drops: Ignore, as m does
+    Binding("v", "react", "react"), Binding("f5", "refresh_reactions", "refresh"),
 ]
 
 
@@ -1101,6 +1131,7 @@ class ThreadsPage(Page, ThreadActions):
 
     def show_current(self):
         self.app.main.show_thread(self.current_thread_id())
+        self.app.schedule_reaction_snapshot(self.current_thread_id(), force=True)
 
     @property
     def view_index(self) -> int:
@@ -1138,6 +1169,8 @@ class ThreadsPage(Page, ThreadActions):
     def on_mount(self):
         self.rows = []
         self.refresh_data()
+        if self.active:
+            self.app.schedule_reaction_snapshot(self.current_thread_id())
         self.set_interval(1, self.tick)
 
     def tick(self):
@@ -1158,6 +1191,11 @@ class ThreadsPage(Page, ThreadActions):
         self.focus_first()
 
     def refresh_data(self):
+        # Table rebuilds post RowHighlighted too; only real cursor movement is a source-open trigger.
+        with self.prevent(DataTable.RowHighlighted):
+            self._refresh_data()
+
+    def _refresh_data(self):
         if not self.query(DataTable) or not self.on_screen:  # not composed yet, or being replaced
             return
         db, view = self.app.db, self.view_index
@@ -1224,6 +1262,7 @@ class ThreadsPage(Page, ThreadActions):
             if main.pending_select in ids:
                 table.move_cursor(row=ids.index(main.pending_select))
             main.pending_select = None
+        self.app.cursor[view] = table.cursor_row  # RowHighlighted is suppressed during this internal rebuild.
         if self.host is not None:
             self.host.list_changed(self)
         if not self.active:  # another of Today's lists fills the right pane
@@ -1288,8 +1327,10 @@ class ThreadsPage(Page, ThreadActions):
         r = self.rows[event.cursor_row] if self.rows and event.cursor_row < len(self.rows) else None
         if r is not None and r.get("header") and r["case_id"]:
             self.app.main.open(lambda: CasePage(r["case_id"], r["title"]))
-        elif r is not None and not r.get("header") and not getattr(event.data_table, "clicked", False):
-            self.app.main.action_focus_pane(1)
+        elif r is not None and not r.get("header"):
+            if not getattr(event.data_table, "clicked", False):
+                self.app.main.action_focus_pane(1)
+            self.app.schedule_reaction_snapshot(self.current_thread_id(), force=True)
         event.data_table.clicked = False
 
     def on_data_table_row_highlighted(self, event):
@@ -1310,6 +1351,7 @@ class ThreadsPage(Page, ThreadActions):
         self._preview_timer, self._previewed = None, time.monotonic()
         if self.active and self.is_attached:
             self.app.main.show_thread(self.current_thread_id())
+            self.app.schedule_reaction_snapshot(self.current_thread_id())
 
     def action_down(self):
         self.query_one(DataTable).action_cursor_down()
@@ -1916,6 +1958,68 @@ class MessageText(Static):
         return Style(underline=True)
 
 
+REACTION_CHOICES = (("+1", "👍", "Like"), ("pray", "🙏", "Thanks"), ("eyes", "👀", "Looking"))
+REACTION_GLYPHS = {name: emoji for name, emoji, _ in REACTION_CHOICES}
+
+
+class ReactionLine(MessageText):
+    """Wrap whole keyboard choices/chips, never an emoji away from its textual name."""
+
+    def __init__(self, items, *, classes, separator=" "):
+        self.items, self.separator = tuple(items), separator
+        super().__init__(separator.join(self.items), classes=classes)
+
+    def on_resize(self, _):
+        rows, row, used = [], [], 0
+        for item in self.items:
+            width = cell_len(render.plain(item))
+            gap = cell_len(self.separator) if row else 0
+            if row and used + gap + width > self.content_size.width:
+                rows.append(self.separator.join(row))
+                row, used, gap = [], 0, 0
+            row.append(item)
+            used += gap + width
+        self.update("\n".join(rows + ([self.separator.join(row)] if row else [])))
+
+
+def reaction_widgets(state, selected=False):
+    """Counts, own membership and write outcome are independent; all provider text is data."""
+    state = state or {}
+    out, own = [], state.get("own", {})
+    if state.get("totals") == "ready":
+        groups = state.get("groups", [])
+        chips = []
+        for group in groups:
+            name, mine = group["name"], own.get(group["name"], group["mine"])
+            label = escape(REACTION_GLYPHS.get(name, f":{name}:"))
+            edge = "#45707a" if mine else "#a89984"
+            chips.append(f"[{edge}]\\[[/][#7c6f64 on #eee0b7]{label} {group['count']}"
+                         + (" ✓" if mine else "") + f"[/][{edge}]][/]")
+        if chips:
+            out.append(ReactionLine(chips, classes="reaction-chips"))
+    elif state.get("write_outcome") == "confirmed":
+        chips = [f"[#45707a]\\[[/]{escape(REACTION_GLYPHS.get(name, f':{name}:'))} ✓[#45707a]][/]"
+                 for name, mine in own.items() if mine]
+        if chips:
+            out.append(ReactionLine(chips, classes="reaction-chips"))
+        note = "Refreshing totals…" if state.get("totals") == "checking" else "Reaction totals unavailable"
+        out.append(MessageText(f"[#928374]{note}[/]", classes="reaction-feedback"))
+    if selected:
+        color = "#45707a" if state.get("ready") else "#928374"
+        choices = [f"[{color}]{i} {emoji} {'✓ ' if own.get(name) else ''}{label}[/]"
+                   for i, (name, emoji, label) in enumerate(REACTION_CHOICES, 1)]
+        out.append(ReactionLine(choices, classes="reaction-choices", separator=" · "))
+    feedback = state.get("feedback", "")
+    if feedback:
+        out.append(MessageText(f"[#928374]{escape(feedback)}[/]", classes="reaction-feedback"))
+    if selected and state.get("totals") == "checking" and feedback != "Checking reactions…" and not state.get("pending"):
+        out.append(MessageText("[#928374]Checking reactions…[/]", classes="reaction-feedback"))
+    if selected and not state.get("ready") and not state.get("pending"):
+        if state.get("totals") != "checking":
+            out.append(MessageText("[#45707a]c Check · o Source link[/]", classes="reaction-feedback"))
+    return out
+
+
 def message_body(m, raw, slack: bool = False) -> render.Body:
     """The rendered body: from the raw message when it was kept (decision #106), Slack mrkdwn for Slack
     (#114), else the stored text."""
@@ -2070,7 +2174,7 @@ def message_action_id(native_id: str) -> str:
     return repr(native_id).replace("[", r"\u005b").replace("]", r"\u005d")
 
 
-def message_widgets(v, st: dict | None = None, raw=None) -> list:
+def message_widgets(v, st: dict | None = None, raw=None, *, reactions=None, selected=None) -> list:
     """A Thread's messages, Gmail-style (#105-#109): each open message is a card (header, body, •••,
     Trimmed content under a rule, Attachment chips); older ones collapse to faded one-line rows."""
     msgs, tid = v["messages"], v["thread"].id
@@ -2090,6 +2194,17 @@ def message_widgets(v, st: dict | None = None, raw=None) -> list:
         return gutter_row(badge(m["who"], faded=True), MessageText(line, classes="mline"), "faded")
 
     def card(i, m):
+        key = (tid, m["id"], v["channel"]["connection_id"])
+        state = (reactions or {}).get(key)
+        chosen = selected == key
+
+        def finish():
+            parts.extend(reaction_widgets(state, chosen) if slack else [])
+            content = Vertical(*parts, classes="msg" + (" react-selected" if chosen else ""))
+            row = gutter_row(badge(m["who"]), content, "open")
+            row.reaction_key = key
+            return row
+
         age = datetime.now().astimezone() - datetime.fromisoformat(m["at"]).astimezone()
         meta = stamp(m["at"]) + (f" · {ago(m['at'])}" if age.days < 7 else "")
         meta += f"  {ICON['edited']} edited" if m["edited"] else ""
@@ -2100,7 +2215,7 @@ def message_widgets(v, st: dict | None = None, raw=None) -> list:
         parts = [MessageText(head, classes="mhead")]
         if m["deleted"]:
             parts.append(MessageText(f"[i {dim}]{ICON['deleted']} message deleted[/]", classes="mbody"))
-            return gutter_row(badge(m["who"]), Vertical(*parts, classes="msg"), "open")
+            return finish()
         body = message_body(m, raw, slack)
         if body.invite:
             parts.append(MessageText(f"[{dim}]{ICON['calendar']} invitation[/]\n" + render.invite_card(body.invite),
@@ -2118,7 +2233,7 @@ def message_widgets(v, st: dict | None = None, raw=None) -> list:
                      f"{render.chip(a['name'], a['type'], a['size'])}[/][/link]"
                      + (f" [{dim}]· not copied[/]" if a["state"] in ("pending", "failed") else "") for a in files]
             parts.append(MessageText("\n".join(chips), classes="mchips"))
-        return gutter_row(badge(m["who"]), Vertical(*parts, classes="msg"), "open")
+        return finish()
 
     # Audit log entries sit between messages by time; one after a message at the same instant follows it.
     log = [(datetime.fromisoformat(e["occurred_at"]), e) for e in v.get("audit", [])]
@@ -2153,7 +2268,7 @@ def widget_key(w) -> tuple:
     own = w.content if isinstance(w, Static) else getattr(w, "image", None)  # markup, or a picture's path
     return (type(w).__name__, tuple(sorted(w.classes)), str(w.styles.height),
             own if own is None or isinstance(own, (str, Content)) else id(own),  # anything else always repaints
-            tuple(widget_key(c) for c in w._pending_children))
+            getattr(w, "reaction_key", None), tuple(widget_key(c) for c in w._pending_children))
 
 
 def show_messages(container, widgets, scroller=None):
@@ -2488,7 +2603,9 @@ class ThreadView(Horizontal):
         self.paint_status()
         load_context(self, *thread_addresses([v]))
         timeline = self.query_one(".timeline")
-        show_messages(self.query_one(".msgs"), message_widgets(v, self.app.message_state(self.thread_id), self.app.raw),
+        show_messages(self.query_one(".msgs"),
+                      message_widgets(v, self.app.message_state(self.thread_id), self.app.raw,
+                                      reactions=self.app.reaction_view(v), selected=self.app.react_target),
                       timeline)
         if opened:
             timeline.pin_end()
@@ -4265,11 +4382,24 @@ class StatusLine(Static):
             label = bnd.key_display or {"escape": "esc", "question_mark": "?"}.get(key, key)
             item = (f"[@click=app.simulate_key('{key}')][b {PALETTE['blue']}]{escape(label)}[/] "
                     f"[{PALETTE['grey2']}]{escape(bnd.description)}[/][/]")
-            groups.setdefault(KEY_GROUP.get(key, 3), []).append(item)
+            if bnd.action in ("react", "refresh_reactions", "app.thread('react')", "app.thread('refresh_reactions')"):
+                item = f"[b {PALETTE['blue']}]{escape(label)}[/] [{PALETTE['grey2']}]{escape(bnd.description)}[/]"
+            if bnd.action in ("react", "app.thread('react')"):
+                groups.setdefault(4, []).insert(0, item)  # entry remains discoverable with the protected general keys
+            elif bnd.action in ("refresh_reactions", "app.thread('refresh_reactions')"):
+                groups.setdefault(3, []).insert(0, item)  # keep refresh before secondary organize hints when space fits
+            else:
+                groups.setdefault(KEY_GROUP.get(key, 3), []).append(item)
         return [groups[g] for g in sorted(groups)]
 
     def refresh_line(self):
         app, main, b = self.app, self.app.main, PALETTE
+        if app.react_mode:
+            line = f"[b {b['bg0']} on {b['grey2']}] REACT [/] [b {b['blue']}]j/k[/] message · [b {b['blue']}]esc[/] exit"
+            if line != getattr(self, "shown", None):
+                self.shown = line
+                self.update(line)
+            return
         sec = main.section
         mode = VIEW_NAMES[app.view].upper() if sec.startswith("view:") else (
             f"CASES · {inbox.CASE_VIEWS[app.case_view].upper()}" if sec.startswith("cases:") else
@@ -4350,7 +4480,9 @@ class CaseCard(Vertical):
         msgs_box = self.query_one(".msgs")
         if expanded:
             body = ""
-            show_messages(msgs_box, message_widgets(v, self.app.message_state(t.id), self.app.raw))
+            show_messages(msgs_box, message_widgets(
+                v, self.app.message_state(t.id), self.app.raw, reactions=self.app.reaction_view(v),
+                selected=self.app.react_target if selected else None))
         else:  # folded with enter
             msgs_box.remove_children()
             last = msgs[-1]["at"] if msgs else None
@@ -4454,6 +4586,7 @@ class CasePage(Page, ThreadActions):
 
     def on_mount(self):
         self.refresh_data()
+        self.app.schedule_reaction_snapshot(self.current_thread_id())
 
     def focus_first(self):
         self.focus()
@@ -4562,7 +4695,11 @@ class CasePage(Page, ThreadActions):
     def select(self, i):
         if not self.views:
             return
+        before = self.current_thread_id()
         self.sel = max(0, min(i, len(self.views) - 1))
+        if self.current_thread_id() != before:
+            self.app.reaction_owner_changed(self.current_thread_id())
+            self.app.schedule_reaction_snapshot(self.current_thread_id())
         self.paint()
         cards = self.live_cards()
         if self.sel < len(cards):
@@ -4579,6 +4716,8 @@ class CasePage(Page, ThreadActions):
         if tid is not None:
             self.toggled ^= {tid}
             self.paint()
+            if tid not in self.toggled:
+                self.app.schedule_reaction_snapshot(tid, force=True)
 
     def action_reply(self, mode="all"):
         if not self.views:
@@ -6243,6 +6382,7 @@ class MainScreen(Screen):
             self.refresh_chrome()
         else:
             self.go(f"view:{view}")
+        self.app.schedule_reaction_snapshot(thread.id, force=True)
 
     def open_person(self, person_id):
         self.open(lambda: PersonPage(person_id))
@@ -6258,6 +6398,7 @@ class MainScreen(Screen):
         tv = self.thread_view
         if thread_id is not None:
             thread_id = inbox.get_thread(self.app.db, thread_id).id
+        self.app.reaction_owner_changed(thread_id)
         if thread_id is not None and tv is not None and inbox.get_thread(self.app.db, tv.thread_id).id == thread_id:
             self.showing = thread_id
             tv.refresh_data()
@@ -6288,6 +6429,8 @@ class MainScreen(Screen):
             self.current.focus_first()
 
     def _show(self):
+        self.app.leave_react(repaint=False)
+        self.app.reaction_owner_changed()
         main, pane = self.query_one("#main"), self.query_one("#thread")
         main.remove_children()
         page = self.stack[-1]()
@@ -6409,7 +6552,7 @@ class Console(App):
     CONSOLE_UPDATE_PROTOCOL = 1
 
     def __init__(self, db_path: str, reply=None, sources=None, send_draft=None, slack_conversations=None,
-                 files=FILE_SERVER, remote=None, syncer=None):
+                 files=FILE_SERVER, remote=None, syncer=None, *, reactions=None):
         super().__init__()
         self.remote, self.syncer = remote, syncer  # Comms Terminal's laptop copy (remote.py, ADR 0004)
         self.db_path, self.send_reply, self.view, self.cursor = db_path, reply, 0, {}
@@ -6427,6 +6570,13 @@ class Console(App):
         self.people_collapsed = set()  # People list letters folded shut
         self.undo = None  # (message, restore) for the last change
         self.msg_states = {}  # thread id -> which messages, quotes, and recipient lines are open (#107)
+        self.reactions, self.reaction_states = reactions, {}
+        self.react_mode, self.react_target, self.react_revision = False, None, None
+        self.last_opened_message = {}
+        self._reaction_reads, self._reaction_read_active = [], None
+        self._reaction_timer, self._reaction_owner = None, None
+        self._reaction_display_owner = None
+        self._reaction_viewport_generation = 0
         self._app_lock_fd = inherited_app_lock_fd()
         self._managed_console = self._app_lock_fd is not None
         self._console_stopping = self._console_closed = self._console_editors_saved = False
@@ -6475,6 +6625,10 @@ class Console(App):
                 event.stop()
                 event.prevent_default()
                 return
+        if isinstance(event, events.Key) and self._reaction_key(event.key, event.time):
+            event.stop()
+            event.prevent_default()
+            return
         await super().on_event(event)
 
     async def run_action(self, action, default_namespace=None, namespaces=None):
@@ -6627,6 +6781,402 @@ class Console(App):
         return [(key, text) for key, text in self.drafts.items()
                 if text.strip() and key in members]
 
+    def reaction_scope(self):
+        """Only the active Thread, or selected expanded Case card; never a Draft's history."""
+        page = self.main.list
+        if isinstance(page, ThreadsPage):
+            pane = self.main.thread_view
+            if pane is not None and getattr(pane, "view", None) and pane.thread_id == page.current_thread_id():
+                return pane.view, pane.query_one(".msgs"), pane.query_one(".timeline")
+        elif isinstance(page, CasePage) and page.views:
+            cards = page.live_cards()
+            if page.sel < len(cards) and page.expanded(page.views[page.sel]):
+                return page.views[page.sel], cards[page.sel].query_one(".msgs"), page.query_one(".activity")
+        return None
+
+    def _reaction_identity(self, v, m):
+        c = self.db.execute("SELECT platform, external_id, self_id FROM connections WHERE id = ?",
+                            (v["channel"]["connection_id"],)).fetchone()
+        return (*tuple(c), v["channel"]["native_id"], m["native_id"]) if c else None
+
+    def _reaction_target(self, key):
+        try:
+            v = inbox.thread_view(self.db, key[0], self.files)
+        except (ValueError, KeyError):
+            return None
+        if v["thread"].id != key[0] or v["channel"]["platform"] != "slack" or v["channel"]["connection_id"] != key[2]:
+            return None
+        m = next((m for m in v["messages"] if m["id"] == key[1] and not m["deleted"]), None)
+        if m is None or type(m.get("revision")) is not int:
+            return None
+        return m, self._reaction_identity(v, m)
+
+    def _reaction_state(self, key):
+        return self.reaction_states.setdefault(key, dict(generation=0, ready=False, pending=False, totals=None,
+                                                        groups=[], own={}, feedback="", write_outcome=None,
+                                                        write_feedback=""))
+
+    def reaction_view(self, v):
+        """Invalidate known edits/identity loss on repaint, without reading Slack."""
+        for m in v["messages"]:
+            key = (v["thread"].id, m["id"], v["channel"]["connection_id"])
+            lost = [s for k, s in self.reaction_states.items() if k[1] == m["id"] and k != key
+                    and s["write_outcome"] == "unknown"]
+            if lost:
+                self._reaction_state(key).update(ready=False, totals="unavailable", blocked=True,
+                                                 feedback="Outcome unknown — original target unavailable")
+                continue
+            state = self.reaction_states.get(key)
+            if state and (m["deleted"] or state.get("identity") != self._reaction_identity(v, m)
+                          or state.get("revision") != m.get("revision")):
+                state.update(ready=False, totals="unavailable")
+                if state["write_outcome"] != "confirmed":
+                    lost_identity = state.get("identity") != self._reaction_identity(v, m)
+                    state["feedback"] = ("Outcome unknown — original target unavailable" if
+                                         state["write_outcome"] == "unknown" and (m["deleted"] or lost_identity) else
+                                         "Original reaction target unavailable" if m["deleted"] or lost_identity else
+                                         "Message changed — review")
+        return self.reaction_states
+
+    def _reaction_repaint(self, *, preserve_viewport=True, target=None):
+        scope = self.reaction_scope()
+        if target is not None and (scope is None or scope[0]["thread"].id != target[0]):
+            preserve_viewport = False
+        scroller, y = (scope[2], scope[2].scroll_y) if scope and preserve_viewport else (None, None)
+        owner, generation = self._reaction_current_owner(), self._reaction_viewport_generation
+        if scroller is not None:
+            scroller.pinned = False
+        self.repaint_messages()
+        if scroller is not None:
+            def restore():
+                if (scroller.is_attached and self._reaction_current_owner() == owner
+                        and self._reaction_viewport_generation == generation):
+                    scroller.scroll_to(y=y, animate=False, immediate=True)
+            self.call_after_refresh(restore)
+        self.main.query_one(StatusLine).refresh_line()
+
+    def leave_react(self, repaint=True):
+        self.react_mode, self.react_target, self.react_revision = False, None, None
+        if repaint:
+            self._reaction_repaint()
+
+    def reaction_owner_changed(self, thread_id=None):
+        self._reaction_viewport_generation += 1
+        owner = (id(self.main.page), thread_id) if thread_id is not None else None
+        if self._reaction_display_owner != owner:
+            self._reaction_display_owner = owner
+            self._reaction_owner = None
+            self._reaction_reads = [j for j in self._reaction_reads if j["owner"] is None]
+            if self._reaction_timer is not None:
+                self._reaction_timer.stop()
+                self._reaction_timer = None
+        if self.react_mode and (self.react_target is None or self.react_target[0] != thread_id):
+            self.leave_react(repaint=False)
+
+    def schedule_reaction_snapshot(self, thread_id, *, force=False):
+        """One settled user activation; internal paints/replica refreshes never call this."""
+        if self.reactions is None or thread_id is None:
+            return
+        if self._reaction_timer is not None:
+            self._reaction_timer.stop()
+        page = self.main.page
+        self._reaction_timer = self.set_timer(
+            PREVIEW_GAP, lambda: self._reaction_snapshot(page, thread_id, force))
+
+    def _reaction_snapshot(self, page, thread_id, force):
+        self._reaction_timer = None
+        scope = self.reaction_scope()
+        if page is not self.main.page or scope is None or scope[0]["thread"].id != thread_id:
+            return
+        owner = (id(page), thread_id)
+        if self._reaction_owner == owner and not force:
+            return
+        self._reaction_owner = owner
+        self._reaction_reads = [j for j in self._reaction_reads if j["owner"] in (None, owner)]
+        v = scope[0]
+        if v["channel"]["platform"] == "slack":
+            for m in v["messages"]:
+                if not m["deleted"]:
+                    self._reaction_read((thread_id, m["id"], v["channel"]["connection_id"]), owner=owner)
+            self._reaction_repaint(preserve_viewport=False)
+
+    def _reaction_candidates(self):
+        scope = self.reaction_scope()
+        if scope is None or scope[0]["channel"]["platform"] != "slack":
+            return [], []
+        v, container, scroller = scope
+        eligible = {m["id"] for m in v["messages"] if not m["deleted"]}
+        widgets = [w for w in container.query(".mrow.open") if getattr(w, "reaction_key", (None, None))[1] in eligible]
+        visible = [w for w in widgets if w.region.overlaps(scroller.scrollable_content_region)]
+        return widgets, visible
+
+    def enter_react(self):
+        if self.screen is not self.main or isinstance(self.focused, (Input, TextArea)):
+            return
+        scope = self.reaction_scope()
+        if scope is None:
+            return
+        self.react_mode, self.react_target = True, None
+        owner, generation = self._reaction_current_owner(), self._reaction_viewport_generation
+        # A source completion may be remounting message widgets. Resolve visibility after layout, not
+        # from zero-sized replacements; React already owns early keys, so no gesture is buffered.
+        self.call_after_refresh(lambda: self._enter_react_target(owner, generation))
+        self.main.query_one(StatusLine).refresh_line()
+
+    def _enter_react_target(self, owner, generation):
+        if (not self.react_mode or self.react_target is not None or owner != self._reaction_current_owner()
+                or generation != self._reaction_viewport_generation):
+            return
+        scope = self.reaction_scope()
+        if scope is None:
+            return
+        widgets, visible = self._reaction_candidates()
+        last = self.last_opened_message.get(scope[0]["thread"].id)
+        chosen = next((w for w in visible if w.reaction_key[1] == last), None)
+        chosen = chosen or (visible[-1] if visible else None)
+        if chosen is not None:
+            self._reaction_select(chosen.reaction_key)
+        else:
+            self.notify("No open Slack message visible · j/k to select." if widgets else "Expand a Slack message first.")
+            self._reaction_repaint()
+
+    def _reaction_select(self, key, *, recovery=False):
+        self.react_target = key
+        target = self._reaction_target(key)
+        self.react_revision = target[0]["revision"] if target else None
+        self._reaction_read(key, check=True, recovery=recovery)
+        self._reaction_repaint()
+
+    def _reaction_key(self, key, event_at=None):
+        if not self.react_mode:
+            return False
+        scope = self.reaction_scope()
+        if self.screen is not self.main or isinstance(self.focused, (Input, TextArea)) or scope is None:
+            self.leave_react()
+            return False
+        if self.react_target is not None and scope[0]["thread"].id != self.react_target[0]:
+            self.leave_react()
+            return False
+        if key == "escape":
+            self.leave_react()
+        elif key in ("j", "k", "down", "up"):
+            widgets, _ = self._reaction_candidates()
+            if widgets:
+                keys = [w.reaction_key for w in widgets]
+                delta = 1 if key in ("j", "down") else -1
+                index = keys.index(self.react_target) if self.react_target in keys else (-1 if delta > 0 else len(keys))
+                selected = widgets[max(0, min(index + delta, len(widgets) - 1))]
+                if selected.reaction_key != self.react_target:
+                    self._reaction_select(selected.reaction_key, recovery=True)
+                    wanted = selected.reaction_key
+                    def reveal():
+                        current = self.reaction_scope()
+                        if current and self.react_target == wanted:
+                            w = next((w for w in current[1].query(".mrow.open") if w.reaction_key == wanted), None)
+                            if w:
+                                current[2].scroll_to_widget(w, animate=False)
+                    self.call_after_refresh(reveal)
+        elif key in ("1", "2", "3"):
+            self._reaction_choose(int(key) - 1, event_at=event_at)
+        elif key == "c":
+            if self.react_target is not None:
+                self._reaction_select(self.react_target, recovery=True)
+        elif key == "o":
+            target = self._reaction_target(self.react_target) if self.react_target else None
+            link = target[0].get("link") if target else None
+            self.notify(f"[link='{render.target(link)}']{escape(link)}[/link]" if link else
+                        "Original reaction target unavailable")
+        else:
+            return False
+        return True
+
+    def _reaction_read(self, key, *, check=False, recovery=False, owner=None):
+        state, target = self._reaction_state(key), self._reaction_target(key)
+        if state["pending"]:
+            return
+        if state.get("blocked") or target is None or (
+                state.get("identity") is not None and state["identity"] != target[1]):
+            state.update(ready=False, totals="unavailable")
+            if state["write_outcome"] != "confirmed":
+                state["feedback"] = "Original reaction target unavailable"
+            return
+        m, identity = target
+        state.update(ready=False, totals="checking")
+        if check and state["write_outcome"] != "unknown":
+            state["feedback"] = "Checking reactions…"
+        for job in ([self._reaction_read_active] if self._reaction_read_active else []) + self._reaction_reads:
+            if job["key"] == key and job["revision"] == m["revision"] and job["generation"] == state["generation"]:
+                job["check"] |= check
+                job["recovery"] |= recovery
+                if check:
+                    job["owner"] = None
+                return
+        state["generation"] += 1
+        state.update(revision=m["revision"], identity=identity)
+        job = dict(key=key, revision=m["revision"], identity=identity, generation=state["generation"],
+                   check=check, recovery=recovery, owner=owner)
+        if check or owner is None:
+            self._reaction_reads.insert(0, job)
+        else:
+            self._reaction_reads.append(job)
+        self._reaction_next_read()
+
+    def _reaction_current_owner(self):
+        scope = self.reaction_scope()
+        return (id(self.main.page), scope[0]["thread"].id) if scope else None
+
+    def _reaction_next_read(self):
+        if self._reaction_read_active is not None or self._console_stopping or self._console_closed:
+            return
+        while self._reaction_reads:
+            job = self._reaction_reads.pop(0)
+            if job["owner"] is not None and job["owner"] != self._reaction_current_owner():
+                continue
+            if self._reaction_state(job["key"])["generation"] != job["generation"]:
+                continue
+            self._reaction_read_active = job
+            self._reaction_fetch(job)
+            break
+
+    def _reaction_call(self, payload):
+        changing = payload["op"] != "read"
+        if self.reactions is None or getattr(self, "outdated", False) or (self.remote is not None and not self.remote.online):
+            return {"outcome": "unavailable", "error": "Reactions unavailable · Connection offline or update required."}
+        try:
+            return self.reactions(payload)
+        except ReplyError as e:
+            return {"outcome": "unknown" if changing and e.status != 503 else "unavailable",
+                    "error": "Reaction service unavailable."}
+        except Exception:  # source/relay exceptions contain no safe result proof
+            return {"outcome": "unknown" if changing else "unavailable", "error": "Reaction service unavailable."}
+
+    @work(thread=True)
+    def _reaction_fetch(self, job):
+        tid, mid, cid = job["key"]
+        result = self._reaction_call(dict(op="read", thread_id=tid, message_id=mid, connection_id=cid))
+        self.call_from_thread(self._reaction_read_done, job, result)
+
+    def _reaction_echo(self, result, job):
+        return isinstance(result, dict) and all(type(result.get(field)) is int and result[field] == value
+                                               for field, value in zip(("thread_id", "message_id", "connection_id"),
+                                                                       job["key"]))
+
+    def _reaction_read_done(self, job, result):
+        if self._reaction_read_active is job:
+            self._reaction_read_active = None
+        state = self._reaction_state(job["key"])
+        current = (state["generation"] == job["generation"] and
+                   (job["owner"] is None or job["owner"] == self._reaction_current_owner()))
+        if current:
+            target = self._reaction_target(job["key"])
+            groups = result.get("groups") if isinstance(result, dict) else None
+            valid = (self._reaction_echo(result, job) and result.get("outcome") == "ready"
+                     and type(result.get("revision")) is int and result["revision"] == job["revision"]
+                     and isinstance(groups, list) and all(
+                         isinstance(g, dict) and isinstance(g.get("name"), str) and g["name"]
+                         and type(g.get("count")) is int and g["count"] >= 0 and type(g.get("mine")) is bool
+                         for g in groups) and len({g["name"] for g in groups}) == len(groups))
+            unchanged = target and target[0]["revision"] == job["revision"] and target[1] == job["identity"]
+            changed = (not unchanged or (isinstance(result, dict) and (
+                result.get("outcome") == "review_required" or
+                (self._reaction_echo(result, job) and result.get("outcome") == "ready"
+                 and type(result.get("revision")) is int and result["revision"] != job["revision"]))))
+            if valid and unchanged and (state["write_outcome"] != "unknown" or job["recovery"]):
+                state.update(groups=groups, own={g["name"]: g["mine"] for g in groups}, totals="ready",
+                             ready=job["check"])
+                state["ready_at"] = Message().time  # same clock as events.Key.time, including already-forwarded keys
+                if state["write_outcome"] == "unknown":
+                    state.update(write_outcome=None, feedback="Current reactions checked")
+                else:
+                    state["feedback"] = state["write_feedback"] if state["write_outcome"] == "confirmed" else ""
+            else:
+                state.update(ready=False, totals="unavailable")
+                if state["write_outcome"] not in ("confirmed", "unknown"):
+                    reason = result.get("error", "Service unavailable") if isinstance(result, dict) else "Service unavailable"
+                    state["feedback"] = "Message changed — review" if changed else f"Couldn’t check reactions · {reason}"
+                elif state["write_outcome"] == "confirmed":
+                    state["feedback"] = state["write_feedback"] + (" · Message changed — review" if changed else "")
+                elif changed:
+                    state["feedback"] = "Outcome unknown · Message changed — review"
+                # A source limitation stops this snapshot batch; unqueried messages stay unavailable, never zero.
+                if job["owner"] is not None and not valid:
+                    remaining = [j for j in self._reaction_reads if j["owner"] == job["owner"]]
+                    self._reaction_reads = [j for j in self._reaction_reads if j not in remaining]
+                    for skipped in remaining:
+                        self._reaction_state(skipped["key"]).update(
+                            ready=False, totals="unavailable", feedback="Couldn’t check reactions · f5 to refresh")
+            self._reaction_repaint(preserve_viewport=job["owner"] is None, target=job["key"])
+        self._reaction_next_read()
+
+    def _reaction_choose(self, index, *, event_at=None):
+        key = self.react_target
+        if key is None:
+            return
+        state, target = self._reaction_state(key), self._reaction_target(key)
+        if state["pending"] or not state["ready"]:
+            return
+        if event_at is not None and event_at <= state.get("ready_at", float("inf")):
+            return  # Created while checking: discard, even if a source callback won the event-queue race.
+        widgets, _ = self._reaction_candidates()
+        if key not in [w.reaction_key for w in widgets]:
+            self.leave_react()
+            return
+        if target is None or target[1] != state.get("identity") or target[0]["revision"] != self.react_revision:
+            state.update(ready=False, totals="unavailable", feedback="Message changed — review")
+            self._reaction_repaint()
+            return
+        if self.reactions is None or getattr(self, "outdated", False) or (self.remote is not None and not self.remote.online):
+            state.update(ready=False, feedback="Reactions unavailable · Connection offline or update required.")
+            self._reaction_repaint()
+            return
+        name, emoji, _ = REACTION_CHOICES[index]
+        op = "remove" if state["own"].get(name, False) else "add"
+        state["generation"] += 1
+        state.update(ready=False, pending=True, feedback=f"{'Removing' if op == 'remove' else 'Adding'} {emoji}…")
+        job = dict(key=key, revision=self.react_revision, generation=state["generation"], op=op, name=name)
+        self.leave_react()
+        self._reaction_change(job)
+
+    @work(thread=True)
+    def _reaction_change(self, job):
+        tid, mid, cid = job["key"]
+        result = self._reaction_call(dict(op=job["op"], name=job["name"], expected_revision=job["revision"],
+                                         thread_id=tid, message_id=mid, connection_id=cid))
+        self.call_from_thread(self._reaction_change_done, job, result)
+
+    def _reaction_change_done(self, job, result):
+        state = self._reaction_state(job["key"])
+        if state["generation"] != job["generation"]:
+            return
+        state["pending"] = False
+        confirmed = (self._reaction_echo(result, job) and result.get("outcome") == "confirmed"
+                     and result.get("op") == job["op"] and result.get("name") == job["name"]
+                     and type(result.get("revision")) is int and result["revision"] == job["revision"]
+                     and type(result.get("mine")) is bool and result["mine"] == (job["op"] == "add")
+                     and type(result.get("changed")) is bool)
+        if confirmed:
+            state["own"][job["name"]] = result["mine"]
+            verb = "Added" if result["mine"] else "Removed"
+            state.update(write_outcome="confirmed", totals="checking",
+                         feedback=f"{verb if result['changed'] else 'Already ' + verb.lower()} {REACTION_GLYPHS[job['name']]}")
+            state["write_feedback"] = state["feedback"]
+            self._reaction_read(job["key"])
+        else:
+            outcome = result.get("outcome") if isinstance(result, dict) else None
+            if isinstance(result, dict) and any(
+                    field in result and (type(result[field]) is not int or result[field] != value)
+                    for field, value in zip(("thread_id", "message_id", "connection_id"), job["key"])):
+                outcome = "unknown"
+            if outcome not in ("refused", "unavailable", "review_required"):
+                state.update(write_outcome="unknown", ready=False, totals="unavailable",
+                             feedback="Outcome unknown — use React to check")
+            else:
+                verb = "Not added" if job["op"] == "add" else "Not removed"
+                feedback = "Message changed — review" if outcome == "review_required" else (
+                    f"{verb} · {result.get('error', 'Reactions unavailable')}")
+                state.update(write_outcome=outcome, ready=False, feedback=feedback)
+        self._reaction_repaint(target=job["key"])
+
     # Mouse: markup links ([@click=app.…]) and the rail, tables, menus, and footer keys are all clickable.
     def message_state(self, thread_id: int) -> dict:
         tid = inbox.get_thread(self.db, thread_id).id
@@ -6663,6 +7213,13 @@ class Console(App):
         now_open = native_id in st["open"] or (native_id in opened and native_id not in st["closed"])
         st["open"].discard(native_id), st["closed"].discard(native_id)
         (st["closed"] if now_open else st["open"]).add(native_id)
+        if not now_open:
+            m = next((m for m in v["messages"] if m["native_id"] == native_id), None)
+            if m and v["channel"]["platform"] == "slack" and not m["deleted"]:
+                self.last_opened_message[v["thread"].id] = m["id"]
+        elif self.react_target is not None and self.react_target[:2] == (
+                v["thread"].id, next(m["id"] for m in v["messages"] if m["native_id"] == native_id)):
+            self.leave_react(repaint=False)
         self.repaint_messages()
 
     def action_msg_trim(self, thread_id, i):
@@ -6688,6 +7245,8 @@ class Console(App):
         st = self.message_state(tid)
         st["open"], st["closed"] = (ids, set()) if expand else (set(), ids)
         st["lines"] = expand
+        if not expand:
+            self.leave_react(repaint=False)
         self.repaint_messages()
 
     def action_status_tab(self, i):
@@ -6796,7 +7355,8 @@ class Console(App):
         """The service runs another build: quit with UPDATE_EXIT, so deploy/comms-terminal-local installs that build
         and reopens, once no write is on its way and no reply text would be lost."""
         saved = not self.is_screen_installed("main") or self.main.save_draft()  # at mount, nothing is typed yet
-        if self.remote is None or not self.remote.idle.is_set() or not saved or self.drafts.__dict__.get("held"):
+        if (self.remote is None or not self.remote.idle.is_set() or not saved or self.drafts.__dict__.get("held")
+                or any(state["pending"] for state in self.reaction_states.values())):
             return
         self.exit(return_code=UPDATE_EXIT)
 

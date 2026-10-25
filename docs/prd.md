@@ -17,6 +17,7 @@
   - Plain behavior evidence: Plain docs and GraphQL schema, read 2026-10-10 (cited in §9).
 - **Implementation authorization**: Phase 0 (done) and the BDD setup. Phases 1–6, external accounts, DNS changes, and installing services each need separate explicit approval. Connecting real accounts is Jeremy's own step after the build (FR-1).
 - **History limits**: Built from the full 2026-10-10 session plus the artifacts above. Exact times exist only for observed clock readings or file modification times.
+- **Emoji reactions, 2026-10-25**: local implementation is authorized and **in progress; integrated behavior and rendered states are not yet verified**. Six accepted synthetic design previews establish their visual design only. Actual Slack grants/access, exact live actions, failure-state visual acceptance, the five-opportunity user trial, and release/deployment remain separate gates.
 
 ## 2. Executive framing
 
@@ -186,7 +187,11 @@ Status key in brackets:
   - [D] I Ignore; C add to Case. Reason: Plain ignores through status changes and workflows, and has no Case.
   - [D] Enter opens the Thread in the console; O shows a Ctrl-clickable link to it in Gmail or Slack. Reason: reading full context in the native app; Attachments open from their chips (#130). Other console keys: `docs/design/console.md` §4.
 - **FR-14b** [C]: **Today** is where the console opens: one page stacking Todo Threads (grouped by Case), Due Tasks, and the Drafts not shown through them (Today (`inbox.today`) lists a Task's Draft only through its due Task, and a reply Draft only when its Thread is not Todo). Key `1` opens it. Requirements FR-T1–16 and acceptance scenarios AS-T1–10 are in the Today PRD (`.agents/prd/2026-10-17-today-view.md`).
-- **FR-15** [C]: The console sends only replies Jeremy writes. It never edits, deletes, archives, or marks read anything in Gmail or Slack.
+- **FR-15** [C]: The console sends replies Jeremy writes. The narrow Slack-reaction exception permits only Jeremy's explicit add/remove of his own reaction on one captured source message through its intended Connection. It never edits or deletes messages, archives conversations, or changes Gmail/Slack read markers. Automated or agent-initiated reactions and changes to other people's reactions remain prohibited.
+- **FR-R** [C]: Keyboard-only Slack acknowledgements use temporary React mode on an expanded captured message in the active Thread or selected Case Thread card: `v`, bounded `j/k` or arrow selection, then ready `1/2/3` for Like, Thanks, or Looking. Checked choices represent Jeremy's membership only; activating one removes only his membership. Entry and Esc may read state but perform zero mutations; checking consumes early digits without buffering or page navigation. One explicit ready choice sends once and returns to reading with message-bound feedback.
+  - Normal reading shows all existing reaction-group totals, including other participants, with own membership marked separately. Snapshots load on initial Thread display, settled user-driven Thread selection, explicit reopen/F5, and the affected message after a confirmed own change. Fresh own-state checks on React entry/selection remain required. Internal repaint, resize, timers, replica sync, and unselected Case cards add no reaction reads; this preserves event-driven message completeness (#66).
+  - Unavailable reads, definitive refusals, unknown writes, and review-required edits remain distinct. Recovery checks the original message/Connection read-only; a successful read proves current membership, not which request caused it. Count-refresh failure preserves a confirmed write and exposes unavailable/stale totals. No automatic retry, queued key, optimistic provider queue, reaction Activity, schema migration, or Status/Case/Task/Enrollment change.
+  - Settled interfaces and validation: `docs/design/api-and-database.md` § Slack reaction interface. Keys, snapshots and recovery: `docs/design/console.md` § Slack reactions. Source declarations and separate live gates: `docs/runbook.md` § Slack reaction access and recovery. Implementation remains in progress pending parent-recorded proof.
 
 ### Sequences
 
@@ -199,6 +204,7 @@ Status key in brackets:
 ### Non-functional
 
 - **NFR-1** [PL]: **Completeness** relies on event delivery, as in Plain (decisions #55, #66). Reference-based reconciliation repairs stored Thread membership; it does not establish source completeness. See R7 and R12.
+  - Explicit snapshots of reactions on captured Slack messages provide bounded item state; they add no message reconciliation, polling, backfill, or reaction-event subscription.
 - **NFR-2** [C / P]: **Sync health.**
   - Slack: Broken when Slack reports the token revoked or the app uninstalled (`tokens_revoked`, `app_uninstalled` events), or a reply fails to post.
   - Email: Broken on an inbound request that fails verification or a send failure.
@@ -255,6 +261,7 @@ Executable form: `features/<domain>.feature` (Gherkin via pytest-bdd), each scen
 - **FR-2, FR-2a, FR-4b, FR-6–FR-8, FR-10–FR-12, I-1..I-6, AS-2, AS-4..AS-7, AS-12..AS-14, AS-16, AS-20**: steps 1.2–1.4 → `features/threads.feature`, `people.feature`, `organizations.feature`, `cases.feature`, and the Ingest scenarios in `email.feature` and `slack.feature`.
 - **FR-1, FR-3–FR-3b, FR-5, AS-3, AS-11, AS-19**: steps 2.1–2.2 → `features/email.feature`.
 - **FR-1, FR-4, FR-4a, FR-4c, AS-15, AS-17**: steps 3.1–3.4 → `features/slack.feature`.
+- **FR-R, narrow FR-15 exception; AS-R-01–15**: local reaction implementation/verification in progress → fake-provider and private-route coverage, Thread/Case keyboard tests, Slack-domain acceptance scenarios, and exact OAuth-scope assertions. Acceptance interface titles: **Slack Identity**, **Slack Reaction Snapshot**, **Slack Reaction Change**, **Slack Reactions** (`docs/design/api-and-database.md`). Actual runtime/rendered proof remains pending; synthetic previews do not establish implemented behavior. **AS-R-16** is Jeremy's separately authorized five-opportunity live trial.
 - **NFR-2, AS-8**: step 4.1 → `features/sync.feature`.
 - **FR-13, FR-14**: steps 5.1–5.5 → console tests; build demo in step 6.3 on synthetic data.
 - **FR-13c**: decision #125 → `tests/test_linear.py`, `tests/test_linear_service.py`, and `tests/test_linear_console.py`; synthetic provider, actual private Unix route, matching/cache, and rendered page checks. See the [local implementation evidence](design/linear-context.md#local-implementation-evidence--2026-10-15) for results and regression-suite limitations. Live connection evidence is in the [connection receipt](design/linear-context.md#connection-receipt--2026-10-16).

@@ -6,6 +6,10 @@ Feature: Slack
   one-to-one ingestion mode, #115); otherwise Ingest (inbox.ingest) groups a conversation's messages into one Thread
   until it has been quiet for 24 hours, whoever sent them (decision #126). The Slack Sender (slack.SlackSender)
   posts replies inside the Slack thread.
+  Slack Identity (slack.SlackClient.identity) verifies the connected workspace and user.
+  Slack Reaction Snapshot (slack.SlackClient.reaction_snapshot) reads source totals and own membership.
+  Slack Reaction Change (slack.SlackSender.change_reaction) adds or removes only own membership.
+  Slack Reactions (serve.handle_slack_reactions) binds those operations to one captured source message.
 
   @AS-13 @FR-4a @FR-4b
   Scenario: Ingest groups a Slack DM into one Thread until it has been quiet for 24 hours
@@ -59,3 +63,26 @@ Feature: Slack
     Then the response is 401
     And no Activity or Thread is created
     And the Slack Connection has a Last Error
+
+  @AS-R-08 @FR-R-10 @FR-R-18 @I-R-02
+  Scenario: Slack Reaction Snapshot keeps source totals separate from own membership
+    Given a captured Slack source message with verified Slack Identity
+    And Slack reports reaction "+1" with total 7 and users "U0OTHER,U0JEREMY"
+    When Slack Reactions reads that source message
+    Then Slack Reaction Snapshot has reaction "+1" with total 7 and own membership
+    And Slack Reactions leaves all stored records unchanged
+
+  @AS-R-01 @FR-R-01 @FR-R-17 @FR-R-18 @I-R-01
+  Scenario: Slack Reactions changes only the captured reply
+    Given a captured Slack source message with verified Slack Identity
+    When Slack Reactions adds "eyes" to that source message
+    Then Slack Reaction Change confirms own membership on that exact source message
+    And Slack Reactions leaves all stored records unchanged
+
+  @AS-R-14 @FR-R-18 @NFR-R-01 @I-R-01
+  Scenario: Slack Reactions refuses a different authenticated workspace
+    Given a captured Slack source message with verified Slack Identity
+    And Slack Identity belongs to another workspace
+    When Slack Reactions adds "eyes" to that source message
+    Then Slack Reactions refuses the change without a Slack Reaction Change
+    And Slack Reactions leaves all stored records unchanged

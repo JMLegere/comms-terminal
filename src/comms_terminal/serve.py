@@ -135,6 +135,7 @@ class Senders:
 
     def __init__(self, shared: dict | None = None, made: dict | None = None):
         self.shared, self.made = shared or {}, dict(made or {})
+        self._reaction_lock, self._reaction_pending = threading.Lock(), set()
 
     def get(self, connection):
         if connection["id"] not in self.made:
@@ -246,6 +247,134 @@ def handle_slack_conversations(db, body: bytes, senders: Senders) -> tuple[int, 
         return 502, {"error": str(e)}
 
 
+def _slack_reaction_target(db, req):
+    """Resolve only this captured original Message; never choose a default, parent, or newest message."""
+    view = inbox.thread_view(db, req["thread_id"])
+    ch = view["channel"]
+    if ch["platform"] != "slack" or ch["connection_id"] != req["connection_id"]:
+        raise ValueError("Slack message does not belong to this Connection")
+    message = next((m for m in view["messages"] if m["id"] == req["message_id"]), None)
+    if message is None:
+        raise ValueError("Captured Slack message is unavailable in this Thread")
+    connection = db.execute("SELECT * FROM connections WHERE id = ?", (req["connection_id"],)).fetchone()
+    data = message["data"]
+    channel, ts = data.get("channel"), data.get("ts")
+    if (connection is None or not isinstance(channel, str) or not re.fullmatch(r"[CDG][A-Z0-9]+", channel)
+            or not isinstance(ts, str) or not re.fullmatch(r"[0-9]+\.[0-9]+", ts)
+            or channel != ch["native_id"] or message["native_id"] != f"{channel}:{ts}"
+            or ch["kind"] not in ("channel", "private", "im", "mpim")
+            or ("kind" in data and data["kind"] != ch["kind"])):
+        raise ValueError("Captured Slack source identifiers are unavailable or inconsistent")
+    return dict(connection), message, channel, ts
+
+
+def handle_slack_reactions(db, body: bytes, senders: Senders) -> tuple[int, dict]:
+    """Private Slack Reactions: strict captured-target read/add/remove; no ledger or health writes."""
+    def unique(pairs):
+        result = dict(pairs)
+        if len(result) != len(pairs):
+            raise ValueError("duplicate fields")
+        return result
+
+    def failure(status, outcome, error, target=None):
+        return status, {"outcome": outcome, "error": error, **(target or {})}
+
+    try:
+        req = json.loads(body, object_pairs_hook=unique)
+        if not isinstance(req, dict) or req.get("op") not in ("read", "add", "remove"):
+            raise ValueError
+        fields = {"op", "thread_id", "message_id", "connection_id"}
+        if req["op"] != "read":
+            fields |= {"name", "expected_revision"}
+        ids = fields - {"op", "name"}
+        if (set(req) != fields or any(type(req[k]) is not int or not 0 < req[k] <= 2**63 - 1 for k in ids)
+                or (req["op"] != "read" and (not isinstance(req["name"], str)
+                                             or req["name"] not in slack.REACTION_NAMES))):
+            raise ValueError
+    except (ValueError, TypeError):
+        return failure(400, "refused", "Expected an explicit Slack reaction operation and positive captured IDs")
+
+    try:
+        connection, message, channel, ts = _slack_reaction_target(db, req)
+    except (AttributeError, KeyError, ValueError, TypeError):
+        return failure(400, "refused", "Captured Slack message, Thread, or Connection is unavailable or mismatched")
+    target = {key: req[key] for key in ("thread_id", "message_id", "connection_id")}
+    target["revision"] = message["revision"]
+    if message["deleted"]:
+        return failure(400, "refused", "Slack message was deleted", target)
+    if req["op"] != "read" and req["expected_revision"] != message["revision"]:
+        return failure(409, "review_required", "Message changed — review", target)
+    try:
+        sender = senders.get(connection)
+        if sender is None:
+            return failure(503, "unavailable", "Slack reactions are not connected", target)
+        token = sender.token
+        client = sender.client or slack.SlackClient(sender.token, get=sender.get)
+        if client.token != token:
+            return failure(502, "refused", "Slack read and change identities do not match", target)
+        identity = client.identity()
+    except slack.ReactionUnavailable as error:
+        return failure(503, "unavailable", str(error), target)
+    except Exception:  # no provider request or exception text is exposed
+        return failure(503, "unavailable", "Slack user identity could not be checked", target)
+    if identity != {"team_id": connection["external_id"], "user_id": connection["self_id"]}:
+        return failure(502, "refused", "Slack user or workspace does not match this Connection", target)
+
+    def recheck():
+        try:
+            current, msg, current_channel, current_ts = _slack_reaction_target(db, req)
+        except (AttributeError, KeyError, ValueError, TypeError):
+            return failure(400, "refused", "Original captured Slack target is no longer available", target)
+        if sender.token != token or client.token != token:
+            return failure(502, "refused", "Original Slack authentication changed; check again", target)
+        if ((current["external_id"], current["self_id"], current_channel, current_ts)
+                != (connection["external_id"], connection["self_id"], channel, ts)):
+            return failure(502, "refused", "Original Slack target or Connection identity changed", target)
+        if msg["deleted"]:
+            return failure(400, "refused", "Slack message was deleted", {**target, "revision": msg["revision"]})
+        if msg["revision"] != message["revision"]:
+            return failure(409, "review_required", "Message changed — review", {**target, "revision": msg["revision"]})
+        return None
+
+    checked = recheck()  # auth/query latency must not open a known edit/delete/Connection race
+    if checked:
+        return checked
+    if req["op"] == "read":
+        try:
+            groups = client.reaction_snapshot(channel, ts, connection["self_id"])
+        except slack.ReactionUnavailable as error:
+            return failure(503, "unavailable", str(error), target)
+        except Exception:
+            return failure(503, "unavailable", "Slack reactions could not be checked", target)
+        checked = recheck()
+        return checked if checked else (200, {"outcome": "ready", **target, "groups": groups})
+    key = (connection["id"], message["id"])
+    with senders._reaction_lock:
+        if key in senders._reaction_pending:
+            return failure(503, "unavailable", "Slack reaction change is already in progress; check again afterward", target)
+        senders._reaction_pending.add(key)
+    try:
+        checked = recheck()
+        if checked:
+            return checked
+        try:
+            result = sender.change_reaction(channel, ts, req["name"], req["op"])
+            if (not isinstance(result, dict) or type(result.get("changed")) is not bool
+                    or result.get("mine") is not (req["op"] == "add")):
+                raise inbox.SendUnknown("Slack reaction outcome unknown; check the original source message")
+        except inbox.SendUnknown:
+            return failure(504, "unknown", "Slack reaction outcome unknown; check the original source message", target)
+        except inbox.SendFailed as error:
+            return failure(502, "refused", str(error), target)
+        except Exception:  # the change may have reached Slack; never resend
+            return failure(504, "unknown", "Slack reaction outcome unknown; check the original source message", target)
+        return 200, {"outcome": "confirmed", **target, "op": req["op"], "name": req["name"],
+                     "mine": result["mine"], "changed": result["changed"]}
+    finally:
+        with senders._reaction_lock:
+            senders._reaction_pending.discard(key)
+
+
 RESEND_MAX = 64 * 1024
 RESEND_TIMEOUT = 5  # total body-read deadline, not a fresh timeout per chunk
 
@@ -347,6 +476,7 @@ class UnixHTTPServer(socketserver.ThreadingUnixStreamServer):
 
 def reply_server(db_path: str, socket_path: str, senders: Senders, contexts: dict | None = None) -> UnixHTTPServer:
     """The local socket: POST /reply, POST /send-draft, POST /slack-conversations, and POST /<source> for each Context source in `contexts` ({"tana": …})."""
+    # Reactions are a provider operation, not a remote /call ledger write.
     contexts = contexts or {}
     def reply(headers, body):
         db = inbox.connect(db_path)
@@ -368,6 +498,14 @@ def reply_server(db_path: str, socket_path: str, senders: Senders, contexts: dic
         db = inbox.connect(db_path)
         try:
             status, out = handle_slack_conversations(db, body, senders)
+        finally:
+            db.close()
+        return status, "application/json", json.dumps(out).encode()
+
+    def slack_reactions(headers, body):
+        db = inbox.connect(db_path)
+        try:
+            status, out = handle_slack_reactions(db, body, senders)
         finally:
             db.close()
         return status, "application/json", json.dumps(out).encode()
@@ -405,6 +543,7 @@ def reply_server(db_path: str, socket_path: str, senders: Senders, contexts: dic
     try:
         return UnixHTTPServer(socket_path, _handler({"/reply": reply, "/send-draft": send_draft,
                                                          "/slack-conversations": slack_conversations, "/attio-people": attio_people, "/tana": context_route("tana"), "/attio": context_route("attio"), "/linear": linear_route,
+                                                         "/slack-reactions": slack_reactions,
                                                          "/call": json_route(lambda b: remote.handle_call(db_path, b)),
                                                          "/sync": json_route(lambda b: remote.handle_sync(db_path, changes, b)),
                                                          "/raw": json_route(lambda b: remote.handle_raw(db_path, b))}))

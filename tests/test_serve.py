@@ -626,3 +626,68 @@ def test_init_connects_each_gmail_address_with_its_own_inbound_address(tmp_path,
         ("gmail", "jeremy@agentmaple.com", "jeremy.agentmaple.com@inbox.agentmaple.com"),
         ("gmail", "jeremy@agentmaple.ai", "jeremy.agentmaple.ai@inbox.agentmaple.com")]
     assert "forward its mail to jeremy.agentmaple.ai@inbox.agentmaple.com" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("relay", [False, True])
+def test_private_slack_reactions_socket_and_command_relay_preserve_reply_route(tmp_path, relay):
+    import stat
+    import sys
+    from comms_terminal import remote, slack
+
+    path, tid = setup(tmp_path)
+    db = inbox.connect(path)
+    t = inbox.ingest(db, inbox.Incoming(2, "D0ANA", "im", "MESSAGE", "D0ANA:100.2",
+                     inbox.Identity("slack_user", "U0ANA"), datetime.now(timezone.utc), "Captured reply",
+                     data={"channel": "D0ANA", "ts": "100.2", "thread_ts": "100.1", "kind": "im"}))
+    message = next(m for m in inbox.thread_view(db, t.id)["messages"] if m["native_id"] == "D0ANA:100.2")
+    reads, writes = [], []
+
+    def get(url, token, params):
+        reads.append((url, params))
+        if url.endswith("auth.test"):
+            return {"ok": True, "team_id": "T0", "user_id": "U0JEREMY"}
+        return {"ok": True, "type": "message", "channel": "D0ANA",
+                "message": {"type": "message", "ts": "100.2"}}
+
+    def post(url, token, payload):
+        writes.append((url, payload))
+        return {"ok": True, "ts": "101.0"}
+
+    sender = slack.SlackSender("fake", post=post, client=slack.SlackClient("fake", get=get))
+    sock = str(tmp_path / "reactions.sock")
+    server = serve.reply_server(path, sock, serve.Senders(made={2: sender}))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    route = [sys.executable, "-I", "-c", remote.RELAY.replace(repr(remote.SERVICE_SOCKET), repr(sock))] if relay else sock
+    request = {"op": "read", "thread_id": t.id, "message_id": message["id"], "connection_id": 2}
+    before = tuple(db.iterdump())
+    try:
+        assert stat.S_IMODE(__import__("os").stat(sock).st_mode) == 0o600
+        assert _post(route, "/slack-reactions", request) == (
+            200, {"outcome": "ready", **{k: request[k] for k in ("thread_id", "message_id", "connection_id")},
+                  "revision": message["revision"], "groups": []})
+        status, out = _post(route, "/slack-reactions", request | {
+            "op": "add", "name": "eyes", "expected_revision": message["revision"]})
+        assert status == 200 and out["outcome"] == "confirmed"
+        assert writes == [("https://slack.com/api/reactions.add", {"channel": "D0ANA", "timestamp": "100.2", "name": "eyes"})]
+        assert tuple(db.iterdump()) == before
+        assert _post(route, "/slack-reactions", request | {"name": None})[0] == 400
+        assert len(writes) == 1
+        assert socket_reply(route)(t.id, "Reply still works", [], [])["status_detail"] == "WAITING_FOR_CUSTOMER"
+        assert writes[-1][0].endswith("chat.postMessage")
+        assert writes[-1][1]["thread_ts"] == "100.1"
+    finally:
+        server.shutdown()
+        server.server_close()
+        db.close()
+
+
+def test_slack_reactions_is_not_a_public_hook_or_remote_ledger_call(tmp_path, monkeypatch):
+    from comms_terminal import remote
+    path, _ = setup(tmp_path)
+    monkeypatch.setattr(serve, "credential", lambda name: None)
+    public = serve.hooks_server(path, "127.0.0.1", 0, client=object())
+    try:
+        assert "/slack-reactions" not in public.RequestHandlerClass.routes
+        assert not any("reaction" in name for name in remote.CALLS)
+    finally:
+        public.server_close()

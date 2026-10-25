@@ -200,7 +200,7 @@ def test_run_adds_the_file_server_for_a_files_host(tmp_path, monkeypatch):
     monkeypatch.setattr(serve, "files_server", lambda *args: started.append(args) or server)
     monkeypatch.setattr(serve, "credential", lambda name: None)
     monkeypatch.setattr(serve, "threading", SimpleNamespace(
-        Event=threading.Event, Thread=lambda **kwargs: SimpleNamespace(start=lambda: None)))
+        Event=threading.Event, Lock=threading.Lock, Thread=lambda **kwargs: SimpleNamespace(start=lambda: None)))
 
     def interrupt(_):
         raise KeyboardInterrupt

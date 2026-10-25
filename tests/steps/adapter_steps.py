@@ -305,3 +305,77 @@ def probed_ago(ctx, minutes):
     with ctx.db:
         ctx.db.execute("UPDATE connections SET probe_error = NULL, probed_at = ? WHERE id = ?",
                        (at.isoformat(), ctx.conn))
+
+
+# --- Slack reactions (synthetic source only) --------------------------------
+
+@given("a captured Slack source message with verified Slack Identity")
+def captured_reaction_message(ctx):
+    event = slack_event("C0EXTACME", ts="1728700100.000200", thread_ts="1728700000.000100")
+    inc = slack.parse(event, connection(ctx, SLACK), [("prefix", "ext-")], FakeClient({"C0EXTACME": "ext-acme"}))
+    keep(ctx, inbox.ingest(ctx.db, inc))
+    message = inbox.thread_view(ctx.db, ctx.thread.id)["messages"][0]
+    ctx.reaction_auth = {"ok": True, "team_id": "T0AGENTMAPLE", "user_id": "U0JEREMY"}
+    ctx.reaction_snapshot = {"ok": True, "type": "message", "channel": "C0EXTACME",
+                             "message": {"type": "message", "ts": event["ts"], "reactions": []}}
+    ctx.reaction_posts = Recorder({"ok": True})
+
+    def get(url, token, params):
+        return ctx.reaction_auth if url.endswith("auth.test") else ctx.reaction_snapshot
+
+    sender = slack.SlackSender("xoxp-test", post=ctx.reaction_posts,
+                               client=slack.SlackClient("xoxp-test", get=get))
+    ctx.reaction_senders = serve.Senders(made={SLACK: sender})
+    ctx.reaction_request = {"op": "read", "thread_id": ctx.thread.id, "message_id": message["id"],
+                            "connection_id": SLACK}
+    ctx.reaction_revision = message["revision"]
+    ctx.reaction_before = tuple(ctx.db.iterdump())
+
+
+@given(parsers.parse('Slack reports reaction "{name}" with total {count:d} and users "{users}"'))
+def reported_reaction(ctx, name, count, users):
+    ctx.reaction_snapshot["message"]["reactions"] = [{"name": name, "count": count, "users": users.split(",")}]
+
+
+@given("Slack Identity belongs to another workspace")
+def different_reaction_workspace(ctx):
+    ctx.reaction_auth["team_id"] = "T0OTHER"
+
+
+@when("Slack Reactions reads that source message")
+def read_reactions(ctx):
+    ctx.status, ctx.reaction_result = serve.handle_slack_reactions(
+        ctx.db, json.dumps(ctx.reaction_request).encode(), ctx.reaction_senders)
+
+
+@when(parsers.parse('Slack Reactions adds "{name}" to that source message'))
+def add_reaction(ctx, name):
+    req = ctx.reaction_request | {"op": "add", "name": name, "expected_revision": ctx.reaction_revision}
+    ctx.status, ctx.reaction_result = serve.handle_slack_reactions(ctx.db, json.dumps(req).encode(), ctx.reaction_senders)
+
+
+@then(parsers.parse('Slack Reaction Snapshot has reaction "{name}" with total {count:d} and own membership'))
+def reaction_snapshot_total(ctx, name, count):
+    assert ctx.status == 200 and ctx.reaction_result["outcome"] == "ready"
+    assert ctx.reaction_result["groups"] == [{"name": name, "count": count, "mine": True}]
+    assert ctx.reaction_posts.calls == []
+
+
+@then("Slack Reaction Change confirms own membership on that exact source message")
+def reaction_confirmed(ctx):
+    assert ctx.status == 200 and ctx.reaction_result["outcome"] == "confirmed"
+    assert ctx.reaction_result["mine"] and ctx.reaction_result["changed"]
+    assert ctx.reaction_result["message_id"] == ctx.reaction_request["message_id"]
+    assert ctx.reaction_posts.calls == [("https://slack.com/api/reactions.add", "xoxp-test",
+                                         {"channel": "C0EXTACME", "timestamp": "1728700100.000200", "name": "eyes"})]
+
+
+@then("Slack Reactions refuses the change without a Slack Reaction Change")
+def reaction_refused(ctx):
+    assert ctx.status == 502 and ctx.reaction_result["outcome"] == "refused"
+    assert ctx.reaction_posts.calls == []
+
+
+@then("Slack Reactions leaves all stored records unchanged")
+def reactions_leave_records(ctx):
+    assert tuple(ctx.db.iterdump()) == ctx.reaction_before

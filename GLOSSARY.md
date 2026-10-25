@@ -29,6 +29,21 @@ Stored Threads matching an exact email or phone destination, whether or not it i
 A timestamped, never-rewritten record of a message received or sent in a Thread, a Phone call, a Meeting, or an edit or deletion of one.
 _Avoid_: Event, Interaction, Message (when meaning the record)
 
+**Acknowledgement**:
+A signal that a message was seen or appreciated, carrying no automatic work-completion meaning.
+
+**Source message**:
+The individual Slack message to which an acknowledgement belongs, including a reply.
+
+**Reaction**:
+An emoji associated with one source message and a reacting Slack identity.
+
+**Own reaction**:
+A reaction attributed to Jeremy’s identity for the relevant Connection.
+
+**Own-reaction state**:
+Jeremy’s current reaction memberships on a particular source message.
+
 **Audit entry**:
 A never-rewritten record that a Thread's Status or Case changed, when, and why: Jeremy's action, his own message, the other side's Activity, a snooze ending, an import, a Block, or an undo. It shows in the Thread's timeline between messages. It is not an Activity and never moves Status.
 _Avoid_: Activity, Event, History (when meaning one entry)

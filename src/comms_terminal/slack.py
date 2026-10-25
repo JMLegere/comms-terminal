@@ -2,6 +2,7 @@
 
 import hashlib
 import hmac
+import http.client
 import json
 import re
 import time
@@ -15,6 +16,39 @@ from . import inbox
 SIGNATURE_WINDOW = 300  # seconds
 CHANNEL_KINDS = {"channel": "channel", "group": "private", "im": "im", "mpim": "mpim"}
 MESSAGE_SUBTYPES = {None, "thread_broadcast", "file_share"}
+REACTION_NAMES = {"+1", "pray", "eyes"}
+# Only documented rejections establish no change; unknown/new source errors stay uncertain.
+REACTION_REFUSALS = {
+    "access_denied", "accesslimited", "account_inactive", "bad_timestamp", "channel_not_found",
+    "deprecated_endpoint", "ekm_access_denied", "enterprise_is_restricted", "external_channel_migrating",
+    "invalid_arg_name", "invalid_arguments", "invalid_array_arg", "invalid_auth", "invalid_charset",
+    "invalid_form_data", "invalid_name", "invalid_post_type", "is_archived", "message_not_found",
+    "method_deprecated", "missing_post_type", "missing_scope", "no_access", "no_item_specified",
+    "no_permission", "not_allowed_token_type", "not_authed", "not_reactable", "org_login_required",
+    "ratelimited", "team_access_not_granted", "team_added_to_org", "thread_locked", "token_expired",
+    "token_revoked", "too_many_emoji", "too_many_reactions", "two_factor_setup_required",
+}
+
+
+class ReactionUnavailable(Exception):
+    """A read failed; its safe message never contains provider bodies or transport exception text."""
+
+
+def _reaction_error(code):
+    if code == "missing_scope":
+        return "Slack reaction access is missing; reactions:read and reactions:write need approval"
+    if code == "ratelimited":
+        return "Slack rate limit reached; wait before checking or trying again"
+    return f"Slack refused reactions: {code}" if isinstance(code, str) and code in REACTION_REFUSALS else \
+        "Slack reactions are unavailable"
+
+
+def _reaction_http_error(error):
+    message = _reaction_error("ratelimited") if error.code == 429 else f"Slack reactions: HTTP {error.code}"
+    retry = (error.headers or {}).get("Retry-After", "")
+    if isinstance(retry, str) and re.fullmatch(r"[0-9]{1,6}", retry):
+        message += f"; wait {int(retry)} seconds"
+    return message
 
 
 def verify(headers, body: bytes, signing_secret: bytes, now: datetime) -> bool:
@@ -131,6 +165,56 @@ class SlackClient:
 
     def __init__(self, token: str, get=_get):
         self.token, self.get, self._names, self._users, self._threads = token, get, {}, {}, {}
+
+    def _reaction_query(self, method, params):
+        try:
+            result = self.get(f"https://slack.com/api/{method}", self.token, params)
+        except urllib.error.HTTPError as error:
+            raise ReactionUnavailable(_reaction_http_error(error)) from None
+        except (urllib.error.URLError, OSError, ValueError, http.client.HTTPException):
+            raise ReactionUnavailable("Slack reaction read failed; check the source before trying again") from None
+        if not isinstance(result, dict) or result.get("ok") is not True:
+            code = result.get("error") if isinstance(result, dict) else None
+            raise ReactionUnavailable(_reaction_error(code))
+        return result
+
+    def identity(self) -> dict:
+        """Authenticated user-token identity, checked afresh; no Connection or credential cache."""
+        result = self._reaction_query("auth.test", {})
+        team, user = result.get("team_id"), result.get("user_id")
+        if (not isinstance(team, str) or not re.fullmatch(r"T[A-Z0-9]+", team)
+                or not isinstance(user, str) or not re.fullmatch(r"[UW][A-Z0-9]+", user)
+                or result.get("bot_id")):
+            raise ReactionUnavailable("Slack user identity could not be verified")
+        return {"team_id": team, "user_id": user}
+
+    def reaction_snapshot(self, channel, ts, self_id) -> list[dict]:
+        """All source totals; Slack guarantees the authenticated user is in each partial users list if present."""
+        result = self._reaction_query("reactions.get", {"channel": channel, "timestamp": ts})
+        message = result.get("message")
+        if (result.get("type") != "message" or result.get("channel") != channel
+                or not isinstance(message, dict) or message.get("type") != "message" or message.get("ts") != ts):
+            raise ReactionUnavailable("Slack returned an invalid reaction message")
+        # Slack's message object documents reactions as optional when no reactions have been added.
+        reactions = message.get("reactions", [])
+        if not isinstance(reactions, list):
+            raise ReactionUnavailable("Slack returned invalid reaction groups")
+        groups, names = [], set()
+        for reaction in reactions:
+            if not isinstance(reaction, dict):
+                raise ReactionUnavailable("Slack returned an invalid reaction group")
+            name, count, users = (reaction.get(k) for k in ("name", "count", "users"))
+            if (not isinstance(name, str) or not name or len(name) > 100 or not name.isprintable()
+                    or type(count) is not int or count <= 0 or not isinstance(users, list)
+                    or any(not isinstance(user, str) or not re.fullmatch(r"[UW][A-Z0-9]+", user) for user in users)
+                    or len(set(users)) != len(users) or count < len(users)):
+                raise ReactionUnavailable("Slack returned an invalid reaction group")
+            name = "+1" if name == "thumbsup" else name
+            if name in names:
+                raise ReactionUnavailable("Slack returned duplicate reaction groups")
+            names.add(name)
+            groups.append({"name": name, "count": count, "mine": self_id in users})
+        return groups
 
     def _info(self, channel: str) -> dict:
         if channel not in self._names:
@@ -309,6 +393,27 @@ class SlackSender:
 
     def __init__(self, token: str, post=_post, client=None, get=_get, upload=_upload, sleep=time.sleep):
         self.token, self.post, self.client, self.get, self.upload, self.sleep = token, post, client, get, upload, sleep
+
+    def change_reaction(self, channel, ts, name, op) -> dict:
+        """One explicit own add/remove, never retried; definitive desired state is separate from a new change."""
+        if op not in ("add", "remove") or not isinstance(name, str) or name not in REACTION_NAMES:
+            raise inbox.SendFailed("Choose an explicit supported Slack reaction change")
+        try:
+            result = self.post(f"https://slack.com/api/reactions.{op}", self.token,
+                               {"channel": channel, "timestamp": ts, "name": name})
+        except urllib.error.HTTPError as error:
+            refused = 400 <= error.code < 500 and error.code != 408
+            raise (inbox.SendFailed if refused else inbox.SendUnknown)(_reaction_http_error(error)) from None
+        except (urllib.error.URLError, OSError, ValueError, http.client.HTTPException):
+            raise inbox.SendUnknown("Slack reaction outcome unknown; check the original source message") from None
+        if isinstance(result, dict) and result.get("ok") is True:
+            return {"mine": op == "add", "changed": True}
+        code = result.get("error") if isinstance(result, dict) and result.get("ok") is False else None
+        if isinstance(code, str) and code == ("already_reacted" if op == "add" else "no_reaction"):
+            return {"mine": op == "add", "changed": False}
+        if isinstance(code, str) and code in REACTION_REFUSALS:
+            raise inbox.SendFailed(_reaction_error(code))
+        raise inbox.SendUnknown("Slack reaction outcome unknown; check the original source message")
 
     def start(self, to, cc, subject, body, key, files=()) -> str:
         """A Slack Draft: one top-level message in an existing conversation. Slack has no idempotency key."""

@@ -243,7 +243,7 @@ def test_run_composes_linear_context(database, monkeypatch):
     monkeypatch.setattr(serve, "reply_server", reply_server)
     monkeypatch.setattr(serve, "credential", lambda name: None)
     monkeypatch.setattr(serve, "threading", SimpleNamespace(
-        Event=threading.Event, Thread=lambda **kwargs: SimpleNamespace(start=lambda: None)))
+        Event=threading.Event, Lock=threading.Lock, Thread=lambda **kwargs: SimpleNamespace(start=lambda: None)))
     monkeypatch.setattr(serve, "time", SimpleNamespace(sleep=interrupt))
     serve.run(path, "/unused-synthetic.sock", "127.0.0.1", 0)
     assert seen == {"tana": "tana", "attio": "attio", "linear": "linear"}
