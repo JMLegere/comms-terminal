@@ -1189,12 +1189,15 @@ class ThreadsPage(Page, ThreadActions):
         self.call_after_refresh(self.refresh_data)
 
     def after_change(self):
+        before = self.current_thread_id()
         self.refresh_data()
         self.app.main.refresh_chrome()
         self.focus_first()
+        if self.active and self.current_thread_id() != before:
+            self.app.schedule_reaction_snapshot(self.current_thread_id())
 
     def refresh_data(self):
-        # Table rebuilds post RowHighlighted too; only real cursor movement is a source-open trigger.
+        # Table rebuilds post RowHighlighted too; user-driven opens are scheduled explicitly.
         with self.prevent(DataTable.RowHighlighted):
             self._refresh_data()
 
@@ -5772,8 +5775,11 @@ class TodayPage(Page):
             page.refresh_data()
 
     def after_change(self):  # undo
+        before = self.threads.current_thread_id()
         self.refresh_data()
         self.app.main.refresh_chrome()
+        if self.threads.active and self.threads.current_thread_id() != before:
+            self.app.schedule_reaction_snapshot(self.threads.current_thread_id())
 
     def list_changed(self, page):
         """A list rebuilt (FR-T3–T9): retitle it, hide it when empty, show All clear when every list is empty,
@@ -7112,13 +7118,16 @@ class Console(App):
                     state["feedback"] = state["write_feedback"] + (" · Message changed — review" if changed else "")
                 elif changed:
                     state["feedback"] = "Outcome unknown · Message changed — review"
-                # A source limitation stops this snapshot batch; unqueried messages stay unavailable, never zero.
-                if job["owner"] is not None and not valid:
+                # Local target refusals/edits leave later items eligible; unavailable service reads stop the batch.
+                local = changed or (isinstance(result, dict) and result.get("outcome") in ("refused", "review_required"))
+                if job["owner"] is not None and not valid and not local:
                     remaining = [j for j in self._reaction_reads if j["owner"] == job["owner"]]
                     self._reaction_reads = [j for j in self._reaction_reads if j not in remaining]
                     for skipped in remaining:
-                        self._reaction_state(skipped["key"]).update(
-                            ready=False, totals="unavailable", feedback="Couldn’t check reactions · f5 to refresh")
+                        skipped_state = self._reaction_state(skipped["key"])
+                        skipped_state.update(ready=False, totals="unavailable")
+                        if not skipped_state["pending"] and skipped_state["write_outcome"] not in ("unknown", "confirmed"):
+                            skipped_state["feedback"] = "Couldn’t check reactions · f5 to refresh"
             self._reaction_repaint(preserve_viewport=job["owner"] is None, target=job["key"])
         self._reaction_next_read()
 

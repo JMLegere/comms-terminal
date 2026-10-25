@@ -411,6 +411,139 @@ def test_confirmed_write_failed_count_refresh_keeps_own_result_and_native_contro
     run(app, [scenario], size=size)
 
 
+@pytest.mark.parametrize("limitation", [None, "missing_scope", "ratelimited"])
+def test_outgoing_item_refusal_keeps_later_snapshots_and_service_limits_stop_batch(tmp_path, limitation):
+    import json
+
+    from comms_terminal import serve, slack
+
+    path = str(tmp_path / "outgoing-reactions.db")
+    db = inbox.connect(path)
+    inbox.migrate(db)
+    now = datetime.now(timezone.utc)
+    with db:
+        db.execute("INSERT INTO connections (id, platform, external_id, self_id, label, connected_at, probed_at)"
+                   " VALUES (1, 'slack', 'T1', 'UME', 'Slack', ?, ?)", (now.isoformat(), now.isoformat()))
+    thread = inbox.ingest(db, inbox.Incoming(
+        1, "C1", "channel", "MESSAGE", "C1:100.1", inbox.Identity("slack_user", "UOTHER"),
+        now - timedelta(minutes=3), "First captured message.", data={"channel": "C1", "ts": "100.1"}))
+    inbox.reply(db, thread.id, "Synthetic outgoing reply.",
+                SimpleNamespace(send=lambda *args, **kwargs: "C1:100.2"))
+    inbox.ingest(db, inbox.Incoming(
+        1, "C1", "channel", "MESSAGE", "C1:100.3", inbox.Identity("slack_user", "UOTHER"),
+        now + timedelta(minutes=1), "Later captured message.", thread_ref=["C1:100.1"],
+        data={"channel": "C1", "ts": "100.3", "thread_ts": "100.1"}))
+    messages = inbox.thread_view(db, thread.id)["messages"]
+    assert [m["native_id"] for m in messages] == ["C1:100.1", "C1:100.2", "C1:100.3"]
+    assert messages[1]["data"] == {"to": [], "cc": []}
+    before = tuple(db.iterdump())
+    db.close()
+    reads, responses = [], []
+
+    def get(url, token, params):
+        if url.endswith("auth.test"):
+            return {"ok": True, "team_id": "T1", "user_id": "UME"}
+        reads.append(params["timestamp"])
+        if limitation:
+            return {"ok": False, "error": limitation}
+        return {"ok": True, "type": "message", "channel": "C1",
+                "message": {"type": "message", "ts": params["timestamp"],
+                            "reactions": [{"name": "pray", "count": 7, "users": ["UOTHER"]}]}}
+
+    sender = slack.SlackSender("synthetic-token", client=slack.SlackClient("synthetic-token", get=get),
+                               post=lambda *args: pytest.fail("snapshot performed a provider write"))
+    senders = serve.Senders(made={1: sender})
+
+    def fetch(payload):
+        source = inbox.connect(path)
+        try:
+            status, result = serve.handle_slack_reactions(source, json.dumps(payload).encode(), senders)
+            responses.append((dict(payload), status, result))
+            return result
+        finally:
+            source.close()
+
+    app = Console(path, reactions=fetch)
+    app.home = "view:0"
+
+    async def scenario(app, pilot):
+        await settle(app, pilot)
+        keys = [(thread.id, m["id"], 1) for m in messages]
+        if limitation:
+            assert reads == ["100.1"] and len(responses) == 1
+            assert responses[0][2]["outcome"] == "unavailable"
+            assert all(app.reaction_states[key]["totals"] == "unavailable" for key in keys)
+        else:
+            assert [request["message_id"] for request, _, _ in responses] == [m["id"] for m in messages]
+            assert responses[1][1] == 400 and responses[1][2]["outcome"] == "refused"
+            assert reads == ["100.1", "100.3"]
+            assert app.reaction_states[keys[1]]["totals"] == "unavailable"
+            assert app.reaction_states[keys[2]]["totals"] == "ready"
+            assert app.reaction_states[keys[2]]["groups"] == [dict(name="pray", count=7, mine=False)]
+        assert all(request["op"] == "read" for request, _, _ in responses)
+        assert tuple(app.db.iterdump()) == before
+
+    run(app, [scenario], size=(187, 50))
+
+
+@pytest.mark.parametrize("mode", ["unknown", "count_failure"])
+def test_failed_refresh_preserves_unqueried_messages_write_feedback(tmp_path, mode):
+    app, ids, fake = make_reaction_app(tmp_path)
+    alex, maya = ids["keys"][:2]
+
+    async def scenario(app, pilot):
+        await prepare_reaction_state(app, pilot, mode)
+        state = app.reaction_states[maya]
+        feedback, outcome, writes = state["feedback"], state["write_outcome"], len(fake.writes)
+        before = len(fake.calls)
+        fake.mode = "unavailable"
+        await pilot.press("f5")
+        await settle(app, pilot)
+        assert fake.calls[before:] == [dict(op="read", thread_id=alex[0], message_id=alex[1], connection_id=alex[2])]
+        assert state["write_outcome"] == outcome and state["feedback"] == feedback
+        assert state["totals"] == "unavailable" and len(fake.writes) == writes == 1
+        text = visible_text(message_row(app, maya))
+        assert ("Outcome unknown" if mode == "unknown" else "Added 👍") in text
+        assert "Couldn’t check reactions" not in text
+
+    run(app, [scenario], size=(187, 50))
+
+
+@pytest.mark.parametrize("home", ["view:0", "today"])
+@pytest.mark.parametrize("key", ["e", "m", "g", "reply"])
+def test_user_triage_advances_snapshot_owner_without_incidental_refresh_reads(tmp_path, home, key):
+    app, ids, fake = make_reaction_app(tmp_path)
+    app.home = home
+
+    async def scenario(app, pilot):
+        await settle(app, pilot)
+        page = app.main.list
+        assert page.current_thread_id() == ids["thread"]
+        other_message = inbox.thread_view(app.db, ids["other"])["messages"][0]["id"]
+        before = len(fake.calls)
+        if key == "reply":
+            inbox.reply(app.db, ids["thread"], "Synthetic reply.",
+                        SimpleNamespace(send=lambda *args, **kwargs: "C_REVIEW:999.000002"))
+            app.main.page.after_change()  # ReplyBox.sent's owner, including Today.
+        else:
+            await pilot.press(key)
+            if key == "g":
+                await pilot.press("enter")
+        await settle(app, pilot)
+        page = app.main.list
+        assert page.current_thread_id() == app.main.thread_view.thread_id == ids["other"]
+        assert fake.calls[before:] == [dict(op="read", thread_id=ids["other"],
+                                           message_id=other_message, connection_id=1)]
+        assert app.cursor[page.view_index] == page.query_one("#table").cursor_row
+        before = len(fake.calls)
+        page.after_change()
+        app.main.refresh_all()
+        await settle(app, pilot)
+        assert len(fake.calls) == before and not fake.writes
+
+    run(app, [scenario], size=(187, 50))
+
+
 def test_snapshot_triggers_exclude_repaint_resize_clock_and_replica_change(tmp_path):
     app, ids, fake = make_reaction_app(tmp_path)
 
