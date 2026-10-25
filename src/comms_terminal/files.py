@@ -18,6 +18,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from .mcp import USER_AGENT
+from .writers import writer
 
 
 def raw_dir(db) -> Path | None:
@@ -47,6 +48,7 @@ def files_dir(db) -> Path | None:
     return Path(f).parent / "files" if f else None
 
 
+@writer("service")
 def store_file(db, data: bytes) -> str | None:
     """Keep one file's bytes, content-addressed and 0600; returns the sha256 name (unchanged once written)."""
     d = files_dir(db)
@@ -134,6 +136,7 @@ def upload_owner(secret: bytes, token: str, now: float | None = None) -> tuple[s
     return (m[1], int(m[2])) if int(m[3]) > (now if now is not None else time.time()) else None
 
 
+@writer("service")
 def upload_url(db, owner: tuple[str, int], host: str, port: int) -> str:
     """A 1-hour LAN upload page whose files are staged on `owner` (FR-A9)."""
     return f"http://{host}:{port}/up/{upload_token(files_secret(db), owner)}"

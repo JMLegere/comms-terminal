@@ -24,32 +24,11 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from . import files, inbox, pipeline, sequences
+from . import files, inbox, pipeline, sequences, writers
 
 LOG = logging.getLogger("comms_terminal.remote")
 
-# name -> how the console runs it. "write": apply locally at once, then send in order in the background.
-# "create": the service answers first (its new row id is what later actions use), then the copy follows.
-# "service": the service only (it holds the file store and the link secret).
-CALLS = {
-    "inbox.act": "write", "inbox.save_draft": "write", "inbox.save_reply_draft": "write",
-    "inbox.schedule_reply": "write", "inbox.schedule_draft": "write", "inbox.set_case_description": "write",
-    "inbox.delete_draft": "write", "inbox.restore_draft": "write", "inbox.restore": "write",
-    "inbox.unstage": "write", "inbox.rename_person": "write", "inbox.merge_persons": "write",
-    "inbox.remove_identity": "write", "inbox.delete_channel_rule": "write",
-    "inbox.stage": "create", "inbox.create_case": "create", "inbox.block": "create", "inbox.add_identity": "create",
-    "inbox.add_channel_rule": "create", "inbox.set_membership": "create",  # may create the Organization
-    "sequences.rename_sequence": "write", "sequences.archive_sequence": "write",
-    "sequences.restore_sequence": "write", "sequences.delete_sequence": "write",
-    "sequences.undelete_sequence": "write", "sequences.delete_step": "write", "sequences.restore_step": "write",
-    "sequences.move_step": "write", "sequences.save_step": "write", "sequences.unenroll": "write",
-    "sequences.resume": "write", "sequences.finish": "write", "sequences.restore_finish": "write",
-    "sequences.undo_task": "write",
-    "sequences.create_sequence": "create", "sequences.add_step": "create", "sequences.enroll": "create",
-    "sequences.task_new_thread": "create", "sequences.complete_task": "create", "sequences.skip_task": "create",
-    "pipeline.undo": "write", "pipeline.set_stage": "create", "pipeline.set_value": "create",  # undo takes the id
-    "files.store_file": "service", "files.upload_url": "service",
-}
+CALLS = writers.WRITERS  # name -> how the console runs it (writers.KINDS); each writer declares its own
 MODULES = {"inbox": inbox, "sequences": sequences, "pipeline": pipeline, "files": files}
 
 
@@ -70,11 +49,13 @@ def creates(name: str, db, args, kwargs) -> bool:
 
 # --- values over the wire ------------------------------------------------------
 
-DATACLASSES = {c.__name__: c for c in (inbox.Done, inbox.Snooze, inbox.Wait, inbox.Investigate, inbox.MarkTodo,
-                                       inbox.Ignore, inbox.Unignore, inbox.SetCase, inbox.Reopen, inbox.Thread)}
-ERRORS = {c.__name__: c for c in (inbox.DraftConflict, inbox.StaleThreadSnapshot, inbox.SendUnknown,
-                                  inbox.SendFailed, inbox.IdentityTaken, inbox.FreeMail, inbox.SnoozeNeedsDate, sequences.Refused, pipeline.Refused, ValueError,
-                                  KeyError)}
+DATACLASSES = {c.__name__: c for c in vars(inbox).values()  # the Action dataclasses and Thread, by name
+               if isinstance(c, type) and dataclasses.is_dataclass(c) and c.__module__ == inbox.__name__}
+ERRORS = {f"{n}.{c.__name__}": c for n, c in sorted(  # every domain error by module, most specific first
+    {(n, c) for n, m in MODULES.items() for c in vars(m).values()
+     if isinstance(c, type) and issubclass(c, Exception) and c.__module__ == m.__name__},
+    key=lambda nc: (-len(nc[1].__mro__), nc[0], nc[1].__name__))}
+ERRORS |= {"ValueError": ValueError, "KeyError": KeyError}
 
 
 def encode(v):

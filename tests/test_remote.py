@@ -288,3 +288,46 @@ def test_link_master_forwards_the_file_server_and_relays_do_not(monkeypatch, tmp
     assert seen[0][seen[0].index("-L") + 1] == "127.0.0.1:8789:127.0.0.1:8789"
     assert "-L" not in link.command()
     assert tui.FILE_SERVER == ("127.0.0.1", 8789)
+
+
+def database_writers():
+    """Every inbox/sequences/pipeline/files function that changes the database: its own SQL says INSERT, UPDATE,
+    DELETE or REPLACE, or it calls one that does."""
+    import ast
+    import inspect
+    import re
+
+    from comms_terminal import sequences
+    mods = {"inbox": inbox, "sequences": sequences, "pipeline": pipeline, "files": files}
+    sql = re.compile(r"\s*(INSERT|UPDATE|DELETE|REPLACE)\b", re.I)
+    funcs = {f"{n}.{f.name}": (n, f) for n, m in mods.items() for f in ast.parse(inspect.getsource(m)).body
+             if isinstance(f, ast.FunctionDef)}
+
+    def calls(n, f):
+        for c in ast.walk(f):
+            if isinstance(c, ast.Call) and isinstance(c.func, ast.Name):
+                yield f"{n}.{c.func.id}"
+            elif isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute) and \
+                    isinstance(c.func.value, ast.Name) and c.func.value.id in mods:
+                yield f"{c.func.value.id}.{c.func.attr}"
+    found = {k for k, (_, f) in funcs.items()
+             if any(isinstance(c, ast.Constant) and isinstance(c.value, str) and sql.match(c.value) for c in ast.walk(f))}
+    while more := {k for k, (n, f) in funcs.items() if k not in found and any(c in found for c in calls(n, f))}:
+        found |= more
+    return found
+
+
+def test_every_writer_the_console_calls_is_declared():
+    """A function the console calls that changes the database is a declared writer (writers.py), so the laptop
+    copy sends it to the service; undeclared, it changed only the copy and the next snapshot reverted it
+    (sequences.set_connection, 2026-10-25)."""
+    import inspect
+    import re
+
+    from comms_terminal import writers
+    found = database_writers()
+    assert "sequences.set_connection" in found and "inbox.thread_view" not in found  # the scan sees writes
+    called = set(re.findall(r"\b((?:inbox|sequences|pipeline|files)\.\w+)\(", inspect.getsource(tui)))
+    assert sorted(c for c in called if c in found and c not in writers.WRITERS) == []
+    assert remote.CALLS is writers.WRITERS and remote.CALLS["sequences.set_connection"] == "write"
+    assert remote.ERRORS["pipeline.Refused"] is pipeline.Refused  # two Refused errors no longer collide
