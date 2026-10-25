@@ -6,6 +6,8 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import seed_demo  # noqa: E402
 
@@ -36,6 +38,52 @@ def detail(path, thread_id):
 
 def page(app):
     return app.main.page
+
+
+@pytest.mark.parametrize("supported", [True, False])
+def test_newer_connection_platform_survives_console_startup_and_detail(tmp_path, monkeypatch, supported):
+    """An older client's registry may not know the service's read-only Calendar Connection yet."""
+    from comms_terminal import meetings, tui
+
+    path, _ = seeded(tmp_path)
+    db = inbox.connect(path)
+    cid = meetings.connect(db)
+    with db:
+        db.execute("UPDATE connections SET label = 'Work calendar' WHERE id = ?", (cid,))
+    assert tui.PLATFORMS["gcal"].format is None
+    if not supported:
+        monkeypatch.delitem(tui.PLATFORMS, "gcal")
+    with pytest.raises(ValueError, match="Connection must support its message format"):
+        inbox.save_draft(db, dict(connection_id=cid, kind="email", sender="me@example.com", to="you@example.com",
+                                 cc="", subject="No calendar sends", body="Not sendable"))
+    db.close()
+
+    async def inspect(app, pilot):
+        c = next(c for c in inbox.connections(app.db) if c["id"] == cid)
+        name = "Google Calendar" if supported else "Work calendar"
+        icon = tui.ICON["calendar" if supported else "connection"]
+        rows = [str(app.main.rail.get_option_at_index(i).prompt) for i in range(app.main.rail.option_count)]
+        assert any(name in row and icon in row for row in rows)
+        assert tui.health_ok(c) is supported
+        assert ("gcal" in tui.PLATFORMS) is supported  # display fallback never registers a send adapter
+        if not supported:
+            assert "Work calendar unavailable" in app.main.query_one(tui.StatusLine).shown
+        app.main.go(f"conn:{cid}")
+        await pilot.pause()
+        assert isinstance(page(app), tui.ConnectionPage)
+        text = str(page(app).query_one("#conn").render())
+        assert name in text and icon in text and meetings.EXTERNAL in text
+        if supported:
+            assert "OK" in text and "Reading Google Calendar" in text
+        else:
+            assert "UNAVAILABLE" in text and "Update Comms Terminal" in text and "gcal" in text
+            assert " OK" not in text
+        app.main.go("conn:1")
+        await pilot.pause()
+        text = str(page(app).query_one("#conn").render())
+        assert seed_demo.ME in text and "Receiving forwarded mail and sending replies." in text
+
+    run(Console(path), [inspect])
 
 
 def test_queue_key_marks_selected_thread_done(tmp_path):

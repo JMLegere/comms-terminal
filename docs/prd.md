@@ -135,7 +135,7 @@ Status key in brackets:
     - *Investigating*: set manually.
   - **Snoozed**:
     - *Waiting for them*: Plain's "Waiting for customer".
-    - *Paused for later*: for a duration, or indefinitely.
+    - *Paused for later*: until a date. A Snooze always has one (FR-OA-10); `Snooze` with no date is refused.
   - **Done**:
     - *Done*.
     - *Ignored*.
@@ -165,7 +165,7 @@ Status key in brackets:
   - [D] The rail has a Cases section with Todo, Snoozed, Done, and Ignored views; `n` there creates a Case with no Threads yet. Thread views group Threads under Case header rows (title and Thread counts per Status), "No case" first, then by each Case's oldest Thread. Reason: Jeremy works Cases to completion (2026-10-13); Plain has no Case.
   - [D] A Case may match one CRM record, such as an Attio deal, but holds none of its data; a link goes in its description. A Case whose Threads are all Done shows Done even if its goal is still open (accepted).
 - **FR-13** [C]: Person and Organization records list their Threads (with Status) and Cases.
-- **FR-13a** [D]: Tana is a read-only Context source (decision #122). Thread, Person, Organization, and Case pages show a Tana section in their details column, fetched live from Tana's MCP server when the page opens: the matching Tana People (by email Identity) and Organizations (by domain), the Organization's Deals, its unresolved Threats (Active, Mitigating) and Opportunities (Exploring, Validated), open Tana tasks that mention the Person or Organization, and Meetings (the next upcoming and the last three whose attendees include the Person's email or the Organization's domain), each with its summary and linked documents by type. Teammates match like everyone else. Meetings are never Threads or Activities. If Tana fails, the section says why and the bottom bar shows Tana broken, apart from Connection health. Reason: Jeremy's meeting context lives in Tana (2026-10-13); Plain shows CRM context beside threads the same way.
+- **FR-13a** [D]: Tana is a read-only Context source (decision #122). Thread, Person, Organization, and Case pages show a Tana section in their details column, fetched live from Tana's MCP server when the page opens: the matching Tana People (by email Identity) and Organizations (by domain), the Organization's Deals, its unresolved Threats (Active, Mitigating) and Opportunities (Exploring, Validated), open Tana tasks that mention the Person or Organization, and Meetings (the next upcoming and the last three whose attendees include the Person's email or the Organization's domain), each with its summary and linked documents by type. Teammates match like everyone else. A Google Calendar Meeting with someone outside Agent Maple is a Thread (FR-OA, ADR 0007), and this section shows its Tana summary there. If Tana fails, the section says why and the bottom bar shows Tana broken, apart from Connection health. Reason: Jeremy's meeting context lives in Tana (2026-10-13); Plain shows CRM context beside threads the same way.
 - **FR-13b** [D]: Attio is a read-only Context source (decision #123). The same pages show an Attio section above Tana's, fetched live from Attio's REST API: the matching Attio People (by email Identity) and Companies (by domain), each with every filled field less a short list of noise (identifiers, images, audit stamps, social handles, first and per-channel interactions), the lists each is on with that entry's fields, and the open tasks on any of them. Attio has had no Deals object since 2026-10-22 (Jeremy moved to account-level tracking), so the section shows no deals. The rail's context section and the bottom bar show Attio's health beside Tana's. Reason: Agent Maple's CRM is Attio (2026-10-14); Jeremy wants its structured data and open tasks beside each Person and Organization.
 - **FR-13c** [D]: Linear is a read-only Context source, never a message Platform (decision #125). Thread, Person, Organization, and Case pages show a separate Linear section alongside Attio and Tana. Linear issues never become Threads or Activities.
   - Automatically match People and Organizations using exact email addresses/domains and exact full-name/company-name phrases across issue title and description and Linear Customer (external company) fields. Inspect Customer Request text and relations only within matched Customer/issue candidates; no global search over unassociated Requests. Name-only matches must be unique among local People/Organizations; ignore ambiguous names. Names/text if straightforward, exact-key fallback otherwise. No fuzzy or semantic matching.
@@ -200,6 +200,10 @@ Status key in brackets:
 ### Pipeline
 
 - **FR-PL** [C]: Each Organization holds a Stage and a Value in the Revenue and Fundraising Pipelines, set by Jeremy in the console (`s`, `v`) or the `pipeline` CLI and kept in an append-only log (ADR 0006). A Pipeline page per Pipeline works Winning by Design's Bowtie Standard v1.0 backwards from its Target over the last 12 months: Conversion rate, Time in Stage, Conversion to Impact, Retention rate (GRR), Expansion rate, Net retention, Required volume, Pace, and the Constraint (the measured rate furthest below its benchmark), with the standard's Table 6.2 benchmarks only where no rate is measured. It sets no Tasks and does not read or write Attio. Detail: `.agents/prd/2026-10-23-pipeline.md` (FR-PL-1..40); design: `docs/design/console.md` § Pipeline.
+
+### Organization actions
+
+- **FR-OA** [C]: Threads do the work and an Organization only reads them (ADR 0007). A Person belongs to the Organizations of their company email domains, plus Jeremy's own additions and less his removals (Membership: `o` on a Person, `p` on an Organization). An Organization's roll-up is the earliest of Todo, Snoozed, and Done over the Threads its People wrote in or were addressed in, with an unfinished Enrollment counting as Snoozed; in an open or paying Stage and Done, it is Unattended, and Today, the Pipeline board, and the Organization page show it. A Snooze always has a date. Google Calendar is a read-only Platform: each Event with someone outside Agent Maple, first seen after go-live, is one Thread in Todo, and each held, cancelled, or declined occurrence is a Meeting Activity that puts it back in Todo. Detail: `.agents/prd/2026-10-24-organization-actions.md` (FR-OA-1..16); design: `docs/design/console.md` § Today, § Pipeline, § Meetings.
 
 ### Non-functional
 
@@ -250,7 +254,7 @@ Executable form: `features/<domain>.feature` (Gherkin via pytest-bdd), each scen
 - **AS-13**: In a DM, Logan sends a message, then another 30 minutes later. → One Thread (within 24 hours). Logan writes again 25 hours later → a new Thread.
 - **AS-14**: Jeremy posts top-level in a selected channel. → A Thread in Snoozed / Waiting for them. Someone replies 40 minutes later → Todo / Needs next response.
 - **AS-15**: A message in an unselected channel. → Not ingested; no Thread.
-- **AS-16**: Z with "indefinitely", then the other side writes. → Todo / Needs next response.
+- **AS-16**: A Snooze with no date is refused, and the Thread stays as it was (FR-OA-10; superseded the earlier "indefinitely" scenario).
 - **AS-17**: Jeremy replies to a Slack Thread from the console. → The reply posts from his Slack profile in the Thread's conversation; the Thread is Snoozed / Waiting for them.
 - **AS-18**: Jeremy replies to an email directly in Gmail. → Not seen; the Thread stays Todo (accepted Plain limitation, decision #55).
 - **AS-19**: An inbound mail request arrives without the shared secret. → Rejected; nothing stored; email health shows broken.
@@ -931,6 +935,8 @@ All entries are dated 2026-10-10; exact times are unproven unless noted. Full de
   - Source: Jeremy's grilling answers (2026-10-13): "maybe meetings aren't threads, but meetings and their linked docs/types are fetched live on threads of connected people and orgs", "Tana only, no Calendar", "person, org, case thread", "No writes now".
   - Status: Built (2026-10-13): `tana.py`, `POST /tana`, the console's Tana section and bottom-bar health, `mcp.py` (the MCP client moved out of `fastmail.py`; `FastmailError` is now `McpError`), `scripts/oauth_mcp.py --resource tana` (renamed from `oauth_fastmail.py`), `deploy/comms-terminal.service.d/tana.conf`, runbook §3c. Full suite: 227 passed after the move to `mcp.py`; Thread and Person pages checked in rendered screenshots with sample Tana data. Connected 2026-10-13: the live NBIF Thread (Laïla Thériault) shows her Tana person, NBIF, the Breakthru deal, six active threats, two open tasks, and the next and past meetings; first fetch 9.8 s, then cached.
 
+  - Superseded in part (2026-10-24) by #140: Meetings with someone outside Agent Maple are now Threads, from Google Calendar.
+
 - **123**
   - Request / decision: Integrate Attio as a second read-only Context source (FR-13b), shaped like Tana (#122): same pages, same five-minute service cache, same socket route pattern (`POST /attio`), its own section above Tana's (Jeremy, 2026-10-14). Auth is a read-only workspace access token (Records, Object configuration, List entries, List configuration, Tasks, User management: read), stored as the `attio-token` credential, over Attio's REST API; Attio's MCP server (OAuth, rotating tokens) was the alternative. Shows every filled field of the Person and Company, their list entries, open deals (stage not Lost) with stage, value, owner, and list, and open tasks on the Person, Company, or those deals (most tasks hang off a deal). Teammates match like everyone else.
   - Source: Jeremy's answers (2026-10-14): "can we do a similar attio integration like tana?", "it should summarize the structured data and open tasks for the person and org", "Access token", "Every filled field", "Yes, open deals too", "Same pages as Tana".
@@ -1006,6 +1012,11 @@ All entries are dated 2026-10-10; exact times are unproven unless noted. Full de
   - Request / decision: A read-only Calendar in the console, like renCal, from Jeremy's Google work calendar (FR-13d, ADR 0005). The service polls the secret iCal address every 30 seconds, stores Events as Google gives them, keeps Deleted Events forever, and expands repeats on read. Supersedes #122's "no Google Calendar Connection" for the Calendar; the Tana section's Meetings are unchanged. Considered: Google Calendar API with push (needs a sign-in; the path for later writes), Tana's sync (timing unknown), vdirsyncer/khal beside the console, invite-derived Events.
   - Source: Jeremy's discovery and grilling answers (2026-10-20), spike (Google changes reached the feed in 8–13 s), "implement and ship".
   - Status: Built and shipped (2026-10-20).
+
+- **140**
+  - Request / decision: Organization actions (FR-OA, ADR 0007): Membership, the Unattended roll-up, Snoozes always dated, and Meetings as Activities on Threads from Google Calendar (one Thread per Event UID; booked, held, cancelled, and declined Meeting Activities; future Events only). Reverses #122's "no meeting Threads"; Tana's Meetings stay context. Considered: a Task or "next step" on an Organization or Event (removed by the deletion test), a Sequence per Stage, each meeting tool as a Platform, and meetings joining the attendees' email Thread.
+  - Source: Jeremy's discovery, C4 review, and grilling (2026-10-24, `.agents/discovery/2026-10-24-pipeline-account-actions.md`); PRD approved 2026-10-25; "execute everything up to phase 5 of the prd".
+  - Status: Built and shipped (2026-10-25): Phases 1 to 5 of `.agents/prd/2026-10-24-organization-actions.md`.
 
 ## 8. Work log
 

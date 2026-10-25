@@ -259,7 +259,16 @@ def reply(ctx, text, outcome):
 
 @when("Act is called with Snooze and no time")
 def act_snooze_indefinitely(ctx):
-    ctx.thread = inbox.act(ctx.db, ctx.thread.id, inbox.Snooze())
+    try:
+        ctx.thread = inbox.act(ctx.db, ctx.thread.id, inbox.Snooze())
+    except inbox.SnoozeNeedsDate as e:
+        ctx.error = e
+    ctx.thread = inbox.get_thread(ctx.db, ctx.thread.id)
+
+
+@then("Act raises Snooze Needs Date")
+def act_raises_snooze_needs_date(ctx):
+    assert isinstance(ctx.error, inbox.SnoozeNeedsDate)
 
 
 @when(parsers.parse('Act is called with Snooze until "{iso}"'))

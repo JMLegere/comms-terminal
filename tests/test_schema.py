@@ -44,6 +44,9 @@ def test_migrates_a_version_1_database(tmp_path):
                    " VALUES (?, ?, ?, ?, '2026-10-01T00:00:00+00:00')",
                    [("slack", "T0", "U0", "Slack"), ("email", "me@x.io", "me@x.io", "Email"),
                     ("email", "me@fastmail.com", "me@fastmail.com", "Fastmail")])
+    db.execute("CREATE TABLE channels (id INTEGER PRIMARY KEY, connection_id INTEGER NOT NULL REFERENCES connections (id),"
+               " native_id TEXT NOT NULL, name TEXT, kind TEXT NOT NULL CHECK (kind IN ('mailbox', 'channel', 'private', 'im',"
+               " 'mpim')), UNIQUE (connection_id, native_id)) STRICT")  # as in v1 (4ff3c55); 28 rebuilds it
     db.execute("CREATE TABLE identities (id INTEGER PRIMARY KEY, person_id INTEGER, kind TEXT NOT NULL CHECK (kind IN"
                " ('email', 'slack_user')), value TEXT NOT NULL, blocked INTEGER NOT NULL DEFAULT 0, UNIQUE (kind, value)) STRICT")
     db.execute("INSERT INTO identities (kind, value) VALUES ('email', 'ana@acme.com')")
@@ -143,13 +146,15 @@ def test_version_12_upgrade_adds_only_receipts_and_preserves_records_files_and_g
         read = lambda: {name: [tuple(r) for r in db.execute(f'SELECT {columns[name]} FROM "{name}" ORDER BY rowid')]  # noqa: E731
                         for name in tables}
         rows = read()
-        unchanged = "SELECT type, name, tbl_name, sql FROM sqlite_schema WHERE tbl_name NOT IN ('composition_drafts', 'persons', 'connections') ORDER BY name"
+        unchanged = ("SELECT type, name, tbl_name, sql FROM sqlite_schema WHERE tbl_name NOT IN"
+                     " ('composition_drafts', 'persons', 'connections', 'channels', 'audit_log') ORDER BY name")
         schema = [tuple(r) for r in db.execute(unchanged)]
         inbox.migrate(db)
         assert db.execute("PRAGMA user_version").fetchone()[0] == inbox.SCHEMA_VERSION
         assert read() == rows  # 13-17 add tables, and NULL columns on existing Drafts and People
         assert db.execute("SELECT count(*) FROM composition_drafts WHERE thread_id IS NOT NULL").fetchone()[0] == 0
-        names = {row[1] for row in schema}  # 15-17 add the audit logs and Sequences tables; 23 a Connection column
+        names = {row[1] for row in schema}  # 15-17 add the audit logs and Sequences tables; 23 a Connection column;
+        # 28 widens the connections, channels, and audit_log CHECKs
         assert [tuple(r) for r in db.execute(unchanged) if r[1] in names] == schema
         assert files.attachment_path(db, sha).read_bytes() == b"retained file"
         assert (files.raw_dir(db) / f"{raw_sha}.eml").read_bytes() == raw

@@ -18,6 +18,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from . import inbox, platforms
+from .writers import writer
 
 LOCAL = ZoneInfo("America/Halifax")  # Jeremy's days (main.LOCAL_TZ)
 KINDS = ("email", "call", "linkedin", "letter", "enrollment")
@@ -56,6 +57,7 @@ def email_connections(db) -> list:
             if platforms.PLATFORMS.get(c["platform"]) and platforms.PLATFORMS[c["platform"]].format == "email"]
 
 
+@writer("create")
 def create_sequence(db, name: str, connection_id: int | None = None) -> int:
     """A new, empty Sequence; it sends from `connection_id`, else the only email Connection."""
     if not name.strip():
@@ -69,6 +71,7 @@ def create_sequence(db, name: str, connection_id: int | None = None) -> int:
                           (name.strip(), connection_id, at, at)).lastrowid
 
 
+@writer("write")
 def rename_sequence(db, sequence_id: int, name: str) -> None:
     if not name.strip():
         raise ValueError("A Sequence needs a name.")
@@ -76,6 +79,7 @@ def rename_sequence(db, sequence_id: int, name: str) -> None:
         db.execute("UPDATE sequences SET name = ?, updated_at = ? WHERE id = ?", (name.strip(), _iso(_now()), sequence_id))
 
 
+@writer("write")
 def set_connection(db, sequence_id: int, connection_id: int) -> None:
     with db:
         db.execute("UPDATE sequences SET connection_id = ?, updated_at = ? WHERE id = ?",
@@ -115,6 +119,7 @@ def sequences(db, *, now: datetime | None = None) -> list[dict]:
     return out
 
 
+@writer("write")
 def archive_sequence(db, sequence_id: int, cancel_live: bool, now: datetime | None = None) -> list[dict]:
     """A used Sequence is archived, never deleted: it takes no new Enrollments and can be restored.
     `cancel_live` finishes its live Enrollments as Canceled; returns what restore_sequence needs to undo that."""
@@ -130,6 +135,7 @@ def archive_sequence(db, sequence_id: int, cancel_live: bool, now: datetime | No
     return undo
 
 
+@writer("write")
 def restore_sequence(db, sequence_id: int, undo: list[dict] = ()) -> None:
     with db:
         _tx(db)
@@ -138,6 +144,7 @@ def restore_sequence(db, sequence_id: int, undo: list[dict] = ()) -> None:
             _restore_finish(db, u)
 
 
+@writer("write")
 def delete_sequence(db, sequence_id: int) -> dict:
     """Only a Sequence that never had an Enrollment can be deleted; returns its rows for undo."""
     with db:
@@ -152,6 +159,7 @@ def delete_sequence(db, sequence_id: int) -> dict:
     return dict(sequence=seq, steps=steps)
 
 
+@writer("write")
 def undelete_sequence(db, rows: dict) -> None:
     with db:
         _tx(db)
@@ -171,6 +179,7 @@ def _touch(db, sequence_id):
     db.execute("UPDATE sequences SET updated_at = ? WHERE id = ?", (_iso(_now()), sequence_id))
 
 
+@writer("create")
 def add_step(db, sequence_id: int, kind: str, after: int | None = None) -> int:
     """A new Step of `kind`, after position `after` (default: last); one business day after the previous Step."""
     if kind not in KINDS:
@@ -189,6 +198,7 @@ def add_step(db, sequence_id: int, kind: str, after: int | None = None) -> int:
     return step_id
 
 
+@writer("write")
 def save_step(db, step_id: int, **fields) -> dict:
     """Edit a Step; Tasks already due keep their content (FR-SEQ-5)."""
     if set(fields) - set(STEP_FIELDS):
@@ -215,6 +225,7 @@ def save_step(db, step_id: int, **fields) -> dict:
         return dict(db.execute("SELECT * FROM sequence_steps WHERE id = ?", (step_id,)).fetchone())
 
 
+@writer("write")
 def move_step(db, step_id: int, delta: int) -> None:
     """Swap a Step with its neighbour (`delta` -1 up, +1 down)."""
     with db:
@@ -230,6 +241,7 @@ def move_step(db, step_id: int, delta: int) -> None:
         _touch(db, st["sequence_id"])
 
 
+@writer("write")
 def delete_step(db, step_id: int, now: datetime | None = None) -> tuple[int, dict]:
     """Delete a Step, live (FR-SEQ-24): Enrollments that have not reached it skip it; where it is the current
     Due Task, that Task and its unsent Draft go and the next Step's Task comes due by its gap. Returns how many
@@ -255,6 +267,7 @@ def delete_step(db, step_id: int, now: datetime | None = None) -> tuple[int, dic
     return len(open_tasks), dict(step=st, tasks=open_tasks, drafts=drafts, after=before, enrollments=states)
 
 
+@writer("write")
 def restore_step(db, undo: dict) -> None:
     """Put a deleted Step back, with the Tasks and Drafts it removed; Tasks made since for those Enrollments go."""
     st = undo["step"]
@@ -386,6 +399,7 @@ def parse_start(text: str, now: datetime) -> date | None:
         return None
 
 
+@writer("create")
 def enroll(db, person_id: int, sequence_id: int, now: datetime | None = None, start: date | None = None) -> int:
     """One Person into one Sequence (FR-SEQ-6); its first Task counts from the enroll day, or from a later
     Start date (FR-SEQ-25)."""
@@ -428,6 +442,7 @@ def _enroll(db, person_id: int, sequence_id: int, now: datetime, starts: str | N
                       " VALUES (?, ?, 'ACTIVE', ?, ?)", (person_id, sequence_id, _iso(now), starts)).lastrowid
 
 
+@writer("write")
 def unenroll(db, enrollment_id: int) -> None:
     """Undo an enroll before any Task is done: the Enrollment, its Tasks, and their unsent Drafts go."""
     with db:
@@ -439,6 +454,7 @@ def unenroll(db, enrollment_id: int) -> None:
         db.execute("DELETE FROM enrollments WHERE id = ?", (enrollment_id,))
 
 
+@writer("create")
 def task_new_thread(db, task_id: int) -> int:
     """A reply Task whose target was skipped starts a new Thread instead (FR-SEQ-8): a new email Draft with the
     replied-to Step's subject. Returns the Draft's id."""
@@ -586,6 +602,7 @@ def _close(db, task_id: int, state: str, now: datetime, thread_id: int | None = 
     return undo
 
 
+@writer("create")
 def complete_task(db, task_id: int, now: datetime | None = None) -> dict:
     """Jeremy did a non-email Task (FR-SEQ-9); an Enrollment Task enrolls the Person now, whatever its flag said.
     The next Step's Task follows. Returns what undo_task needs."""
@@ -604,6 +621,7 @@ def complete_task(db, task_id: int, now: datetime | None = None) -> dict:
     return undo
 
 
+@writer("create")
 def skip_task(db, task_id: int, now: datetime | None = None) -> dict:
     """Skip a Task; its unsent Draft goes. A skip counts as done for the next Task's gap."""
     now = now or _now()
@@ -615,6 +633,7 @@ def skip_task(db, task_id: int, now: datetime | None = None) -> dict:
     return undo
 
 
+@writer("write")
 def undo_task(db, undo: dict) -> None:
     """Back to before complete_task or skip_task: the Task due again, its Draft and Enrollment as they were."""
     with db:
@@ -732,6 +751,7 @@ def pause_person(db, person_id: int, at: datetime, why: str) -> int:
                       (_iso(at), why, person_id, _iso(at))).rowcount
 
 
+@writer("write")
 def resume(db, enrollment_id: int, now: datetime | None = None) -> None:
     """Paused to Active; the next Task is due at once (FR-SEQ-13)."""
     now = now or _now()
@@ -770,6 +790,7 @@ def _restore_finish(db, undo: dict) -> None:
         _insert(db, "composition_drafts", d)
 
 
+@writer("write")
 def finish(db, enrollment_id: int, reason: str, now: datetime | None = None) -> list[dict]:
     """End an Enrollment as Completed, Unsubscribed, or Canceled (FR-SEQ-14); its unsent Task Drafts go.
     Unsubscribed also marks the Person and ends every Sequence they are in. Returns what restore_finish needs."""
@@ -801,6 +822,7 @@ def _unsubscribe(db, person_id: int, now: datetime) -> list[dict]:
     return [dict(person=person_id, unsubscribed_at=before)] + undo
 
 
+@writer("write")
 def restore_finish(db, undo: list[dict]) -> None:
     with db:
         _tx(db)

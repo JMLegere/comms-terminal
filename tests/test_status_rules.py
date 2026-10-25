@@ -1,7 +1,7 @@
 """inbox.transition against design §4 and decision #68, one row per rule."""
 import pytest
 
-from comms_terminal.inbox import Arrived, Reopen, Unignore, Woke, transition
+from comms_terminal.inbox import Arrived, Reopen, Snooze, SnoozeNeedsDate, Unignore, Woke, transition
 
 ROWS = [
     # current, event, kwargs, expected
@@ -32,3 +32,8 @@ ROWS = [
 @pytest.mark.parametrize("current, event, kwargs, expected", ROWS)
 def test_transition(current, event, kwargs, expected):
     assert transition(current, event, **kwargs) == expected
+
+
+def test_a_snooze_always_has_a_date():  # FR-OA-10
+    with pytest.raises(SnoozeNeedsDate):
+        transition(("TODO", "CREATED"), Snooze())

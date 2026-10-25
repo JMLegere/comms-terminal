@@ -77,12 +77,16 @@ def _quo(m, ch):
     return m["data"].get("link")
 
 
+def _gcal(m, ch):
+    return (m["data"].get("meeting") or {}).get("join") or None
+
+
 @dataclass(frozen=True)
 class Platform:
     name: str          # connections.platform
     title: str         # the service's name ("open in Gmail")
     icon: str          # icons.ICON key
-    format: str        # Message format: email, slack, or sms
+    format: str | None  # Message format: email, slack, or sms; None for a Platform that only reads (gcal)
     adapter: str       # module under comms_terminal
     by_address: bool   # a Connection is named by its address or number, else by title
     healthy: str       # Connection page text when healthy
@@ -95,7 +99,7 @@ class Platform:
     @property
     def sends_files(self) -> bool:
         """FR-A16: replies and Drafts through this Platform can carry Attachments."""
-        return self.can_attach and FORMATS[self.format].can_attach
+        return self.can_attach and self.format in FORMATS and FORMATS[self.format].can_attach
 
 
 PLATFORMS = {p.name: p for p in (
@@ -118,6 +122,10 @@ PLATFORMS = {p.name: p for p in (
              "[#c14a4a]Texts may not be sending.[/] Check the Quo API key and the webhook in Quo's settings; "
              "this clears on the next successful reply.", _quo, dm_where="SMS",
              hook_secret="quo-webhook-secret"),
+    Platform("gcal", "Google Calendar", "calendar", None, "calendar", False,
+             "Reading Google Calendar every 30 seconds; Meetings with someone outside Agent Maple become Threads.",
+             "[#c14a4a]Google Calendar is not being read.[/] Check the google-calendar-ics credential; "
+             "this clears on the next successful read.", _gcal),
 )}
 
 EMAIL = tuple(n for n, p in PLATFORMS.items() if p.format == "email")

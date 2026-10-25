@@ -38,8 +38,8 @@ def test_version_12_upgrade_matches_fresh_schema(monkeypatch):
         before = shape(old)
         inbox.migrate(old)
         assert shape(old) == shape(fresh)
-        changed = ("composition_drafts", "persons", "connections")  # 14: reply Drafts; 17: Task Drafts and
-        # Unsubscribed; 23: Inbound addresses
+        changed = ("composition_drafts", "persons", "connections", "channels", "audit_log")  # 14: reply Drafts;
+        # 17: Task Drafts and Unsubscribed; 23: Inbound addresses; 28: gcal and meeting CHECKs
         assert {k: v for k, v in shape(old).items() if k in before and k[1] not in changed} == \
             {k: v for k, v in before.items() if k[1] not in changed}
         assert "thread_id integer references threads(id)" in shape(old)[("table", "composition_drafts")]

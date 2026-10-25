@@ -19,6 +19,7 @@ from statistics import median
 from zoneinfo import ZoneInfo
 
 from . import inbox
+from .writers import writer
 
 LOCAL = ZoneInfo("America/Halifax")  # Jeremy's days (main.LOCAL_TZ)
 REVENUE, FUNDRAISING = "REVENUE", "FUNDRAISING"
@@ -118,6 +119,7 @@ def _append(db, org_id, pipeline, kind, at=None, stage=None, value=None, undoes=
             (org_id, pipeline, kind, stage, value, undoes, _effective(at), inbox._iso(_now()))).lastrowid
 
 
+@writer("create")
 def set_stage(db, org_id: int, pipeline: str, stage: str, at=None) -> int | None:
     """Move an Organization to a Stage; returns the log entry, or None when it is already there."""
     stage = parse_stage(pipeline, stage)
@@ -126,6 +128,7 @@ def set_stage(db, org_id: int, pipeline: str, stage: str, at=None) -> int | None
     return _append(db, org_id, pipeline, "STAGE", at, stage=stage)
 
 
+@writer("create")
 def set_value(db, org_id: int, pipeline: str, value, at=None) -> int | None:
     """Set the Organization's Revenue Value or Fundraising Value; it belongs to the Pipeline, not the Stage."""
     value = parse_amount(value)
@@ -134,6 +137,7 @@ def set_value(db, org_id: int, pipeline: str, value, at=None) -> int | None:
     return _append(db, org_id, pipeline, "VALUE", at, value=value)
 
 
+@writer("write")
 def undo(db, entry_id: int) -> None:
     """Cancel one Stage or Value entry; the math and history skip both (FR-PL-4)."""
     e = db.execute("SELECT * FROM pipeline_log WHERE id = ?", (entry_id,)).fetchone()

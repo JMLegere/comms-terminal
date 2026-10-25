@@ -540,6 +540,51 @@ def test_offline_and_build_gates_prevent_source_dispatch_without_remote_queue(tm
     run(app, [scenario], size=(187, 50))
 
 
+def test_remote_writer_proxies_keep_reaction_reads_adds_and_removes_on_private_transport(tmp_path, monkeypatch):
+    from comms_terminal import remote
+
+    app, ids, fake = make_reaction_app(tmp_path)
+    route, seen = ["ssh", "synthetic", "relay"], []
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("reaction entered the remote ledger RPC or optimistic queue")
+
+    def post(command, path, payload):
+        seen.append((command, path, dict(payload)))
+        return 200, fake(payload)
+
+    async def scenario(app, pilot):
+        await settle(app, pilot)
+        before = tuple(app.db.iterdump())
+        with monkeypatch.context() as patch:
+            for name in ("inbox", "sequences", "pipeline", "files"):
+                patch.setattr(tui, name, getattr(tui, name))
+            patch.setattr(remote.files, "file_url", remote.files.file_url)
+            patch.setattr(tui, "_post", post)
+            rem = SimpleNamespace(online=True, problem="", call=forbidden, queue=forbidden)
+            remote.install(tui, rem, {})
+            app.remote, app.reactions = rem, tui.socket_slack_reactions(route)
+            try:
+                target = await prepare_reaction_state(app, pilot)
+                await pilot.press("1")
+                await settle(app, pilot)
+                await pilot.press("v")
+                await settle(app, pilot)
+                await pilot.press("1")
+                await settle(app, pilot)
+                assert [call["op"] for call in fake.writes] == ["add", "remove"]
+                assert all((call["thread_id"], call["message_id"], call["connection_id"]) == target
+                           for call in fake.writes)
+                assert {body["op"] for _, _, body in seen} == {"read", "add", "remove"}
+                assert all(command == route and path == "/slack-reactions" for command, path, _ in seen)
+                assert tuple(app.db.iterdump()) == before
+                assert not any("reaction" in name for name in remote.CALLS)
+            finally:
+                app.remote, app.reactions = None, fake
+
+    run(app, [scenario], size=(187, 50))
+
+
 @pytest.mark.parametrize("transport", ["/tmp/fake.sock", ["ssh", "synthetic", "relay"]])
 def test_socket_reactions_uses_existing_transport_and_preserves_typed_outcomes(monkeypatch, transport):
     payload = dict(op="add", thread_id=1, message_id=2, connection_id=3, name="+1", expected_revision=2)

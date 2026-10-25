@@ -65,11 +65,13 @@ def main(argv=None) -> None:
     ai.add_argument("--days", type=int, default=89)
     sub.add_parser("attachments-backfill", help="one-time copy of stored Gmail messages' Attachments into files/")
     from . import agent
+    before = set(sub.choices)
     agent.add_parsers(sub)
+    agent_commands = set(sub.choices) - before
     a = p.parse_args(argv)
     Path(a.db).parent.mkdir(parents=True, exist_ok=True)
 
-    if a.cmd in ("threads", "thread", "drafts", "draft", "tasks", "enroll", "events", "pipeline"):
+    if a.cmd in agent_commands:
         from . import inbox
         db = inbox.connect(a.db)
         inbox.migrate(db)

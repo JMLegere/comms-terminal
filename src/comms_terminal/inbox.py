@@ -23,8 +23,9 @@ from email.utils import getaddresses
 from typing import Protocol, Sequence
 
 from . import files, platforms
+from .writers import writer
 
-SCHEMA_VERSION = 27
+SCHEMA_VERSION = 28
 WAIT = timedelta(days=4)  # Waiting for them ends after this with no reply: back to Todo to follow up (#116)
 EMAIL_CONFIRMATION_PENDING = "Email confirmation pending; wait for its sent receipt before replying."
 MIGRATIONS = {  # version -> statement that upgrades an existing database to it
@@ -406,6 +407,60 @@ CREATE TABLE planning_priors (
   changed_at      TEXT NOT NULL,
   PRIMARY KEY (person_id, organization_id)
 ) STRICT;""",  # Membership (ADR 0007 discovery, FR-OA-1)
+    # Meetings are Threads (ADR 0007): Google Calendar is a Platform, and each Event UID with an outside attendee
+    # is a Channel of kind meeting, and a Meeting is a Status change's cause. All CHECKs, so a rebuild of each
+    # table (as in 5 and 6).
+    28: """PRAGMA legacy_alter_table = ON;
+CREATE TABLE connections_new (
+  id INTEGER PRIMARY KEY,
+  platform TEXT NOT NULL CHECK (platform IN ('gmail', 'fastmail', 'slack', 'quo', 'gcal')),
+  external_id TEXT NOT NULL UNIQUE, self_id TEXT NOT NULL, label TEXT NOT NULL, connected_at TEXT NOT NULL,
+  auth_ok INTEGER NOT NULL DEFAULT 1 CHECK (auth_ok IN (0, 1)), last_error TEXT, probe_error TEXT, probed_at TEXT,
+  inbound TEXT
+) STRICT;
+INSERT INTO connections_new SELECT id, platform, external_id, self_id, label, connected_at, auth_ok, last_error,
+  probe_error, probed_at, inbound FROM connections;
+DROP TABLE connections;
+ALTER TABLE connections_new RENAME TO connections;
+CREATE UNIQUE INDEX connections_inbound ON connections (inbound);
+CREATE TABLE channels_new (
+  id INTEGER PRIMARY KEY,
+  connection_id INTEGER NOT NULL REFERENCES connections (id),
+  native_id TEXT NOT NULL,
+  name TEXT,
+  kind TEXT NOT NULL CHECK (kind IN ('mailbox', 'channel', 'private', 'im', 'mpim', 'meeting')),
+  UNIQUE (connection_id, native_id)
+) STRICT;
+INSERT INTO channels_new SELECT id, connection_id, native_id, name, kind FROM channels;
+DROP TABLE channels;
+ALTER TABLE channels_new RENAME TO channels;
+CREATE TABLE audit_log_new (
+  id          INTEGER PRIMARY KEY,
+  thread_id   INTEGER NOT NULL REFERENCES threads (id),
+  occurred_at TEXT NOT NULL,
+  kind        TEXT NOT NULL CHECK (kind IN ('STATUS', 'CASE')),
+  cause       TEXT NOT NULL CHECK (cause IN ('action', 'reply', 'message', 'edit', 'delete', 'call',
+                                             'woke', 'reopen', 'blocked', 'undo', 'meeting')),
+  old_detail  TEXT,
+  new_detail  TEXT,
+  case_id     INTEGER REFERENCES cases (id),
+  data        TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(data)),
+  CHECK ((kind = 'STATUS') = (new_detail IS NOT NULL))
+) STRICT;
+INSERT INTO audit_log_new SELECT id, thread_id, occurred_at, kind, cause, old_detail, new_detail, case_id, data
+FROM audit_log;
+DROP TABLE audit_log;
+ALTER TABLE audit_log_new RENAME TO audit_log;
+CREATE INDEX audit_log_thread ON audit_log (thread_id, occurred_at);
+CREATE TRIGGER audit_log_no_delete BEFORE DELETE ON audit_log
+BEGIN
+  SELECT RAISE(ABORT, 'the audit log is append-only');
+END;
+CREATE TRIGGER audit_log_no_update BEFORE UPDATE ON audit_log
+BEGIN
+  SELECT RAISE(ABORT, 'the audit log is append-only');
+END;
+PRAGMA legacy_alter_table = OFF;""",
 }
 
 # ponytail: fixed list; extend when a free-mail sender forms an Organization by mistake.
@@ -615,6 +670,9 @@ def migrate(db: sqlite3.Connection) -> None:
     db.create_function("org_key", 1, _org, deterministic=True)  # migration 7 (connect() also registers it)
     fk = db.execute("PRAGMA foreign_keys").fetchone()[0]
     db.execute("PRAGMA foreign_keys = OFF")  # table rebuilds (5) drop and rename parents; checked before commit
+    # A rebuild's statement journal spills to a temp file past 64 KiB; the update's migration check runs in a
+    # read-only container with no writable temp directory ("disk I/O error" on 28 with the live audit log).
+    db.execute("PRAGMA temp_store = MEMORY")
     try:
         db.executescript(f"BEGIN IMMEDIATE;\n{sql}\nPRAGMA user_version = {SCHEMA_VERSION};")
         if db.execute("PRAGMA foreign_key_check").fetchone():
@@ -649,6 +707,7 @@ def get_thread(db, thread_id: int) -> Thread:
 
 # --- unsent composition ------------------------------------------------------
 
+@writer("write")
 def save_draft(db, values: dict, *, draft_id: int | None = None,
                expected_revision: int | None = None, thread_id: int | None = None, task_id: int | None = None) -> dict:
     """Persist the complete edited envelope, including incomplete text; never send or create work.
@@ -699,6 +758,7 @@ def save_draft(db, values: dict, *, draft_id: int | None = None,
         return get_draft(db, draft_id)
 
 
+@writer("write")
 def save_reply_draft(db, thread_id: int, body: str, task_id: int | None = None) -> dict | None:
     """The reply Draft kept under one Thread id (the one its reply box opened on, so an alias keeps its own):
     text replaces it, empty text deletes it. The envelope comes from the Thread as the reply box shows it; the
@@ -717,6 +777,8 @@ def save_reply_draft(db, thread_id: int, body: str, task_id: int | None = None) 
         v = thread_view(db, thread_id)
         ch, title = v["channel"], v["thread"].title
         kind = platforms.PLATFORMS[ch["platform"]].format
+        if kind is None:
+            raise ValueError(NO_REPLY)
         values = dict(connection_id=ch["connection_id"], kind=kind, sender=ch["external_id"], cc="", subject=None,
                       to=v["where"], body=body)
         if kind == "email":
@@ -741,6 +803,7 @@ def send_time(choice: str, now: datetime, rand=random.random) -> datetime:
     return (datetime.combine(day, time(7), LOCAL) + timedelta(minutes=int(rand() * 120))).astimezone(timezone.utc)
 
 
+@writer("write")
 def schedule_draft(db, draft_id: int, send_at: datetime | None) -> dict:
     """Set when the service sends this Draft (None: only when Jeremy sends it); clears any failed send. The
     revision stays, so an open editor's next save does not conflict."""
@@ -754,6 +817,7 @@ def schedule_draft(db, draft_id: int, send_at: datetime | None) -> dict:
     return get_draft(db, draft_id)
 
 
+@writer("write")
 def schedule_reply(db, thread_id: int, body: str, to: list[str], cc: list[str], send_at: datetime | None) -> dict:
     """Save a reply box as its Thread's reply Draft, with the box's To and Cc, to send at `send_at`."""
     with db:
@@ -803,6 +867,7 @@ def get_draft(db, draft_id: int) -> dict:
     return dict(r)
 
 
+@writer("write")
 def delete_draft(db, draft_id: int) -> dict:
     """Remove one unsent Draft; return its row so `restore_draft` can put it back."""
     from . import sequences
@@ -813,6 +878,7 @@ def delete_draft(db, draft_id: int) -> dict:
     return draft
 
 
+@writer("write")
 def restore_draft(db, draft: dict) -> None:
     from . import sequences
     columns = ", ".join(f'"{c}"' for c in draft)
@@ -1108,9 +1174,10 @@ def transition(current: tuple[str, str] | None, event, *, has_replied: bool = Fa
             return None if status == "TODO" else fresh
         case Done():
             return ("DONE", "DONE_MANUALLY_SET")
+        case Snooze(until=None):
+            raise SnoozeNeedsDate()  # WAITING_INDEFINITELY stays readable for old rows (0 live)
         case Snooze(until=until):
-            return ("SNOOZED", "WAITING_INDEFINITELY" if until is None else "WAITING_FOR_DURATION",
-                    None if until is None else _iso(until), detail if status == "TODO" else None)
+            return ("SNOOZED", "WAITING_FOR_DURATION", _iso(until), detail if status == "TODO" else None)
         case Wait():
             return ("SNOOZED", "WAITING_FOR_CUSTOMER")
         case Investigate():
@@ -1232,12 +1299,14 @@ def _same_person(db, name: str, value: str, kind: str) -> int | None:
     return None
 
 
+@writer("write")
 def rename_person(db, person_id: int, name: str) -> None:
     """Jeremy's own name for a Person; senders' display names only replace a name that is still an address."""
     with db:
         db.execute("UPDATE persons SET display_name = ? WHERE id = ?", (name.strip(), person_id))
 
 
+@writer("write")
 def merge_persons(db, keep: int, drop: int) -> None:
     """One Person from two: `drop`'s Identities (and so its Threads) move to `keep`, which keeps the
     fuller name."""
@@ -1412,6 +1481,7 @@ def _identity_for(db, sender: Identity) -> sqlite3.Row:
                       (sender.kind, value)).fetchone()
 
 
+@writer("create")
 def block(db, kind: str, value: str, blocked: bool = True) -> None:
     value = value.lower() if kind == "email" else value
     with db:
@@ -1435,6 +1505,7 @@ def thread_senders(db, thread_id: int) -> list[dict]:
     return senders
 
 
+@writer("create")
 def add_identity(db, person_id: int, kind: str, value: str) -> None:
     value = value.lower() if kind == "email" else value
     with db:
@@ -1451,6 +1522,7 @@ def add_identity(db, person_id: int, kind: str, value: str) -> None:
         _ensure_org(db, kind, value)
 
 
+@writer("write")
 def remove_identity(db, identity_id: int) -> None:
     with db:
         db.execute("UPDATE identities SET person_id = NULL WHERE id = ?", (identity_id,))
@@ -1470,6 +1542,9 @@ def _channel_id(db, inc: Incoming) -> int:
 
 def _thread_for_message(db, channel_id, inc: Incoming, identity_id):
     """Existing Thread this message joins, or None (design §4 Threading)."""
+    if inc.channel_kind == "meeting":  # one Thread per Event UID, so a series is one Thread (FR-OA-12)
+        r = db.execute("SELECT id FROM threads WHERE channel_id = ? AND merged_into IS NULL", (channel_id,)).fetchone()
+        return r and r["id"]
     if inc.channel_kind == "mailbox":
         rows, own, refs, known = _email_evidence(db)
         declared = _email_ids(inc.thread_ref, ordered=True)
@@ -1646,6 +1721,7 @@ def _owner(db, draft_id, thread_id) -> tuple[str, int]:
     return ("thread_id", r[0]) if r and r[0] is not None else ("draft_id", draft_id)
 
 
+@writer("create")
 def stage(db, *, sha: str, name: str, type: str, size: int,
           draft_id: int | None = None, thread_id: int | None = None) -> int:
     """Attach a stored file to an unsent Draft or to one Thread's open reply."""
@@ -1675,6 +1751,7 @@ def staged_files(db, *, draft_id: int | None = None, thread_id: int | None = Non
     return out
 
 
+@writer("write")
 def unstage(db, staged_id: int) -> None:
     with db:
         db.execute("DELETE FROM staged_attachments WHERE id = ?", (staged_id,))
@@ -1978,7 +2055,9 @@ def _ingest(db, inc: Incoming) -> Thread | None:
     at = inc.occurred_at
 
     target_id = None
-    call = inc.kind == "MESSAGE" and "call" in inc.data  # a Phone call: every one puts its Thread in Todo
+    meeting = inc.kind == "MESSAGE" and "meeting" in inc.data
+    call = inc.kind == "MESSAGE" and "call" in inc.data or meeting  # a Phone call or a Meeting: every one puts
+    # its Thread in Todo (FR-OA-13, FR-OA-14)
     if inc.kind == "MESSAGE":
         thread_id = _thread_for_message(db, channel_id, inc, identity_id)
     else:
@@ -2015,23 +2094,24 @@ def _ingest(db, inc: Incoming) -> Thread | None:
     t = get_thread(db, thread_id)
     if not created or t.id != thread_id:
         if (not event.blocked or call) and (nxt := transition((t.status, t.status_detail), event)):
-            _set_status(db, t.id, at, *nxt, cause="reply" if event.from_jeremy else "call" if call else inc.kind.lower())
+            _set_status(db, t.id, at, *nxt, cause="reply" if event.from_jeremy else "meeting" if meeting else "call" if call else inc.kind.lower())
     if inc.kind == "DELETE":  # FR-2a
         db.execute("UPDATE activities SET content = NULL WHERE id = ?"
                    " OR (kind = 'EDIT' AND target_id = ?)", (target_id, target_id))
     if inc.kind == "MESSAGE":  # Sequences: anything from the Person, or a connected call, pauses (FR-SEQ-12)
         from . import sequences
         person = identity["person_id"] if identity else None
-        if identity is None and call and inc.data["call"]["outcome"] == "connected" and inc.data.get("peer"):
+        if identity is None and call and not meeting and inc.data["call"]["outcome"] == "connected" and inc.data.get("peer"):
             row = db.execute("SELECT person_id FROM identities WHERE kind = 'phone' AND value = ?", (inc.data["peer"],)).fetchone()
             person = row[0] if row else None
         if person is not None:
-            sequences.pause_person(db, person, at, "call" if call else "replied")
+            sequences.pause_person(db, person, at, "call" if call and not meeting else "replied")
     return get_thread(db, thread_id)
 
 
 # --- act, reply, wake ------------------------------------------------------
 
+@writer("write")
 def act(db, thread_id: int, action: Action | Reopen) -> Thread:
     with db:
         if not db.in_transaction:
@@ -2068,6 +2148,8 @@ def reply(db, thread_id: int, text: str, sender: Sender,
                     "at": r["occurred_at"]} for r in records]
         connection_id, platform = db.execute("SELECT c.id, c.platform FROM channels ch JOIN connections c"
                                              " ON c.id = ch.connection_id WHERE ch.id = ?", (t.channel_id,)).fetchone()
+        if platforms.PLATFORMS[platform].format is None:
+            raise ValueError(NO_REPLY)
         files = staged_files(db, thread_id=staged_on)
         from . import sequences
         draft = db.execute("SELECT * FROM composition_drafts WHERE thread_id = ?", (staged_on,)).fetchone()
@@ -2261,6 +2343,16 @@ def _members(db) -> dict[str, set[int]]:
     return members
 
 
+NO_REPLY = "A Meeting Thread takes no replies. Write to its people in a new Draft (n)."
+
+
+class SnoozeNeedsDate(ValueError):
+    """A Snooze always runs until a date (GLOSSARY Snoozed; FR-OA-10)."""
+
+    def __init__(self, message: str = "a Snooze needs a date"):  # the remote copy rebuilds it from its message
+        super().__init__(message)
+
+
 class FreeMail(ValueError):
     """A free-mail domain (gmail.com, …) is never an Organization."""
 
@@ -2272,6 +2364,7 @@ def membership(db, person_id: int, domain: str) -> bool | None:
     return None if r is None else bool(r[0])
 
 
+@writer("create")
 def set_membership(db, person_id: int, domain: str, member: bool | None) -> bool | None:
     """Add (True) or remove (False) a Person from an Organization, or drop Jeremy's change (None) so the email
     domain decides again. Creates the Organization for a new company domain. Returns the previous change, for
@@ -2293,6 +2386,7 @@ def set_membership(db, person_id: int, domain: str, member: bool | None) -> bool
     return before
 
 
+@writer("write")
 def set_case_description(db, case_id: int, description: str) -> None:
     with db:
         old = db.execute("SELECT description FROM cases WHERE id = ?", (case_id,)).fetchone()[0]
@@ -2349,6 +2443,7 @@ def case_status(details) -> str:
     return next((v for v in CASE_VIEWS if any(d in VIEWS[v] for d in details)), "Todo")
 
 
+@writer("create")
 def create_case(db, title: str) -> int:
     """A Case with no Threads yet (#120)."""
     with db:
@@ -2390,6 +2485,8 @@ def _sender(db, identity_id):
 
 def _where(channel, identity) -> str:
     kind = channel["kind"]
+    if kind == "meeting":
+        return "Meeting"
     dm = platforms.PLATFORMS.get(dict(channel).get("platform"))
     if kind == "im" and dm and dm.dm_where:  # the queue already shows the sender's number
         return dm.dm_where if identity else f"{dm.dm_where} · {channel['name'] or channel['native_id']}"
@@ -2590,12 +2687,14 @@ def channel_rules(db, connection_id: int) -> list[dict]:
         "SELECT id, kind, value FROM channel_rules WHERE connection_id = ? ORDER BY kind, value", (connection_id,))]
 
 
+@writer("create")
 def add_channel_rule(db, connection_id: int, kind: str, value: str) -> None:
     with db:
         db.execute("INSERT OR IGNORE INTO channel_rules (connection_id, kind, value) VALUES (?, ?, ?)",
                    (connection_id, kind, value))
 
 
+@writer("write")
 def delete_channel_rule(db, rule_id: int) -> None:
     with db:
         db.execute("DELETE FROM channel_rules WHERE id = ?", (rule_id,))
@@ -2689,6 +2788,7 @@ def snapshot(db, thread_id: int) -> dict:
     return snap
 
 
+@writer("write")
 def restore(db, snap: dict) -> Thread:
     with db:
         if not db.in_transaction:
