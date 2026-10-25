@@ -610,6 +610,100 @@ def test_case_only_selected_card_reads_and_react_navigation_never_crosses_cards(
     run(app, [scenario], size=(187, 50))
 
 
+def test_sunday_snooze_options_keep_unique_destinations_in_real_picker(tmp_path):
+    now = datetime(2026, 10, 25, 12, tzinfo=timezone.utc)  # Sunday: tomorrow and next Monday coincide.
+    options = tui.snooze_options(now)
+    assert options == [("2026-10-25T13:00:00+00:00", "1 hour (13:00)"),
+                       ("2026-10-26T09:00:00+00:00", "Tomorrow 9:00"), ("typed", "Pick a time…")]
+    app, _, _ = make_reaction_app(tmp_path)
+    selected = []
+
+    async def scenario(app, pilot):
+        await settle(app, pilot)
+        app.push_screen(tui.Pick("Pause for later", options), selected.append)
+        await pilot.pause()
+        await pilot.press("enter")
+        assert selected == ["2026-10-25T13:00:00+00:00"]
+
+    run(app, [scenario], size=(187, 50))
+
+
+def test_passive_snapshot_budget_caps_long_threads_bursts_and_keeps_explicit_recovery(tmp_path):
+    app, ids, fake = make_reaction_app(tmp_path, message_count=30)
+    pending = []
+    app._reaction_fetch = pending.append
+
+    def finish_reads():
+        while pending:
+            job = pending.pop(0)
+            tid, mid, cid = job["key"]
+            result = fake(dict(op="read", thread_id=tid, message_id=mid, connection_id=cid))
+            app._reaction_read_done(job, result)
+
+    async def scenario(app, pilot):
+        await pilot.pause(tui.PREVIEW_GAP * 2 + 0.05)
+        recent = set(ids["messages"][-20:])
+        for _ in range(5):
+            assert len(pending) == 1 and len(app._reaction_reads) == 19
+            assert {j["key"][1] for j in pending + app._reaction_reads} == recent
+            await pilot.press("f5")
+            await pilot.pause(tui.PREVIEW_GAP * 2)
+        finish_reads()
+        await pilot.pause()
+        assert len(fake.calls) == app._reaction_passive_used == 20
+        assert {c["message_id"] for c in fake.calls} == recent
+        assert all(app.reaction_states[key]["totals"] == "unavailable" for key in ids["keys"][:-20])
+
+        warnings = ("Outcome unknown — use React to check", "Added 👍", "Adding 👍…")
+        for key, outcome, feedback in zip(ids["keys"][:3], ("unknown", "confirmed", None), warnings):
+            target, identity = app._reaction_target(key)
+            app._reaction_state(key).update(revision=target["revision"], identity=identity, feedback=feedback,
+                                            write_outcome=outcome, pending=outcome is None,
+                                            write_feedback=feedback if outcome == "confirmed" else "")
+        for tid in (ids["other"], ids["thread"], ids["other"], ids["thread"]):
+            app.main.open_thread(tid)
+            await pilot.pause(tui.PREVIEW_GAP * 2)
+            await pilot.press("f5")
+            await pilot.pause(tui.PREVIEW_GAP * 2)
+            assert not pending and not app._reaction_reads and len(fake.calls) == 20
+        assert [app.reaction_states[key]["feedback"] for key in ids["keys"][:3]] == list(warnings)
+        assert all(app.reaction_states[key]["totals"] == "unavailable" for key in ids["keys"])
+
+        app.repaint_messages()
+        app.main.refresh_all()
+        app.minute()
+        db = inbox.connect(app.db_path)
+        with db:
+            db.execute("UPDATE persons SET display_name = display_name || ' updated' WHERE id = (SELECT min(id) FROM persons)")
+        db.close()
+        app.check_changes()
+        await pilot.pause(tui.PREVIEW_GAP * 2)
+        assert not pending and len(fake.calls) == 20
+        app._reaction_passive_started -= tui.REACTION_PASSIVE_SECONDS + 1
+        app.minute()
+        app.repaint_messages()
+        await pilot.pause(tui.PREVIEW_GAP * 2)
+        assert not pending and len(fake.calls) == app._reaction_passive_used == 20
+        await pilot.press("f5")
+        await pilot.pause(tui.PREVIEW_GAP * 2)
+        assert len(pending) == 1 and len(app._reaction_reads) == 19
+        finish_reads()
+        await pilot.pause()
+        assert len(fake.calls) == 40 and app._reaction_passive_used == 20
+
+        original = ids["keys"][0]
+        app.react_mode = True
+        app._reaction_select(original, recovery=True)
+        assert len(pending) == 1 and pending[0]["key"] == original and pending[0]["owner"] is None
+        finish_reads()
+        await pilot.pause()
+        assert fake.calls[-1] == dict(op="read", thread_id=original[0], message_id=original[1], connection_id=original[2])
+        assert len(fake.calls) == 41 and app._reaction_passive_used == 20 and not fake.writes
+        assert app.reaction_states[original]["ready"] and app.reaction_states[original]["write_outcome"] is None
+
+    run(app, [scenario], size=(187, 50))
+
+
 def test_read_batch_is_serial_coalesced_and_stops_obsolete_work(tmp_path):
     app, ids, fake = make_reaction_app(tmp_path, message_count=20)
     pending = []

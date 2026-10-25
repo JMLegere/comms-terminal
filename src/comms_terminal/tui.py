@@ -685,8 +685,10 @@ def snooze_options(now: datetime) -> list[tuple[str, str]]:
     tomorrow = (now + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
     monday = (now + timedelta(days=7 - now.weekday())).replace(hour=9, minute=0, second=0, microsecond=0)
     hour = now + timedelta(hours=1)
-    return [(hour.isoformat(), f"1 hour ({hour:%H:%M})"), (tomorrow.isoformat(), "Tomorrow 9:00"),
-            (monday.isoformat(), "Next Monday 9:00"), ("typed", "Pick a time…")]
+    options = [(hour.isoformat(), f"1 hour ({hour:%H:%M})"), (tomorrow.isoformat(), "Tomorrow 9:00")]
+    if monday != tomorrow:  # Sunday: tomorrow already is next Monday; Pick requires unique destination IDs.
+        options.append((monday.isoformat(), "Next Monday 9:00"))
+    return options + [("typed", "Pick a time…")]
 
 
 def parse_time(text: str, now: datetime) -> datetime | None:
@@ -1970,6 +1972,8 @@ class MessageText(Static):
 
 REACTION_CHOICES = (("+1", "👍", "Like"), ("pray", "🙏", "Thanks"), ("eyes", "👀", "Looking"))
 REACTION_GLYPHS = {name: emoji for name, emoji, _ in REACTION_CHOICES}
+# ponytail: per-console passive ceiling; use a shared provider budget if multiple clients become routine.
+REACTION_SNAPSHOT_LIMIT, REACTION_PASSIVE_LIMIT, REACTION_PASSIVE_SECONDS = 20, 20, 60
 
 
 class ReactionLine(MessageText):
@@ -6597,6 +6601,7 @@ class Console(App):
         self._reaction_timer, self._reaction_owner = None, None
         self._reaction_display_owner = None
         self._reaction_viewport_generation = 0
+        self._reaction_passive_started, self._reaction_passive_used = None, 0
         self._app_lock_fd = inherited_app_lock_fd()
         self._managed_console = self._app_lock_fd is not None
         self._console_stopping = self._console_closed = self._console_editors_saved = False
@@ -6836,6 +6841,12 @@ class Console(App):
                                                         groups=[], own={}, feedback="", write_outcome=None,
                                                         write_feedback=""))
 
+    def _reaction_unavailable(self, key, feedback="Reaction snapshot partial · v to check · f5 later"):
+        state = self._reaction_state(key)
+        state.update(ready=False, totals="unavailable")
+        if not state["pending"] and state["write_outcome"] not in ("unknown", "confirmed"):
+            state["feedback"] = feedback
+
     def reaction_view(self, v):
         """Invalidate known edits/identity loss on repaint, without reading Slack."""
         for m in v["messages"]:
@@ -6912,12 +6923,25 @@ class Console(App):
         if self._reaction_owner == owner and not force:
             return
         self._reaction_owner = owner
-        self._reaction_reads = [j for j in self._reaction_reads if j["owner"] in (None, owner)]
+        self._reaction_reads = [j for j in self._reaction_reads if j["owner"] is None]
         v = scope[0]
         if v["channel"]["platform"] == "slack":
-            for m in v["messages"]:
-                if not m["deleted"]:
-                    self._reaction_read((thread_id, m["id"], v["channel"]["connection_id"]), owner=owner)
+            now = time.monotonic()
+            if self._reaction_passive_started is None or now - self._reaction_passive_started >= REACTION_PASSIVE_SECONDS:
+                self._reaction_passive_started, self._reaction_passive_used = now, 0
+            messages = [m for m in v["messages"] if not m["deleted"]]
+            recent = messages[-REACTION_SNAPSHOT_LIMIT:]
+            available = max(0, REACTION_PASSIVE_LIMIT - self._reaction_passive_used)
+            selected = {m["id"] for m in recent[-available:]} if available else set()
+            active = self._reaction_read_active
+            if active and active["owner"] == owner and active["key"][1] in {m["id"] for m in recent}:
+                selected.add(active["key"][1])
+            for m in messages:
+                key = (thread_id, m["id"], v["channel"]["connection_id"])
+                if m["id"] in selected:
+                    self._reaction_read(key, owner=owner)
+                else:
+                    self._reaction_unavailable(key)
             self._reaction_repaint(preserve_viewport=False)
 
     def _reaction_candidates(self):
@@ -7054,6 +7078,11 @@ class Console(App):
                 continue
             if self._reaction_state(job["key"])["generation"] != job["generation"]:
                 continue
+            if job["owner"] is not None:
+                if self._reaction_passive_used >= REACTION_PASSIVE_LIMIT:
+                    self._reaction_unavailable(job["key"])
+                    continue
+                self._reaction_passive_used += 1
             self._reaction_read_active = job
             self._reaction_fetch(job)
             break
@@ -7124,10 +7153,7 @@ class Console(App):
                     remaining = [j for j in self._reaction_reads if j["owner"] == job["owner"]]
                     self._reaction_reads = [j for j in self._reaction_reads if j not in remaining]
                     for skipped in remaining:
-                        skipped_state = self._reaction_state(skipped["key"])
-                        skipped_state.update(ready=False, totals="unavailable")
-                        if not skipped_state["pending"] and skipped_state["write_outcome"] not in ("unknown", "confirmed"):
-                            skipped_state["feedback"] = "Couldn’t check reactions · f5 to refresh"
+                        self._reaction_unavailable(skipped["key"], "Couldn’t check reactions · f5 to refresh")
             self._reaction_repaint(preserve_viewport=job["owner"] is None, target=job["key"])
         self._reaction_next_read()
 
