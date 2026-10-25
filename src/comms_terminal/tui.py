@@ -6858,11 +6858,12 @@ class Console(App):
                                                  feedback="Outcome unknown — original target unavailable")
                 continue
             state = self.reaction_states.get(key)
-            if state and (m["deleted"] or state.get("identity") != self._reaction_identity(v, m)
-                          or state.get("revision") != m.get("revision")):
+            # A never-queried partial snapshot has no checked binding to lose.
+            if state and (m["deleted"] or ("identity" in state and state["identity"] != self._reaction_identity(v, m))
+                          or ("revision" in state and state["revision"] != m.get("revision"))):
                 state.update(ready=False, totals="unavailable")
                 if state["write_outcome"] != "confirmed":
-                    lost_identity = state.get("identity") != self._reaction_identity(v, m)
+                    lost_identity = "identity" in state and state["identity"] != self._reaction_identity(v, m)
                     state["feedback"] = ("Outcome unknown — original target unavailable" if
                                          state["write_outcome"] == "unknown" and (m["deleted"] or lost_identity) else
                                          "Original reaction target unavailable" if m["deleted"] or lost_identity else

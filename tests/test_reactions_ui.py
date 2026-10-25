@@ -640,6 +640,17 @@ def test_passive_snapshot_budget_caps_long_threads_bursts_and_keeps_explicit_rec
             result = fake(dict(op="read", thread_id=tid, message_id=mid, connection_id=cid))
             app._reaction_read_done(job, result)
 
+    async def assert_partial_visible(pilot, key):
+        row = message_row(app, key)
+        scroller = app.reaction_scope()[2]
+        scroller.pinned = False
+        scroller.scroll_to_widget(row, animate=False)
+        await pilot.pause()
+        text = visible_text(row)
+        assert "Reaction snapshot partial" in text and "v to check" in text and "f5 later" in text
+        assert "Original reaction target unavailable" not in text
+        assert row.query_one(".reaction-feedback").region.overlaps(scroller.scrollable_content_region)
+
     async def scenario(app, pilot):
         await pilot.pause(tui.PREVIEW_GAP * 2 + 0.05)
         recent = set(ids["messages"][-20:])
@@ -653,6 +664,10 @@ def test_passive_snapshot_budget_caps_long_threads_bursts_and_keeps_explicit_rec
         assert len(fake.calls) == app._reaction_passive_used == 20
         assert {c["message_id"] for c in fake.calls} == recent
         assert all(app.reaction_states[key]["totals"] == "unavailable" for key in ids["keys"][:-20])
+        app.action_expand_all(True)
+        await pilot.pause()
+        await assert_partial_visible(pilot, ids["keys"][0])
+        assert len(fake.calls) == 20  # Expanding/revealing the capped message still performs no source read.
 
         warnings = ("Outcome unknown — use React to check", "Added 👍", "Adding 👍…")
         for key, outcome, feedback in zip(ids["keys"][:3], ("unknown", "confirmed", None), warnings):
@@ -666,6 +681,9 @@ def test_passive_snapshot_budget_caps_long_threads_bursts_and_keeps_explicit_rec
             await pilot.press("f5")
             await pilot.pause(tui.PREVIEW_GAP * 2)
             assert not pending and not app._reaction_reads and len(fake.calls) == 20
+            if tid == ids["other"]:
+                view = app.reaction_scope()[0]
+                await assert_partial_visible(pilot, (tid, view["messages"][0]["id"], view["channel"]["connection_id"]))
         assert [app.reaction_states[key]["feedback"] for key in ids["keys"][:3]] == list(warnings)
         assert all(app.reaction_states[key]["totals"] == "unavailable" for key in ids["keys"])
 
