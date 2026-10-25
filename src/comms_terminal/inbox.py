@@ -669,6 +669,9 @@ def migrate(db: sqlite3.Connection) -> None:
     db.create_function("org_key", 1, _org, deterministic=True)  # migration 7 (connect() also registers it)
     fk = db.execute("PRAGMA foreign_keys").fetchone()[0]
     db.execute("PRAGMA foreign_keys = OFF")  # table rebuilds (5) drop and rename parents; checked before commit
+    # A rebuild's statement journal spills to a temp file past 64 KiB; the update's migration check runs in a
+    # read-only container with no writable temp directory ("disk I/O error" on 28 with the live audit log).
+    db.execute("PRAGMA temp_store = MEMORY")
     try:
         db.executescript(f"BEGIN IMMEDIATE;\n{sql}\nPRAGMA user_version = {SCHEMA_VERSION};")
         if db.execute("PRAGMA foreign_key_check").fetchone():
