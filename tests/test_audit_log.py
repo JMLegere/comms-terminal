@@ -201,7 +201,7 @@ def test_blocked_phone_calls_keep_existing_creation_and_reopen_rules(slack_threa
     inbox.block(db, "phone", "+15555550101")
     call = inbox.Incoming(2, "+15555550101", "im", "MESSAGE", "call-1",
                           inbox.Identity("phone", "+15555550101"), NOW - timedelta(minutes=2), "Missed call",
-                          data={"peer": "+15555550101", "call": {"direction": "incoming", "outcome": "missed", "length": 0}})
+                          data={"peer": "+15555550101", "call": {"direction": "incoming", "outcome": "missed", "length": 0}}, synchronous="call")
     thread = inbox.ingest(db, call)
     assert (thread.status, thread.status_detail) == ("DONE", "IGNORED")
     assert entries(db, thread.id) == [("STATUS", "blocked", None, "IGNORED", None)]

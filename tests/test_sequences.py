@@ -204,7 +204,7 @@ def test_inbound_reply_pauses_and_resume_makes_the_next_task_due(db):  # AS-SEQ-
                    " VALUES (3, 'quo', '+15065550000', '+15065550000', 'Quo', ?)", (MONDAY.isoformat(),))
     call = {"direction": "outgoing", "outcome": "connected", "length": 70}
     inbox.ingest(db, inbox.Incoming(3, "+15065550101", "im", "MESSAGE", "AC1", None, MONDAY + 3 * DAY + timedelta(hours=1),
-                                    "Outgoing call, 1m 10s", data={"peer": "+15065550101", "call": call}))
+                                    "Outgoing call, 1m 10s", data={"peer": "+15065550101", "call": call}, synchronous="call"))
     assert sq.enrollments(db, dana)[0]["pause_reason"] == "call"
 
 

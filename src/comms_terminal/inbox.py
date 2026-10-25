@@ -517,6 +517,10 @@ class Incoming:
     title: str | None = None
     data: dict = field(default_factory=dict)
     channel_name: str | None = None  # a friendly name for the Channel (Slack #name, DM partner); kept current
+    synchronous: str | None = None  # "call" or "meeting": a Phone call or Meeting puts its Thread in Todo whoever
+    # started it (FR-OA-13, FR-OA-14); its details stay in data
+    participants: tuple[Identity, ...] = ()  # others in it besides the sender (Meeting attendees), each kept as an
+    # Identity so Membership and the roll-up see them (FR-OA-15)
 
 
 @dataclass(frozen=True)
@@ -1073,8 +1077,7 @@ def send_draft(db, draft_id: int, revision: int, sender: Sender, *, again: bool 
         mailbox = db.execute("SELECT native_id FROM channels WHERE connection_id = ? AND kind = 'mailbox'",
                              (connection["id"],)).fetchone()
         channel = mailbox["native_id"] if mailbox else connection["self_id"]
-        channel_id = _channel_id(db, Incoming(connection["id"], channel, "mailbox", "MESSAGE",
-                                              native_id, None, now, d["body"]))
+        channel_id = _channel_id(db, connection["id"], channel, "mailbox")
         thread_id = _new_thread(db, channel_id, native_id, d["subject"].strip()[:80],
                                 transition(None, Arrived(from_jeremy=True)), now)
         data = {"from": connection["self_id"], "to": to, "cc": cc, "subject": d["subject"]}
@@ -1524,14 +1527,14 @@ def remove_identity(db, identity_id: int) -> None:
 
 # --- ingest ----------------------------------------------------------------
 
-def _channel_id(db, inc: Incoming) -> int:
+def _channel_id(db, connection_id: int, native_id: str, kind: str, name: str | None = None) -> int:
     db.execute("INSERT OR IGNORE INTO channels (connection_id, native_id, kind) VALUES (?, ?, ?)",
-               (inc.connection_id, inc.channel, inc.channel_kind))
-    if inc.channel_name:
+               (connection_id, native_id, kind))
+    if name:
         db.execute("UPDATE channels SET name = ? WHERE connection_id = ? AND native_id = ? AND name IS NOT ?",
-                   (inc.channel_name, inc.connection_id, inc.channel, inc.channel_name))
+                   (name, connection_id, native_id, name))
     return db.execute("SELECT id FROM channels WHERE connection_id = ? AND native_id = ?",
-                      (inc.connection_id, inc.channel)).fetchone()["id"]
+                      (connection_id, native_id)).fetchone()["id"]
 
 
 def _thread_for_message(db, channel_id, inc: Incoming, identity_id):
@@ -2015,8 +2018,8 @@ def reconcile_resend_receipts(db) -> None:
 
 
 def ingest(db, inc: Incoming) -> Thread | None:
-    """Store one message, edit, or deletion; returns its Thread, or None for a
-    duplicate or an edit/deletion of a message that was never stored."""
+    """Store one message, Phone call, Meeting, edit, or deletion, with its participants; returns its Thread, or None
+    for a duplicate or an edit/deletion of a message that was never stored."""
     with db:
         return _ingest(db, inc)
 
@@ -2037,7 +2040,7 @@ def _ingest(db, inc: Incoming) -> Thread | None:
                 if added:
                     _reconcile_email_threads(db, True, ch["id"])
         return None
-    channel_id = _channel_id(db, inc)
+    channel_id = _channel_id(db, inc.connection_id, inc.channel, inc.channel_kind, inc.channel_name)
     sender = inc.sender
     if sender and sender.kind == "email" and db.execute(  # Jeremy's own address on any Connection (#117)
             f"SELECT 1 FROM connections WHERE platform IN ({','.join('?' * len(platforms.EMAIL))})"
@@ -2046,12 +2049,13 @@ def _ingest(db, inc: Incoming) -> Thread | None:
         sender = None
     identity = _identity_for(db, sender) if sender else None
     identity_id = identity["id"] if identity else None
+    for p in inc.participants:
+        _identity_for(db, p)
     at = inc.occurred_at
 
     target_id = None
-    meeting = inc.kind == "MESSAGE" and "meeting" in inc.data
-    call = inc.kind == "MESSAGE" and "call" in inc.data or meeting  # a Phone call or a Meeting: every one puts
-    # its Thread in Todo (FR-OA-13, FR-OA-14)
+    meeting = inc.kind == "MESSAGE" and inc.synchronous == "meeting"
+    call = inc.kind == "MESSAGE" and inc.synchronous is not None  # a Phone call or a Meeting
     if inc.kind == "MESSAGE":
         thread_id = _thread_for_message(db, channel_id, inc, identity_id)
     else:

@@ -76,15 +76,12 @@ def _record(db, c, o: dict, what: str, people: list[dict], rid: str, at: datetim
     names = ", ".join(p["name"] or p["email"] for p in people)
     content = "\n".join([f"{WHAT[what]} · {o['title']}", f"{meeting['where']} · {start:%a %b %-d %H:%M}–{end:%H:%M}"]
                         + ([f"Join: {o['join_url']}"] if o["join_url"] else []) + [f"With: {names}"])
-    with db:
-        for p in people:  # every outside attendee is a Participant, so Membership and the roll-up see them
-            if p is not sender:
-                inbox._identity_for(db, inbox.Identity("email", p["email"], p["name"] or None))
-        return inbox._ingest(db, inbox.Incoming(
-            c["id"], o["uid"], "meeting", "MESSAGE", f"gcal:{o['uid']}:{rid}:{what}{key}",
-            inbox.Identity("email", sender["email"], sender["name"] or None), at, content, title=o["title"],
-            data={"meeting": meeting, "to": [p["email"] for p in people if p is not sender]},
-            channel_name=o["title"]))
+    others = [p for p in people if p is not sender]  # every outside attendee is a Participant (FR-OA-15)
+    return inbox.ingest(db, inbox.Incoming(
+        c["id"], o["uid"], "meeting", "MESSAGE", f"gcal:{o['uid']}:{rid}:{what}{key}",
+        inbox.Identity("email", sender["email"], sender["name"] or None), at, content, title=o["title"],
+        data={"meeting": meeting, "to": [p["email"] for p in others]}, channel_name=o["title"],
+        synchronous="meeting", participants=tuple(inbox.Identity("email", p["email"], p["name"] or None) for p in others)))
 
 
 def _parse(ics: str, mine, series=frozenset()) -> dict:

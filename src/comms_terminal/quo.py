@@ -83,7 +83,7 @@ def _call(event: dict, connection) -> inbox.Incoming | None:
         sender=inbox.Identity("phone", peer) if incoming else None,
         occurred_at=datetime.fromisoformat(r["createdAt"].replace("Z", "+00:00")), content=summary, title=summary,
         data={"peer": peer, "conversation": c.get("conversationId"), "call": call, **({"link": link} if link else {})},
-        channel_name=peer)
+        channel_name=peer, synchronous="call")
 
 
 def _transcript(event: dict, connection) -> inbox.Incoming | None:
