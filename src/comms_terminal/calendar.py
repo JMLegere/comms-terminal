@@ -10,6 +10,8 @@ from datetime import date, datetime, time, timedelta, timezone
 import icalendar
 import recurring_ical_events
 
+from . import clock
+
 CREDENTIAL = "google-calendar-ics"  # the secret address: a bearer secret, held only by the service
 SYNTHETIC = "X-UI-REMOVED-OCCURRENCE"  # marks a stored copy of one occurrence Google removed from a series
 FAILED = 3  # failed fetches in a row before the Calendar says the Event provider is broken
@@ -22,13 +24,6 @@ def fetch(url: str, timeout: float = 20) -> str:
         return r.read().decode("utf-8", "replace")
 
 
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
-
-
-def _local(value) -> datetime:
-    """A date or datetime as an aware local datetime (naive and floating values are local time)."""
-    return (value if isinstance(value, datetime) else datetime.combine(value, time())).astimezone()
 
 
 def _rid(value) -> str:
@@ -63,7 +58,7 @@ def _removed_occurrence(master_ics: str, when) -> str:
 def sync(db, feed: str, now: str | None = None) -> bool:
     """Store the feed: new and changed Events written, Events gone from it marked deleted, nothing written when
     nothing changed (each write sends the laptop console a new copy). True when something changed."""
-    now = now or _now()
+    now = now or clock.now().isoformat(timespec="seconds")
     cal = icalendar.Calendar.from_ical(feed)
     new = {}
     for ev in cal.walk("VEVENT"):
@@ -198,24 +193,24 @@ def expand(db, start: date, end: date, deleted: bool = True) -> list[dict]:
     out = [_occurrence(o, mine, series, m) for o, m in found]
     if not deleted:
         out = [e for e in out if not e["deleted_at"]]
-    return sorted(out, key=lambda e: (not e["all_day"], _local(e["start"])))
+    return sorted(out, key=lambda e: (not e["all_day"], clock.local(e["start"])))
 
 
 def now_and_next(db, now: datetime | None = None) -> tuple[dict | None, dict | None]:
     """The timed Event in progress and the next one to start, on any day within a year; Declined and Deleted
     Events do not count."""
-    now = now or datetime.now().astimezone()
+    now = now or clock.local()
     timed = [e for e in expand(db, now.date() - timedelta(days=1), now.date() + timedelta(days=366), deleted=False)
              if not e["all_day"] and e["state"] != "DECLINED"]
-    current = [e for e in timed if _local(e["start"]) <= now < _local(e["end"])]
-    later = [e for e in timed if _local(e["start"]) > now]
-    return (max(current, key=lambda e: _local(e["start"])) if current else None,
-            min(later, key=lambda e: _local(e["start"])) if later else None)
+    current = [e for e in timed if clock.local(e["start"]) <= now < clock.local(e["end"])]
+    later = [e for e in timed if clock.local(e["start"]) > now]
+    return (max(current, key=lambda e: clock.local(e["start"])) if current else None,
+            min(later, key=lambda e: clock.local(e["start"])) if later else None)
 
 
 def _when(value: str | None) -> datetime | None:
     try:
-        return _local(datetime.fromisoformat(value)) if value else None
+        return clock.local(datetime.fromisoformat(value)) if value else None
     except ValueError:
         return None
 
@@ -224,8 +219,8 @@ def items(db, start: date, end: date) -> list[dict]:
     """Calendar Items on the local days [start, end): Events, Tasks on their day, Snoozed Threads at their wake
     time, Drafts at their send time, and Enrollments on their start day. Each has kind, at (local), all_day,
     title, and the id it opens."""
-    lo, hi = _local(start), _local(end)
-    out = [{**e, "kind": "event", "type": e["kind"], "at": _local(e["start"])} for e in expand(db, start, end)]
+    lo, hi = clock.local(start), clock.local(end)
+    out = [{**e, "kind": "event", "type": e["kind"], "at": clock.local(e["start"])} for e in expand(db, start, end)]
 
     def add(kind, at, title, ref, **extra):
         when = _when(at)

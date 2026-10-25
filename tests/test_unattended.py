@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from comms_terminal import inbox, pipeline as pl, sequences as sq
+from comms_terminal import clock, inbox, pipeline as pl, sequences as sq
 
 NOW = datetime(2026, 10, 24, 16, 0, tzinfo=timezone.utc)
 DAY = timedelta(days=1)
@@ -16,9 +16,7 @@ R = pl.REVENUE
 
 @pytest.fixture
 def db(monkeypatch):
-    monkeypatch.setattr(inbox, "_now", lambda: NOW)
-    monkeypatch.setattr(pl, "_now", lambda: NOW)
-    monkeypatch.setattr(sq, "_now", lambda: NOW)
+    monkeypatch.setattr(clock, "now", lambda: NOW)
     db = inbox.connect()
     inbox.migrate(db)
     with db:

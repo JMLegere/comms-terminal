@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from comms_terminal import email, files, inbox
+from comms_terminal import clock, email, files, inbox
 
 AT = datetime(2026, 10, 12, 10, tzinfo=timezone.utc)
 SELF = "me@example.test"
@@ -16,7 +16,7 @@ OTHER = "other@example.test"
 
 @pytest.fixture
 def db(tmp_path, monkeypatch):
-    monkeypatch.setattr(inbox, "_now", lambda: AT + timedelta(days=1))
+    monkeypatch.setattr(clock, "now", lambda: AT + timedelta(days=1))
     db = inbox.connect(str(tmp_path / "inbox.db"))
     inbox.migrate(db)
     with db:
@@ -502,7 +502,7 @@ def test_premerge_snapshot_rejects_without_writes_and_postmerge_snapshot_restore
     root = inbox.ingest(db, historical(db, "<root@test>"))
     child = inbox.ingest(db, historical(db, "<child@test>", "<root@test>"))
     inbox.act(db, root.id, inbox.Wait())
-    monkeypatch.setattr(inbox, "_now", lambda: AT + timedelta(days=2))
+    monkeypatch.setattr(clock, "now", lambda: AT + timedelta(days=2))
     inbox.act(db, child.id, inbox.SetCase(new_title="Shared"))
     inbox.act(db, child.id, inbox.Snooze(AT + timedelta(days=7)))
     thread_id = root.id if snapshot_id == "survivor" else child.id

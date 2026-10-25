@@ -17,7 +17,7 @@ import re
 from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from . import inbox, platforms
+from . import clock, inbox, platforms
 from .writers import writer
 
 LOCAL = ZoneInfo("America/Halifax")  # Jeremy's days (main.LOCAL_TZ)
@@ -33,16 +33,7 @@ class Refused(ValueError):
     """An Enrollment change the rules do not allow; the message says why."""
 
 
-def _now() -> datetime:
-    return datetime.now(timezone.utc)
 
-
-def _iso(dt: datetime) -> str:
-    return inbox._iso(dt)
-
-
-def _at(text: str) -> datetime:
-    return datetime.fromisoformat(text)
 
 
 def _tx(db):
@@ -65,7 +56,7 @@ def create_sequence(db, name: str, connection_id: int | None = None) -> int:
     if connection_id is None:
         mail = email_connections(db)
         connection_id = mail[0]["id"] if len(mail) == 1 else None
-    at = _iso(_now())
+    at = clock.iso(clock.now())
     with db:
         return db.execute("INSERT INTO sequences (name, connection_id, created_at, updated_at) VALUES (?, ?, ?, ?)",
                           (name.strip(), connection_id, at, at)).lastrowid
@@ -76,14 +67,14 @@ def rename_sequence(db, sequence_id: int, name: str) -> None:
     if not name.strip():
         raise ValueError("A Sequence needs a name.")
     with db:
-        db.execute("UPDATE sequences SET name = ?, updated_at = ? WHERE id = ?", (name.strip(), _iso(_now()), sequence_id))
+        db.execute("UPDATE sequences SET name = ?, updated_at = ? WHERE id = ?", (name.strip(), clock.iso(clock.now()), sequence_id))
 
 
 @writer("write")
 def set_connection(db, sequence_id: int, connection_id: int) -> None:
     with db:
         db.execute("UPDATE sequences SET connection_id = ?, updated_at = ? WHERE id = ?",
-                   (connection_id, _iso(_now()), sequence_id))
+                   (connection_id, clock.iso(clock.now()), sequence_id))
 
 
 def sequence_steps(db, sequence_id: int) -> list[dict]:
@@ -102,7 +93,7 @@ def get_sequence(db, sequence_id: int) -> dict:
 def sequences(db, *, now: datetime | None = None) -> list[dict]:
     """Every Sequence, active ones first, with its Steps, length in business days, Enrollment counts, and the
     Tasks due today."""
-    today = (now or _now()).astimezone(LOCAL).date()
+    today = (now or clock.now()).astimezone(LOCAL).date()
     out = []
     for s in db.execute("SELECT * FROM sequences ORDER BY archived_at IS NOT NULL, id"):
         steps = sequence_steps(db, s["id"])
@@ -111,7 +102,7 @@ def sequences(db, *, now: datetime | None = None) -> list[dict]:
         due = sum(1 for t in db.execute(
             "SELECT t.due_at FROM tasks t JOIN enrollments e ON e.id = t.enrollment_id"
             " WHERE e.sequence_id = ? AND e.state = 'ACTIVE' AND t.state = 'DUE'", (s["id"],))
-            if _at(t[0]).astimezone(LOCAL).date() <= today)
+            if datetime.fromisoformat(t[0]).astimezone(LOCAL).date() <= today)
         out.append(dict(s) | dict(steps=len(steps), days=sum(st["gap_days"] for st in steps) + 1 if steps else 0,
                                   active=counts.get("ACTIVE", 0), paused=counts.get("PAUSED", 0),
                                   finished=counts.get("FINISHED", 0), due_today=due,
@@ -123,11 +114,11 @@ def sequences(db, *, now: datetime | None = None) -> list[dict]:
 def archive_sequence(db, sequence_id: int, cancel_live: bool, now: datetime | None = None) -> list[dict]:
     """A used Sequence is archived, never deleted: it takes no new Enrollments and can be restored.
     `cancel_live` finishes its live Enrollments as Canceled; returns what restore_sequence needs to undo that."""
-    now = now or _now()
+    now = now or clock.now()
     undo = []
     with db:
         _tx(db)
-        db.execute("UPDATE sequences SET archived_at = ?, updated_at = ? WHERE id = ?", (_iso(now), _iso(now), sequence_id))
+        db.execute("UPDATE sequences SET archived_at = ?, updated_at = ? WHERE id = ?", (clock.iso(now), clock.iso(now), sequence_id))
         if cancel_live:
             for e in db.execute("SELECT id FROM enrollments WHERE sequence_id = ? AND state != 'FINISHED'",
                                 (sequence_id,)).fetchall():
@@ -139,7 +130,7 @@ def archive_sequence(db, sequence_id: int, cancel_live: bool, now: datetime | No
 def restore_sequence(db, sequence_id: int, undo: list[dict] = ()) -> None:
     with db:
         _tx(db)
-        db.execute("UPDATE sequences SET archived_at = NULL, updated_at = ? WHERE id = ?", (_iso(_now()), sequence_id))
+        db.execute("UPDATE sequences SET archived_at = NULL, updated_at = ? WHERE id = ?", (clock.iso(clock.now()), sequence_id))
         for u in undo:
             _restore_finish(db, u)
 
@@ -176,7 +167,7 @@ def _insert(db, table: str, row: dict) -> None:
 
 
 def _touch(db, sequence_id):
-    db.execute("UPDATE sequences SET updated_at = ? WHERE id = ?", (_iso(_now()), sequence_id))
+    db.execute("UPDATE sequences SET updated_at = ? WHERE id = ?", (clock.iso(clock.now()), sequence_id))
 
 
 @writer("create")
@@ -246,7 +237,7 @@ def delete_step(db, step_id: int, now: datetime | None = None) -> tuple[int, dic
     """Delete a Step, live (FR-SEQ-24): Enrollments that have not reached it skip it; where it is the current
     Due Task, that Task and its unsent Draft go and the next Step's Task comes due by its gap. Returns how many
     Enrollments moved on, and what restore_step needs."""
-    now = now or _now()
+    now = now or clock.now()
     with db:
         _tx(db)
         st = dict(db.execute("SELECT * FROM sequence_steps WHERE id = ?", (step_id,)).fetchone())
@@ -403,11 +394,11 @@ def parse_start(text: str, now: datetime) -> date | None:
 def enroll(db, person_id: int, sequence_id: int, now: datetime | None = None, start: date | None = None) -> int:
     """One Person into one Sequence (FR-SEQ-6); its first Task counts from the enroll day, or from a later
     Start date (FR-SEQ-25)."""
-    now = now or _now()
+    now = now or clock.now()
     today = now.astimezone(LOCAL).date()
     if start and start < today:
         raise Refused(f"The Start date {start:%b} {start.day} is before today.")
-    starts = _iso(datetime.combine(start, time(0, 0), LOCAL)) if start and start > today else None
+    starts = clock.iso(datetime.combine(start, time(0, 0), LOCAL)) if start and start > today else None
     with db:
         _tx(db)
         eid = _enroll(db, person_id, sequence_id, now, starts)
@@ -418,7 +409,7 @@ def enroll(db, person_id: int, sequence_id: int, now: datetime | None = None, st
 def first_due(db, enrollment_id: int, now: datetime | None = None) -> str:
     """When an Enrollment's first Task is due, for a confirmation: "today" or "on Nov 2"."""
     t = db.execute("SELECT due_at FROM tasks WHERE enrollment_id = ? ORDER BY id LIMIT 1", (enrollment_id,)).fetchone()
-    if t is None or _at(t[0]).astimezone(LOCAL).date() <= (now or _now()).astimezone(LOCAL).date():
+    if t is None or datetime.fromisoformat(t[0]).astimezone(LOCAL).date() <= (now or clock.now()).astimezone(LOCAL).date():
         return "today"
     return f"on {_day(t[0])}"
 
@@ -439,7 +430,7 @@ def _enroll(db, person_id: int, sequence_id: int, now: datetime, starts: str | N
     if live:
         raise Refused(f"{p['display_name']} is already in {s['name']} ({live[0].title()}).")
     return db.execute("INSERT INTO enrollments (person_id, sequence_id, state, enrolled_at, starts_at)"
-                      " VALUES (?, ?, 'ACTIVE', ?, ?)", (person_id, sequence_id, _iso(now), starts)).lastrowid
+                      " VALUES (?, ?, 'ACTIVE', ?, ?)", (person_id, sequence_id, clock.iso(now), starts)).lastrowid
 
 
 @writer("write")
@@ -474,7 +465,7 @@ def task_new_thread(db, task_id: int) -> int:
 
 
 def _day(iso: str) -> str:
-    d = _at(iso).astimezone(LOCAL)
+    d = datetime.fromisoformat(iso).astimezone(LOCAL)
     return f"{d:%b} {d.day}"
 
 
@@ -483,7 +474,7 @@ def materialize(db, now: datetime | None = None) -> int:
     each email Task whose day has come; finish an Enrollment whose last Task is done. Idempotent (one Task per
     Enrollment and Step, one Draft per Task), so it runs every minute from wake. Returns how many Tasks or
     Drafts it made."""
-    now = now or _now()
+    now = now or clock.now()
     made = 0
     with db:
         _tx(db)
@@ -501,7 +492,7 @@ def materialize(db, now: datetime | None = None) -> int:
                 " JOIN sequence_steps s ON s.id = t.step_id JOIN enrollments e ON e.id = t.enrollment_id"
                 " WHERE t.state = 'DUE' AND e.state = 'ACTIVE' AND s.kind = 'email' AND t.flag IS NULL"
                 " AND NOT EXISTS (SELECT 1 FROM composition_drafts d WHERE d.task_id = t.id)").fetchall():
-            if _at(t["due_at"]).astimezone(LOCAL).date() <= today:
+            if datetime.fromisoformat(t["due_at"]).astimezone(LOCAL).date() <= today:
                 made += _task_draft(db, t)
     return made
 
@@ -515,12 +506,12 @@ def _next_task(db, e, now: datetime, due: datetime | None = None) -> int | None:
     step = next((s for s in sequence_steps(db, e["sequence_id"]) if s["position"] > after and s["id"] not in taken), None)
     if step is None:
         db.execute("UPDATE enrollments SET state = 'FINISHED', reason = 'COMPLETED', finished_at = ? WHERE id = ?",
-                   (_iso(now), e["id"]))
+                   (clock.iso(now), e["id"]))
         return None
-    base = _at(last["done_at"]) if last else _at(e["starts_at"] or e["enrolled_at"])
+    base = datetime.fromisoformat(last["done_at"]) if last else datetime.fromisoformat(e["starts_at"] or e["enrolled_at"])
     due = due or due_date(base, step["gap_days"], step["at_time"])
     return db.execute("INSERT OR IGNORE INTO tasks (enrollment_id, step_id, due_at, state) VALUES (?, ?, ?, 'DUE')",
-                      (e["id"], step["id"], _iso(due))).lastrowid
+                      (e["id"], step["id"], clock.iso(due))).lastrowid
 
 
 def _enroll_tasks(db, now: datetime) -> int:
@@ -532,7 +523,7 @@ def _enroll_tasks(db, now: datetime) -> int:
             "SELECT t.id, t.due_at, s.enroll_sequence_id, e.person_id, e.responded_at FROM tasks t"
             " JOIN sequence_steps s ON s.id = t.step_id JOIN enrollments e ON e.id = t.enrollment_id"
             " WHERE t.state = 'DUE' AND e.state = 'ACTIVE' AND s.kind = 'enrollment' AND t.flag IS NULL").fetchall():
-        if _at(t["due_at"]) > now:
+        if datetime.fromisoformat(t["due_at"]) > now:
             continue
         target = db.execute("SELECT name FROM sequences WHERE id = ?", (t["enroll_sequence_id"],)).fetchone()
         before = db.execute("SELECT 1 FROM enrollments WHERE person_id = ? AND sequence_id = ?",
@@ -598,7 +589,7 @@ def _snapshot(db, task_id: int) -> dict:
 def _close(db, task_id: int, state: str, now: datetime, thread_id: int | None = None) -> dict:
     undo = _snapshot(db, task_id)
     db.execute("UPDATE tasks SET state = ?, done_at = ?, thread_id = coalesce(?, thread_id) WHERE id = ? AND state = 'DUE'",
-               (state, _iso(now), thread_id, task_id))
+               (state, clock.iso(now), thread_id, task_id))
     return undo
 
 
@@ -606,7 +597,7 @@ def _close(db, task_id: int, state: str, now: datetime, thread_id: int | None = 
 def complete_task(db, task_id: int, now: datetime | None = None) -> dict:
     """Jeremy did a non-email Task (FR-SEQ-9); an Enrollment Task enrolls the Person now, whatever its flag said.
     The next Step's Task follows. Returns what undo_task needs."""
-    now = now or _now()
+    now = now or clock.now()
     with db:
         _tx(db)
         t = db.execute("SELECT s.kind, s.enroll_sequence_id, e.person_id FROM tasks t JOIN sequence_steps s ON s.id = t.step_id"
@@ -624,7 +615,7 @@ def complete_task(db, task_id: int, now: datetime | None = None) -> dict:
 @writer("create")
 def skip_task(db, task_id: int, now: datetime | None = None) -> dict:
     """Skip a Task; its unsent Draft goes. A skip counts as done for the next Task's gap."""
-    now = now or _now()
+    now = now or clock.now()
     with db:
         _tx(db)
         undo = _close(db, task_id, "SKIPPED", now)
@@ -659,7 +650,7 @@ def tasks_due(db, now: datetime | None = None) -> list[dict]:
     """The Tasks page (FR-SEQ-15): Active Enrollments' Tasks whose day has come, grouped Overdue, Today, and Later
     today (a fixed time not yet reached), oldest first. A Task whose Draft is scheduled to send is left out until it
     sends, or until the send fails or is unscheduled (Jeremy, 2026-10-20)."""
-    now = now or _now()
+    now = now or clock.now()
     today = now.astimezone(LOCAL).date()
     out = []
     for r in db.execute(
@@ -672,13 +663,13 @@ def tasks_due(db, now: datetime | None = None) -> list[dict]:
             " JOIN sequences q ON q.id = e.sequence_id JOIN persons p ON p.id = e.person_id"
             " WHERE t.state = 'DUE' AND e.state = 'ACTIVE' AND NOT EXISTS (SELECT 1 FROM composition_drafts d"
             " WHERE d.task_id = t.id AND d.send_at IS NOT NULL AND d.send_error IS NULL) ORDER BY t.due_at, t.id"):
-        due = _at(r["due_at"])
+        due = datetime.fromisoformat(r["due_at"])
         day = due.astimezone(LOCAL).date()
         if day > today:
             continue
         group = "overdue" if day < today else "later today" if r["at_time"] and due > now else "due today"
         org = person_fill(db, r["person_id"])["company"]
-        out.append(dict(r) | dict(group=group, organization=org, day=day_number(_at(r["starts_at"]), due),
+        out.append(dict(r) | dict(group=group, organization=org, day=day_number(datetime.fromisoformat(r["starts_at"]), due),
                                   age=(today - day).days))
     order = {"overdue": 0, "due today": 1, "later today": 2}
     return sorted(out, key=lambda t: (order[t["group"]], t["due_at"], t["id"]))
@@ -717,9 +708,9 @@ def task_sent(db, draft: dict, thread_id: int, now: datetime) -> None:
 def task_draft_deleted(db, draft: dict, now: datetime | None = None) -> None:
     """Deleting an email Task's Draft skips the Task (FR-SEQ-9)."""
     if draft.get("task_id"):
-        now = now or _now()
+        now = now or clock.now()
         db.execute("UPDATE tasks SET state = 'SKIPPED', done_at = ? WHERE id = ? AND state = 'DUE'",
-                   (_iso(now), draft["task_id"]))
+                   (clock.iso(now), draft["task_id"]))
         materialize(db, now)
 
 
@@ -745,16 +736,16 @@ def pause_person(db, person_id: int, at: datetime, why: str) -> int:
     if not any(c[1] == "responded_at" for c in db.execute("PRAGMA table_info(enrollments)")):
         return 0  # a database still being built up to schema 20 (migration tests ingest along the way)
     db.execute("UPDATE enrollments SET responded_at = ? WHERE person_id = ? AND state != 'FINISHED'"
-               " AND responded_at IS NULL AND enrolled_at <= ?", (_iso(at), person_id, _iso(at)))
+               " AND responded_at IS NULL AND enrolled_at <= ?", (clock.iso(at), person_id, clock.iso(at)))
     return db.execute("UPDATE enrollments SET state = 'PAUSED', paused_at = ?, pause_reason = ?"
                       " WHERE person_id = ? AND state = 'ACTIVE' AND enrolled_at <= ?",
-                      (_iso(at), why, person_id, _iso(at))).rowcount
+                      (clock.iso(at), why, person_id, clock.iso(at))).rowcount
 
 
 @writer("write")
 def resume(db, enrollment_id: int, now: datetime | None = None) -> None:
     """Paused to Active; the next Task is due at once (FR-SEQ-13)."""
-    now = now or _now()
+    now = now or clock.now()
     with db:
         _tx(db)
         e = db.execute("SELECT * FROM enrollments WHERE id = ?", (enrollment_id,)).fetchone()
@@ -764,7 +755,7 @@ def resume(db, enrollment_id: int, now: datetime | None = None) -> None:
                    (enrollment_id,))
         if db.execute("SELECT 1 FROM tasks WHERE enrollment_id = ? AND state = 'DUE'", (enrollment_id,)).fetchone():
             db.execute("UPDATE tasks SET due_at = ? WHERE enrollment_id = ? AND state = 'DUE' AND due_at > ?",
-                       (_iso(now), enrollment_id, _iso(now)))
+                       (clock.iso(now), enrollment_id, clock.iso(now)))
         else:
             _next_task(db, db.execute("SELECT * FROM enrollments WHERE id = ?", (enrollment_id,)).fetchone(), now, due=now)
         materialize(db, now)
@@ -778,7 +769,7 @@ def _finish(db, enrollment_id: int, reason: str, now: datetime) -> dict:
     for d in drafts:
         db.execute("DELETE FROM composition_drafts WHERE id = ?", (d["id"],))
     db.execute("UPDATE enrollments SET state = 'FINISHED', reason = ?, finished_at = ? WHERE id = ?",
-               (reason, _iso(now), enrollment_id))
+               (reason, clock.iso(now), enrollment_id))
     return dict(enrollment=e, drafts=drafts)
 
 
@@ -796,7 +787,7 @@ def finish(db, enrollment_id: int, reason: str, now: datetime | None = None) -> 
     Unsubscribed also marks the Person and ends every Sequence they are in. Returns what restore_finish needs."""
     if reason not in ("COMPLETED", "UNSUBSCRIBED", "CANCELED"):
         raise ValueError("reason is COMPLETED, UNSUBSCRIBED, or CANCELED")
-    now = now or _now()
+    now = now or clock.now()
     with db:
         _tx(db)
         e = db.execute("SELECT * FROM enrollments WHERE id = ?", (enrollment_id,)).fetchone()
@@ -808,7 +799,7 @@ def finish(db, enrollment_id: int, reason: str, now: datetime | None = None) -> 
 
 
 def unsubscribe(db, person_id: int, now: datetime | None = None) -> list[dict]:
-    now = now or _now()
+    now = now or clock.now()
     with db:
         _tx(db)
         return _unsubscribe(db, person_id, now)
@@ -816,7 +807,7 @@ def unsubscribe(db, person_id: int, now: datetime | None = None) -> list[dict]:
 
 def _unsubscribe(db, person_id: int, now: datetime) -> list[dict]:
     before = db.execute("SELECT unsubscribed_at FROM persons WHERE id = ?", (person_id,)).fetchone()[0]
-    db.execute("UPDATE persons SET unsubscribed_at = coalesce(unsubscribed_at, ?) WHERE id = ?", (_iso(now), person_id))
+    db.execute("UPDATE persons SET unsubscribed_at = coalesce(unsubscribed_at, ?) WHERE id = ?", (clock.iso(now), person_id))
     undo = [_finish(db, r[0], "UNSUBSCRIBED", now) for r in db.execute(
         "SELECT id FROM enrollments WHERE person_id = ? AND state != 'FINISHED'", (person_id,)).fetchall()]
     return [dict(person=person_id, unsubscribed_at=before)] + undo
@@ -836,7 +827,7 @@ def restore_finish(db, undo: list[dict]) -> None:
 def merge_people(db, keep: int, drop: int) -> None:
     """Inside merge_persons: `drop`'s Enrollments move to `keep`; where both are live in one Sequence, `drop`'s
     is Canceled. Unsubscribed carries over."""
-    now = _now()
+    now = clock.now()
     for e in db.execute("SELECT e.id FROM enrollments e WHERE e.person_id = ? AND e.state != 'FINISHED' AND EXISTS"
                         " (SELECT 1 FROM enrollments k WHERE k.person_id = ? AND k.sequence_id = e.sequence_id"
                         " AND k.state != 'FINISHED')", (drop, keep)).fetchall():
@@ -848,11 +839,11 @@ def merge_people(db, keep: int, drop: int) -> None:
 
 def enrollments(db, person_id: int, now: datetime | None = None) -> list[dict]:
     """A Person's Enrollments, live first then newest, each with its Tasks timeline (FR-SEQ-19)."""
-    now = now or _now()
+    now = now or clock.now()
     out = []
     for e in db.execute("SELECT e.*, q.name AS sequence FROM enrollments e JOIN sequences q ON q.id = e.sequence_id"
                         " WHERE e.person_id = ? ORDER BY e.state = 'FINISHED', e.id DESC", (person_id,)).fetchall():
-        enrolled = _at(e["starts_at"] or e["enrolled_at"])
+        enrolled = datetime.fromisoformat(e["starts_at"] or e["enrolled_at"])
         tasks = {t["step_id"]: dict(t) for t in db.execute("SELECT * FROM tasks WHERE enrollment_id = ?", (e["id"],))}
         steps = [s for s in db.execute("SELECT * FROM sequence_steps WHERE sequence_id = ? ORDER BY position IS NULL, position",
                                        (e["sequence_id"],)) if s["position"] is not None or s["id"] in tasks]
@@ -860,8 +851,8 @@ def enrollments(db, person_id: int, now: datetime | None = None) -> list[dict]:
         for s in steps:
             t = tasks.get(s["id"])
             if t:
-                due = _at(t["due_at"])
-                base = _at(t["done_at"]) if t["done_at"] else None
+                due = datetime.fromisoformat(t["due_at"])
+                base = datetime.fromisoformat(t["done_at"]) if t["done_at"] else None
                 entry = dict(step=dict(s), task=t, day=day_number(enrolled, due),
                              state=t["state"].lower() if t["state"] != "DUE" else "due")
                 if t["state"] == "DUE":

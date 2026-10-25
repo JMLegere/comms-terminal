@@ -18,11 +18,11 @@ import threading
 import time
 import urllib.parse
 from collections import Counter
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from . import attio, calendar, email, fastmail, files, inbox, linear, mcp, meetings, platforms, quo, slack, tana
+from . import attio, calendar, clock, email, fastmail, files, inbox, linear, mcp, meetings, platforms, quo, slack, tana
 
 
 def credential(name: str) -> bytes | None:
@@ -124,7 +124,7 @@ def handle_attio_people(body: bytes, context: tana.Context | None) -> tuple[int,
     except (ValueError, KeyError, TypeError):
         return 400, {"error": "expected days"}
     try:
-        return 200, {"people": attio.recent_people(context.client, datetime.now(timezone.utc) - timedelta(days=days))}
+        return 200, {"people": attio.recent_people(context.client, clock.now() - timedelta(days=days))}
     except (attio.AttioError, OSError, ValueError, KeyError, IndexError) as e:
         return 502, {"error": str(e) or type(e).__name__}
 
@@ -438,7 +438,7 @@ def hooks_server(db_path: str, host: str, port: int, client=None,
                 return 503, "text/plain", f"{path.rsplit('/', 1)[1]} not connected".encode()
             db = inbox.connect(db_path)
             try:
-                status, text = intake(db, name, headers, body, secret, datetime.now(timezone.utc), *args)
+                status, text = intake(db, name, headers, body, secret, clock.now(), *args)
             finally:
                 db.close()
             if name not in platforms.EMAIL:  # email stores its files inline
@@ -449,7 +449,7 @@ def hooks_server(db_path: str, host: str, port: int, client=None,
     def resend_hook(headers, body):
         if resend_secret is None:
             return 503, "text/plain", b""
-        if not _verify_resend(headers, body, resend_secret, datetime.now(timezone.utc)):
+        if not _verify_resend(headers, body, resend_secret, clock.now()):
             return 401, "text/plain", b""
         try:
             db = inbox.connect(db_path)
@@ -701,7 +701,7 @@ def wake_loop(db_path: str, stop: threading.Event, every: float = 60, kick: thre
         kick.clear()
         db = inbox.connect(db_path)
         try:
-            now = datetime.now(timezone.utc)
+            now = clock.now()
             inbox.wake(db, now)
             meetings.held(db, now)  # an ended Meeting occurrence puts its Thread in Todo (FR-OA-13)
             if senders is not None:
@@ -760,7 +760,7 @@ def calendar_loop(db_path: str, url: str, stop: threading.Event, every: float = 
                         log.info("meetings recorded: %d", n)
                 except Exception as e:  # noqa: BLE001
                     log.info("meetings not recorded: %s", e)
-            ok_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            ok_at = clock.now().isoformat(timespec="seconds")
             calendar.record_ok(db)
         except Exception as e:  # noqa: BLE001 - one failed fetch must not stop the loop
             error = (str(e) or type(e).__name__).replace(url, "<secret address>")[:300]

@@ -13,7 +13,7 @@ from email import message_from_bytes, policy
 from email.parser import BytesHeaderParser
 from email.utils import getaddresses, make_msgid, parseaddr, parsedate_to_datetime
 
-from . import files, inbox, render
+from . import clock, files, inbox, render
 
 SIGNATURE_WINDOW = 300  # seconds
 INBOX = "inbox.agentmaple.com"  # Email Routing's domain: every forward reaches the Worker here (runbook D3)
@@ -76,7 +76,7 @@ def parse(raw: bytes, connection) -> inbox.Incoming | None:
     try:
         occurred = parsedate_to_datetime(msg["Date"]).astimezone(timezone.utc)
     except (TypeError, ValueError):
-        occurred = datetime.now(timezone.utc)
+        occurred = clock.now()
     subject = str(msg.get("Subject", "") or "")
     return inbox.Incoming(
         connection_id=connection["id"], channel=mailbox, channel_kind="mailbox", kind="MESSAGE",

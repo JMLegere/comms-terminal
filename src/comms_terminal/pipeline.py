@@ -18,7 +18,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from statistics import median
 from zoneinfo import ZoneInfo
 
-from . import inbox
+from . import clock, inbox
 from .writers import writer
 
 LOCAL = ZoneInfo("America/Halifax")  # Jeremy's days (main.LOCAL_TZ)
@@ -48,9 +48,6 @@ BENCHMARKS = ((1_000, (5, 10, 65, 15, 100, 90, 90, 5)), (5_000, (7, 12, 70, 17, 
 class Refused(ValueError):
     """A Pipeline change or input the rules do not allow; the message says why."""
 
-
-def _now() -> datetime:
-    return datetime.now(timezone.utc)
 
 
 def _tx(db):
@@ -100,14 +97,14 @@ def find_org(db, text: str):
 def _effective(at) -> str:
     """Now, or a backdated date or time; a future one is refused."""
     if at is None:
-        return inbox._iso(_now())
+        return clock.iso(clock.now())
     if isinstance(at, str):
         at = date.fromisoformat(at) if len(at) == 10 else datetime.fromisoformat(at)
     if not isinstance(at, datetime):
         at = datetime.combine(at, time(), LOCAL)
-    if at > _now():
+    if at > clock.now():
         raise Refused(f"{at.date()} is in the future")
-    return inbox._iso(at.astimezone(timezone.utc))
+    return clock.iso(at.astimezone(timezone.utc))
 
 
 def _append(db, org_id, pipeline, kind, at=None, stage=None, value=None, undoes=None) -> int:
@@ -116,7 +113,7 @@ def _append(db, org_id, pipeline, kind, at=None, stage=None, value=None, undoes=
         return db.execute(
             "INSERT INTO pipeline_log (organization_id, pipeline, kind, stage, value, undoes, effective_at,"
             " recorded_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (org_id, pipeline, kind, stage, value, undoes, _effective(at), inbox._iso(_now()))).lastrowid
+            (org_id, pipeline, kind, stage, value, undoes, _effective(at), clock.iso(clock.now()))).lastrowid
 
 
 @writer("create")
@@ -301,7 +298,7 @@ def unattended(db) -> list[dict]:
 def math(db, pipeline: str, now: datetime | None = None, orgs: bool = True) -> dict:
     """Everything a Pipeline page shows. A pure function of the log, Target, and `now`.
     `orgs=False` skips each Organization's row details (the rail needs only the summary)."""
-    now = now or _now()
+    now = now or clock.now()
     today = now.astimezone(LOCAL).date()
     chain, opens = _chain(pipeline), OPEN[pipeline]
     rows = _entries(db, pipeline)

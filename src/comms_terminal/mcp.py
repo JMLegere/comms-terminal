@@ -13,6 +13,8 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from . import clock
+
 USER_AGENT = "comms-terminal/0.1 (+https://github.com/JMLegere/comms-terminal)"
 
 
@@ -63,7 +65,7 @@ class McpClient:
         if st != 200 or "access_token" not in tok:
             raise McpError(f"{self.name} sign-in expired or revoked (HTTP {st} {tok.get('error', '')})".strip())
         self.access = tok["access_token"]
-        self.expires = datetime.now(timezone.utc) + timedelta(seconds=int(tok.get("expires_in", 3600)) - 120)
+        self.expires = clock.now() + timedelta(seconds=int(tok.get("expires_in", 3600)) - 120)
         new = tok.get("refresh_token")
         if new and new != self.cred["refresh_token"]:
             self.cred["refresh_token"] = new
@@ -75,7 +77,7 @@ class McpClient:
         self.session = None
 
     def _rpc(self, method, params=None, notify=False):
-        if self.access is None or datetime.now(timezone.utc) >= self.expires:
+        if self.access is None or clock.now() >= self.expires:
             self._refresh()
         if self.session is None and method != "initialize":
             self._initialize()

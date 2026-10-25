@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from comms_terminal import calendar as cal, inbox, meetings, pipeline as pl, platforms
+from comms_terminal import calendar as cal, clock as comms_clock, inbox, meetings, pipeline as pl, platforms
 
 UTC = timezone.utc
 
@@ -21,8 +21,7 @@ def local_time(monkeypatch):
 @pytest.fixture
 def clock(monkeypatch):
     at = [datetime(2026, 10, 20, 13, tzinfo=UTC)]
-    monkeypatch.setattr(inbox, "_now", lambda: at[0])
-    monkeypatch.setattr(cal, "_now", lambda: at[0].isoformat(timespec="seconds"))
+    monkeypatch.setattr(comms_clock, "now", lambda: at[0])
     return at
 
 

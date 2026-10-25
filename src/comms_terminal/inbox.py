@@ -22,7 +22,7 @@ from email.parser import BytesHeaderParser
 from email.utils import getaddresses
 from typing import Protocol, Sequence
 
-from . import files, platforms
+from . import clock, files, platforms
 from .writers import writer
 
 SCHEMA_VERSION = 28
@@ -686,12 +686,6 @@ def migrate(db: sqlite3.Connection) -> None:
         db.execute(f"PRAGMA foreign_keys = {fk}")
 
 
-def _iso(dt: datetime) -> str:
-    return dt.astimezone(timezone.utc).isoformat(timespec="microseconds")
-
-
-def _now() -> datetime:
-    return datetime.now(timezone.utc)
 
 
 def get_thread(db, thread_id: int) -> Thread:
@@ -740,7 +734,7 @@ def save_draft(db, values: dict, *, draft_id: int | None = None,
             platform = platforms.PLATFORMS.get(c["platform"]) if c else None
             if platform is None or platform.format != values["kind"]:
                 raise ValueError("draft Connection must support its message format")
-        at = _iso(_now())
+        at = clock.iso(clock.now())
         envelope = tuple(values[k] for k in ("connection_id", "kind", "sender", "to", "cc", "subject", "body"))
         if draft_id is None:
             draft_id = db.execute(
@@ -813,7 +807,7 @@ def schedule_draft(db, draft_id: int, send_at: datetime | None) -> dict:
         if get_draft(db, draft_id)["sending_at"]:
             raise SendUnknown("Send outcome unknown; check before scheduling it.")
         db.execute("UPDATE composition_drafts SET send_at = ?, send_error = NULL WHERE id = ?",
-                   (_iso(send_at) if send_at else None, draft_id))
+                   (clock.iso(send_at) if send_at else None, draft_id))
     return get_draft(db, draft_id)
 
 
@@ -837,7 +831,7 @@ def claim_due_drafts(db, now: datetime) -> list[dict]:
         if not db.in_transaction:
             db.execute("BEGIN IMMEDIATE")
         due = [dict(r) for r in db.execute("SELECT * FROM composition_drafts WHERE send_at <= ? AND sending_at IS NULL"
-                                           " ORDER BY send_at, id", (_iso(now),))]
+                                           " ORDER BY send_at, id", (clock.iso(now),))]
         db.executemany("UPDATE composition_drafts SET send_at = NULL WHERE id = ?", [(d["id"],) for d in due])
     return due
 
@@ -1012,7 +1006,7 @@ def _send(db, connection_id: int, fmt: str, files: Sequence[Staged], call, recor
     with db:
         if not db.in_transaction:
             db.execute("BEGIN IMMEDIATE")
-        activity_id, sent_in = record(native_id, _now())
+        activity_id, sent_in = record(native_id, clock.now())
         if activity_id:
             _add_sent(db, activity_id, files)
         db.execute(f"DELETE FROM staged_attachments WHERE {column} = ?", (owner,))
@@ -1045,8 +1039,8 @@ def send_draft(db, draft_id: int, revision: int, sender: Sender, *, again: bool 
         if problem:
             raise ValueError(problem)
         connection = db.execute("SELECT * FROM connections WHERE id = ?", (d["connection_id"],)).fetchone()
-        started = _now()
-        at = _iso(started)
+        started = clock.now()
+        at = clock.iso(started)
         gmail = connection["platform"] == "gmail"
         checkpoint = _send_checkpoint(db, connection["id"]) if gmail else None
         db.execute("UPDATE composition_drafts SET sending_at = ? WHERE id = ?", (at, draft_id))
@@ -1088,14 +1082,14 @@ def send_draft(db, draft_id: int, revision: int, sender: Sender, *, again: bool 
             data["seen_through_activity_id"] = checkpoint[0]
         return db.execute(
             "INSERT INTO activities (thread_id, kind, occurred_at, native_id, content, data)"
-            " VALUES (?, 'MESSAGE', ?, ?, ?, ?)", (thread_id, _iso(now), native_id, d["body"], json.dumps(data))).lastrowid, thread_id
+            " VALUES (?, 'MESSAGE', ?, ?, ?, ?)", (thread_id, clock.iso(now), native_id, d["body"], json.dumps(data))).lastrowid, thread_id
 
     def settle(thread_id):
         if gmail:
             _reconcile_email_threads(db, True, get_thread(db, thread_id).channel_id)
             thread_id = get_thread(db, thread_id).id
             _preserve_send_changes(db, thread_id, changes)
-        sequences.task_sent(db, d, thread_id, _now())  # an email Task's Draft: the Task is done
+        sequences.task_sent(db, d, thread_id, clock.now())  # an email Task's Draft: the Task is done
         return thread_id
 
     try:
@@ -1114,7 +1108,7 @@ def _new_thread(db, channel_id, native_id, title, status, at) -> int:
     return db.execute(
         "INSERT INTO threads (channel_id, native_thread_id, title, status, status_detail,"
         " status_changed_at, created_at, follow_up_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (channel_id, native_id, title, *status, _iso(at), _iso(at), _follow_up(status[1], at))).lastrowid
+        (channel_id, native_id, title, *status, clock.iso(at), clock.iso(at), _follow_up(status[1], at))).lastrowid
 
 
 def _set_status(db, thread_id, at, status, detail, snoozed_until=None, before=None, *, cause):
@@ -1123,7 +1117,7 @@ def _set_status(db, thread_id, at, status, detail, snoozed_until=None, before=No
     db.execute(
         "UPDATE threads SET status = ?, status_detail = ?, status_changed_at = ?,"
         " snoozed_until = ?, detail_before_snooze = ?, follow_up_at = ? WHERE id = ?",
-        (status, detail, _iso(at), snoozed_until, before, follow_up, thread_id))
+        (status, detail, clock.iso(at), snoozed_until, before, follow_up, thread_id))
     if detail != old or snoozed_until:  # same detail is no change, except a snooze to a new time
         _audit(db, thread_id, at, cause, old, detail, data={"until": snoozed_until} if snoozed_until else {})
 
@@ -1136,7 +1130,7 @@ def _left(case_id) -> dict:
 def _audit(db, thread_id, at, cause, old=None, new=None, case_id=None, data=None):
     """One audit log entry: a Status change (new is its detail) or, with new None, a Case change."""
     db.execute("INSERT INTO audit_log (thread_id, occurred_at, kind, cause, old_detail, new_detail, case_id, data)"
-               " VALUES (?, ?, ?, ?, ?, ?, ?, ?)", (thread_id, _iso(at), "CASE" if new is None else "STATUS",
+               " VALUES (?, ?, ?, ?, ?, ?, ?, ?)", (thread_id, clock.iso(at), "CASE" if new is None else "STATUS",
                                                    cause, old, new, case_id, json.dumps(data or {})))
 
 
@@ -1177,7 +1171,7 @@ def transition(current: tuple[str, str] | None, event, *, has_replied: bool = Fa
         case Snooze(until=None):
             raise SnoozeNeedsDate()  # WAITING_INDEFINITELY stays readable for old rows (0 live)
         case Snooze(until=until):
-            return ("SNOOZED", "WAITING_FOR_DURATION", _iso(until), detail if status == "TODO" else None)
+            return ("SNOOZED", "WAITING_FOR_DURATION", clock.iso(until), detail if status == "TODO" else None)
         case Wait():
             return ("SNOOZED", "WAITING_FOR_CUSTOMER")
         case Investigate():
@@ -1193,7 +1187,7 @@ def transition(current: tuple[str, str] | None, event, *, has_replied: bool = Fa
 
 def _follow_up(detail, at) -> str | None:
     """Waiting for them ends after WAIT with no reply (#116)."""
-    return _iso(at + WAIT) if detail == "WAITING_FOR_CUSTOMER" else None
+    return clock.iso(at + WAIT) if detail == "WAITING_FOR_CUSTOMER" else None
 
 
 def reopen_imported(db, thread_id: int) -> Thread:
@@ -1210,7 +1204,7 @@ def _ensure_org(db, kind, value):
     domain = value.rsplit("@", 1)[1]
     if domain not in FREE_MAIL:
         db.execute("INSERT OR IGNORE INTO organizations (domain, name, created_at)"
-                   " VALUES (?, ?, ?)", (_org(domain), _org(domain), _iso(_now())))
+                   " VALUES (?, ?, ?)", (_org(domain), _org(domain), clock.iso(clock.now())))
 
 
 AUTOMATED = re.compile(r"^(no-?reply|do-?not-?reply|donotreply|noreply|service|notifications?|notify|alerts?|"
@@ -1448,7 +1442,7 @@ def display_name(db, person_id: int) -> str:
 
 def _new_person(db, name) -> int:
     return db.execute("INSERT INTO persons (display_name, created_at) VALUES (?, ?)",
-                      (name, _iso(_now()))).lastrowid
+                      (name, clock.iso(clock.now()))).lastrowid
 
 
 def _identity_for(db, sender: Identity) -> sqlite3.Row:
@@ -1605,7 +1599,7 @@ def _echo_of_sent(db, thread_id: int, inc: Incoming) -> bool:
     text = (inc.content or "").strip()
     if not text:
         return False
-    since = _iso(inc.occurred_at - ECHO_WINDOW)
+    since = clock.iso(inc.occurred_at - ECHO_WINDOW)
     # The copy is Jeremy's text, possibly followed by the quote his reply included (decision #109).
     norm = lambda x: (x or "").replace("\r\n", "\n").strip()  # noqa: E731
     text = norm(text)
@@ -1694,7 +1688,7 @@ def expire_attachments(db, now: datetime) -> int:
         shas = [r[0] for r in db.execute(
             "SELECT a.sha FROM attachments a JOIN activities v ON v.id = a.activity_id WHERE a.sha IS NOT NULL"
             " AND a.sha NOT IN (SELECT sha FROM staged_attachments) GROUP BY a.sha HAVING max(v.occurred_at) < ?",
-            (_iso(now - timedelta(days=365)),))]
+            (clock.iso(now - timedelta(days=365)),))]
         db.executemany("UPDATE attachments SET state = 'expired', sha = NULL WHERE sha = ?", [(s,) for s in shas])
     for sha in shas:
         if (path := files.attachment_path(db, sha)) is not None:
@@ -1731,7 +1725,7 @@ def stage(db, *, sha: str, name: str, type: str, size: int,
         raise ValueError("stage needs the sha256 of a stored file")
     with db:
         return db.execute(f"INSERT INTO staged_attachments ({column}, sha, name, type, size, added_at)"
-                          " VALUES (?, ?, ?, ?, ?, ?)", (owner, sha, name, type, size, _iso(_now()))).lastrowid
+                          " VALUES (?, ?, ?, ?, ?, ?)", (owner, sha, name, type, size, clock.iso(clock.now()))).lastrowid
 
 
 def staged(db, *, draft_id: int | None = None, thread_id: int | None = None) -> list[dict]:
@@ -2083,7 +2077,7 @@ def _ingest(db, inc: Incoming) -> Thread | None:
     activity_id = db.execute(
         "INSERT INTO activities (thread_id, kind, occurred_at, identity_id, native_id,"
         " target_id, content, data) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (thread_id, inc.kind, _iso(at), identity_id, inc.native_id, target_id,
+        (thread_id, inc.kind, clock.iso(at), identity_id, inc.native_id, target_id,
          None if inc.kind == "DELETE" else inc.content, json.dumps(inc.data))).lastrowid
     if inc.kind == "MESSAGE":
         _add_attachments(db, activity_id, _downloads(inc.data))
@@ -2118,12 +2112,12 @@ def act(db, thread_id: int, action: Action | Reopen) -> Thread:
             db.execute("BEGIN IMMEDIATE")
         t = get_thread(db, thread_id)
         thread_id = t.id
-        now = _now()
+        now = clock.now()
         if isinstance(action, SetCase):
             case_id = action.case_id
             if action.new_title is not None:
                 case_id = db.execute("INSERT INTO cases (title, created_at) VALUES (?, ?)",
-                                     (action.new_title, _iso(now))).lastrowid
+                                     (action.new_title, clock.iso(now))).lastrowid
             db.execute("UPDATE threads SET case_id = ? WHERE id = ?", (case_id, thread_id))
             if case_id != t.case_id:
                 _audit(db, thread_id, now, "action", case_id=case_id, data=_left(t.case_id))
@@ -2164,7 +2158,7 @@ def reply(db, thread_id: int, text: str, sender: Sender,
                 message["wire_id"] = message["native_id"]
             if history and history[-1]["native_id"] is None:
                 raise ValueError(EMAIL_CONFIRMATION_PENDING)
-    started = _now()
+    started = clock.now()
     changes, recorded_at = {}, []
 
     def record(native_id, now):
@@ -2178,7 +2172,7 @@ def reply(db, thread_id: int, text: str, sender: Sender,
             data["seen_through_activity_id"] = checkpoint[0]
         cur = db.execute(
             "INSERT OR IGNORE INTO activities (thread_id, kind, occurred_at, native_id, content, data)"
-            " VALUES (?, 'MESSAGE', ?, ?, ?, ?)", (t.id, _iso(now), native_id, text, json.dumps(data)))
+            " VALUES (?, 'MESSAGE', ?, ?, ?, ?)", (t.id, clock.iso(now), native_id, text, json.dumps(data)))
         db.execute("DELETE FROM composition_drafts WHERE thread_id = ?", (staged_on,))  # the reply Draft went out
         sequences.task_sent(db, draft, t.id, now)
         return cur.lastrowid if cur.rowcount else None, t.id
@@ -2208,7 +2202,7 @@ def wake(db, now: datetime) -> int:
                          " WHERE merged_into IS NULL AND"
                          " ((status_detail = 'WAITING_FOR_DURATION' AND snoozed_until <= ?)"
                          " OR (status_detail = 'WAITING_FOR_CUSTOMER' AND follow_up_at <= ?))",
-                         (_iso(now), _iso(now))).fetchall()
+                         (clock.iso(now), clock.iso(now))).fetchall()
         for r in due:
             _set_status(db, r["id"], now, *transition((r["status"], r["status_detail"]), Woke(),
                                                       has_replied=_has_replied(db, r["id"]),
@@ -2234,7 +2228,7 @@ def set_probe(db, connection_id: int, error: str | None) -> None:
     """Records a health check: its failure (None when it passed) and when it ran."""
     with db:
         db.execute("UPDATE connections SET probe_error = ?, probed_at = ? WHERE id = ?",
-                   (error, _iso(_now()), connection_id))
+                   (error, clock.iso(clock.now()), connection_id))
 
 
 # --- read side (records) ---------------------------------------------------
@@ -2375,14 +2369,14 @@ def set_membership(db, person_id: int, domain: str, member: bool | None) -> bool
     with db:
         before = membership(db, person_id, domain)
         db.execute("INSERT OR IGNORE INTO organizations (domain, name, created_at) VALUES (?, ?, ?)",
-                   (domain, domain, _iso(_now())))
+                   (domain, domain, clock.iso(clock.now())))
         org = db.execute("SELECT id FROM organizations WHERE domain = ?", (domain,)).fetchone()[0]
         if member is None:
             db.execute("DELETE FROM memberships WHERE person_id = ? AND organization_id = ?", (person_id, org))
         else:
             db.execute("INSERT INTO memberships (person_id, organization_id, member, changed_at) VALUES (?, ?, ?, ?)"
                        " ON CONFLICT DO UPDATE SET member = excluded.member, changed_at = excluded.changed_at",
-                       (person_id, org, int(member), _iso(_now())))
+                       (person_id, org, int(member), clock.iso(clock.now())))
     return before
 
 
@@ -2393,7 +2387,7 @@ def set_case_description(db, case_id: int, description: str) -> None:
         if description != old:
             db.execute("UPDATE cases SET description = ? WHERE id = ?", (description, case_id))
             db.execute("INSERT INTO case_log (case_id, occurred_at, kind, old) VALUES (?, ?, 'DESCRIPTION', ?)",
-                       (case_id, _iso(_now()), old))
+                       (case_id, clock.iso(clock.now()), old))
 
 
 def case_feed(db, case_id: int) -> list[dict]:
@@ -2447,7 +2441,7 @@ def case_status(details) -> str:
 def create_case(db, title: str) -> int:
     """A Case with no Threads yet (#120)."""
     with db:
-        return db.execute("INSERT INTO cases (title, created_at) VALUES (?, ?)", (title, _iso(_now()))).lastrowid
+        return db.execute("INSERT INTO cases (title, created_at) VALUES (?, ?)", (title, clock.iso(clock.now()))).lastrowid
 
 
 def case_queue(db, view: str | None = None) -> list[dict]:
@@ -2513,7 +2507,7 @@ def today(db, now: datetime | None = None) -> dict:
     Organizations; and, for an empty Today, when the next Snoozed Thread wakes and the next Task comes due (None
     when nothing is coming)."""
     from . import pipeline, sequences
-    now = now or _now()
+    now = now or clock.now()
     snoozed = ",".join("?" * len(VIEWS["Snoozed"]))
     wake = db.execute(
         f"SELECT min(at) FROM (SELECT snoozed_until AS at FROM threads WHERE merged_into IS NULL"
@@ -2523,7 +2517,7 @@ def today(db, now: datetime | None = None) -> dict:
     later = [r[0] for r in db.execute(
         "SELECT t.due_at FROM tasks t JOIN enrollments e ON e.id = t.enrollment_id"
         " WHERE t.state = 'DUE' AND e.state = 'ACTIVE' ORDER BY t.due_at")
-        if sequences._at(r[0]).astimezone(sequences.LOCAL).date() > day]
+        if datetime.fromisoformat(r[0]).astimezone(sequences.LOCAL).date() > day]
     return {"threads": queue(db, "Todo"), "tasks": sequences.tasks_due(db, now),
             "drafts": [d for d in list_drafts(db) if today_draft(db, d)], "unattended": pipeline.unattended(db),
             "next_wake": wake, "next_task": later[0] if later else None}
@@ -2799,7 +2793,7 @@ def restore(db, snap: dict) -> Thread:
                    " detail_before_snooze = ?, case_id = ?, follow_up_at = ? WHERE id = ?",
                    (snap["status"], snap["status_detail"], snap["status_changed_at"], snap["snoozed_until"],
                     snap["detail_before_snooze"], snap["case_id"], snap["follow_up_at"], thread_id))
-        now = _now()
+        now = clock.now()
         if snap["status_detail"] != current["status_detail"]:
             _audit(db, thread_id, now, "undo", current["status_detail"], snap["status_detail"],
                    data={"until": snap["snoozed_until"]} if snap["snoozed_until"] else {})

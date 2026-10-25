@@ -1,8 +1,10 @@
 """Connection health (NFR-2): BROKEN when Slack revoked access, the last health check failed, the last
 send/inbound request failed, or no health check has run for over an hour (the service is down)."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Literal
+
+from . import clock
 
 STALE = timedelta(minutes=65)  # two missed 30-minute checks (decision #119)
 
@@ -16,7 +18,7 @@ def problem(connection, now: datetime | None = None) -> str | None:
     if connection["last_error"]:
         return connection["last_error"]
     if at := connection["probed_at"]:  # never checked (a database without the service) makes no claim
-        age = (now or datetime.now(timezone.utc)) - datetime.fromisoformat(at)
+        age = (now or clock.now()) - datetime.fromisoformat(at)
         if age > STALE:
             return f"No health check for {int(age.total_seconds() // 60)} minutes: is comms-terminal serve running?"
     return None

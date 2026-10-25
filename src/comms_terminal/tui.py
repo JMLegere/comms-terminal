@@ -20,7 +20,7 @@ import time
 import unicodedata
 from collections import Counter
 from collections.abc import MutableMapping
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 from email.errors import HeaderParseError
 from email.headerregistry import Address
 from email.utils import getaddresses
@@ -45,7 +45,7 @@ from textual.widgets import DataTable, DirectoryTree, Input, OptionList, Static,
 from textual.widgets.option_list import Option
 from textual.worker import WorkerCancelled, get_current_worker
 
-from . import calendar as cal, files, inbox, pipeline, render, sequences
+from . import calendar as cal, clock, files, inbox, pipeline, render, sequences
 from .health import problem
 from .icons import ICON
 from .platforms import E164, FORMATS, PLATFORMS
@@ -433,7 +433,7 @@ def when(iso: str | None, now: datetime | None = None) -> str:
     if not iso:
         return ""
     t = datetime.fromisoformat(iso).astimezone()
-    now = now or datetime.now().astimezone()
+    now = now or clock.local()
     secs = (now - t).total_seconds()
     if secs < 60:
         return "now"
@@ -450,7 +450,7 @@ def left(iso: str | None, now: datetime | None = None) -> str:
     """Time left until a snooze ends, to the second: 5m24s, 3h32m12s, 2d4h0m9s; now when due; — with no end."""
     if not iso:
         return "—"
-    secs = int((datetime.fromisoformat(iso).astimezone() - (now or datetime.now().astimezone())).total_seconds())
+    secs = int((datetime.fromisoformat(iso).astimezone() - (now or clock.local())).total_seconds())
     if secs <= 0:
         return "now"
     days, secs = divmod(secs, 86400)
@@ -488,7 +488,7 @@ def stamp(iso: str | None) -> str:
 def send_menu(draft: dict | None) -> tuple[list[tuple[str, str]], dict]:
     """ctrl+enter's choices: send now, or later at a random minute from 7 to 9 am tomorrow or next Monday.
     Returns the options and each later choice's time."""
-    now = datetime.now(timezone.utc)
+    now = clock.now()
     later = {k: inbox.send_time(k, now) for k in ("tomorrow", "monday")}
     options = [("send", "Send now"), ("tomorrow", f"Send tomorrow · {stamp(later['tomorrow'].isoformat())}"),
                ("monday", f"Send next Monday · {stamp(later['monday'].isoformat())}")]
@@ -766,7 +766,7 @@ class ThreadActions:
     def action_pause(self):
         if self.current_thread_id() is None:
             return
-        now = datetime.now().astimezone()
+        now = clock.local()
 
         def typed(text):
             t = parse_time(text or "", now)
@@ -1141,10 +1141,9 @@ class ThreadsPage(Page, ThreadActions):
     def on_mount(self):
         self.rows = []
         self.refresh_data()
-        self.set_interval(1, self.tick)
 
     def tick(self):
-        """Snoozed rows count down every second; only their time cells change."""
+        """Snoozed rows count down (Console.tick_countdowns, every second); only their time cells change."""
         if not self.on_screen or not self.query(DataTable):
             return
         table = self.query_one(DataTable)
@@ -2097,7 +2096,7 @@ def message_widgets(v, st: dict | None = None, raw=None) -> list:
         return gutter_row(badge(m["who"], faded=True), MessageText(line, classes="mline"), "faded")
 
     def card(i, m):
-        age = datetime.now().astimezone() - datetime.fromisoformat(m["at"]).astimezone()
+        age = clock.local() - datetime.fromisoformat(m["at"]).astimezone()
         meta = stamp(m["at"]) + (f" · {ago(m['at'])}" if age.days < 7 else "")
         meta += f"  {ICON['edited']} edited" if m["edited"] else ""
         head = f"[@click=app.msg_toggle({tid},{message_action_id(m['native_id'])})][b #654735]{escape(m['who'])}[/][/]  [{dim}]{meta}[/]"
@@ -3691,7 +3690,7 @@ def set_org_value(app, org: dict):
 
 def pipeline_section(db, org_id: int) -> str:
     """The Organization page's Pipeline section (FR-PL-26)."""
-    g, now = PALETTE["grey1"], datetime.now(timezone.utc)
+    g, now = PALETTE["grey1"], clock.now()
     out = [f"[b]{ICON['pipeline']} Pipeline[/]"]
     for p, s in pipeline.current(db, org_id).items():
         stage = f"{s['stage']} · {(now - s['since']).days}d" if s["stage"] else f"[{g}]no Stage[/]"
@@ -4233,7 +4232,7 @@ _next_event: dict = {}
 def next_event_markup(db) -> str:
     """The bottom bar's Event in progress (time left) and the next one on any day (ADR 0005), read once a minute
     or after a change."""
-    now = datetime.now().astimezone()
+    now = clock.local()
     key = (id(db), db.execute("PRAGMA database_list").fetchone()[2], db.execute("PRAGMA data_version").fetchone()[0],
            now.strftime("%Y%m%d%H%M"))
     if _next_event.get("key") != key:
@@ -4244,10 +4243,10 @@ def next_event_markup(db) -> str:
         b, out = PALETTE, []
         short = lambda e: escape(e["title"] if len(e["title"]) <= 24 else e["title"][:23] + "…")  # noqa: E731
         if current:
-            left = int((cal._local(current["end"]) - now).total_seconds() // 60)
+            left = int((clock.local(current["end"]) - now).total_seconds() // 60)
             out.append(f"[b {b['fg1']}]now[/] {short(current)} [{b['grey1']}]{left} min left[/]")
         if nxt:
-            start = cal._local(nxt["start"])
+            start = clock.local(nxt["start"])
             days = (start.date() - now.date()).days
             when = (f"{start:%H:%M}" if days == 0 else f"tomorrow {start:%H:%M}" if days == 1 else
                     f"{start:%a %H:%M}" if days < 7 else f"{start:%b %-d %H:%M}")
@@ -4685,7 +4684,7 @@ def enroll_person(app, person_id: int, name: str):
         def typed(text):
             if text is None:
                 return
-            start = sequences.parse_start(text, sequences._now())
+            start = sequences.parse_start(text, clock.now())
             if start is None:
                 app.notify(f"Not enrolled: {text!r} is neither a date (2026-12-01) nor a number of days.",
                            severity="error")
@@ -4925,7 +4924,7 @@ class TasksPage(Page):
             room = max(4, width - 40)
             seq = t["sequence"] if len(t["sequence"]) <= room else t["sequence"][:room - 1] + "…"
             when = (f"{t['age']}d" if t["group"] == "overdue" else
-                    sequences._at(t["due_at"]).astimezone(sequences.LOCAL).strftime("%H:%M") if t["group"] == "later today" else "")
+                    datetime.fromisoformat(t["due_at"]).astimezone(sequences.LOCAL).strftime("%H:%M") if t["group"] == "later today" else "")
             self.items.append(t)
             table.add_row(f"[#654735]{ICON[t['kind']]}[/]", mark + f"[b]{escape(name)}[/]",
                           "" if narrow else f"Day {t['day']}", "" if narrow else f"[#928374]{escape(seq)}[/]",
@@ -5546,7 +5545,7 @@ class UnattendedPage(TablePage):
     COLUMNS = ("", "Organization", "Stage", "Last message")
 
     def rows(self):
-        now = datetime.now().astimezone()
+        now = clock.local()
         return [(o, (f"[{PALETTE['red']}]{ICON['organization']}[/]", f"[b]{escape(o['name'])}[/]",
                      f"[#928374]{escape(' · '.join(o['stages'].values()))}[/]",
                      f"[#928374]{when(o['last'].isoformat(), now) if o['last'] else 'never'}[/]"))
@@ -5661,7 +5660,7 @@ class TodayPage(Page):
         clear.display = empty
         if empty:
             t = inbox.today(self.app.db)
-            when = lambda at: sequences._at(at).astimezone(sequences.LOCAL).strftime("%a %d %b %H:%M")  # noqa: E731
+            when = lambda at: datetime.fromisoformat(at).astimezone(sequences.LOCAL).strftime("%a %d %b %H:%M")  # noqa: E731
             clear.update("\n".join([f"[b #6c782e]{ICON['done']} All clear[/]: nothing needs you now."]
                                    + ([f"[#928374]{ICON['SNOOZED']} Next wake · {when(t['next_wake'])}[/]"] if t["next_wake"] else [])
                                    + ([f"[#928374]{ICON['tasks']} Next Task · {when(t['next_task'])}[/]"] if t["next_task"] else [])))
@@ -5736,7 +5735,7 @@ def cal_by_day(items) -> dict:
     for i in items:
         day = last = i["at"].date()
         if i["kind"] == "event":
-            last = max(day, (cal._local(i["end"]) - timedelta(microseconds=1)).date())
+            last = max(day, (clock.local(i["end"]) - timedelta(microseconds=1)).date())
         while day <= last:
             out.setdefault(day, []).append(i)
             day += timedelta(days=1)
@@ -5745,7 +5744,7 @@ def cal_by_day(items) -> dict:
 
 def cal_time(value) -> str:
     """10:00 -> 10, 9:30 -> 9:30: the shortest clear start in a day cell."""
-    t = cal._local(value)
+    t = clock.local(value)
     return f"{t.hour}" if t.minute == 0 else f"{t.hour}:{t.minute:02}"
 
 
@@ -5937,7 +5936,7 @@ def cal_line(i) -> str:
         when = "" if i["all_day"] else f"{i['at']:%H:%M}  "
         what = {"task": "Task", "snooze": "wakes", "draft": "sends", "enrollment": "starts"}[i["kind"]]
         return f"[{grey}]{when}{ICON[icon]} {what}[/]  {escape(i['title'])}"
-    when = "all day" if i["all_day"] else f"{cal._local(i['start']):%H:%M}–{cal._local(i['end']):%H:%M}"
+    when = "all day" if i["all_day"] else f"{clock.local(i['start']):%H:%M}–{clock.local(i['end']):%H:%M}"
     state = {"NEEDS-ACTION": "unanswered", "TENTATIVE": "maybe", "DECLINED": "declined"}.get(i["state"], "")
     tags = " · ".join(t for t in (i["type"] if i["type"] == "block" else "", state,
                                   "deleted" if i["deleted_at"] else "") if t)
@@ -5988,7 +5987,7 @@ class CalendarPage(Page):
             banner.update(f"[{PALETTE['grey1']}]No Event provider yet: add the google-calendar-ics credential "
                           "(runbook §3g).[/]")
         elif why:
-            since = cal._local(datetime.fromisoformat(p["ok_at"])).strftime("%a %H:%M") if p["ok_at"] else "earlier"
+            since = clock.local(datetime.fromisoformat(p["ok_at"])).strftime("%a %H:%M") if p["ok_at"] else "earlier"
             banner.update(f"[b {PALETTE['bg0']} on {PALETTE['red']}] {ICON['broken']} Google Calendar unreachable [/]"
                           f" [{PALETTE['grey1']}]{escape(why)} · showing the copy as of {since}[/]")
         else:
@@ -6028,7 +6027,7 @@ class EventPage(Page):
 
     def refresh_data(self):
         db, e, b = self.app.db, self.event, PALETTE
-        start, end = cal._local(e["start"]), cal._local(e["end"])
+        start, end = clock.local(e["start"]), clock.local(e["end"])
         when = (f"{start:%a %b %-d} · all day" if e["all_day"] else f"{start:%a %b %-d} · {start:%H:%M}–{end:%H:%M}")
         state = {"ACCEPTED": "Accepted", "TENTATIVE": "Tentative", "NEEDS-ACTION": "Unanswered",
                  "DECLINED": "Declined"}.get(e["state"], e["state"].title())
@@ -6624,9 +6623,11 @@ class Console(App):
         self.call_from_thread(show)
 
     def tick_countdowns(self):
-        """Snoozed Threads count down beside their status every second (the lists tick on their own)."""
+        """Snoozed Threads count down every second: list rows, the Thread's status, and Case cards."""
         if self._console_stopping or self._console_closed:
             return
+        for page in self.screen.query(ThreadsPage):
+            page.tick()
         for tv in self.screen.query(ThreadView):
             if getattr(tv, "view", None) is not None and tv.view["thread"].status == "SNOOZED":
                 tv.paint_status(details=False)
@@ -6831,10 +6832,10 @@ class Console(App):
 
     def toast_pauses(self):
         """A pause during a session says what it means and the way back (FR-SEQ-20)."""
-        since = getattr(self, "paused_seen", None) or inbox._iso(inbox._now() - timedelta(minutes=5))
+        since = getattr(self, "paused_seen", None) or clock.iso(clock.now() - timedelta(minutes=5))
         for e in sequences.pauses_since(self.db, since):
             why = "called" if e["pause_reason"] == "call" else "replied"
             self.notify(f"{e['person']} {why}: their {e['sequence']} Enrollment paused and its Tasks are hidden. "
                         f"Resume on their Person page (r).", timeout=20)
             since = max(since, e["paused_at"])
-        self.paused_seen = max(since, inbox._iso(inbox._now()))
+        self.paused_seen = max(since, clock.iso(clock.now()))

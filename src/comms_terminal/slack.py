@@ -10,7 +10,7 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 
-from . import inbox
+from . import clock, inbox
 
 SIGNATURE_WINDOW = 300  # seconds
 CHANNEL_KINDS = {"channel": "channel", "group": "private", "im": "im", "mpim": "mpim"}
@@ -266,7 +266,7 @@ def import_recent(db, connection, client, days: int) -> int:
     """One-time import (Jeremy, 2026-10-12): the last `days` of Slack through the live filter, oldest first,
     so Threads form as they would have live; then every touched Thread goes to Todo, as Jeremy asked.
     Returns the number of messages stored."""
-    since = datetime.now(timezone.utc).timestamp() - days * 86400
+    since = clock.now().timestamp() - days * 86400
     rules = [(r["kind"], r["value"]) for r in db.execute(
         "SELECT kind, value FROM channel_rules WHERE connection_id = ?", (connection["id"],))]
     events = sorted(({"type": "message", "channel": ch, "channel_type": kind, "user": m.get("user"),

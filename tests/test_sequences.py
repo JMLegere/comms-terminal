@@ -5,7 +5,7 @@ from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
-from comms_terminal import inbox, sequences as sq
+from comms_terminal import clock as comms_clock, inbox, sequences as sq
 from test_attachment_send import FakeSender
 
 ME = "jeremy@agentmaple.example"
@@ -21,8 +21,7 @@ class Clock:
 @pytest.fixture
 def clock(monkeypatch):
     c = Clock()
-    monkeypatch.setattr(inbox, "_now", lambda: c.at)
-    monkeypatch.setattr(sq, "_now", lambda: c.at)
+    monkeypatch.setattr(comms_clock, "now", lambda: c.at)
     return c
 
 

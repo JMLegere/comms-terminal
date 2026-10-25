@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 from pytest_bdd import given, parsers, then, when
 
-from comms_terminal import inbox, sequences
+from comms_terminal import clock, inbox, sequences
 
 ME = "jeremy@agentmaple.example"
 DAYS = {"Monday": datetime(2026, 10, 19, 13, 0, tzinfo=timezone.utc)}
@@ -27,8 +27,7 @@ def outreach(monkeypatch):
         db.execute("INSERT INTO connections (id, platform, external_id, self_id, label, connected_at)"
                    " VALUES (1, 'fastmail', ?, ?, 'Fastmail', ?)", (ME, ME, DAYS["Monday"].isoformat()))
     ctx = SimpleNamespace(db=db, now=DAYS["Monday"], sequences={}, people={}, enrollment=None, error=None)
-    monkeypatch.setattr(inbox, "_now", lambda: ctx.now)
-    monkeypatch.setattr(sequences, "_now", lambda: ctx.now)
+    monkeypatch.setattr(clock, "now", lambda: ctx.now)
     yield ctx
     db.close()
 

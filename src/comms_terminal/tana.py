@@ -15,6 +15,8 @@ from urllib.parse import quote
 
 from .mcp import McpClient
 
+from . import clock
+
 MCP = "https://home.tana.inc/mcp"
 TOKEN = "https://login.tana.inc/oauth2/token"
 TTL = 300  # seconds an answer is reused
@@ -72,7 +74,7 @@ def meetings(client, emails: list[str], domains: list[str], now: datetime) -> li
 
 def context(client, emails, domains, now: datetime | None = None) -> dict:
     """Everything the Tana section shows, as plain JSON. Each record is {id, title, type, url}."""
-    now = now or datetime.now(timezone.utc)
+    now = now or clock.now()
     emails, domains = sorted({e.lower() for e in emails}), sorted({d.lower() for d in domains})
     people = _uniq([i for e in emails for i in _typed(client, "People", [{"field": "Email", "equals": e}])])
     orgs = _uniq([i for d in domains for i in _typed(client, "Organizations", [{"field": "Domain", "equals": d}])])
