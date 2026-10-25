@@ -8,6 +8,7 @@ import pytest
 
 from comms_terminal import clock, email, files, inbox
 from test_email_reconcile import SCHEMA3
+from schema_history import changed_since
 from test_schema_equivalence import shape
 
 AT = datetime(2026, 10, 1, 10, tzinfo=timezone.utc)
@@ -201,8 +202,7 @@ def test_v8_draft_migration_matches_fresh_preserves_old_rows_aliases_guards_and_
         inbox.migrate(fresh)
         assert old.execute("PRAGMA user_version").fetchone()[0] == inbox.SCHEMA_VERSION
         assert shape(old) == shape(fresh)
-        changed = ("persons", "connections", "channels", "audit_log")  # 17: persons.unsubscribed_at;
-        # 23: connections.inbound; 28: the gcal, meeting, and meeting-cause CHECKs
+        changed = changed_since(8)
         assert {k: v for k, v in shape(old).items() if k in old_shape and k[1] not in changed} == \
             {k: v for k, v in old_shape.items() if k[1] not in changed}
         assert {k: v for k, v in old_rows(old).items() if k in before} == before  # later migrations may add tables

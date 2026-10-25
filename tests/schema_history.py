@@ -1,5 +1,7 @@
 """Fake an older database from a fresh one: undo the migrations after `version`, newest first."""
 
+import re
+
 from comms_terminal import inbox
 
 UNDO = {
@@ -32,3 +34,11 @@ UNDO = {
 def downgrade(db, version: int, extra: str = "") -> None:
     db.executescript("".join(UNDO[v] for v in range(inbox.SCHEMA_VERSION, version, -1))
                      + extra + f" PRAGMA user_version = {version};")
+
+
+def changed_since(version: int) -> tuple[str, ...]:
+    """The tables a migration after `version` alters, rebuilds, or drops: their stored SQL may change across the
+    upgrade; every other table's must not."""
+    found = {t.removesuffix("_new") for n, sql in inbox.MIGRATIONS.items() if n > version
+             for t in re.findall(r'(?:ALTER|DROP) TABLE (?:IF EXISTS )?"?(\w+)', sql, re.I)}
+    return tuple(sorted(found))

@@ -146,15 +146,15 @@ def test_version_12_upgrade_adds_only_receipts_and_preserves_records_files_and_g
         read = lambda: {name: [tuple(r) for r in db.execute(f'SELECT {columns[name]} FROM "{name}" ORDER BY rowid')]  # noqa: E731
                         for name in tables}
         rows = read()
+        from schema_history import changed_since
         unchanged = ("SELECT type, name, tbl_name, sql FROM sqlite_schema WHERE tbl_name NOT IN"
-                     " ('composition_drafts', 'persons', 'connections', 'channels', 'audit_log') ORDER BY name")
+                     f" ({', '.join(repr(t) for t in changed_since(12))}) ORDER BY name")
         schema = [tuple(r) for r in db.execute(unchanged)]
         inbox.migrate(db)
         assert db.execute("PRAGMA user_version").fetchone()[0] == inbox.SCHEMA_VERSION
         assert read() == rows  # 13-17 add tables, and NULL columns on existing Drafts and People
         assert db.execute("SELECT count(*) FROM composition_drafts WHERE thread_id IS NOT NULL").fetchone()[0] == 0
-        names = {row[1] for row in schema}  # 15-17 add the audit logs and Sequences tables; 23 a Connection column;
-        # 28 widens the connections, channels, and audit_log CHECKs
+        names = {row[1] for row in schema}  # later migrations add tables too
         assert [tuple(r) for r in db.execute(unchanged) if r[1] in names] == schema
         assert files.attachment_path(db, sha).read_bytes() == b"retained file"
         assert (files.raw_dir(db) / f"{raw_sha}.eml").read_bytes() == raw
