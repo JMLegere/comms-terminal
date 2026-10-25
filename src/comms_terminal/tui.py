@@ -7398,7 +7398,7 @@ class Console(App):
             self.set_online("Update ready · restart Comms Terminal to load the service's version; read-only.")
             if service and mine and service != mine:
                 self.update_now()
-        elif self.syncer is not None and self.syncer.confirmed:
+        elif self.syncer is not None and self.syncer.confirmed and self.remote is not None and self.remote.link.ready():
             self.set_online(None)
 
     def update_now(self):

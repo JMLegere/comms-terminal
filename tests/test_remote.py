@@ -221,6 +221,33 @@ def test_the_console_on_the_copy_triages_through_the_service_and_shows_read_only
     assert seen["undone"] == "TODO" and seen["banner"] and seen["refused"] == "TODO"
 
 
+def test_stale_confirmed_sync_cannot_clear_read_only_after_link_loss(laptop, monkeypatch):
+    rem, syncer, db, link = laptop
+    db.close()
+    monkeypatch.setattr(syncer, "start", lambda: None)  # Drive callback ordering directly, without a sync loop.
+    syncer.service_build = ""
+    assert syncer.confirmed
+    offline = "Offline · cannot reach the inbox service; read-only."
+
+    async def scenario(app, pilot):
+        link.up = False
+        app.set_online(offline)
+        app.check_copy()  # A delayed callback still carries the previously confirmed sync.
+        assert not rem.online and rem.problem == offline
+        assert "READ-ONLY" in str(app.main.query_one("#statusline").render())
+        with pytest.raises(remote.Offline, match="Offline"):
+            rem.require_online()
+
+        link.up = True
+        app.check_copy()
+        assert rem.online and rem.problem is None
+        assert "READ-ONLY" not in str(app.main.query_one("#statusline").render())
+        rem.require_online()
+
+    from test_console import run
+    run(tui.Console(syncer.db_path, remote=rem, syncer=syncer), [scenario])
+
+
 def test_a_create_the_copy_cannot_reproduce_resyncs_before_returning(service, laptop):
     _, sdb, _, tid = service
     rem, syncer, db, _ = laptop
