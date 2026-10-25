@@ -188,7 +188,7 @@ def test_on_track_and_coverage(five):
     m = pl.math(five, R)
     s, top = m["summary"], m["stages"][0]
     assert s["coverage"] == pytest.approx(s["weighted"] / (1_000_000 - s["kept"]))
-    assert pl.on_track(m) == ("Behind pace", f"need {pl.num(top['need'])} new Awareness accounts a week,"
+    assert pl.on_track(m) == ("Behind pace", f"need {pl.num(top['need'])} new Awareness Organizations a week,"
                                              f" getting {pl.num(top['entries'])}")
     pl.set_target(five, R, "100k", "2028-09-30")  # customers and open accounts already cover it
     m = pl.math(five, R)
@@ -202,8 +202,8 @@ def test_this_week_bullets(five):
     top = m["stages"][0]
     assert m["summary"]["constraint"]["stage"] == "Onboarding" and not m["stages"][5]["orgs"]
     assert pl.this_week(m) == [
-        ("Find accounts for Onboarding", "it is the constraint: 100% move on (benchmark 98%)"),
-        (f"Add {-(-(top['need'] - top['entries']) // 1):.0f} accounts to Awareness",
+        ("Find Organizations for Onboarding", "it is the constraint: 100% move on (benchmark 98%)"),
+        (f"Add {-(-(top['need'] - top['entries']) // 1):.0f} Organizations to Awareness",
          f"need {pl.num(top['need'])} a week, getting {pl.num(top['entries'])}"),
         ("Set a Value for C", "the math leaves them out until then")]
 

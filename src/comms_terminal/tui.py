@@ -138,7 +138,8 @@ Page { height: 1fr; }
 .todaypane DataTable { height: auto; max-height: 30vh; }
 #todaythreads DataTable { max-height: 50vh; }
 .todaypane.fill, .todaypane.fill Page { height: 1fr; }
-#todaythreads.fill DataTable, #todaytasks.fill DataTable, #todaydrafts.fill DataTable { height: 1fr; max-height: 100%; }
+#todaythreads.fill DataTable, #todaytasks.fill DataTable, #todaydrafts.fill DataTable, #todayorgs.fill DataTable {
+    height: 1fr; max-height: 100%; }
 .todaypane #legend, .todaypane #below { display: none; }
 .todaypane #table { margin-top: 0; }
 #allclear { display: none; height: 1fr; padding: 1 2; }
@@ -597,7 +598,7 @@ HELP = [  # (group, [(keys, what it does)]) — the full key map; Gmail-style wh
                 ("delete", "in the reply's file list: remove the highlighted file"),
                 ("; / :", "expand / collapse every message (click a message or ••• to toggle one)"),
                 ("ctrl+shift+click", "open a link in your browser (shift lets Ghostty take the click)")]),
-    ("Pipeline", [("enter", "open the account under the cursor"), ("← / →", "the next Stage on the board"),
+    ("Pipeline", [("enter", "open the Organization under the cursor"), ("← / →", "the next Stage on the board"),
                   ("s", "set an Organization's Stage (z undoes)"), ("v", "set its Revenue Value or Fundraising Value"),
                   ("p", "Organization page: add or remove its People (z undoes)"),
                   ("y", "copy the Pipeline's math as Markdown for an agent")]),
@@ -878,7 +879,7 @@ class Rail(OptionList):
         gap = Option("", disabled=True)
         try:
             today = inbox.today(db)
-            waiting = len(today["threads"]) + len(today["tasks"]) + len(today["drafts"])
+            waiting = len(today["threads"]) + len(today["tasks"]) + len(today["drafts"]) + len(today["unattended"])
         except Exception:  # a failed Draft read must not take the rail down; the Drafts list says why
             waiting = ""
         opts = [item("today", "today", "Today", waiting), item("calendar", "calendar", "Calendar"), gap,
@@ -3690,6 +3691,9 @@ def pipeline_section(db, org_id: int) -> str:
         out.append(f"{pipeline.NAMES[p]}  {stage}\n[{g}]{pipeline.NAMES[p]} Value[/]  {value}")
     if len(out) == 1:
         out.append(f"[{g}]In no Pipeline yet.[/]")
+    a = pipeline.attention(db).get(org_id)
+    if a:
+        out.append(f"[{g}]Now[/]  {rollup_text(a['rollup'], a['wakes'], a['unattended'])}")
     for h in pipeline.history(db, org_id)[:8]:
         if h["kind"] == "STAGE":
             change = f"{h['old']} → {h['new']}" if h["old"] else h["new"]
@@ -3785,15 +3789,25 @@ def column_head(r: dict, hot: bool) -> str:
             + (f"  [{PALETTE['red'] if hot else g}]{flow}[/]" if flow else ""))
 
 
+def rollup_text(rollup: str | None, wakes, unattended: bool) -> str:
+    """An Organization's roll-up (FR-OA-7): Todo, Snoozed until a date, Unattended in red, or Done."""
+    if unattended:
+        return f"[b {PALETTE['red']}]Unattended[/]"
+    if rollup == "Snoozed":
+        return f"[{PALETTE['grey1']}]Snoozed" + (f" until {wakes.astimezone():%b %-d}" if wakes else "") + "[/]"
+    return f"[{PALETTE['blue']}]Todo[/]" if rollup == "Todo" else f"[{PALETTE['grey1']}]{rollup or 'Done'}[/]"
+
+
 def card(o: dict, now) -> str:
     g = PALETTE["grey1"]
     value = f"CAD {pipeline.money(o['value'])}" if o["value"] is not None else f"[{PALETTE['red']}]no Value[/]"
     last = when(o["last_message"].isoformat(), now) if o["last_message"] else "—"
-    return f"[b]{escape(o['name'])}[/]\n{value} · {o['days']}d\n[{g}]last message {last}[/]"
+    return (f"[b]{escape(o['name'])}[/]\n{value} · {o['days']}d\n{rollup_text(o['rollup'], o['wakes'], o['unattended'])}"
+            f"\n[{g}]last message {last}[/]")
 
 
 class BoardColumn(OptionList):
-    """One Stage's accounts on the Pipeline board: enter opens one; s and v set its Stage and Value;
+    """One Stage's Organizations on the Pipeline board: enter opens one; s and v set its Stage and Value;
     ←/→ move to the next Stage."""
     BINDINGS = [Binding("j", "cursor_down", show=False), Binding("k", "cursor_up", show=False),
                 Binding("s", "stage", "stage"), Binding("v", "value", "value")]
@@ -3845,11 +3859,11 @@ def box(title: str, *children, id=None, classes="") -> Vertical:
 
 class PipelinePage(Page):
     """One Pipeline, action first (.agents/discovery/2026-10-24-pipeline-page-layout.md): boxes for This week and
-    Progress, the Constraint, the Accounts board (each Stage once, its header carrying the Bowtie's count and
+    Progress, the Constraint, the Organizations board (each Stage once, its header carrying the Bowtie's count and
     conversion), and the Weekly review."""
     BINDINGS = [Binding("y", "copy", "copy for agent"), Binding("pagedown", "scroll(1)", show=False),
                 Binding("pageup", "scroll(-1)", show=False), Binding("space", "scroll(1)", show=False)]
-    WEEKLY = ("Stage", "Accounts", "Convert", "Benchmark", "Days in Stage", "Reach {paid}", "Need a week",
+    WEEKLY = ("Stage", "Organizations", "Convert", "Benchmark", "Days in Stage", "Reach {paid}", "Need a week",
               "Getting a week", "Short by")
 
     def __init__(self, p: str):
@@ -3867,7 +3881,7 @@ class PipelinePage(Page):
             yield Horizontal(box("THIS WEEK", Static(id="plweek"), id="plweekbox"),
                              box("PROGRESS", Static(id="plprogress"), id="plprogressbox"), id="pltop")
             yield box("CONSTRAINT", Static(id="plconstraint"), classes="plred")
-            yield box("ACCOUNTS  ·  each Stage, how many move on  ·  enter opens · s Stage · v Value · ←/→",
+            yield box("ORGANIZATIONS  ·  each Stage, how many move on  ·  enter opens · s Stage · v Value · ←/→",
                       HorizontalScroll(*cols, id="plboard"))
             yield box("WEEKLY REVIEW", DataTable(id="plweekly", cursor_type="none", show_cursor=False),
                       Static(id="pllegend"))
@@ -3914,8 +3928,8 @@ class PipelinePage(Page):
                 rate = f"{word} {pipeline.pct(r['rate'])}" if r["rate"] is not None else f"[{g}]no data[/]"
                 table.add_row(r["stage"], str(len(r["orgs"])), rate, pipeline.pct(r["benchmark"]), *[""] * 5)
         self.query_one("#pllegend", Static).update(
-            f"[{g}]Convert: share of accounts that moved on to the next Stage in the last 12 months · Benchmark:"
-            " Winning by Design's Bowtie Standard, Table 6.2 · Need and Getting: accounts entering the Stage a week"
+            f"[{g}]Convert: share of Organizations that moved on to the next Stage in the last 12 months · Benchmark:"
+            " Winning by Design's Bowtie Standard, Table 6.2 · Need and Getting: Organizations entering the Stage a week"
             " · Short by: how many more a week the Target needs[/]")
 
     def on_resize(self, event):
@@ -3936,7 +3950,7 @@ class PipelinePage(Page):
         s.scroll_page_down() if step > 0 else s.scroll_page_up()
 
     def move_column(self, step) -> bool:
-        """←/→ on the board: the next Stage's accounts; False at the edge."""
+        """←/→ on the board: the next Stage's Organizations; False at the edge."""
         cols = list(self.query(BoardColumn))
         at = next((i for i, c in enumerate(cols) if c.has_focus), None)
         if at is None or not 0 <= at + step < len(cols):
@@ -5510,14 +5524,54 @@ class StepEditor(Vertical):
             + escape(text if len(text) <= 300 else text[:299] + "…"))
 
 
+class UnattendedPage(TablePage):
+    """Today's Unattended Organizations (FR-OA-6): in an open or paying Stage with no Todo or Snoozed Thread and no
+    unfinished Enrollment. Enter opens the Organization; its Pipeline section fills the right pane."""
+    KIND = "organizations"
+    SIDE = f"{ICON['organization']} organization"
+    COLUMNS = ("", "Organization", "Stage", "Last message")
+
+    def rows(self):
+        now = datetime.now().astimezone()
+        return [(o, (f"[{PALETTE['red']}]{ICON['organization']}[/]", f"[b]{escape(o['name'])}[/]",
+                     f"[#928374]{escape(' · '.join(o['stages'].values()))}[/]",
+                     f"[#928374]{when(o['last'].isoformat(), now) if o['last'] else 'never'}[/]"))
+                for o in pipeline.unattended(self.app.db)]
+
+    def refresh_data(self):
+        if not self.query(DataTable) or not self.on_screen:
+            return
+        super().refresh_data()
+        if self.host is not None:
+            self.host.list_changed(self)
+        if self.active:
+            self.show_selected()
+
+    def show_selected(self):
+        o = self.selected()
+        if o is None:
+            return
+        self.app.main.showing = f"organization:{o['id']}"
+        domain = f"  [#928374]{escape(o['domain'])}[/]" if o["domain"] != o["name"] else ""
+        self.app.main.show_side(f"[b]{escape(o['name'])}[/]{domain}\n\n" + pipeline_section(self.app.db, o["id"]))
+
+    def on_data_table_row_highlighted(self, event):
+        event.stop()
+        if self.active:
+            self.show_selected()
+
+    def open(self, o):
+        self.app.main.open(lambda: OrganizationPage(o["domain"]))
+
+
 class TodayPage(Page):
-    """Today (GLOSSARY; .agents/prd/2026-10-17-today-view.md): Todo Threads, Due Tasks, and the Drafts not shown
-    through them, stacked in that order; a list with nothing in it hides. The list holding the cursor fills the
+    """Today (GLOSSARY; .agents/prd/2026-10-17-today-view.md): Todo Threads, Due Tasks, the Drafts not shown
+    through them, and Unattended Organizations, stacked in that order; a list with nothing in it hides. The list holding the cursor fills the
     right pane; ↓/↑ run on from one list into the next, and tab jumps to the next list."""
     TITLE = f"{ICON['today']} today"
     RAIL = "today"
     BINDINGS = [Binding("tab", "next_list", show=False)]
-    PANES = ("todaythreads", "todaytasks", "todaydrafts")
+    PANES = ("todaythreads", "todaytasks", "todaydrafts", "todayorgs")
 
     def __init__(self):
         super().__init__()
@@ -5525,13 +5579,14 @@ class TodayPage(Page):
         threads.fixed_view = 0
         self.threads, self.tasks = threads, TasksPage()
         self.drafts = DraftsPage(include=lambda d: inbox.today_draft(self.app.db, d))
+        self.orgs = UnattendedPage()
         for page in self.lists:
             page.host = self
         self.current_list = threads
 
     @property
     def lists(self):
-        return [self.threads, self.tasks, self.drafts]
+        return [self.threads, self.tasks, self.drafts, self.orgs]
 
     @property
     def active_list(self):
@@ -5576,8 +5631,10 @@ class TodayPage(Page):
         elif page is self.tasks:
             late = sum(1 for t in page.items if t and t["group"] == "overdue")
             title = pill(f"{ICON['tasks']} tasks · {n}", "blue") + (f" [b #c14a4a]{late} overdue[/]" if late else "")
-        else:
+        elif page is self.drafts:
             title = pill(f"{ICON['edited']} drafts · {n}", "blue")
+        else:
+            title = pill(f"{ICON['organization']} unattended · {n}", "red")
         page.parent.border_title = title
         page.parent.display = n > 0
         shown = [p.parent for p in self.lists if p.parent.display]

@@ -239,14 +239,59 @@ def _deadline(pipeline, due: date) -> date:
         return due.replace(year=due.year - 1, day=28) + timedelta(days=1)
 
 
-def _last_messages(db) -> dict:
-    """{domain: latest message time} over Threads with anyone at that Organization."""
-    rows = db.execute(
-        "SELECT org_key(substr(i.value, instr(i.value, '@') + 1)) AS domain, max(m.occurred_at) AS at"
-        " FROM identities i JOIN activities a ON a.identity_id = i.id"
-        " JOIN activities m ON m.thread_id = a.thread_id AND m.kind = 'MESSAGE'"
-        " WHERE i.kind = 'email' GROUP BY 1")
-    return {r["domain"]: datetime.fromisoformat(r["at"]) for r in rows}
+ROLLUP = ("Todo", "Snoozed", "Done")  # earliest first, as a Case rolls up its Threads
+
+
+def attention(db) -> dict:
+    """Each Organization in a Pipeline, read from its People's Threads and Enrollments (FR-OA-4, FR-OA-5; never
+    stored): {org_id: {rollup, wakes, last, unattended, stages}}.
+
+    rollup: the earliest of Todo, Snoozed, Done over the Threads its People wrote in or were addressed in, with an
+    unfinished Enrollment counting as Snoozed; Done with no Threads. wakes: the earliest time a Snoozed one comes
+    back (None for Todo, Done, or a Snooze with no date). last: the latest message in those Threads.
+    unattended: in an open or paying Stage, and Done. stages: {pipeline: Stage}."""
+    held = {}
+    for (o, p), st in _state(_entries(db)).items():
+        if st["stage"]:
+            held.setdefault(o, {})[p] = st["stage"]
+    if not held:
+        return {}
+    members, threads = inbox._members(db), inbox.person_thread_ids(db)
+    status = {r["id"]: r for r in db.execute(
+        "SELECT t.id, t.status, COALESCE(t.follow_up_at, t.snoozed_until) AS wakes,"
+        " (SELECT max(a.occurred_at) FROM thread_activities a WHERE a.thread_id = t.id AND a.kind = 'MESSAGE') AS last"
+        " FROM threads t WHERE t.merged_into IS NULL")}
+    enrolled: dict[int, list] = {}  # person -> the next Task due of each unfinished Enrollment (None if paused)
+    for pid, state, due in db.execute(
+            "SELECT e.person_id, e.state, (SELECT min(due_at) FROM tasks t WHERE t.enrollment_id = e.id"
+            " AND t.state = 'DUE') FROM enrollments e WHERE e.state IN ('ACTIVE', 'PAUSED')"):
+        enrolled.setdefault(pid, []).append(due if state == "ACTIVE" else None)
+    out = {}
+    for o, domain in db.execute("SELECT id, domain FROM organizations"):
+        if o not in held:
+            continue
+        pids = members.get(domain, set())
+        rows = [status[t] for t in set().union(*(threads.get(p, set()) for p in pids)) if t in status]
+        found = {r["status"] for r in rows} | ({"SNOOZED"} if any(p in enrolled for p in pids) else set())
+        rollup = next((v for v in ROLLUP if v.upper() in found), "Done")
+        wakes = [datetime.fromisoformat(r["wakes"]) for r in rows if r["status"] == "SNOOZED" and r["wakes"]] + \
+            [datetime.fromisoformat(d) for p in pids for d in enrolled.get(p, []) if d]
+        last = [r["last"] for r in rows if r["last"]]
+        live = any(st in OPEN[p] + PAYING[p] for p, st in held[o].items())
+        out[o] = {"rollup": rollup, "wakes": min(wakes) if rollup == "Snoozed" and wakes else None,
+                  "last": datetime.fromisoformat(max(last, key=datetime.fromisoformat)) if last else None,
+                  "unattended": live and rollup == "Done", "stages": held[o]}
+    return out
+
+
+def unattended(db) -> list[dict]:
+    """Organizations in an open or paying Stage with nothing open (Today's group), by name: id, domain, name,
+    stages, last."""
+    att = attention(db)
+    return sorted(({"id": r["id"], "domain": r["domain"], "name": r["name"], "stages": att[r["id"]]["stages"],
+                    "last": att[r["id"]]["last"]}
+                   for r in db.execute("SELECT id, domain, name FROM organizations") if att.get(r["id"], {}).get(
+                       "unattended")), key=lambda o: o["name"].lower())
 
 
 def math(db, pipeline: str, now: datetime | None = None, orgs: bool = True) -> dict:
@@ -259,7 +304,7 @@ def math(db, pipeline: str, now: datetime | None = None, orgs: bool = True) -> d
     state = {o: s for (o, _), s in _state(rows).items() if s["stage"]}
     want_rows = orgs
     orgs = {r["id"]: r for r in db.execute("SELECT * FROM organizations")} if want_rows else {}
-    last = _last_messages(db) if want_rows and state else {}
+    att = attention(db) if want_rows and state else {}
 
     # When each Organization first reached each chain Stage; a jump reaches the skipped Stages at the same time
     reached, ends = {}, {}  # org -> {index: time}; org -> time it left the chain (Lost, Passed)
@@ -348,7 +393,7 @@ def math(db, pipeline: str, now: datetime | None = None, orgs: bool = True) -> d
         gap = max(0, goal["amount"] - projected)
         customers = _m.ceil(gap / average) if average else None
         weeks = (deadline - today).days / 7
-        new = goal["amount"] - kept  # what open and future accounts must add
+        new = goal["amount"] - kept  # what open and future Organizations must add
         summary.update(kept=kept, projected=projected, gap=gap, customers=customers, deadline=deadline,
                        weeks=weeks, years=years, share=projected / goal["amount"], new=max(0, new),
                        coverage=weighted / new if new > 0 else None)
@@ -372,8 +417,10 @@ def math(db, pipeline: str, now: datetime | None = None, orgs: bool = True) -> d
 
     def org_row(o):
         s = state[o]
+        a = att.get(o, {})
         return {"id": o, "domain": orgs[o]["domain"], "name": orgs[o]["name"], "value": s["value"],
-                "days": (now - s["since"]).days, "last_message": last.get(orgs[o]["domain"])}
+                "days": (now - s["since"]).days, "last_message": a.get("last"), "rollup": a.get("rollup"),
+                "wakes": a.get("wakes"), "unattended": a.get("unattended", False)}
 
     def members(stages):
         if not want_rows:
@@ -455,23 +502,23 @@ def names(orgs, most=3) -> str:
 
 def on_track(m: dict) -> tuple[str, str] | None:
     """The verdict on the Target: the top Stage's Pace, since the backward plan already counts the open
-    accounts and the rates below it. None without a Target."""
+    Organizations and the rates below it. None without a Target."""
     s, top = m["summary"], m["stages"][0]
     if not s["target"]:
         return None
     if s["gap"] == 0:
-        return "On track", "customers and open accounts cover the Target"
+        return "On track", "customers and open Organizations cover the Target"
     if top["need"] == "late":
-        return "Off track", f"new {top['stage']} accounts can no longer reach {m['paying_stage']} by {s['deadline']}"
+        return "Off track", f"new {top['stage']} Organizations can no longer reach {m['paying_stage']} by {s['deadline']}"
     if top["pace"] is None:
         return "Pace unknown", "not enough Stage history or Value yet"
     verdict = "On pace" if top["pace"] >= 0 else "Behind pace"
-    return verdict, f"need {num(top['need'])} new {top['stage']} accounts a week, getting {num(top['entries'])}"
+    return verdict, f"need {num(top['need'])} new {top['stage']} Organizations a week, getting {num(top['entries'])}"
 
 
 def this_week(m: dict) -> list[tuple[str, str]]:
     """What the math says to do this week, as (action, why) pairs in plain words (never Tasks): the
-    constraint's lever, the input the backward plan needs at the top Stage, and accounts the math cannot count."""
+    constraint's lever, the input the backward plan needs at the top Stage, and Organizations the math cannot count."""
     s, out = m["summary"], []
     if not s["target"]:
         out.append(("Set a Target", f"comms-terminal pipeline target {m['name'].lower()} AMOUNT --by DATE"))
@@ -484,13 +531,13 @@ def this_week(m: dict) -> list[tuple[str, str]]:
     elif c:
         row = next(r for r in m["stages"] if r["stage"] == c["stage"])
         out.append((f"Move {names(row['orgs'])}", f"{c['stage']} → {c['next']}, the constraint") if row["orgs"]
-                   else (f"Find accounts for {c['stage']}", f"it is the constraint: {pct(c['rate'])} move on{vs}"))
+                   else (f"Find Organizations for {c['stage']}", f"it is the constraint: {pct(c['rate'])} move on{vs}"))
     top = m["stages"][0]
     if top["need"] == "late":
-        out.append((f"Too late for new {top['stage']} accounts",
+        out.append((f"Too late for new {top['stage']} Organizations",
                     f"they can no longer reach {m['paying_stage']} by {s['deadline']}"))
     elif isinstance(top["need"], float) and top["pace"] < 0:
-        out.append((f"Add {_m.ceil(top['need'] - top['entries'])} accounts to {top['stage']}",
+        out.append((f"Add {_m.ceil(top['need'] - top['entries'])} Organizations to {top['stage']}",
                     f"need {num(top['need'])} a week, getting {num(top['entries'])}"))
     live = m["stages"] + [r for r in m["ending"] if r["stage"] not in ENDING[m["pipeline"]]]  # not Lost, Churned
     missing = [o for r in live for o in r["orgs"] if o.get("value") is None and "name" in o]
@@ -512,7 +559,7 @@ def markdown(m: dict) -> str:
         lines += [f"- Target: CAD {t['amount']:,} {what} by {t['due']}",
                   f"- Projected: CAD {s['projected']:,.0f} ({s['share'] * 100:.0f}%): paying CAD {s['paying']:,}"
                   f" ({s['paying_count']}) → CAD {s['kept']:,.0f} in the window, weighted new CAD {s['weighted']:,.0f}",
-                  f"- Coverage: weighted open accounts cover {pct(s['coverage'])} of the CAD {s['new']:,.0f}"
+                  f"- Coverage: weighted open Organizations cover {pct(s['coverage'])} of the CAD {s['new']:,.0f}"
                   f" still to add",
                   f"- Gap: CAD {s['gap']:,.0f}"
                   + (f" = {s['customers']} new at CAD {s['average']:,.0f}" if s["customers"] is not None else ""),

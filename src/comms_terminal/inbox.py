@@ -2156,11 +2156,32 @@ def set_probe(db, connection_id: int, error: str | None) -> None:
 
 # --- read side (records) ---------------------------------------------------
 
+# (Person, Thread) for each Person who wrote in a Thread or was addressed in it (To/Cc, or a phone peer), as
+# _participants counts them (FR-OA-4). The CROSS JOINs keep SQLite reading messages first: left to itself it
+# scans every Identity for each message (5 s on the live data, against 6 ms).
+PERSON_THREADS = (
+    "SELECT i.person_id, a.thread_id FROM thread_activities a JOIN identities i ON i.id = a.identity_id"
+    " WHERE i.person_id IS NOT NULL"
+    + "".join(f" UNION SELECT i.person_id, a.thread_id FROM thread_activities a CROSS JOIN json_each(a.data, '$.{k}') j"
+              " CROSS JOIN identities i ON i.kind = 'email' AND i.value = lower(j.value)"
+              " WHERE a.kind = 'MESSAGE' AND i.person_id IS NOT NULL" for k in ("to", "cc"))
+    + " UNION SELECT i.person_id, a.thread_id FROM thread_activities a CROSS JOIN identities i"
+    " ON i.kind = 'phone' AND i.value = json_extract(a.data, '$.peer') WHERE a.kind = 'MESSAGE' AND i.person_id IS NOT NULL")
+
+
+def person_thread_ids(db) -> dict[int, set[int]]:
+    """Every Person's Threads, as PERSON_THREADS counts them: person id -> Thread ids."""
+    out: dict[int, set[int]] = {}
+    for pid, tid in db.execute(PERSON_THREADS):
+        out.setdefault(pid, set()).add(tid)
+    return out
+
+
 def person_threads(db, person_id: int) -> list[Thread]:
+    """The Threads a Person wrote in or was addressed in."""
     with _read_snapshot(db):
-        ids = [r[0] for r in db.execute(
-            "SELECT DISTINCT a.thread_id FROM thread_activities a JOIN identities i ON i.id = a.identity_id"
-            " WHERE i.person_id = ? ORDER BY a.thread_id", (person_id,))]
+        ids = [r[0] for r in db.execute(f"SELECT DISTINCT thread_id FROM ({PERSON_THREADS}) WHERE person_id = ?"
+                                        " ORDER BY thread_id", (person_id,))]
         return [get_thread(db, i) for i in ids]
 
 
@@ -2391,9 +2412,10 @@ def today_draft(db, draft: dict) -> bool:
 
 
 def today(db, now: datetime | None = None) -> dict:
-    """Today (GLOSSARY): Todo Threads, Due Tasks, and the Drafts not shown through them, each once; and, for an
-    empty Today, when the next Snoozed Thread wakes and the next Task comes due (None when nothing is coming)."""
-    from . import sequences
+    """Today (GLOSSARY): Todo Threads, Due Tasks, the Drafts not shown through them, each once, and Unattended
+    Organizations; and, for an empty Today, when the next Snoozed Thread wakes and the next Task comes due (None
+    when nothing is coming)."""
+    from . import pipeline, sequences
     now = now or _now()
     snoozed = ",".join("?" * len(VIEWS["Snoozed"]))
     wake = db.execute(
@@ -2406,7 +2428,7 @@ def today(db, now: datetime | None = None) -> dict:
         " WHERE t.state = 'DUE' AND e.state = 'ACTIVE' ORDER BY t.due_at")
         if sequences._at(r[0]).astimezone(sequences.LOCAL).date() > day]
     return {"threads": queue(db, "Todo"), "tasks": sequences.tasks_due(db, now),
-            "drafts": [d for d in list_drafts(db) if today_draft(db, d)],
+            "drafts": [d for d in list_drafts(db) if today_draft(db, d)], "unattended": pipeline.unattended(db),
             "next_wake": wake, "next_task": later[0] if later else None}
 
 
@@ -2581,15 +2603,16 @@ def people(db) -> list[dict]:
     """Persons with at least one Identity: name, first address, Organizations, open (Todo) Thread count, and
     how many of their Identities are blocked."""
     with _read_snapshot(db):
-        out = []
+        out, every = [], person_thread_ids(db)
+        todo = {r[0] for r in db.execute("SELECT id FROM threads WHERE status = 'TODO'")}
         for p in db.execute("SELECT p.id, p.display_name FROM persons p WHERE EXISTS"
                             " (SELECT 1 FROM identities i WHERE i.person_id = p.id) ORDER BY lower(p.display_name)"):
             ids = db.execute("SELECT value, blocked FROM identities WHERE person_id = ? ORDER BY kind, value",
                              (p["id"],)).fetchall()
-            threads = person_threads(db, p["id"])
+            threads = every.get(p["id"], set())
             out.append({"id": p["id"], "name": p["display_name"], "address": ids[0]["value"],
                         "organizations": person_organizations(db, p["id"]),
-                        "todo": sum(t.status == "TODO" for t in threads), "threads": len(threads),
+                        "todo": len(threads & todo), "threads": len(threads),
                         "identities": len(ids), "blocked": sum(r["blocked"] for r in ids)})
         return out
 
@@ -2598,13 +2621,7 @@ def organizations(db) -> list[dict]:
     """Each Organization's Person, Thread, and open (Todo) Thread counts, as organization_view counts them, in
     three queries rather than a person_view per member (the Organizations list and rail)."""
     with _read_snapshot(db):
-        members = _members(db)
-        threads: dict[int, set[int]] = {}
-        for pid, tid in db.execute(
-                "SELECT DISTINCT i.person_id, COALESCE(t.merged_into, t.id) FROM thread_activities a"
-                " JOIN identities i ON i.id = a.identity_id JOIN threads t ON t.id = a.thread_id"
-                " WHERE i.person_id IS NOT NULL"):
-            threads.setdefault(pid, set()).add(tid)
+        members, threads = _members(db), person_thread_ids(db)
         todo = {r[0] for r in db.execute("SELECT id FROM threads WHERE status = 'TODO'")}
         out = []
         for o in db.execute("SELECT id, domain FROM organizations ORDER BY domain"):

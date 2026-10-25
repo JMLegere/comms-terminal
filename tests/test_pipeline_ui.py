@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import seed_demo  # noqa: E402
 
 from comms_terminal import inbox, pipeline as pl  # noqa: E402
-from comms_terminal.tui import (Ask, BoardColumn, Console, OrganizationPage, Pick, PipelinePage)  # noqa: E402
+from comms_terminal.tui import (Ask, BoardColumn, Console, OrganizationPage, Pick, PipelinePage, card)  # noqa: E402
 
 R = pl.REVENUE
 DAY = timedelta(days=1)
@@ -88,7 +88,7 @@ def test_revenue_page_this_week_board_and_stage_change_with_undo(tmp_path):
     run(Console(path), [open_revenue, "right", moved, "left", back_left, "s", pick_commit, "z", undone], size=(236, 57))
     assert any("Revenue" in r and "behind" in r for r in seen["rail"])
     assert seen["page"] is PipelinePage and seen["side"] == ""
-    assert seen["week"].startswith("1  ") and "accounts to Awareness" in seen["week"]
+    assert seen["week"].startswith("1  ") and "Organizations to Awareness" in seen["week"]
     assert seen["progress"].startswith(("BEHIND PACE", "ON PACE")) and "Coverage" in seen["progress"]
     assert "CAD 1M" in seen["progress"] and "reach Impact by 2027-10-01" in seen["progress"]
     assert seen["heads"][0].startswith("Awareness\n1") and "keep" in seen["heads"][6]
@@ -192,3 +192,39 @@ def test_stage_picker_asks_the_pipeline_for_an_organization_in_none(tmp_path):
     assert seen["stages"][:2] == ["Research", "Outreach"] and seen["stages"][-1] == "pipeline:REVENUE"
     org = db.execute("SELECT id FROM organizations WHERE domain = 'initech.com'").fetchone()[0]
     assert pl.current(db, org)[pl.FUNDRAISING]["stage"] == "Research"
+
+
+def test_unattended_shows_in_today_on_the_board_and_on_the_organization_page(tmp_path):
+    """FR-OA-6, -7: Globex's Threads all Done, so it is Unattended; Acme still has Todo."""
+    path, db, org = seeded(tmp_path)
+    for t in inbox.organization_view(db, "globex.com")["threads"]:
+        inbox.act(db, t.id, inbox.Done())
+    seen = {}
+
+    async def today(app, pilot):
+        app.main.go("today")
+        await pilot.pause(0.2)
+        page = app.main.current
+        seen["today"] = (page.count(page.orgs), str(page.orgs.parent.border_title),
+                         [o["domain"] for o, _ in page.orgs.items])
+        page.enter(page.orgs, 1)
+        await pilot.pause()
+        seen["side"] = str(app.main.side_text.render())
+        shot(app, "11-today-unattended")
+
+    async def opened(app, pilot):
+        seen["opened"] = (type(app.main.current), getattr(app.main.current, "domain", None))
+
+    async def board(app, pilot):
+        app.main.go("pipeline:revenue")
+        await pilot.pause(0.2)
+        cards = {o["domain"]: o for c in app.main.current.query(BoardColumn) for o in c.orgs}
+        seen["cards"] = {d: card(o, datetime.now(timezone.utc)) for d, o in cards.items()}
+        shot(app, "12-board-rollup")
+
+    run(Console(path), [today, "enter", opened, board], size=(236, 57))
+    n, title, domains = seen["today"]
+    assert n == 1 and "unattended · 1" in title and domains == ["globex.com"]
+    assert "Now" in seen["side"] and "Unattended" in seen["side"]
+    assert seen["opened"] == (OrganizationPage, "globex.com")
+    assert "Unattended" in seen["cards"]["globex.com"] and "Unattended" not in seen["cards"]["acme.com"]

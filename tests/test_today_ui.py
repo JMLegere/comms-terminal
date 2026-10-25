@@ -53,7 +53,7 @@ def test_console_opens_on_today_with_three_lists_and_the_rail_count(tmp_path):
 
     run(Console(path), [scenario])
     assert seen["page"] is TodayPage
-    assert seen["counts"] == [6, 1, 1] and seen["shown"] == [True, True, True]
+    assert seen["counts"] == [6, 1, 1, 0] and seen["shown"] == [True, True, True, False]
     assert "threads · 6" in seen["titles"][0] and "tasks · 1" in seen["titles"][1] and "drafts · 1" in seen["titles"][2]
     assert seen["rail"][0] == "today" and "  8[/]" in seen["rail"][1]
     assert isinstance(seen["list"], ThreadsPage) and seen["right"] is ThreadView
@@ -128,7 +128,7 @@ def test_an_empty_today_says_all_clear_and_what_comes_next(tmp_path):
 
     run(Console(path), [scenario])
     assert seen["clear"][0] is True and "All clear" in seen["clear"][1] and "Next wake" in seen["clear"][1]
-    assert seen["shown"] == [False, False, False]
+    assert seen["shown"] == [False, False, False, False]
 
 
 def test_a_task_due_by_the_clock_alone_shows_within_a_minute(tmp_path, clock):
