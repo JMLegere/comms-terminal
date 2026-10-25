@@ -257,10 +257,10 @@ def attention(db) -> dict:
     if not held:
         return {}
     members, threads = inbox._members(db), inbox.person_thread_ids(db)
-    status = {r["id"]: r for r in db.execute(
-        "SELECT t.id, t.status, COALESCE(t.follow_up_at, t.snoozed_until) AS wakes,"
-        " (SELECT max(a.occurred_at) FROM thread_activities a WHERE a.thread_id = t.id AND a.kind = 'MESSAGE') AS last"
-        " FROM threads t WHERE t.merged_into IS NULL")}
+    status = {r["id"]: r for r in db.execute(  # one grouped scan: a subquery per Thread on the view took 390 ms live
+        "SELECT t.id, t.status, COALESCE(t.follow_up_at, t.snoozed_until) AS wakes, m.last FROM threads t"
+        " LEFT JOIN (SELECT thread_id, max(occurred_at) AS last FROM thread_activities WHERE kind = 'MESSAGE'"
+        " GROUP BY thread_id) m ON m.thread_id = t.id WHERE t.merged_into IS NULL")}
     enrolled: dict[int, list] = {}  # person -> the next Task due of each unfinished Enrollment (None if paused)
     for pid, state, due in db.execute(
             "SELECT e.person_id, e.state, (SELECT min(due_at) FROM tasks t WHERE t.enrollment_id = e.id"

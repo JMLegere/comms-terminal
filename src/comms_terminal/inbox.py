@@ -1266,7 +1266,8 @@ def merge_preview(db, keep: int, drop: int) -> dict:
     with _read_snapshot(db):
         identities = [dict(r) for r in db.execute(
             "SELECT kind, value FROM identities WHERE person_id IN (?, ?) ORDER BY kind, value", (keep, drop))]
-        threads = {t.id: t for pid in (keep, drop) for t in person_threads(db, pid)}
+        every = person_thread_ids(db)
+        threads = {t.id: t for pid in (keep, drop) for t in person_threads(db, pid, every)}
         orgs = sorted({o for pid in (keep, drop) for o in person_organizations(db, pid)})
         return {"name": _merged_name(db, keep, drop), "identities": identities, "organizations": orgs,
                 "threads": len(threads), "todo": sum(t.status == "TODO" for t in threads.values())}
@@ -2177,12 +2178,11 @@ def person_thread_ids(db) -> dict[int, set[int]]:
     return out
 
 
-def person_threads(db, person_id: int) -> list[Thread]:
-    """The Threads a Person wrote in or was addressed in."""
+def person_threads(db, person_id: int, every: dict | None = None) -> list[Thread]:
+    """The Threads a Person wrote in or was addressed in; `every` is person_thread_ids, when already read."""
     with _read_snapshot(db):
-        ids = [r[0] for r in db.execute(f"SELECT DISTINCT thread_id FROM ({PERSON_THREADS}) WHERE person_id = ?"
-                                        " ORDER BY thread_id", (person_id,))]
-        return [get_thread(db, i) for i in ids]
+        ids = (every if every is not None else person_thread_ids(db)).get(person_id, set())
+        return [get_thread(db, i) for i in sorted(ids)]
 
 
 def channel_threads(db, connection_id: int, native_id: str) -> list[Thread]:
@@ -2559,12 +2559,12 @@ def _participants(db, acts) -> tuple[list[dict], list[str], list[str]]:
     return people, others, sorted((known | extra) - own)
 
 
-def person_view(db, person_id: int) -> dict:
+def person_view(db, person_id: int, every: dict | None = None) -> dict:
     with _read_snapshot(db):
         p = db.execute("SELECT * FROM persons WHERE id = ?", (person_id,)).fetchone()
         identities = [dict(r) for r in db.execute(
             "SELECT id, kind, value, blocked FROM identities WHERE person_id = ? ORDER BY kind, value", (person_id,))]
-        threads = person_threads(db, person_id)
+        threads = person_threads(db, person_id, every)
         cases = sorted({r[0] for r in db.execute(
             "SELECT c.title FROM cases c JOIN threads t ON t.case_id = c.id WHERE t.id IN"
             f" ({','.join(str(t.id) for t in threads) or 'NULL'})")})
@@ -2605,13 +2605,17 @@ def people(db) -> list[dict]:
     with _read_snapshot(db):
         out, every = [], person_thread_ids(db)
         todo = {r[0] for r in db.execute("SELECT id FROM threads WHERE status = 'TODO'")}
+        known, orgs = {r[0] for r in db.execute("SELECT domain FROM organizations")}, {}
+        for domain, pids in _members(db).items():  # person_organizations for everyone at once
+            for pid in pids if domain in known else ():
+                orgs.setdefault(pid, []).append(domain)
         for p in db.execute("SELECT p.id, p.display_name FROM persons p WHERE EXISTS"
                             " (SELECT 1 FROM identities i WHERE i.person_id = p.id) ORDER BY lower(p.display_name)"):
             ids = db.execute("SELECT value, blocked FROM identities WHERE person_id = ? ORDER BY kind, value",
                              (p["id"],)).fetchall()
             threads = every.get(p["id"], set())
             out.append({"id": p["id"], "name": p["display_name"], "address": ids[0]["value"],
-                        "organizations": person_organizations(db, p["id"]),
+                        "organizations": sorted(orgs.get(p["id"], [])),
                         "todo": len(threads & todo), "threads": len(threads),
                         "identities": len(ids), "blocked": sum(r["blocked"] for r in ids)})
         return out
@@ -2661,7 +2665,8 @@ def organization_view(db, domain: str) -> dict:
                                       " ON o.id = m.organization_id WHERE o.domain = ? ORDER BY m.changed_at",
                                       (domain,)):
             pids = [p for p in pids if p != pid] + ([pid] if member else [])
-        persons = [person_view(db, pid) for pid in pids]
+        every = person_thread_ids(db)
+        persons = [person_view(db, pid, every) for pid in pids]
         threads = {t.id: t for p in persons for t in p["threads"]}
         return {"domain": domain, "people": persons, "threads": sorted(threads.values(), key=lambda t: t.id)}
 
