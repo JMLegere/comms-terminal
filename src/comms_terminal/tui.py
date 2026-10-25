@@ -1147,7 +1147,7 @@ class ThreadsPage(Page, ThreadActions):
         if not self.on_screen or not self.query(DataTable):
             return
         table = self.query_one(DataTable)
-        for i, r in enumerate(self.rows):
+        for i, r in enumerate(getattr(self, "rows", ())):  # a page still mounting has none yet
             if r.get("status") == "SNOOZED" and i < table.row_count:
                 table.update_cell_at(Coordinate(i, 3), f"[#928374]{thread_time(r)}[/]", update_width=True)
 
