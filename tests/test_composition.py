@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from comms_terminal import clock, email, files, inbox
+from comms_terminal import clock, email, files, inbox, platforms
 from test_email_reconcile import SCHEMA3
 from schema_history import changed_since
 from test_schema_equivalence import shape
@@ -361,7 +361,7 @@ def test_slack_draft_saves_one_conversation_and_names_it(db):
     assert d["kind"] == "slack" and d["subject"] is None and d["cc"] == ""
     assert inbox.draft_problem(d) is None
     assert inbox.recipient_names(db, d["to"], "slack") == "#eng"
-    assert inbox._destinations(d["to"], "slack") == ["C0123"]
+    assert platforms.destinations(d["to"], "slack") == ["C0123"]
     assert inbox.draft_problem(d | {"to": "#eng"}) == "Choose one conversation"
     assert inbox.draft_problem(d | {"to": "#eng <C0123>, Sam <D0456>"}) == "Choose one conversation"
     assert inbox.draft_problem(d | {"body": " "}) == "Write a message"

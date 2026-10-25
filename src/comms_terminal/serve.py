@@ -158,6 +158,8 @@ def handle_reply(db, body: bytes, senders: Senders) -> tuple[int, dict]:
                    " JOIN connections c ON c.id = ch.connection_id WHERE t.id = ?", (thread_id,)).fetchone()
     if r is None:
         return 404, {"error": "unknown thread"}
+    if not platforms.PLATFORMS[r["platform"]].takes_replies:  # a Meeting Thread: its Platform has no Sender
+        return 400, {"error": inbox.NO_REPLY}
     sender = senders.get(r)
     if sender is None:
         return 503, {"error": f"{r['label'] or r['platform']} is not connected for sending"}

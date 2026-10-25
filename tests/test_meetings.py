@@ -199,3 +199,15 @@ def test_a_meeting_thread_in_the_console(tmp_path, clock):
     assert "Google Meet" in seen["msgs"] and "Sam Lee" in seen["details"]
     assert any("no replies" in n for n in seen["notes"]) and not seen["box"]
     assert any("Google Calendar" in r for r in seen["rail"])
+
+
+def test_the_service_refuses_a_reply_on_a_meeting_thread(db, clock):
+    """POST /reply on a Meeting Thread says it takes no replies; its Platform has no Sender to make."""
+    from comms_terminal import serve
+    meetings.connect(db)
+    clock[0] = datetime(2026, 10, 20, 14, tzinfo=UTC)
+    cal.sync(db, feed(DEMO), "2026-10-20T14:00:00+00:00")
+    meetings.synced(db)
+    status, body = serve.handle_reply(db, f'{{"thread_id": {thread(db, "demo").id}, "text": "hi"}}'.encode(),
+                                      serve.Senders())
+    assert (status, body["error"]) == (400, inbox.NO_REPLY)

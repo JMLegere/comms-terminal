@@ -895,10 +895,10 @@ def recipient_names(db, to: str, kind: str) -> str:
     if kind == "slack":
         return re.sub(r"\s*<[A-Z0-9]+>", "", to).strip()
     names = []
-    for typed, value in ([(n, n) for n in _destinations(to, "sms")] if kind == "sms"
+    for typed, value in ([(n, n) for n in platforms.destinations(to, "sms")] if kind == "sms"
                          else [(person_name(n) or a, a.lower()) for n, a in getaddresses([to]) if a]):
         row = db.execute("SELECT p.display_name FROM identities i JOIN persons p ON p.id = i.person_id"
-                         " WHERE i.kind = ? AND i.value = ?", ("phone" if kind == "sms" else "email", value)).fetchone()
+                         " WHERE i.kind = ? AND i.value = ?", (platforms.FORMATS[kind].identity, value)).fetchone()
         names.append(row[0] if row else typed)
     return ", ".join(names)
 
@@ -910,38 +910,17 @@ def draft_problem(values: dict, files: Sequence[Staged] = ()) -> str | None:
         return problem
     if values["connection_id"] is None:
         return "Choose a Connection"
-    if values["kind"] == "slack" and len(_destinations(values["to"], "slack")) != 1:
+    if values["kind"] == "slack" and len(platforms.destinations(values["to"], "slack")) != 1:
         return "Choose one conversation"
     if not values["to"].strip():
         return "Add a recipient"
-    if values["kind"] == "sms" and len(_destinations(values["to"], "sms")) != 1:
+    if values["kind"] == "sms" and len(platforms.destinations(values["to"], "sms")) != 1:
         return "SMS needs one number"
     if rules.cc_subject and not values["subject"].strip():
         return "Add a subject"
     if not values["body"].strip():
         return "Write a message"
     return None
-
-
-def _destinations(text: str, kind: str) -> list[str]:
-    if kind == "slack":  # "#eng <C0123>": the label is for people, the ID is where it posts
-        return re.findall(r"<([A-Z0-9]+)>", text)
-    if kind == "sms":
-        return [_e164(n) for n in re.split(r"[,;]+", text) if n.strip()]
-    return [a for _, a in getaddresses([text]) if a]
-
-
-def _e164(number: str) -> str:
-    """The +E.164 form Quo files messages under, so replies find the Thread.
-    ponytail: bare numbers are taken as North American; type + for other countries."""
-    digits = re.sub(r"\D", "", number)
-    if number.strip().startswith("+"):
-        return "+" + digits
-    if len(digits) == 10:
-        return "+1" + digits
-    if len(digits) == 11 and digits.startswith("1"):
-        return "+" + digits
-    return number.strip()
 
 
 def _send_checkpoint(db, connection_id):
@@ -1045,11 +1024,11 @@ def send_draft(db, draft_id: int, revision: int, sender: Sender, *, again: bool 
         connection = db.execute("SELECT * FROM connections WHERE id = ?", (d["connection_id"],)).fetchone()
         started = clock.now()
         at = clock.iso(started)
-        gmail = connection["platform"] == "gmail"
+        gmail = platforms.PLATFORMS[connection["platform"]].receipts
         checkpoint = _send_checkpoint(db, connection["id"]) if gmail else None
         db.execute("UPDATE composition_drafts SET sending_at = ? WHERE id = ?", (at, draft_id))
     sms = d["kind"] == "sms"
-    to, cc = _destinations(d["to"], d["kind"]), _destinations(d["cc"], d["kind"])
+    to, cc = platforms.destinations(d["to"], d["kind"]), platforms.destinations(d["cc"], d["kind"])
     changes = {}
 
     def record(native_id, now):
@@ -1863,7 +1842,7 @@ def _email_evidence(db):
     own, refs, known = {}, {a["id"]: set() for a in rows}, {}
     for a in rows:
         own[a["id"]] = _email_ids([a["native_id"]], single=True)
-        if a["platform"] == "gmail":
+        if platforms.PLATFORMS[a["platform"]].receipts:
             wire_id = _gmail_wire_id(db, a["native_id"], a["connection_id"], a["identity_id"])
             if wire_id:
                 own[a["id"]] |= _email_ids([wire_id], single=True)
@@ -2146,7 +2125,7 @@ def reply(db, thread_id: int, text: str, sender: Sender,
                     "at": r["occurred_at"]} for r in records]
         connection_id, platform = db.execute("SELECT c.id, c.platform FROM channels ch JOIN connections c"
                                              " ON c.id = ch.connection_id WHERE ch.id = ?", (t.channel_id,)).fetchone()
-        if platforms.PLATFORMS[platform].format is None:
+        if not platforms.PLATFORMS[platform].takes_replies:
             raise ValueError(NO_REPLY)
         files = staged_files(db, thread_id=staged_on)
         from . import sequences
@@ -2155,7 +2134,8 @@ def reply(db, thread_id: int, text: str, sender: Sender,
         if problem := sequences.send_problem(db, draft, text):
             raise ValueError(problem)
         checkpoint = _send_checkpoint(db, connection_id)
-        if platform == "gmail":
+        receipts = platforms.PLATFORMS[platform].receipts
+        if receipts:
             for message, record in zip(history, records):
                 message["native_id"] = _gmail_wire_id(
                     db, record["native_id"], connection_id, record["identity_id"])
@@ -2166,13 +2146,13 @@ def reply(db, thread_id: int, text: str, sender: Sender,
     changes, recorded_at = {}, []
 
     def record(native_id, now):
-        if platform == "gmail":
+        if receipts:
             now = started
         recorded_at.append(now)
         t = get_thread(db, thread_id)  # reconciliation may have happened while the Sender was in flight
         changes.update(_send_changes(db, connection_id, checkpoint))
         data = {"to": list(to), "cc": list(cc)}
-        if platform == "gmail":
+        if receipts:
             data["seen_through_activity_id"] = checkpoint[0]
         cur = db.execute(
             "INSERT OR IGNORE INTO activities (thread_id, kind, occurred_at, native_id, content, data)"
@@ -2183,7 +2163,7 @@ def reply(db, thread_id: int, text: str, sender: Sender,
 
     def settle(tid):
         t = get_thread(db, tid)
-        if platform == "gmail":
+        if receipts:
             _reconcile_email_threads(db, True, t.channel_id)
             t = get_thread(db, tid)
         if not _preserve_send_changes(db, t.id, changes):
@@ -2603,7 +2583,7 @@ def thread_view(db, thread_id: int, files: tuple[str, int] | None = None) -> dic
                 who, _ = _sender(db, a["identity_id"]) if a["identity_id"] else ("You", None)
                 m = {"id": a["id"], "who": who, "at": a["occurred_at"], "content": a["content"], "edited": False,
                      "deleted": False, "native_id": a["native_id"], "data": json.loads(a["data"])}
-                if ch["platform"] == "gmail":
+                if platforms.PLATFORMS[ch["platform"]].receipts:
                     m["wire_id"] = _gmail_wire_id(db, a["native_id"], ch["connection_id"], a["identity_id"])
                 by_id[a["id"]] = m
                 msgs.append(m)
