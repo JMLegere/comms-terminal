@@ -72,6 +72,7 @@ ICON = {
     "revenue": "\U000f0116",        # md-cash_multiple
     "fundraising": "\U000f1890",    # md-hand_coin_outline
     "enrollment": "\U000f027b",     # an Enrollment Step: same as sequence
+    "action": "\U000f027b",         # an Action Step: same as sequence
     "call": "\U000f0df0",           # md-phone_outgoing_outline
     "linkedin": "\U000f033b",       # md-linkedin
     "letter": "\U000f0d8c",         # md-mailbox_outline

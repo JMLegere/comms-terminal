@@ -3,7 +3,7 @@
 A Sequence is an ordered set of Steps. Enrolling a Person makes an Enrollment, which works each Step as a Task:
 the next Task is created when the previous one is done or skipped, due its Step's gap in business days later
 (Mon-Fri, Halifax time). An email Task's Draft is made when its day comes, from the Step's text with the
-Person's fill-ins. An Enrollment Step chains Sequences: its Task enrolls the Person in another Sequence by itself
+Person's fill-ins. An enroll Action chains Sequences: its Task enrolls the Person in another Sequence by itself
 when its day comes, unless they responded or went through it before; then it waits for Jeremy. Anything inbound from the Person pauses their Enrollments; finishing ends one as Completed,
 Unsubscribed, or Canceled. Nothing here sends: email Tasks go out through Drafts and reply boxes.
 
@@ -21,12 +21,13 @@ from . import clock, inbox, platforms
 from .writers import writer
 
 LOCAL = ZoneInfo("America/Halifax")  # Jeremy's days (main.LOCAL_TZ)
-KINDS = ("email", "call", "linkedin", "letter", "enrollment")
-ACTIONS = ("connect", "message", "engage")
+KINDS = ("email", "call", "linkedin", "letter", "action")
+MOVES = ("connect", "message", "engage")  # a LinkedIn Step's move
+ACTION_KINDS = ("enroll",)  # what an Action does; more arrive with the sequence flow (FR-SEQ-27)
 FILL_INS = ("first_name", "last_name", "company")
 MARKER = re.compile(r"\{(\w+)\}")
-STEP_FIELDS = ("kind", "gap_days", "at_time", "subject", "body", "voicemail", "action", "reply_to_step_id",
-               "enroll_sequence_id")
+STEP_FIELDS = ("kind", "gap_days", "at_time", "subject", "body", "voicemail", "linkedin_move", "reply_to_step_id",
+               "enroll_sequence_id", "action_kind")
 
 
 class Refused(ValueError):
@@ -183,8 +184,10 @@ def add_step(db, sequence_id: int, kind: str, after: int | None = None) -> int:
             if st["position"] >= position:
                 db.execute("UPDATE sequence_steps SET position = position + 1 WHERE id = ?", (st["id"],))
         step_id = db.execute(
-            "INSERT INTO sequence_steps (sequence_id, position, kind, gap_days, action) VALUES (?, ?, ?, ?, ?)",
-            (sequence_id, position, kind, 0 if position == 1 else 1, "connect" if kind == "linkedin" else None)).lastrowid
+            "INSERT INTO sequence_steps (sequence_id, position, kind, gap_days, linkedin_move, action_kind)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            (sequence_id, position, kind, 0 if position == 1 else 1, "connect" if kind == "linkedin" else None,
+             "enroll" if kind == "action" else None)).lastrowid
         _touch(db, sequence_id)
     return step_id
 
@@ -200,9 +203,11 @@ def save_step(db, step_id: int, **fields) -> dict:
         raise ValueError("Gap is a whole number of business days, 0 or more.")
     if fields.get("at_time") and not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", fields["at_time"]):
         raise ValueError("Time is HH:MM, 24-hour, or empty for any time.")
-    if fields.get("action") and fields["action"] not in ACTIONS:
-        raise ValueError(f"LinkedIn action is one of {', '.join(ACTIONS)}.")
-    fields = {k: (v or None) if k in ("at_time", "action", "reply_to_step_id", "enroll_sequence_id") else v
+    if fields.get("linkedin_move") and fields["linkedin_move"] not in MOVES:
+        raise ValueError(f"LinkedIn move is one of {', '.join(MOVES)}.")
+    if "action_kind" in fields and fields["action_kind"] not in ACTION_KINDS:
+        raise ValueError(f"An Action is one of {', '.join(ACTION_KINDS)}.")
+    fields = {k: (v or None) if k in ("at_time", "linkedin_move", "reply_to_step_id", "enroll_sequence_id") else v
               for k, v in fields.items()}
     with db:
         _tx(db)
@@ -309,12 +314,12 @@ def validate(db, sequence_id: int) -> list[tuple[int, str]]:
                 problems.append((st["id"], "Reply to must name an earlier email Step."))
             if st["kind"] != "email":
                 problems.append((st["id"], "Only an email Step can reply in an earlier email's Thread."))
-        if st["kind"] == "enrollment":
+        if st["action_kind"] == "enroll":
             target = db.execute("SELECT * FROM sequences WHERE id = ?", (st["enroll_sequence_id"],)).fetchone()
             if target is None:
-                problems.append((st["id"], "Name the Sequence this Step enrolls them in."))
+                problems.append((st["id"], "Name the Sequence this Action enrolls them in."))
             elif target["id"] == sequence_id:
-                problems.append((st["id"], "A Step cannot enroll them in its own Sequence; they are still in it."))
+                problems.append((st["id"], "An Action cannot enroll them in its own Sequence; they are still in it."))
             elif target["archived_at"]:
                 problems.append((st["id"], f"{target['name']} is archived; restore it, or enrolling waits for you."))
     return problems
@@ -470,7 +475,7 @@ def _day(iso: str) -> str:
 
 
 def materialize(db, now: datetime | None = None) -> int:
-    """Make each Active Enrollment's next Task, do each Enrollment Task whose time has come, and make the Draft of
+    """Make each Active Enrollment's next Task, do each enroll Action whose time has come, and make the Draft of
     each email Task whose day has come; finish an Enrollment whose last Task is done. Idempotent (one Task per
     Enrollment and Step, one Draft per Task), so it runs every minute from wake. Returns how many Tasks or
     Drafts it made."""
@@ -479,7 +484,7 @@ def materialize(db, now: datetime | None = None) -> int:
     with db:
         _tx(db)
         enrolled = 1
-        while enrolled:  # an Enrollment Task's new Enrollment gets its first Task in the same run
+        while enrolled:  # an enroll Action's new Enrollment gets its first Task in the same run
             for e in db.execute("SELECT * FROM enrollments WHERE state = 'ACTIVE'").fetchall():
                 if db.execute("SELECT 1 FROM tasks WHERE enrollment_id = ? AND state = 'DUE'", (e["id"],)).fetchone():
                     continue
@@ -515,20 +520,20 @@ def _next_task(db, e, now: datetime, due: datetime | None = None) -> int | None:
 
 
 def _enroll_tasks(db, now: datetime) -> int:
-    """Do the Enrollment Tasks whose time has come: enroll the Person in the Step's Sequence. One who responded
+    """Do the enroll Actions whose time has come: enroll the Person in the Action's Sequence. One who responded
     during this Enrollment, or went through that Sequence before, waits for Jeremy (flag), and so does a
     refused enroll; the second rule also ends a loop of Sequences that enroll each other."""
     done = 0
     for t in db.execute(
             "SELECT t.id, t.due_at, s.enroll_sequence_id, e.person_id, e.responded_at FROM tasks t"
             " JOIN sequence_steps s ON s.id = t.step_id JOIN enrollments e ON e.id = t.enrollment_id"
-            " WHERE t.state = 'DUE' AND e.state = 'ACTIVE' AND s.kind = 'enrollment' AND t.flag IS NULL").fetchall():
+            " WHERE t.state = 'DUE' AND e.state = 'ACTIVE' AND s.action_kind = 'enroll' AND t.flag IS NULL").fetchall():
         if datetime.fromisoformat(t["due_at"]) > now:
             continue
         target = db.execute("SELECT name FROM sequences WHERE id = ?", (t["enroll_sequence_id"],)).fetchone()
         before = db.execute("SELECT 1 FROM enrollments WHERE person_id = ? AND sequence_id = ?",
                             (t["person_id"], t["enroll_sequence_id"])).fetchone()
-        flag = ("Step names no Sequence" if target is None
+        flag = ("Action names no Sequence" if target is None
                 else f"they responded {_day(t['responded_at'])}" if t["responded_at"]
                 else f"already went through {target['name']}" if before else None)
         if flag is None:
@@ -595,18 +600,19 @@ def _close(db, task_id: int, state: str, now: datetime, thread_id: int | None = 
 
 @writer("create")
 def complete_task(db, task_id: int, now: datetime | None = None) -> dict:
-    """Jeremy did a non-email Task (FR-SEQ-9); an Enrollment Task enrolls the Person now, whatever its flag said.
+    """Jeremy did a non-email Task (FR-SEQ-9); an enroll Action enrolls the Person now, whatever its flag said.
     The next Step's Task follows. Returns what undo_task needs."""
     now = now or clock.now()
     with db:
         _tx(db)
-        t = db.execute("SELECT s.kind, s.enroll_sequence_id, e.person_id FROM tasks t JOIN sequence_steps s ON s.id = t.step_id"
+        t = db.execute("SELECT s.kind, s.action_kind, s.enroll_sequence_id, e.person_id FROM tasks t JOIN sequence_steps s ON s.id = t.step_id"
                        " JOIN enrollments e ON e.id = t.enrollment_id WHERE t.id = ?", (task_id,)).fetchone()
         if t and t["kind"] == "email":
             raise Refused("An email Task is done when its Draft sends.")
-        if t and t["kind"] == "enrollment" and t["enroll_sequence_id"] is None:
-            raise Refused("This Step names no Sequence; name one in its Step, or skip the Task.")
-        enrolled = _enroll(db, t["person_id"], t["enroll_sequence_id"], now) if t and t["kind"] == "enrollment" else None
+        enrolling = t and t["action_kind"] == "enroll"
+        if enrolling and t["enroll_sequence_id"] is None:
+            raise Refused("This Action names no Sequence; name one in its Step, or skip the Task.")
+        enrolled = _enroll(db, t["person_id"], t["enroll_sequence_id"], now) if enrolling else None
         undo = _close(db, task_id, "DONE", now) | dict(enrolled=enrolled)
         materialize(db, now)
     return undo
@@ -632,7 +638,7 @@ def undo_task(db, undo: dict) -> None:
         for t in db.execute("SELECT id FROM tasks WHERE enrollment_id IN (?, ?) AND id > ?",
                             (undo["task"]["enrollment_id"], undo.get("enrolled"), undo["after"])).fetchall():
             _drop_task(db, t["id"])
-        if undo.get("enrolled"):  # the Enrollment an Enrollment Task made
+        if undo.get("enrolled"):  # the Enrollment an enroll Action made
             db.execute("DELETE FROM enrollments WHERE id = ?", (undo["enrolled"],))
         db.execute("UPDATE tasks SET state = ?, done_at = ?, thread_id = ?, flag = ? WHERE id = ?",
                    (undo["task"]["state"], undo["task"]["done_at"], undo["task"]["thread_id"], undo["task"]["flag"],
@@ -654,7 +660,7 @@ def tasks_due(db, now: datetime | None = None) -> list[dict]:
     today = now.astimezone(LOCAL).date()
     out = []
     for r in db.execute(
-            "SELECT t.*, s.kind, s.position, s.at_time, s.subject, s.body, s.voicemail, s.action, s.reply_to_step_id,"
+            "SELECT t.*, s.kind, s.action_kind, s.position, s.at_time, s.subject, s.body, s.voicemail, s.linkedin_move, s.reply_to_step_id,"
             " e.person_id, e.sequence_id, coalesce(e.starts_at, e.enrolled_at) AS starts_at, q.name AS sequence, p.display_name AS person,"
             " (SELECT count(*) FROM sequence_steps x WHERE x.sequence_id = q.id AND x.position IS NOT NULL) AS steps,"
             " (SELECT id FROM composition_drafts d WHERE d.task_id = t.id) AS draft_id,"

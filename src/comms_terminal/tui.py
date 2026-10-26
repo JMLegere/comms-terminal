@@ -4744,7 +4744,7 @@ class CasePage(Page, ThreadActions):
 # --- Sequences: the Tasks and Sequences pages, enrolling, the Sequence section --------------------
 # (.agents/prd/2026-10-16-sequencing.md; layout from the accepted storybook/native/sequencing.py mocks)
 
-KIND_LABEL = {"email": "Email", "call": "Call", "linkedin": "LinkedIn", "letter": "Letter", "enrollment": "Enrollment"}
+KIND_LABEL = {"email": "Email", "call": "Call", "linkedin": "LinkedIn", "letter": "Letter", "action": "Action"}
 FINISH_REASONS = [("CANCELED", "Canceled · you stopped it; enrolling again is allowed"),
                   ("UNSUBSCRIBED", "Unsubscribed · they asked to stop; ends every Sequence for them"),
                   ("COMPLETED", "Completed · count it as done")]
@@ -4909,12 +4909,12 @@ class TaskPane(Horizontal):
                     if t["voicemail"]:
                         yield Static(f"\n[#928374]{ICON['summary']} voicemail[/]\n{text(t['voicemail'])}")
                 elif t["kind"] == "linkedin":
-                    yield Static(f"[b]{(t['action'] or 'connect').title()}[/]   [#928374]{ICON['linkedin']} on their LinkedIn profile[/]")
+                    yield Static(f"[b]{(t['linkedin_move'] or 'connect').title()}[/]   [#928374]{ICON['linkedin']} on their LinkedIn profile[/]")
                     yield Static(f"\n[#928374]{ICON['summary']} note[/]\n{text(t['body']) or '[#928374]none[/]'}")
                     yield Static("\n[#928374]LinkedIn replies do not reach Inbox. If they reply there, pause on their Person page.[/]")
                 elif t["kind"] == "letter":
                     yield Static(f"[#928374]{ICON['letter']} letter[/]\n{text(t['body'])}")
-                elif t["kind"] == "enrollment":
+                elif t["action_kind"] == "enroll":
                     yield Static(f"[b]Enroll in {escape(t['enroll_sequence'] or 'no Sequence')}[/]")
                     if t["flag"]:
                         yield Static(f"[#c14a4a]{ICON['warn']} Waiting for you: {escape(t['flag'])}. e enrolls them anyway, x skips.[/]")
@@ -4942,7 +4942,7 @@ class TaskPane(Horizontal):
     def hint(self):
         if self.item["kind"] == "email":
             return "n new Thread · x skip · p person" if self.item["flag"] == "reply target skipped" else "enter open Thread · x skip · p person"
-        if self.item["kind"] == "enrollment":
+        if self.item["action_kind"] == "enroll":
             return "e enroll · next · x skip · next · p person"
         return "e done · next · x skip · next · p person · y copy for agent"
 
@@ -5152,7 +5152,7 @@ class TasksPage(Page):
         except sequences.Refused as e:
             self.app.notify(f"Not enrolled: {e}", severity="error")
             return
-        done = f"Enrolled {t['person']} in {t['enroll_sequence']}." if t["kind"] == "enrollment" else \
+        done = f"Enrolled {t['person']} in {t['enroll_sequence']}." if t["action_kind"] == "enroll" else \
             f"Done: {t['person']}, Day {t['day']} {KIND_LABEL[t['kind']]}."
         self.app.offer_undo(done, lambda: sequences.undo_task(self.app.db, undo))
         self.refresh_data(select_id=nxt)
@@ -5338,7 +5338,7 @@ class SequencesPage(Page):
         for s in self.steps:
             reply = f" [#928374]↩ {by_id[s['reply_to_step_id']]['position']}[/]" if s["reply_to_step_id"] in by_id else ""
             flag = f" [#c14a4a]{ICON['warn']}[/]" if s["id"] in problems else ""
-            what = (s["subject"] if s["kind"] == "email" else (s["action"] or "") if s["kind"] == "linkedin"
+            what = (s["subject"] if s["kind"] == "email" else (s["linkedin_move"] or "") if s["kind"] == "linkedin"
                     else f"enroll in {names[s['enroll_sequence_id']]}" if s["enroll_sequence_id"] in names else "") or s["body"]
             cells = (f"[#928374]{s['position']}[/]", f"[#654735]{ICON[s['kind']]}[/]", KIND_LABEL[s["kind"]] + reply + flag)
             table.add_row(*cells) if narrow else table.add_row(
@@ -5538,7 +5538,7 @@ class StepEditor(Vertical):
     """One Step's fields and text, with a preview for an enrolled Person (FR-SEQ-18); ctrl+s or leaving saves."""
     BINDINGS = [Binding("ctrl+s", "save", "save Step"), Binding("escape", "close", "back to Steps")]
     FIELDS = {"email": ("Gap", "Time", "Reply to", "Subject"), "call": ("Gap", "Time"),
-              "linkedin": ("Gap", "Time", "Action"), "letter": ("Gap", "Time"), "enrollment": ("Gap", "Time", "Sequence")}
+              "linkedin": ("Gap", "Time", "Move"), "letter": ("Gap", "Time"), "action": ("Gap", "Time", "Sequence")}
 
     def __init__(self, step_id: int):
         super().__init__(classes="stepeditor")
@@ -5550,7 +5550,7 @@ class StepEditor(Vertical):
         steps = {s["id"]: s for s in sequences.sequence_steps(self.app.db, st["sequence_id"])}
         values = {"Gap": str(st["gap_days"]), "Time": st["at_time"] or "", "Subject": st["subject"],
                   "Reply to": str(steps[st["reply_to_step_id"]]["position"]) if st["reply_to_step_id"] in steps else "",
-                  "Action": st["action"] or "connect",
+                  "Move": st["linkedin_move"] or "connect",
                   "Sequence": sequences.get_sequence(self.app.db, st["enroll_sequence_id"])["name"] if st["enroll_sequence_id"] else ""}
         with TextScroll(classes="timeline", can_focus=False):
             yield Static(classes="thead")
@@ -5565,11 +5565,11 @@ class StepEditor(Vertical):
                                                                 "Time": "HH:MM, or empty for any time",
                                                                 "Reply to": "an earlier email Step's number, or empty for a new Thread",
                                                                 "Subject": "subject with {first_name} {last_name} {company}",
-                                                                "Action": "connect, message, or engage",
+                                                                "Move": "connect, message, or engage",
                                                                 "Sequence": "the Sequence to enroll them in, by name"}[label],
                                     classes="fvalue", id=f"f-{label.lower().replace(' ', '')}")
-            label = {"email": "body", "call": "script", "linkedin": "note", "letter": "letter", "enrollment": "note"}[st["kind"]]
-            if st["kind"] == "enrollment":
+            label = {"email": "body", "call": "script", "linkedin": "note", "letter": "letter", "action": "note"}[st["kind"]]
+            if st["action_kind"] == "enroll":
                 yield Static("[#928374]enrolls them on its day · waits for you if they responded[/]", classes="replyhint")
             yield Static(f"[#928374]{label} · fill-ins {{first_name}} {{last_name}} {{company}}[/]", classes="replyhint")
             yield PagedTextArea(st["body"], classes="body-editor", id="f-body")
@@ -5592,8 +5592,8 @@ class StepEditor(Vertical):
             out["at_time"] = at
         if (subject := get("subject")) is not None:
             out["subject"] = subject
-        if (action := get("action")) is not None:
-            out["action"] = action
+        if (move := get("move")) is not None:
+            out["linkedin_move"] = move
         if (name := get("sequence")) is not None:
             found = self.app.db.execute("SELECT id FROM sequences WHERE lower(name) = lower(?) ORDER BY archived_at IS NOT NULL, id",
                                         (name,)).fetchone()
@@ -5607,7 +5607,7 @@ class StepEditor(Vertical):
         if not self.query("#f-body"):
             return True
         v = self.values()
-        blank = ("at_time", "action", "reply_to_step_id")  # save_step stores an empty one as NULL
+        blank = ("at_time", "linkedin_move", "reply_to_step_id")  # save_step stores an empty one as NULL
         if all((self.step.get(k) or None) == (val or None) if k in blank else self.step.get(k) == val
                for k, val in v.items()):
             return True

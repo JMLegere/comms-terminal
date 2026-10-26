@@ -289,36 +289,53 @@ CREATE TABLE sequences (
   updated_at    TEXT NOT NULL
 ) STRICT;
 
--- A Step is the template; position NULL marks a deleted Step, kept because Tasks name it.
+-- A Step is the template; position NULL marks a deleted Step, kept because Tasks name it. Positions run in outline
+-- order through the whole Sequence; a Step's path is its section plus the If (parent_step_id) and branch it sits
+-- under, and the next Step on a path is the next position on the same path (.agents/prd/2026-10-26-sequence-flow.md).
 CREATE TABLE sequence_steps (
-  id               INTEGER PRIMARY KEY,
-  sequence_id      INTEGER NOT NULL REFERENCES sequences (id),
-  position         INTEGER CHECK (position > 0),
-  kind             TEXT NOT NULL CHECK (kind IN ('email', 'call', 'linkedin', 'letter', 'enrollment')),
-  gap_days         INTEGER NOT NULL DEFAULT 0 CHECK (gap_days >= 0),
-  at_time          TEXT CHECK (at_time GLOB '[0-2][0-9]:[0-5][0-9]'),
-  subject          TEXT NOT NULL DEFAULT '',
-  body             TEXT NOT NULL DEFAULT '',
-  voicemail        TEXT NOT NULL DEFAULT '',
-  action           TEXT CHECK (action IN ('connect', 'message', 'engage')),
-  reply_to_step_id INTEGER REFERENCES sequence_steps (id),
-  enroll_sequence_id INTEGER REFERENCES sequences (id),  -- an Enrollment Step: the Sequence it enrolls them in
-  UNIQUE (sequence_id, position)
+  id                 INTEGER PRIMARY KEY,
+  sequence_id        INTEGER NOT NULL REFERENCES sequences (id),
+  position           INTEGER CHECK (position > 0),
+  section            TEXT NOT NULL DEFAULT 'body' CHECK (section IN ('start', 'body', 'completion')),
+  parent_step_id     INTEGER REFERENCES sequence_steps (id),  -- the If whose path this Step is on
+  branch             INTEGER CHECK (branch IN (0, 1)),        -- 1 its true path, 0 its false path
+  kind               TEXT NOT NULL CHECK (kind IN ('email', 'call', 'linkedin', 'letter', 'action', 'if')),
+  gap_days           INTEGER NOT NULL DEFAULT 0 CHECK (gap_days >= 0),
+  at_time            TEXT CHECK (at_time GLOB '[0-2][0-9]:[0-5][0-9]'),
+  subject            TEXT NOT NULL DEFAULT '',  -- an email's subject; an If's question when Jeremy picks
+  body               TEXT NOT NULL DEFAULT '',
+  voicemail          TEXT NOT NULL DEFAULT '',
+  linkedin_move      TEXT CHECK (linkedin_move IN ('connect', 'message', 'engage')),
+  reply_to_step_id   INTEGER REFERENCES sequence_steps (id),
+  enroll_sequence_id INTEGER REFERENCES sequences (id),  -- an enroll Action: the Sequence it enrolls them in
+  action_kind        TEXT CHECK (action_kind IN ('set_stage', 'enroll', 'end_for_others', 'set_value')),
+  pipeline           TEXT CHECK (pipeline IN ('REVENUE', 'FUNDRAISING', 'TALENT')),
+  stage              TEXT,
+  value              INTEGER,
+  condition          TEXT CHECK (condition IN ('end_reason', 'has_channel', 'stage', 'jeremy_picks')),
+  operand            TEXT NOT NULL DEFAULT '',  -- end reasons (comma-separated) or a channel (email, phone, linkedin)
+  true_label         TEXT NOT NULL DEFAULT '',
+  false_label        TEXT NOT NULL DEFAULT '',
+  UNIQUE (sequence_id, position),
+  CHECK ((parent_step_id IS NULL) = (branch IS NULL)),
+  CHECK ((kind = 'action') = (action_kind IS NOT NULL)),
+  CHECK ((kind = 'if') = (condition IS NOT NULL))
 ) STRICT;
 
 CREATE TABLE enrollments (
-  id           INTEGER PRIMARY KEY,
-  person_id    INTEGER NOT NULL REFERENCES persons (id),
-  sequence_id  INTEGER NOT NULL REFERENCES sequences (id),
-  state        TEXT NOT NULL CHECK (state IN ('ACTIVE', 'PAUSED', 'FINISHED')),
-  reason       TEXT CHECK (reason IN ('COMPLETED', 'UNSUBSCRIBED', 'CANCELED')),
-  paused_at    TEXT,
-  pause_reason TEXT,
-  enrolled_at  TEXT NOT NULL,
-  finished_at  TEXT,
-  starts_at    TEXT,  -- a later Start date (FR-SEQ-25): the first Task counts from it; NULL is the enroll day
-  responded_at TEXT,  -- first reply or connected call; kept through Resume, so enroll Steps can tell
-  CHECK ((state = 'FINISHED') = (reason IS NOT NULL))
+  id              INTEGER PRIMARY KEY,
+  person_id       INTEGER NOT NULL REFERENCES persons (id),
+  sequence_id     INTEGER NOT NULL REFERENCES sequences (id),
+  state           TEXT NOT NULL CHECK (state IN ('ACTIVE', 'PAUSED', 'FINISHING', 'FINISHED')),
+  reason          TEXT CHECK (reason IN ('COMPLETED', 'GOAL_MET', 'NOT_RIGHT_NOW', 'LOST', 'UNSUBSCRIBED', 'CANCELED')),
+  paused_at       TEXT,
+  pause_reason    TEXT,
+  enrolled_at     TEXT NOT NULL,
+  finished_at     TEXT,
+  starts_at       TEXT,  -- a later Start date (FR-SEQ-25): the first Task counts from it; NULL is the enroll day
+  responded_at    TEXT,  -- first reply or connected call; kept through Resume, so enroll Actions can tell
+  organization_id INTEGER REFERENCES organizations (id),  -- the Organization it is for (FR-SEQ-36)
+  CHECK (state = 'PAUSED' OR (state IN ('FINISHING', 'FINISHED')) = (reason IS NOT NULL))  -- Paused keeps a Finishing reason
 ) STRICT;
 CREATE UNIQUE INDEX enrollments_live ON enrollments (person_id, sequence_id) WHERE state != 'FINISHED';
 
@@ -332,6 +349,7 @@ CREATE TABLE tasks (
   done_at       TEXT,
   thread_id     INTEGER REFERENCES threads (id),  -- the Thread its email went out in, for later reply Steps
   flag          TEXT,  -- why it waits for Jeremy: a reply target skipped, or a reply Draft already there
+  choice        INTEGER CHECK (choice IN (0, 1)),  -- Jeremy's pick on an If: 1 its true path, 0 its false path
   UNIQUE (enrollment_id, step_id),
   CHECK ((state = 'DUE') = (done_at IS NULL))
 ) STRICT;
@@ -359,7 +377,7 @@ CREATE TABLE event_provider (
 CREATE TABLE pipeline_log (
   id              INTEGER PRIMARY KEY,
   organization_id INTEGER NOT NULL REFERENCES organizations (id),
-  pipeline        TEXT NOT NULL CHECK (pipeline IN ('REVENUE', 'FUNDRAISING')),
+  pipeline        TEXT NOT NULL CHECK (pipeline IN ('REVENUE', 'FUNDRAISING', 'TALENT')),
   kind            TEXT NOT NULL CHECK (kind IN ('STAGE', 'VALUE', 'UNDO')),
   stage           TEXT,
   value           INTEGER,

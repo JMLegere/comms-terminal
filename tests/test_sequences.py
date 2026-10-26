@@ -356,10 +356,10 @@ def chained(db):
     sq.add_step(db, nurture, "letter")
     out = sq.create_sequence(db, "Outbound")
     sq.add_step(db, out, "call")
-    step = sq.add_step(db, out, "enrollment")
-    assert sq.validate(db, out) == [(step, "Name the Sequence this Step enrolls them in.")]
+    step = sq.add_step(db, out, "action")
+    assert sq.validate(db, out) == [(step, "Name the Sequence this Action enrolls them in.")]
     sq.save_step(db, step, enroll_sequence_id=out)
-    assert sq.validate(db, out) == [(step, "A Step cannot enroll them in its own Sequence; they are still in it.")]
+    assert sq.validate(db, out) == [(step, "An Action cannot enroll them in its own Sequence; they are still in it.")]
     sq.save_step(db, step, enroll_sequence_id=nurture)
     assert sq.validate(db, out) == []
     return out, nurture
@@ -385,7 +385,7 @@ def test_sequence_step_enrolls_someone_who_never_responded_in_the_next_sequence(
     sq.complete_task(db, call["id"], MONDAY + DAY)
     sq.materialize(db, MONDAY + 2 * DAY)
     (t,) = sq.tasks_due(db, MONDAY + 2 * DAY)
-    assert (t["kind"], t["flag"], t["enroll_sequence"]) == ("enrollment", "already went through Nurture", "Nurture")
+    assert (t["kind"], t["flag"], t["enroll_sequence"]) == ("action", "already went through Nurture", "Nurture")
 
 
 def test_sequence_step_waits_for_jeremy_when_they_responded_and_undo_removes_the_enrollment(db):
@@ -406,7 +406,7 @@ def test_sequence_step_waits_for_jeremy_when_they_responded_and_undo_removes_the
     assert live(db, dana) == [("Nurture", "ACTIVE", None), ("Outbound", "FINISHED", "COMPLETED")]
     sq.undo_task(db, undo)
     assert live(db, dana) == [("Outbound", "ACTIVE", None)]
-    assert [x["kind"] for x in sq.tasks_due(db, MONDAY + 2 * DAY)] == ["enrollment"]
+    assert [x["kind"] for x in sq.tasks_due(db, MONDAY + 2 * DAY)] == ["action"]
 
 
 def test_version_20_steps_tasks_and_pauses_survive_the_sequence_step_rebuild(db):
@@ -419,10 +419,12 @@ def test_version_20_steps_tasks_and_pauses_survive_the_sequence_step_rebuild(db)
     downgrade(db, 20)
     before = [tuple(r) for r in db.execute("SELECT * FROM sequence_steps ORDER BY id")]
     inbox.migrate(db)
-    assert [tuple(r)[:-1] for r in db.execute("SELECT * FROM sequence_steps ORDER BY id")] == before
+    assert [tuple(r) for r in db.execute(  # the schema-20 columns, the LinkedIn action now linkedin_move (29)
+        "SELECT id, sequence_id, position, kind, gap_days, at_time, subject, body, voicemail, linkedin_move,"
+        " reply_to_step_id FROM sequence_steps ORDER BY id")] == before
     assert db.execute("SELECT responded_at FROM enrollments").fetchone()[0] == MONDAY.isoformat()
     assert db.execute("PRAGMA foreign_key_check").fetchall() == []
-    sq.add_step(db, s, "enrollment")
+    sq.add_step(db, s, "action")
 
 
 def test_version_22_renames_sequence_steps_to_enrollment_steps(monkeypatch):
@@ -438,7 +440,7 @@ def test_version_22_renames_sequence_steps_to_enrollment_steps(monkeypatch):
         db.execute("INSERT INTO sequence_steps (sequence_id, position, kind) VALUES (1, 2, 'call')")
     inbox.migrate(db)
     assert [tuple(r) for r in db.execute("SELECT kind, enroll_sequence_id FROM sequence_steps ORDER BY position")] == [
-        ("enrollment", 1), ("call", None)]
+        ("action", 1), ("call", None)]
 
 
 def test_a_scheduled_task_draft_leaves_the_tasks_list_until_its_send_fails_or_is_unscheduled(db):
@@ -454,3 +456,27 @@ def test_a_scheduled_task_draft_leaves_the_tasks_list_until_its_send_fails_or_is
     inbox.schedule_draft(db, d["id"], MONDAY + DAY)
     inbox.schedule_draft(db, d["id"], None)
     assert [x["id"] for x in sq.tasks_due(db, MONDAY)] == [t["id"]]
+
+
+def test_version_28_enrollments_get_their_one_organization_and_talent_is_a_pipeline(db):
+    """Migration 29 (FR-SEQ-46, FR-SEQ-42): an Enrollment gets its Person's Organization only when exactly one
+    fits; the LinkedIn move and the enroll Action survive; the pipeline log takes Talent."""
+    from schema_history import downgrade
+    s, steps = secret(db)
+    dana = person(db, "dana@harbourline.example", "Dana Roy")
+    marc = person(db, "marc@climb.example", "Marc Savoie")
+    with db:  # Marc is also at a fund by Jeremy's own Membership: two Organizations, so none is picked
+        fund = db.execute("INSERT INTO organizations (domain, name, created_at) VALUES ('eastvalley.example',"
+                          " 'East Valley', 'x')").lastrowid
+        db.execute("INSERT INTO memberships VALUES (?, ?, 1, 'x')", (marc, fund))
+    sq.enroll(db, dana, s, MONDAY)
+    sq.enroll(db, marc, s, MONDAY)
+    downgrade(db, 28)
+    inbox.migrate(db)
+    harbourline = db.execute("SELECT id FROM organizations WHERE domain = 'harbourline.example'").fetchone()[0]
+    assert dict(db.execute("SELECT person_id, organization_id FROM enrollments")) == {dana: harbourline, marc: None}
+    assert db.execute("SELECT linkedin_move FROM sequence_steps WHERE kind = 'linkedin'").fetchone()[0] == "connect"
+    with db:
+        db.execute("INSERT INTO pipeline_log (organization_id, pipeline, kind, stage, effective_at, recorded_at)"
+                   " VALUES (?, 'TALENT', 'STAGE', 'Explore', 'x', 'x')", (harbourline,))
+    assert db.execute("PRAGMA foreign_key_check").fetchall() == []

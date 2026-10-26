@@ -25,7 +25,7 @@ from typing import Protocol, Sequence
 from . import clock, files, platforms
 from .writers import writer
 
-SCHEMA_VERSION = 28
+SCHEMA_VERSION = 29
 WAIT = timedelta(days=4)  # Waiting for them ends after this with no reply: back to Todo to follow up (#116)
 EMAIL_CONFIRMATION_PENDING = "Email confirmation pending; wait for its sent receipt before replying."
 MIGRATIONS = {  # version -> statement that upgrades an existing database to it
@@ -459,6 +459,126 @@ END;
 CREATE TRIGGER audit_log_no_update BEFORE UPDATE ON audit_log
 BEGIN
   SELECT RAISE(ABORT, 'the audit log is append-only');
+END;
+PRAGMA legacy_alter_table = OFF;""",
+    # Sequence flow (.agents/prd/2026-10-26-sequence-flow.md, ADR 0008): Steps form a tree of paths (section,
+    # parent If, branch), Action and If kinds (an Enrollment Step becomes an enroll Action), the LinkedIn Step's
+    # action becomes linkedin_move, Enrollments get an Organization, Finishing and three end reasons, Tasks keep
+    # Jeremy's pick, and a Talent Pipeline. CHECKs change, so each table is rebuilt (as in 22 and 28). An existing
+    # Enrollment gets its Person's Organization only when exactly one fits (FR-SEQ-46).
+    29: """PRAGMA legacy_alter_table = ON;
+CREATE TABLE sequence_steps_new (
+  id                 INTEGER PRIMARY KEY,
+  sequence_id        INTEGER NOT NULL REFERENCES sequences (id),
+  position           INTEGER CHECK (position > 0),
+  section            TEXT NOT NULL DEFAULT 'body' CHECK (section IN ('start', 'body', 'completion')),
+  parent_step_id     INTEGER REFERENCES sequence_steps (id),
+  branch             INTEGER CHECK (branch IN (0, 1)),
+  kind               TEXT NOT NULL CHECK (kind IN ('email', 'call', 'linkedin', 'letter', 'action', 'if')),
+  gap_days           INTEGER NOT NULL DEFAULT 0 CHECK (gap_days >= 0),
+  at_time            TEXT CHECK (at_time GLOB '[0-2][0-9]:[0-5][0-9]'),
+  subject            TEXT NOT NULL DEFAULT '',
+  body               TEXT NOT NULL DEFAULT '',
+  voicemail          TEXT NOT NULL DEFAULT '',
+  linkedin_move      TEXT CHECK (linkedin_move IN ('connect', 'message', 'engage')),
+  reply_to_step_id   INTEGER REFERENCES sequence_steps (id),
+  enroll_sequence_id INTEGER REFERENCES sequences (id),
+  action_kind        TEXT CHECK (action_kind IN ('set_stage', 'enroll', 'end_for_others', 'set_value')),
+  pipeline           TEXT CHECK (pipeline IN ('REVENUE', 'FUNDRAISING', 'TALENT')),
+  stage              TEXT,
+  value              INTEGER,
+  condition          TEXT CHECK (condition IN ('end_reason', 'has_channel', 'stage', 'jeremy_picks')),
+  operand            TEXT NOT NULL DEFAULT '',
+  true_label         TEXT NOT NULL DEFAULT '',
+  false_label        TEXT NOT NULL DEFAULT '',
+  UNIQUE (sequence_id, position),
+  CHECK ((parent_step_id IS NULL) = (branch IS NULL)),
+  CHECK ((kind = 'action') = (action_kind IS NOT NULL)),
+  CHECK ((kind = 'if') = (condition IS NOT NULL))
+) STRICT;
+INSERT INTO sequence_steps_new (id, sequence_id, position, kind, gap_days, at_time, subject, body, voicemail,
+  linkedin_move, reply_to_step_id, enroll_sequence_id, action_kind)
+SELECT id, sequence_id, position, CASE kind WHEN 'enrollment' THEN 'action' ELSE kind END, gap_days, at_time,
+       subject, body, voicemail, action, reply_to_step_id, enroll_sequence_id,
+       CASE kind WHEN 'enrollment' THEN 'enroll' END
+FROM sequence_steps;
+DROP TABLE sequence_steps;
+ALTER TABLE sequence_steps_new RENAME TO sequence_steps;
+CREATE TABLE enrollments_new (
+  id              INTEGER PRIMARY KEY,
+  person_id       INTEGER NOT NULL REFERENCES persons (id),
+  sequence_id     INTEGER NOT NULL REFERENCES sequences (id),
+  state           TEXT NOT NULL CHECK (state IN ('ACTIVE', 'PAUSED', 'FINISHING', 'FINISHED')),
+  reason          TEXT CHECK (reason IN ('COMPLETED', 'GOAL_MET', 'NOT_RIGHT_NOW', 'LOST', 'UNSUBSCRIBED', 'CANCELED')),
+  paused_at       TEXT,
+  pause_reason    TEXT,
+  enrolled_at     TEXT NOT NULL,
+  finished_at     TEXT,
+  starts_at       TEXT,
+  responded_at    TEXT,
+  organization_id INTEGER REFERENCES organizations (id),
+  CHECK (state = 'PAUSED' OR (state IN ('FINISHING', 'FINISHED')) = (reason IS NOT NULL))
+) STRICT;
+INSERT INTO enrollments_new (id, person_id, sequence_id, state, reason, paused_at, pause_reason, enrolled_at,
+  finished_at, starts_at, responded_at)
+SELECT id, person_id, sequence_id, state, reason, paused_at, pause_reason, enrolled_at, finished_at, starts_at,
+       responded_at FROM enrollments;
+DROP TABLE enrollments;
+ALTER TABLE enrollments_new RENAME TO enrollments;
+CREATE UNIQUE INDEX enrollments_live ON enrollments (person_id, sequence_id) WHERE state != 'FINISHED';
+WITH person_orgs (person_id, organization_id) AS (
+  SELECT i.person_id, o.id FROM identities i
+  JOIN organizations o ON o.domain = org_key(substr(i.value, instr(i.value, '@') + 1))
+  WHERE i.kind = 'email' AND i.person_id IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM memberships m WHERE m.person_id = i.person_id AND m.organization_id = o.id AND m.member = 0)
+  UNION
+  SELECT person_id, organization_id FROM memberships WHERE member = 1)
+UPDATE enrollments SET organization_id = (SELECT max(organization_id) FROM person_orgs p
+                                          WHERE p.person_id = enrollments.person_id)
+WHERE (SELECT count(*) FROM person_orgs p WHERE p.person_id = enrollments.person_id) = 1;
+CREATE TABLE tasks_new (
+  id            INTEGER PRIMARY KEY,
+  enrollment_id INTEGER NOT NULL REFERENCES enrollments (id),
+  step_id       INTEGER NOT NULL REFERENCES sequence_steps (id),
+  due_at        TEXT NOT NULL,
+  state         TEXT NOT NULL CHECK (state IN ('DUE', 'DONE', 'SKIPPED')),
+  done_at       TEXT,
+  thread_id     INTEGER REFERENCES threads (id),
+  flag          TEXT,
+  choice        INTEGER CHECK (choice IN (0, 1)),
+  UNIQUE (enrollment_id, step_id),
+  CHECK ((state = 'DUE') = (done_at IS NULL))
+) STRICT;
+INSERT INTO tasks_new (id, enrollment_id, step_id, due_at, state, done_at, thread_id, flag)
+SELECT id, enrollment_id, step_id, due_at, state, done_at, thread_id, flag FROM tasks;
+DROP TABLE tasks;
+ALTER TABLE tasks_new RENAME TO tasks;
+CREATE INDEX tasks_due ON tasks (state, due_at);
+CREATE TABLE pipeline_log_new (
+  id              INTEGER PRIMARY KEY,
+  organization_id INTEGER NOT NULL REFERENCES organizations (id),
+  pipeline        TEXT NOT NULL CHECK (pipeline IN ('REVENUE', 'FUNDRAISING', 'TALENT')),
+  kind            TEXT NOT NULL CHECK (kind IN ('STAGE', 'VALUE', 'UNDO')),
+  stage           TEXT,
+  value           INTEGER,
+  undoes          INTEGER REFERENCES pipeline_log (id),
+  effective_at    TEXT NOT NULL,
+  recorded_at     TEXT NOT NULL,
+  CHECK ((kind = 'STAGE') = (stage IS NOT NULL) AND (kind = 'VALUE') = (value IS NOT NULL)
+         AND (kind = 'UNDO') = (undoes IS NOT NULL))
+) STRICT;
+INSERT INTO pipeline_log_new SELECT id, organization_id, pipeline, kind, stage, value, undoes, effective_at,
+  recorded_at FROM pipeline_log;
+DROP TABLE pipeline_log;
+ALTER TABLE pipeline_log_new RENAME TO pipeline_log;
+CREATE INDEX pipeline_log_org ON pipeline_log (organization_id, pipeline, effective_at);
+CREATE TRIGGER pipeline_log_no_delete BEFORE DELETE ON pipeline_log
+BEGIN
+  SELECT RAISE(ABORT, 'the pipeline log is append-only');
+END;
+CREATE TRIGGER pipeline_log_no_update BEFORE UPDATE ON pipeline_log
+BEGIN
+  SELECT RAISE(ABORT, 'the pipeline log is append-only');
 END;
 PRAGMA legacy_alter_table = OFF;""",
 }
