@@ -103,3 +103,20 @@ def test_agent_enrolls_for_a_named_organization_or_a_new_sole_proprietorship(db,
     agent.run(N(cmd="enroll", person="Brian Dunphy", sequence="Revenue: Onboard", start=None, org="sole"), db)
     org = db.execute("SELECT o.domain FROM enrollments e JOIN organizations o ON o.id = e.organization_id").fetchone()[0]
     assert org == inbox.sole_key(brian) and "Enrolled in Revenue: Onboard" in capsys.readouterr().out
+
+
+def test_agent_lists_resumes_and_finishes_enrollments(db, close_seq, capsys):  # noqa: F811
+    """Jeremy, 2026-10-26: agents may resume and finish Enrollments (superseding FR-SEQ-22 for these)."""
+    from types import SimpleNamespace as N
+    from comms_terminal import agent
+    from test_sequences import MONDAY, person
+    dana = person(db, "dana@harbourline.example", "Dana Roy")
+    eid = sq.enroll(db, dana, close_seq["close"], MONDAY)
+    sq.pause_person(db, dana, MONDAY, "replied")
+    agent.run(N(cmd="enrollment", enrollment_cmd="list", person="Dana Roy"), db)
+    agent.run(N(cmd="enrollment", enrollment_cmd="resume", id=eid), db)
+    agent.run(N(cmd="enrollment", enrollment_cmd="finish", id=eid, reason="GOAL_MET"), db)
+    out = capsys.readouterr().out
+    assert f"{eid}\tDana Roy\tRevenue: Close\tPaused\tharbourline.example" in out
+    assert "Resumed Revenue: Close" in out and "Finished Revenue: Close: Goal met. Its On completion ran." in out
+    assert [e["sequence"] for e in sq.enrollments(db, dana) if e["state"] == "ACTIVE"] == ["Revenue: Onboard"]

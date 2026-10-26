@@ -1,7 +1,7 @@
 """Commands for a terminal agent: Threads, Drafts, and Due Tasks as Markdown, changes to a Draft, enrolling a
 Person in a Sequence, writing Sequences (whole, as Markdown, or Step by Step; FR-SEQ-44), Jeremy's calendar Events,
-and Pipelines (show, Target, Stage and Value). Nothing here sends, completes, resumes, or finishes; Jeremy does
-that from the console (FR-SEQ-22)."""
+Enrollments (list, resume, finish; Jeremy, 2026-10-26, superseding FR-SEQ-22 for these two), and Pipelines (show,
+Target, Stage and Value). Nothing here sends or completes a Task; Jeremy does that from the console."""
 
 import json
 import sys
@@ -49,6 +49,15 @@ def add_parsers(sub):
     x.add_argument("name")
     x = qs.add_parser("archive", help="archive a Sequence; its live Enrollments carry on")
     x.add_argument("sequence")
+    en = sub.add_parser("enrollment", help="Enrollments: list, resume a Paused one, finish one with a reason")
+    es = en.add_subparsers(dest="enrollment_cmd", required=True)
+    x = es.add_parser("list", help="live Enrollments: id, Person, Sequence, state, how it is finishing")
+    x.add_argument("person", nargs="?", help="only this Person (id, email address, or exact name)")
+    x = es.add_parser("resume", help="resume a Paused Enrollment; its next Task is due now")
+    x.add_argument("id", type=int)
+    x = es.add_parser("finish", help="finish an Enrollment; Goal met, Not Right Now, and Lost run its On completion")
+    x.add_argument("id", type=int)
+    x.add_argument("reason", type=str.upper, choices=sequences.END_REASONS)
     st = sub.add_parser("step", help="one Step of a Sequence, by its number: add, set, move, delete")
     ss = st.add_subparsers(dest="step_cmd", required=True)
     x = ss.add_parser("add", help="a new Step: after Step --after, else last on the path you name")
@@ -119,6 +128,8 @@ def run(a, db):
             print(sequence_cmd(db, a), end="")
         elif a.cmd == "step":
             print(step_cmd(db, a), end="")
+        elif a.cmd == "enrollment":
+            print(enrollment_cmd(db, a), end="")
         elif a.cmd == "events":
             print(events(db, a), end="")
         elif a.cmd == "pipeline":
@@ -220,6 +231,39 @@ def enroll(db, person: str, sequence: str, start: str | None = None, org: str | 
         org_id = pipeline.find_org(db, org)["id"]
     eid = sequences.enroll(db, rows[0][0], match[0]["id"], now, start=day, organization_id=org_id)
     return f"Enrolled in {match[0]['name']}: the first Task is due {sequences.first_due(db, eid, now)}."
+
+
+def find_person(db, person: str) -> int:
+    rows = db.execute("SELECT p.id FROM persons p WHERE CAST(p.id AS TEXT) = ? OR lower(p.display_name) = lower(?)"
+                      " UNION SELECT person_id FROM identities WHERE lower(value) = lower(?) AND person_id IS NOT NULL",
+                      (person, person, person)).fetchall()
+    if len(rows) != 1:
+        raise ValueError(f"{'no' if not rows else 'more than one'} Person matches {person!r}")
+    return rows[0][0]
+
+
+def enrollment_cmd(db, a) -> str:
+    c = a.enrollment_cmd
+    if c == "list":
+        who = find_person(db, a.person) if a.person else None
+        rows = db.execute(
+            "SELECT e.id, e.state, e.reason, p.display_name, q.name, o.name AS org FROM enrollments e"
+            " JOIN persons p ON p.id = e.person_id JOIN sequences q ON q.id = e.sequence_id"
+            " LEFT JOIN organizations o ON o.id = e.organization_id"
+            " WHERE e.state != 'FINISHED' AND (? IS NULL OR e.person_id = ?) ORDER BY e.id", (who, who)).fetchall()
+        return "".join(f"{r['id']}\t{r['display_name']}\t{r['name']}\t{r['state'].title()}"
+                       + (f" as {sequences.REASON_LABEL[r['reason']]}" if r["reason"] else "")
+                       + f"\t{r['org'] or 'no Organization'}\n" for r in rows) or "No live Enrollments.\n"
+    e = db.execute("SELECT e.*, q.name FROM enrollments e JOIN sequences q ON q.id = e.sequence_id WHERE e.id = ?",
+                   (a.id,)).fetchone()
+    if e is None:
+        raise ValueError(f"no Enrollment {a.id}")
+    if c == "resume":
+        sequences.resume(db, a.id)
+        return f"Resumed {e['name']}: the next Task is due now.\n"
+    sequences.finish(db, a.id, a.reason)
+    runs = " Its On completion ran." if a.reason in sequences.FINISHING_REASONS else ""
+    return f"Finished {e['name']}: {sequences.REASON_LABEL[a.reason]}.{runs}\n"
 
 
 def find_sequence(db, text: str) -> dict:
