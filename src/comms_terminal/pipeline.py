@@ -22,18 +22,21 @@ from . import clock, inbox
 from .writers import writer
 
 LOCAL = ZoneInfo("America/Halifax")  # Jeremy's days (main.LOCAL_TZ)
-REVENUE, FUNDRAISING = "REVENUE", "FUNDRAISING"
-PIPELINES = (REVENUE, FUNDRAISING)
-NAMES = {REVENUE: "Revenue", FUNDRAISING: "Fundraising"}
+REVENUE, FUNDRAISING, TALENT = "REVENUE", "FUNDRAISING", "TALENT"
+PIPELINES = (REVENUE, FUNDRAISING, TALENT)
+MATH = (REVENUE, FUNDRAISING)  # Pipelines with a Target and the Bowtie math; Talent is a board only (FR-SEQ-42)
+NAMES = {REVENUE: "Revenue", FUNDRAISING: "Fundraising", TALENT: "Talent"}
 OPEN = {REVENUE: ("Awareness", "Education", "Prioritization", "Selection", "Commit", "Onboarding"),
-        FUNDRAISING: ("Research", "Outreach", "Meeting", "Diligence", "Soft commit")}
-PAYING = {REVENUE: ("Impact", "Expansion"), FUNDRAISING: ("Closed",)}
-ENDING = {REVENUE: ("Lost", "Churned"), FUNDRAISING: ("Passed",)}
+        FUNDRAISING: ("Research", "Outreach", "Meeting", "Diligence", "Soft commit"),
+        TALENT: ("Explore", "Role fit", "Offer", "Start")}
+PAYING = {REVENUE: ("Impact", "Expansion"), FUNDRAISING: ("Closed",), TALENT: ("Joined",)}
+ENDING = {REVENUE: ("Lost", "Churned"), FUNDRAISING: ("Passed",), TALENT: ("Lost",)}
 STAGES = {p: OPEN[p] + PAYING[p] + ENDING[p] for p in PIPELINES}
 # Rows after the Stage table (design § Pipeline); Impact and Expansion carry retention and expansion
 END_ROWS = {REVENUE: (("Impact", ("Impact",)), ("Expansion", ("Expansion",)), ("Lost", ("Lost",)),
                       ("Churned", ("Churned",))),
-            FUNDRAISING: (("Closed", ("Closed",)), ("Passed", ("Passed",)))}
+            FUNDRAISING: (("Closed", ("Closed",)), ("Passed", ("Passed",))),
+            TALENT: (("Joined", ("Joined",)), ("Lost", ("Lost",)))}
 WINDOW = timedelta(days=365)  # the standard's last-12-month trendlines (p. 30)
 # The standard's Table 6.2 (p. 28): SaaS benchmarks by ACV band, in percent. Columns map to our Stages:
 # CR1 Awareness, CR2 Education, CR3 Prioritization, CR4 Selection (win rate), CR6 Onboarding (1 - onboarding
@@ -58,7 +61,7 @@ def _tx(db):
 def parse_pipeline(text: str) -> str:
     p = text.strip().upper()
     if p not in PIPELINES:
-        raise Refused(f"no Pipeline {text!r}: revenue or fundraising")
+        raise Refused(f"no Pipeline {text!r}: revenue, fundraising, or talent")
     return p
 
 
@@ -146,6 +149,8 @@ def undo(db, entry_id: int) -> None:
 
 
 def set_target(db, pipeline: str, amount, due) -> None:
+    if pipeline not in MATH:
+        raise Refused(f"{NAMES[pipeline]} has no Target")
     due = date.fromisoformat(due) if isinstance(due, str) else due
     with db:
         db.execute("INSERT OR REPLACE INTO pipeline_targets (pipeline, amount, due) VALUES (?, ?, ?)",
@@ -247,8 +252,10 @@ def attention(db) -> dict:
     """Each Organization in a Pipeline, read from its People's Threads and Enrollments (FR-OA-4, FR-OA-5; never
     stored): {org_id: {rollup, wakes, last, unattended, stages}}.
 
-    rollup: the earliest of Todo, Snoozed, Done over the Threads its People wrote in or were addressed in, with an
-    unfinished Enrollment counting as Snoozed; Done with no Threads. wakes: the earliest time a Snoozed one comes
+    rollup: the earliest of Todo, Snoozed, Done over the Threads its People wrote in or were addressed in, and the
+    Enrollments for it (FR-SEQ-38): an Active or Finishing one counts as Snoozed until its next Task, a Paused one
+    as Todo (it waits for Jeremy); an Enrollment that names no Organization counts for each of its Person's. Done
+    with no Threads. wakes: the earliest time a Snoozed one comes
     back (None for Todo, Done, or a Snooze with no date). last: the latest message in those Threads.
     unattended: in an open or paying Stage, and Done. stages: {pipeline: Stage}."""
     held = {}
@@ -262,23 +269,25 @@ def attention(db) -> dict:
         "SELECT t.id, t.status_detail, COALESCE(t.follow_up_at, t.snoozed_until) AS wakes, m.last FROM threads t"
         " LEFT JOIN (SELECT thread_id, max(occurred_at) AS last FROM thread_activities WHERE kind = 'MESSAGE'"
         " GROUP BY thread_id) m ON m.thread_id = t.id WHERE t.merged_into IS NULL")}
-    enrolled: dict[int, list] = {}  # person -> the next Task due of each unfinished Enrollment (None if paused)
-    for pid, state, due in db.execute(
-            "SELECT e.person_id, e.state, (SELECT min(due_at) FROM tasks t WHERE t.enrollment_id = e.id"
-            " AND t.state = 'DUE') FROM enrollments e WHERE e.state IN ('ACTIVE', 'PAUSED')"):
-        enrolled.setdefault(pid, []).append(due if state == "ACTIVE" else None)
+    by_org: dict[int, list] = {}  # org -> (state, next Task due) of each unfinished Enrollment for it
+    by_person: dict[int, list] = {}  # the same, for Enrollments that name no Organization
+    for pid, org, state, due in db.execute(
+            "SELECT e.person_id, e.organization_id, e.state, (SELECT min(due_at) FROM tasks t WHERE t.enrollment_id = e.id"
+            " AND t.state = 'DUE') FROM enrollments e WHERE e.state != 'FINISHED'"):
+        (by_org.setdefault(org, []) if org is not None else by_person.setdefault(pid, [])).append((state, due))
     out = {}
     for o, domain in db.execute("SELECT id, domain FROM organizations"):
         if o not in held:
             continue
         pids = members.get(domain, set())
         rows = [status[t] for t in set().union(*(threads.get(p, set()) for p in pids)) if t in status]
-        found = {r["status_detail"] for r in rows} | \
-            ({"WAITING_FOR_DURATION"} if any(p in enrolled for p in pids) else set())  # an Enrollment is Snoozed
+        runs = by_org.get(o, []) + [r for p in pids for r in by_person.get(p, [])]
+        found = {r["status_detail"] for r in rows} | {"NEW_REPLY" if st == "PAUSED" else "WAITING_FOR_DURATION"
+                                                       for st, _ in runs}
         rollup = inbox.rollup(found, ROLLUP, "Done")
         snoozed = inbox.VIEWS["Snoozed"]
         wakes = [datetime.fromisoformat(r["wakes"]) for r in rows if r["status_detail"] in snoozed and r["wakes"]] + \
-            [datetime.fromisoformat(d) for p in pids for d in enrolled.get(p, []) if d]
+            [datetime.fromisoformat(d) for st, d in runs if d and st != "PAUSED"]
         last = [r["last"] for r in rows if r["last"]]
         live = any(st in OPEN[p] + PAYING[p] for p, st in held[o].items())
         out[o] = {"rollup": rollup, "wakes": min(wakes) if rollup == "Snoozed" and wakes else None,
@@ -547,6 +556,20 @@ def this_week(m: dict) -> list[tuple[str, str]]:
     if missing:
         out.append((f"Set a Value for {names(missing)}", "the math leaves them out until then"))
     return out
+
+
+def board_markdown(db, pipeline: str, now: datetime | None = None) -> str:
+    """A Pipeline with no math (Talent, FR-SEQ-42): its Organizations under each Stage, longest in Stage first."""
+    now = now or clock.now()
+    names = dict(db.execute("SELECT id, name FROM organizations").fetchall())
+    held = {o: st for (o, p), st in _state(_entries(db, pipeline)).items() if st["stage"]}
+    lines = [f"# {NAMES[pipeline]} Pipeline", ""]
+    for stage in STAGES[pipeline]:
+        here = sorted((st["since"], names[o]) for o, st in held.items() if st["stage"] == stage)
+        lines.append(f"## {stage} ({len(here)})")
+        lines += [f"- {name}: {(now - since).days}d in Stage" for since, name in here] or ["- none"]
+        lines.append("")
+    return "\n".join(lines)
 
 
 def markdown(m: dict) -> str:

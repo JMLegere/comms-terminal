@@ -2484,6 +2484,29 @@ def set_membership(db, person_id: int, domain: str, member: bool | None) -> bool
     return before
 
 
+@writer("create")
+def create_sole_proprietorship(db, person_id: int) -> int:
+    """A Sole proprietorship for a Person acting on their own account (GLOSSARY; FR-SEQ-37): an Organization named
+    for them, keyed `person-<id>.sole`, which no email domain produces, with their Membership. Returns its id; a
+    second call returns the same one."""
+    name = db.execute("SELECT display_name FROM persons WHERE id = ?", (person_id,)).fetchone()
+    if name is None:
+        raise KeyError(f"person {person_id}")
+    domain = sole_key(person_id)
+    with db:
+        db.execute("INSERT OR IGNORE INTO organizations (domain, name, created_at) VALUES (?, ?, ?)",
+                   (domain, name[0], clock.iso(clock.now())))
+        org = db.execute("SELECT id FROM organizations WHERE domain = ?", (domain,)).fetchone()[0]
+        db.execute("INSERT INTO memberships (person_id, organization_id, member, changed_at) VALUES (?, ?, 1, ?)"
+                   " ON CONFLICT DO UPDATE SET member = 1, changed_at = excluded.changed_at",
+                   (person_id, org, clock.iso(clock.now())))
+    return org
+
+
+def sole_key(person_id: int) -> str:
+    return f"person-{person_id}.sole"
+
+
 @writer("write")
 def set_case_description(db, case_id: int, description: str) -> None:
     with db:
@@ -2618,8 +2641,8 @@ def today_draft(db, draft: dict) -> bool:
 
 
 def today(db, now: datetime | None = None) -> dict:
-    """Today (GLOSSARY): Todo Threads, Due Tasks, the Drafts not shown through them, each once, and Unattended
-    Organizations; and, for an empty Today, when the next Snoozed Thread wakes and the next Task comes due (None
+    """Today (GLOSSARY): Todo Threads, Due Tasks, the Drafts not shown through them, each once, Paused
+    Enrollments (FR-SEQ-39), and Unattended Organizations; and, for an empty Today, when the next Snoozed Thread wakes and the next Task comes due (None
     when nothing is coming)."""
     from . import pipeline, sequences
     now = now or clock.now()
@@ -2631,10 +2654,11 @@ def today(db, now: datetime | None = None) -> dict:
     day = now.astimezone(sequences.LOCAL).date()
     later = [r[0] for r in db.execute(
         "SELECT t.due_at FROM tasks t JOIN enrollments e ON e.id = t.enrollment_id"
-        " WHERE t.state = 'DUE' AND e.state = 'ACTIVE' ORDER BY t.due_at")
+        " WHERE t.state = 'DUE' AND e.state IN ('ACTIVE', 'FINISHING') ORDER BY t.due_at")
         if datetime.fromisoformat(r[0]).astimezone(sequences.LOCAL).date() > day]
     return {"threads": queue(db, "Todo"), "tasks": sequences.tasks_due(db, now),
-            "drafts": [d for d in list_drafts(db) if today_draft(db, d)], "unattended": pipeline.unattended(db),
+            "drafts": [d for d in list_drafts(db) if today_draft(db, d)], "paused": sequences.paused(db),
+            "unattended": pipeline.unattended(db),
             "next_wake": wake, "next_task": later[0] if later else None}
 
 

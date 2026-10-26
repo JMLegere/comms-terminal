@@ -71,6 +71,7 @@ ICON = {
     "pipeline": "\U000f0236",       # md-filter_variant (the Bowtie, ADR 0006)
     "revenue": "\U000f0116",        # md-cash_multiple
     "fundraising": "\U000f1890",    # md-hand_coin_outline
+    "talent": "\U000f0849",         # md-account_star
     "enrollment": "\U000f027b",     # an Enrollment Step: same as sequence
     "action": "\U000f027b",         # an Action Step: same as sequence
     "if": "\U000f0641",             # an If Step: a fork

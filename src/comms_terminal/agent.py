@@ -42,6 +42,7 @@ def add_parsers(sub):
     ps = p.add_subparsers(dest="pipeline_cmd", required=True)
     for name in ("revenue", "fundraising"):
         ps.add_parser(name, help=f"the {name.title()} Pipeline as Markdown")
+    ps.add_parser("talent", help="the Talent Pipeline's Organizations by Stage as Markdown (no math)")
     t = ps.add_parser("target", help="set a Pipeline's Target: TTM revenue (Revenue) or round size (Fundraising)")
     t.add_argument("pipeline")
     t.add_argument("amount", help="CAD, e.g. 1000000 or 1m")
@@ -88,6 +89,8 @@ def run(a, db):
 
 def pipeline_cmd(db, a) -> str:
     c = a.pipeline_cmd
+    if c == "talent":
+        return pipeline.board_markdown(db, pipeline.TALENT)
     if c in ("revenue", "fundraising"):
         return pipeline.markdown(pipeline.math(db, pipeline.parse_pipeline(c)))
     p = pipeline.parse_pipeline(a.pipeline)

@@ -1216,6 +1216,16 @@ def thread_person(db, thread_id: int) -> int | None:
     return r[0] if r else None
 
 
+def paused(db) -> list[dict]:
+    """Today's Paused list (FR-SEQ-39): Paused Enrollments, oldest pause first, each waiting for Jeremy to resume
+    or finish it."""
+    return [dict(r) for r in db.execute(
+        "SELECT e.id, e.person_id, e.paused_at, e.pause_reason, e.reason, p.display_name AS person, q.name AS sequence,"
+        " o.name AS organization FROM enrollments e JOIN persons p ON p.id = e.person_id"
+        " JOIN sequences q ON q.id = e.sequence_id LEFT JOIN organizations o ON o.id = e.organization_id"
+        " WHERE e.state = 'PAUSED' ORDER BY e.paused_at, e.id")]
+
+
 def pauses_since(db, since: str) -> list[dict]:
     """Enrollments paused after `since`, for the console's toast (FR-SEQ-20)."""
     return [dict(r) for r in db.execute(

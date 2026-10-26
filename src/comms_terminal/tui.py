@@ -878,7 +878,9 @@ def health_ok(connection) -> bool:
 
 
 def rail_share(db, p: str) -> str:
-    """The on-track verdict for the rail (FR-PL-20); — without a Target."""
+    """The on-track verdict for the rail (FR-PL-20); — without a Target. Talent has no math: its open count."""
+    if p not in pipeline.MATH:
+        return str(sum(1 for st in pipeline.states(db).values() if st.get(p, {}).get("stage") in pipeline.OPEN[p]))
     verdict = pipeline.on_track(pipeline.math(db, p, orgs=False))
     return {"Behind pace": "behind", "Off track": "late", "Pace unknown": "—"}.get(
         verdict[0], verdict[0].lower()) if verdict else "—"
@@ -3748,9 +3750,9 @@ def set_org_stage(app, org: dict, p: str | None = None):
         choose_pipeline(app, org, lambda q: set_org_stage(app, org, q), "Stage")
         return
     now = pipeline.current(app.db, org["id"]).get(p, {}).get("stage")
-    other = next(q for q in pipeline.PIPELINES if q != p)
     opts = [(s, f"{'▸ ' if s == now else '  '}{s}" + ("  [#928374](current)[/]" if s == now else ""))
-            for s in pipeline.STAGES[p]] + [(f"pipeline:{other}", f"  [#928374]{pipeline.NAMES[other]}…[/]")]
+            for s in pipeline.STAGES[p]] + [(f"pipeline:{q}", f"  [#928374]{pipeline.NAMES[q]}…[/]")
+                                           for q in pipeline.PIPELINES if q != p]
 
     def chosen(stage):
         if stage is None:
@@ -3989,11 +3991,11 @@ class PipelinePage(Page):
         with VerticalScroll(id="plscroll"):
             yield Horizontal(box("THIS WEEK", Static(id="plweek"), id="plweekbox"),
                              box("PROGRESS", Static(id="plprogress"), id="plprogressbox"), id="pltop")
-            yield box("CONSTRAINT", Static(id="plconstraint"), classes="plred")
+            yield box("CONSTRAINT", Static(id="plconstraint"), classes="plred", id="plconstraintbox")
             yield box("ORGANIZATIONS  ·  each Stage, how many move on  ·  enter opens · s Stage · v Value · ←/→",
                       HorizontalScroll(*cols, id="plboard"))
             yield box("WEEKLY REVIEW", DataTable(id="plweekly", cursor_type="none", show_cursor=False),
-                      Static(id="pllegend"))
+                      Static(id="pllegend"), id="plweeklybox")
 
     def on_mount(self):
         paid = pipeline.PAYING[self.p][0]
@@ -4010,6 +4012,10 @@ class PipelinePage(Page):
     def refresh_data(self):
         g = PALETTE["grey1"]
         self.m = m = pipeline.math(self.app.db, self.p)
+        board_only = self.p not in pipeline.MATH  # Talent: the board, with no Target or math (FR-SEQ-42)
+        for box_id in ("#pltop", "#plconstraintbox", "#plweeklybox"):
+            for w in self.query(box_id):
+                w.display = not board_only
         self.query_one("#plweek", Static).update(pipeline_week(m))
         self.query_one("#plprogress", Static).update(pipeline_progress(m))
         self.query_one("#plconstraint", Static).update(pipeline_constraint(m))

@@ -68,7 +68,7 @@ def test_refusals(db):
         pl.set_stage(db, o, R, "Discovery")
     with pytest.raises(pl.Refused, match="future"):
         pl.set_stage(db, o, R, "Awareness", at=NOW + DAY)
-    with pytest.raises(pl.Refused, match="revenue or fundraising"):
+    with pytest.raises(pl.Refused, match="revenue, fundraising, or talent"):
         pl.parse_pipeline("partners")
     with pytest.raises(pl.Refused):
         pl.find_org(db, "nobody.com")

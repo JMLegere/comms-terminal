@@ -273,3 +273,76 @@ def test_moving_a_step_stays_on_its_path(db):
     sq.move_step(db, c, -1)  # alone on its path: nothing to swap with
     assert sq.on_path(sq.sequence_steps(db, s), ("completion", None, None))[0]["id"] == c
     assert a
+
+
+def test_as_seq_26_a_paused_enrollment_needs_attention_and_lists_in_today(db):
+    s = sq.create_sequence(db, "Diagnose")
+    touch(db, s, "call")
+    touch(db, s, "call")
+    dana = person(db, "dana@harbourline.example", "Dana Roy")
+    harbourline = org(db, "harbourline.example")
+    pipeline.set_stage(db, harbourline, "REVENUE", "Education")
+    eid = sq.enroll(db, dana, s, MONDAY)
+    t = db.execute("SELECT id FROM threads").fetchone()[0]
+    inbox.act(db, t, inbox.Done())
+    assert pipeline.attention(db)[harbourline]["rollup"] == "Snoozed"  # Active: wakes at its next Task
+    sq.pause_person(db, dana, MONDAY + DAY, "replied")
+    inbox.act(db, t, inbox.Done())
+    att = pipeline.attention(db)[harbourline]
+    assert (att["rollup"], att["unattended"]) == ("Todo", False)
+    assert [(p["id"], p["person"], p["organization"]) for p in inbox.today(db, MONDAY + DAY)["paused"]] == \
+        [(eid, "Dana Roy", "harbourline.example")]
+
+
+def test_an_enrollment_counts_only_for_its_own_organization(db):
+    s = sq.create_sequence(db, "Round close")
+    touch(db, s, "call")
+    marc = person(db, "marc@climb.example", "Marc Savoie")
+    with db:
+        fund = db.execute("INSERT INTO organizations (domain, name, created_at) VALUES ('eastvalley.example',"
+                          " 'East Valley', 'x')").lastrowid
+        db.execute("INSERT INTO memberships VALUES (?, ?, 1, 'x')", (marc, fund))
+    climb = org(db, "climb.example")
+    for o in (climb, fund):
+        pipeline.set_stage(db, o, "FUNDRAISING", "Diligence")
+    inbox.act(db, db.execute("SELECT id FROM threads").fetchone()[0], inbox.Done())
+    sq.enroll(db, marc, s, MONDAY, organization_id=fund)
+    att = pipeline.attention(db)
+    assert (att[fund]["unattended"], att[climb]["unattended"]) == (False, True)
+
+
+def test_as_seq_29_a_sole_proprietorship_holds_an_angels_stage(db):
+    s = sq.create_sequence(db, "Investor fit")
+    action(db, s, "set_stage", section="start", pipeline="FUNDRAISING", stage="Outreach")
+    touch(db, s, "call")
+    brian = person(db, "brian@gmail.com", "Brian Dunphy")
+    sole = inbox.create_sole_proprietorship(db, brian)
+    assert inbox.create_sole_proprietorship(db, brian) == sole
+    row = db.execute("SELECT domain, name FROM organizations WHERE id = ?", (sole,)).fetchone()
+    assert tuple(row) == (f"person-{brian}.sole", "Brian Dunphy")
+    assert sq.default_organization(db, brian) == sole  # his only Organization now
+    sq.enroll(db, brian, s, MONDAY)
+    assert stage(db, sole, "FUNDRAISING") == "Outreach"
+
+
+def test_as_seq_33_jeremy_sets_a_stage_by_hand_after_an_action(db, close_seq):
+    dana = person(db, "dana@harbourline.example", "Dana Roy")
+    sq.enroll(db, dana, close_seq["close"], MONDAY)
+    harbourline = org(db, "harbourline.example")
+    pipeline.set_stage(db, harbourline, "REVENUE", "Selection")
+    assert stage(db, harbourline) == "Selection"
+
+
+def test_as_seq_34_talent_is_a_board_with_no_target_or_math(db):
+    s = sq.create_sequence(db, "Talent: Explore")
+    action(db, s, "set_stage", section="start", pipeline="TALENT", stage="Explore")
+    touch(db, s, "call")
+    assert sq.validate(db, s) == []
+    nic = person(db, "nic@reach.example", "Nic Robichaud")
+    sole = inbox.create_sole_proprietorship(db, nic)
+    sq.enroll(db, nic, s, MONDAY, organization_id=sole)
+    assert stage(db, sole, "TALENT") == "Explore"
+    board = pipeline.board_markdown(db, "TALENT", MONDAY)
+    assert "## Explore (1)\n- Nic Robichaud: 0d in Stage" in board and "Target" not in board
+    with pytest.raises(pipeline.Refused):
+        pipeline.set_target(db, "TALENT", 5, "2027-01-01")

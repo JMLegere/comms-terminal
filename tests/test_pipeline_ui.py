@@ -188,8 +188,8 @@ def test_stage_picker_asks_the_pipeline_for_an_organization_in_none(tmp_path):
         await pilot.pause()
 
     run(Console(path), [open_org, "s", pipeline_first])
-    assert seen["first"] == ["REVENUE", "FUNDRAISING"]
-    assert seen["stages"][:2] == ["Research", "Outreach"] and seen["stages"][-1] == "pipeline:REVENUE"
+    assert seen["first"] == ["REVENUE", "FUNDRAISING", "TALENT"]
+    assert seen["stages"][:2] == ["Research", "Outreach"] and seen["stages"][-2:] == ["pipeline:REVENUE", "pipeline:TALENT"]
     org = db.execute("SELECT id FROM organizations WHERE domain = 'initech.com'").fetchone()[0]
     assert pl.current(db, org)[pl.FUNDRAISING]["stage"] == "Research"
 
@@ -228,3 +228,23 @@ def test_unattended_shows_in_today_on_the_board_and_on_the_organization_page(tmp
     assert "Now" in seen["side"] and "Unattended" in seen["side"]
     assert seen["opened"] == (OrganizationPage, "globex.com")
     assert "Unattended" in seen["cards"]["globex.com"] and "Unattended" not in seen["cards"]["acme.com"]
+
+
+def test_talent_page_is_the_board_alone(tmp_path):
+    """FR-SEQ-42: Talent shows its Organizations by Stage, with no This week, Constraint, or Weekly review."""
+    path, db, org = seeded(tmp_path)
+    pl.set_stage(db, org["globex.com"], pl.TALENT, "Explore")
+    seen = {}
+
+    async def open_talent(app, pilot):
+        app.main.go("pipeline:talent")
+        await pilot.pause(0.2)
+        page = app.main.current
+        seen["page"] = isinstance(page, PipelinePage) and page.p == pl.TALENT
+        seen["hidden"] = [page.query_one(i).display for i in ("#pltop", "#plconstraintbox", "#plweeklybox")]
+        seen["explore"] = [o["name"] for o in page.query(BoardColumn).first().orgs]
+        shot(app, "20-talent-board")
+
+    run(Console(path), [open_talent])
+    assert seen["page"] and seen["hidden"] == [False, False, False]
+    assert seen["explore"] == [db.execute("SELECT name FROM organizations WHERE domain = 'globex.com'").fetchone()[0]]
