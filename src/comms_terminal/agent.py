@@ -1,11 +1,13 @@
 """Commands for a terminal agent: Threads, Drafts, and Due Tasks as Markdown, changes to a Draft, enrolling a
-Person in a Sequence, Jeremy's calendar Events, and Pipelines (show, Target, Stage and Value). Nothing here sends, completes, or finishes; Jeremy does that from the console (FR-SEQ-22)."""
+Person in a Sequence, writing Sequences (whole, as Markdown, or Step by Step; FR-SEQ-44), Jeremy's calendar Events,
+and Pipelines (show, Target, Stage and Value). Nothing here sends, completes, resumes, or finishes; Jeremy does
+that from the console (FR-SEQ-22)."""
 
 import json
 import sys
 from datetime import date, timedelta
 
-from . import calendar, clock, files, inbox, pipeline, sequences
+from . import calendar, clock, files, inbox, pipeline, sequence_md, sequences
 from .platforms import PLATFORMS
 from .tui import (CONTEXT_SOURCES, DRAFT_FIELDS, ReplyError, connection_label, draft_history, draft_text,
                   socket_context, staged_files, task_markdown, thread_addresses, thread_text)
@@ -30,6 +32,45 @@ def add_parsers(sub):
     e.add_argument("person", help="a Person id, email address, or exact name")
     e.add_argument("sequence", help="a Sequence id or exact name")
     e.add_argument("--start", help="a later Start date: YYYY-MM-DD, or a number of days from today")
+    e.add_argument("--org", help="the Organization it is for: a domain or exact name, or `sole` for a new Sole"
+                                 " proprietorship (default: their only Organization)")
+    q = sub.add_parser("sequence", help="Sequences: list, show or apply one as Markdown, new, rename, archive")
+    qs = q.add_subparsers(dest="sequence_cmd", required=True)
+    qs.add_parser("list", help="every Sequence: id, name, Steps, Enrollments")
+    x = qs.add_parser("show", help="one Sequence as Markdown (the shape `apply` reads)")
+    x.add_argument("sequence", help="a Sequence id or exact name")
+    x = qs.add_parser("apply", help="create or update a Sequence from Markdown; prints each change")
+    x.add_argument("file", help="a Markdown file, or - for stdin (through the Workbox wrapper, always -)")
+    x.add_argument("--dry-run", action="store_true", help="print the changes and write nothing")
+    x = qs.add_parser("new", help="an empty Sequence")
+    x.add_argument("name")
+    x = qs.add_parser("rename", help="rename a Sequence")
+    x.add_argument("sequence")
+    x.add_argument("name")
+    x = qs.add_parser("archive", help="archive a Sequence; its live Enrollments carry on")
+    x.add_argument("sequence")
+    st = sub.add_parser("step", help="one Step of a Sequence, by its number: add, set, move, delete")
+    ss = st.add_subparsers(dest="step_cmd", required=True)
+    x = ss.add_parser("add", help="a new Step: after Step --after, else last on the path you name")
+    x.add_argument("sequence")
+    x.add_argument("kind", choices=sequences.KINDS)
+    x.add_argument("--after", type=int, help="the Step number it follows (on that Step's path)")
+    x.add_argument("--section", choices=sequences.SECTIONS, default="body")
+    x.add_argument("--under", type=int, help="the If (by Step number) whose path it goes on")
+    x.add_argument("--branch", choices=("yes", "no"), help="that If's yes (true) or no (false) path")
+    x.add_argument("--action", choices=sequences.ACTION_KINDS, default="enroll", help="what an Action does")
+    x.add_argument("--checks", choices=sequences.CONDITIONS, default="jeremy_picks", help="what an If checks")
+    x = ss.add_parser("set", help="change a Step's fields: field=value ... (enroll=<Sequence name> for an Action)")
+    x.add_argument("sequence")
+    x.add_argument("step", type=int)
+    x.add_argument("fields", nargs="+", help=f"one of {', '.join(sequences.STEP_FIELDS)}, or enroll")
+    x = ss.add_parser("move", help="move a Step up or down its path")
+    x.add_argument("sequence")
+    x.add_argument("step", type=int)
+    x.add_argument("direction", choices=("up", "down"))
+    x = ss.add_parser("delete", help="delete a Step (an If with its paths)")
+    x.add_argument("sequence")
+    x.add_argument("step", type=int)
     v = sub.add_parser("events", help="Jeremy's calendar Events, repeats expanded, local time (ADR 0005)")
     v.add_argument("--from", dest="start", type=date.fromisoformat, help="first day, YYYY-MM-DD (default today)")
     v.add_argument("--to", dest="end", type=date.fromisoformat, help="last day, YYYY-MM-DD (default 7 days on)")
@@ -73,7 +114,11 @@ def run(a, db):
             due = sequences.tasks_due(db)
             print("".join(task_markdown(db, t) + "\n" for t in due) or "No Tasks due.\n", end="")
         elif a.cmd == "enroll":
-            print(enroll(db, a.person, a.sequence, getattr(a, "start", None)))
+            print(enroll(db, a.person, a.sequence, getattr(a, "start", None), getattr(a, "org", None)))
+        elif a.cmd == "sequence":
+            print(sequence_cmd(db, a), end="")
+        elif a.cmd == "step":
+            print(step_cmd(db, a), end="")
         elif a.cmd == "events":
             print(events(db, a), end="")
         elif a.cmd == "pipeline":
@@ -83,7 +128,7 @@ def run(a, db):
             if changes.get("body") == "-":
                 changes["body"] = sys.stdin.read()
             print(draft(db, a.id, changes, a.revision, a.connection, getattr(a, "thread", None)), end="")
-    except (KeyError, ValueError, inbox.DraftConflict) as e:  # sequences.Refused, pipeline.Refused are ValueErrors
+    except (KeyError, ValueError, inbox.DraftConflict) as e:  # Refused and sequence_md.Invalid are ValueErrors
         raise SystemExit(f"comms-terminal {a.cmd}: {e.args[0] if e.args else e}") from e
 
 
@@ -155,7 +200,7 @@ def draft(db, ref, changes, revision, connection_id, thread_id=None) -> str:
                       staged_files(db, ("draft", d["id"])))
 
 
-def enroll(db, person: str, sequence: str, start: str | None = None) -> str:
+def enroll(db, person: str, sequence: str, start: str | None = None, org: str | None = None) -> str:
     rows = db.execute("SELECT p.id FROM persons p WHERE CAST(p.id AS TEXT) = ? OR lower(p.display_name) = lower(?)"
                       " UNION SELECT person_id FROM identities WHERE lower(value) = lower(?) AND person_id IS NOT NULL",
                       (person, person, person)).fetchall()
@@ -168,8 +213,91 @@ def enroll(db, person: str, sequence: str, start: str | None = None) -> str:
     day = sequences.parse_start(start, now) if start else None
     if start and day is None:
         raise ValueError(f"--start {start!r} is neither YYYY-MM-DD nor a number of days")
-    eid = sequences.enroll(db, rows[0][0], match[0]["id"], now, start=day)
+    org_id = None
+    if org == "sole":
+        org_id = inbox.create_sole_proprietorship(db, rows[0][0])
+    elif org:
+        org_id = pipeline.find_org(db, org)["id"]
+    eid = sequences.enroll(db, rows[0][0], match[0]["id"], now, start=day, organization_id=org_id)
     return f"Enrolled in {match[0]['name']}: the first Task is due {sequences.first_due(db, eid, now)}."
+
+
+def find_sequence(db, text: str) -> dict:
+    match = [q for q in sequences.sequences(db) if str(q["id"]) == text or q["name"].lower() == text.lower()]
+    if len(match) != 1:
+        raise ValueError(f"no Sequence matches {text!r}")
+    return match[0]
+
+
+def sequence_cmd(db, a) -> str:
+    c = a.sequence_cmd
+    if c == "list":
+        return "".join(f"{q['id']}\t{q['name']}\t{q['steps']} Steps\t{q['active']} active · {q['paused']} paused"
+                       + (" · archived" if q["archived_at"] else "") + "\n" for q in sequences.sequences(db))
+    if c == "apply":
+        text = sys.stdin.read() if a.file == "-" else open(a.file, encoding="utf-8").read()
+        changes = sequence_md.apply(db, text, dry_run=a.dry_run)
+        head = "Would change" if a.dry_run else "Changed"
+        return (f"{head}:\n" + "".join(f"{x}\n" for x in changes)) if changes else "No changes.\n"
+    if c == "new":
+        return f"Sequence {sequences.create_sequence(db, a.name)}: {a.name}\n"
+    q = find_sequence(db, a.sequence)
+    if c == "show":
+        return sequence_md.render(db, q["id"])
+    if c == "rename":
+        sequences.rename_sequence(db, q["id"], a.name)
+        return f"Renamed {q['name']} to {a.name}.\n"
+    sequences.archive_sequence(db, q["id"], cancel_live=False)
+    return f"Archived {q['name']}; its live Enrollments carry on.\n"
+
+
+def step_cmd(db, a) -> str:
+    q = find_sequence(db, a.sequence)
+    steps = {st["position"]: st for st in sequences.sequence_steps(db, q["id"])}
+
+    def at(n):
+        if n not in steps:
+            raise ValueError(f"{q['name']} has no Step {n}")
+        return steps[n]
+    c = a.step_cmd
+    if c == "add":
+        under = at(a.under)["id"] if a.under else None
+        if (under is None) != (a.branch is None):
+            raise ValueError("--under and --branch go together")
+        section = at(a.under)["section"] if a.under else a.section
+        sid = sequences.add_step(db, q["id"], a.kind, a.after, section=section, parent_step_id=under,
+                                 branch=None if a.branch is None else int(a.branch == "yes"),
+                                 action_kind=a.action, condition=a.checks)
+        pos = db.execute("SELECT position FROM sequence_steps WHERE id = ?", (sid,)).fetchone()[0]
+        return f"Added Step {pos} ({a.kind}).\n" + _problems(db, q["id"])
+    st = at(a.step)
+    if c == "move":
+        sequences.move_step(db, st["id"], -1 if a.direction == "up" else 1)
+        return f"Moved Step {a.step} {a.direction}.\n"
+    if c == "delete":
+        moved, _ = sequences.delete_step(db, st["id"])
+        return f"Deleted Step {a.step}; {moved} Enrollment(s) on it moved on.\n"
+    fields = {}
+    for pair in a.fields:
+        key, sep, value = pair.partition("=")
+        if not sep:
+            raise ValueError(f"{pair!r} is not field=value")
+        if key == "enroll":
+            key, value = "enroll_sequence_id", find_sequence(db, value)["id"]
+        elif key in ("gap_days",):
+            value = int(value)
+        elif key == "value":
+            value = pipeline.parse_amount(value) if value else None
+        elif key == "pipeline":
+            value = value.upper() or None
+        fields[key] = value
+    sequences.save_step(db, st["id"], **fields)
+    return f"Saved Step {a.step}.\n" + _problems(db, q["id"])
+
+
+def _problems(db, sequence_id: int) -> str:
+    steps = {st["id"]: st["position"] for st in sequences.sequence_steps(db, sequence_id)}
+    return "".join(f"Problem · Step {steps[i]}: {m}\n" for i, m in sequences.validate(db, sequence_id))
 
 
 def events(db, a) -> str:

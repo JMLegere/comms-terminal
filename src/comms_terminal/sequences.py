@@ -330,9 +330,9 @@ def save_step(db, step_id: int, **fields) -> dict:
         raise ValueError("Time is HH:MM, 24-hour, or empty for any time.")
     if fields.get("linkedin_move") and fields["linkedin_move"] not in MOVES:
         raise ValueError(f"LinkedIn move is one of {', '.join(MOVES)}.")
-    if "action_kind" in fields and fields["action_kind"] not in ACTION_KINDS:
+    if fields.get("action_kind") is not None and fields["action_kind"] not in ACTION_KINDS:
         raise ValueError(f"An Action is one of {', '.join(ACTION_KINDS)}.")
-    if "condition" in fields and fields["condition"] not in CONDITIONS:
+    if fields.get("condition") is not None and fields["condition"] not in CONDITIONS:
         raise ValueError(f"An If checks one of {', '.join(CONDITIONS)}.")
     if fields.get("pipeline") and fields["pipeline"] not in pipeline_mod.PIPELINES:
         raise ValueError(f"A Pipeline is one of {', '.join(p.title() for p in pipeline_mod.PIPELINES)}.")
