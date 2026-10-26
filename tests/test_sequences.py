@@ -359,8 +359,8 @@ def chained(db):
     step = sq.add_step(db, out, "action")
     assert sq.validate(db, out) == [(step, "Name the Sequence this Action enrolls them in.")]
     sq.save_step(db, step, enroll_sequence_id=out)
-    assert sq.validate(db, out) == [(step, "An Action cannot enroll them in its own Sequence; they are still in it.")]
-    sq.save_step(db, step, enroll_sequence_id=nurture)
+    assert sq.validate(db, out) == [(step, "An Action that repeats this Sequence must be the last Step of an On completion.")]
+    sq.save_step(db, step, enroll_sequence_id=nurture, gap_days=1)  # an Action runs at once unless given a gap
     assert sq.validate(db, out) == []
     return out, nurture
 

@@ -4744,7 +4744,7 @@ class CasePage(Page, ThreadActions):
 # --- Sequences: the Tasks and Sequences pages, enrolling, the Sequence section --------------------
 # (.agents/prd/2026-10-16-sequencing.md; layout from the accepted storybook/native/sequencing.py mocks)
 
-KIND_LABEL = {"email": "Email", "call": "Call", "linkedin": "LinkedIn", "letter": "Letter", "action": "Action"}
+KIND_LABEL = {"email": "Email", "call": "Call", "linkedin": "LinkedIn", "letter": "Letter", "action": "Action", "if": "If"}
 FINISH_REASONS = [("CANCELED", "Canceled · you stopped it; enrolling again is allowed"),
                   ("UNSUBSCRIBED", "Unsubscribed · they asked to stop; ends every Sequence for them"),
                   ("COMPLETED", "Completed · count it as done")]
@@ -5512,7 +5512,7 @@ class SequencesPage(Page):
             self.show_sequence(step_row=next(i for i, s in enumerate(sequences.sequence_steps(self.app.db, self.sequence_id))
                                              if s["id"] == sid))
             self.query_one("#steps").focus()
-        self.app.push_screen(Pick("New Step", [(k, f"{ICON[k]} {KIND_LABEL[k]}") for k in KIND_LABEL]), chosen)
+        self.app.push_screen(Pick("New Step", [(k, f"{ICON[k]} {KIND_LABEL[k]}") for k in KIND_LABEL if k != "if"]), chosen)  # Ifs arrive with the outline (Phase 4)
 
     def delete_step(self):
         st = self.selected_step()

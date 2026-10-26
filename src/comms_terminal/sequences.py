@@ -1,16 +1,21 @@
-"""Sequences (.agents/prd/2026-10-16-sequencing.md, ADR 0003): Jeremy's outreach, run one Person at a time.
+"""Sequences (.agents/prd/2026-10-16-sequencing.md, 2026-10-26-sequence-flow.md; ADR 0003, 0008): Jeremy's
+outreach, run one Person at a time, for one Organization.
 
-A Sequence is an ordered set of Steps. Enrolling a Person makes an Enrollment, which works each Step as a Task:
-the next Task is created when the previous one is done or skipped, due its Step's gap in business days later
-(Mon-Fri, Halifax time). An email Task's Draft is made when its day comes, from the Step's text with the
-Person's fill-ins. An enroll Action chains Sequences: its Task enrolls the Person in another Sequence by itself
-when its day comes, unless they responded or went through it before; then it waits for Jeremy. Anything inbound from the Person pauses their Enrollments; finishing ends one as Completed,
-Unsubscribed, or Canceled. Nothing here sends: email Tasks go out through Drafts and reply boxes.
+A Sequence is a tree of Steps: On start, then the body, where an If ends its path and opens a true path and a
+false path, and every body path ends in its own On completion; paths never rejoin. Enrolling a Person makes an
+Enrollment, which works each Step as a Task: the next Task is created when the previous one is done or skipped,
+due its Step's gap in business days later (Mon-Fri, Halifax time). An email Task's Draft is made when its day
+comes, from the Step's text with the Person's fill-ins. The console carries out Actions (set Stage, enroll, end
+for others, set Value) and Ifs by itself; an If that asks Jeremy waits for his pick. Anything inbound from the
+Person pauses their Enrollments. When a body path runs out, or Jeremy finishes it as Goal met, Not Right Now, or
+Lost, the Enrollment is Finishing and works that path's On completion, then is Finished; Canceled and
+Unsubscribed end it at once. Nothing here sends: email Tasks go out through Drafts and reply boxes.
 
 Interface: create_sequence, rename_sequence, sequences, sequence_steps, archive_sequence, restore_sequence,
-delete_sequence, add_step, save_step, move_step, delete_step, restore_step, validate, fill, enroll, materialize,
-tasks_due, complete_task, skip_task, undo_task, pause_person, resume, finish, unsubscribe, restore_finish,
-enrollments; hooks for inbox: task_sent, task_draft_deleted, task_draft_restored, send_problem.
+delete_sequence, add_step, save_step, move_step, delete_step, restore_step, validate, fill, enroll,
+default_organization, materialize, check, current_path, tasks_due, complete_task, skip_task, pick, undo_task,
+pause_person, resume, finish, unsubscribe, restore_finish, enrollments; paths: path_of, on_path, completion_of;
+hooks for inbox: task_sent, task_draft_deleted, task_draft_restored, send_problem.
 """
 
 import re
@@ -18,16 +23,26 @@ from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from . import clock, inbox, platforms
+from . import pipeline as pipeline_mod
 from .writers import writer
 
 LOCAL = ZoneInfo("America/Halifax")  # Jeremy's days (main.LOCAL_TZ)
-KINDS = ("email", "call", "linkedin", "letter", "action")
+KINDS = ("email", "call", "linkedin", "letter", "action", "if")
+TOUCHES = ("email", "call", "linkedin", "letter")  # Steps Jeremy does; an Action or If the console does
 MOVES = ("connect", "message", "engage")  # a LinkedIn Step's move
-ACTION_KINDS = ("enroll",)  # what an Action does; more arrive with the sequence flow (FR-SEQ-27)
+ACTION_KINDS = ("set_stage", "enroll", "end_for_others", "set_value")  # FR-SEQ-27
+CONDITIONS = ("end_reason", "has_channel", "stage", "jeremy_picks")  # FR-SEQ-29
+CHANNELS = ("email", "phone")  # ponytail: Identities hold no LinkedIn profile, so has_channel cannot check one
+SECTIONS = ("start", "body", "completion")
+FINISHING_REASONS = ("COMPLETED", "GOAL_MET", "NOT_RIGHT_NOW", "LOST")  # these run the path's On completion
+END_REASONS = FINISHING_REASONS + ("CANCELED", "UNSUBSCRIBED")  # these two end at once, with no On completion
+REASON_LABEL = {"COMPLETED": "Completed", "GOAL_MET": "Goal met", "NOT_RIGHT_NOW": "Not Right Now", "LOST": "Lost",
+                "CANCELED": "Canceled", "UNSUBSCRIBED": "Unsubscribed"}
 FILL_INS = ("first_name", "last_name", "company")
 MARKER = re.compile(r"\{(\w+)\}")
 STEP_FIELDS = ("kind", "gap_days", "at_time", "subject", "body", "voicemail", "linkedin_move", "reply_to_step_id",
-               "enroll_sequence_id", "action_kind")
+               "enroll_sequence_id", "action_kind", "pipeline", "stage", "value", "condition", "operand", "true_label",
+               "false_label")
 
 
 class Refused(ValueError):
@@ -102,10 +117,10 @@ def sequences(db, *, now: datetime | None = None) -> list[dict]:
             "SELECT state, count(*) FROM enrollments WHERE sequence_id = ? GROUP BY state", (s["id"],))}
         due = sum(1 for t in db.execute(
             "SELECT t.due_at FROM tasks t JOIN enrollments e ON e.id = t.enrollment_id"
-            " WHERE e.sequence_id = ? AND e.state = 'ACTIVE' AND t.state = 'DUE'", (s["id"],))
+            " WHERE e.sequence_id = ? AND e.state IN ('ACTIVE', 'FINISHING') AND t.state = 'DUE'", (s["id"],))
             if datetime.fromisoformat(t[0]).astimezone(LOCAL).date() <= today)
         out.append(dict(s) | dict(steps=len(steps), days=sum(st["gap_days"] for st in steps) + 1 if steps else 0,
-                                  active=counts.get("ACTIVE", 0), paused=counts.get("PAUSED", 0),
+                                  active=counts.get("ACTIVE", 0) + counts.get("FINISHING", 0), paused=counts.get("PAUSED", 0),
                                   finished=counts.get("FINISHED", 0), due_today=due,
                                   used=bool(counts)))
     return out
@@ -171,23 +186,75 @@ def _touch(db, sequence_id):
     db.execute("UPDATE sequences SET updated_at = ? WHERE id = ?", (clock.iso(clock.now()), sequence_id))
 
 
+# --- the Step tree (.agents/prd/2026-10-26-sequence-flow.md) ------------------------------------------------
+# Positions run through the whole Sequence; a Step's path is (section, the If it hangs under, true/false). The next
+# Step on a path is the next position on the same path. An If ends its path and opens two, each of which ends in
+# its own On completion; paths never rejoin.
+
+def path_of(st) -> tuple:
+    return (st["section"], st["parent_step_id"], st["branch"])
+
+
+def completion_of(path: tuple) -> tuple:
+    """The On completion that ends a body path."""
+    return ("completion", path[1], path[2])
+
+
+def on_path(steps: list[dict], path: tuple) -> list[dict]:
+    return [st for st in steps if path_of(st) == path]
+
+
+def _below(steps: list[dict], step_id: int) -> list[dict]:
+    """Every Step under an If: its two paths, their On completions, and Ifs below them."""
+    out, todo = [], [step_id]
+    while todo:
+        parent = todo.pop()
+        kids = [st for st in steps if st["parent_step_id"] == parent]
+        out += kids
+        todo += [k["id"] for k in kids if k["kind"] == "if"]
+    return out
+
+
 @writer("create")
-def add_step(db, sequence_id: int, kind: str, after: int | None = None) -> int:
-    """A new Step of `kind`, after position `after` (default: last); one business day after the previous Step."""
+def add_step(db, sequence_id: int, kind: str, after: int | None = None, *, section: str = "body",
+             parent_step_id: int | None = None, branch: int | None = None, action_kind: str = "enroll",
+             condition: str = "jeremy_picks") -> int:
+    """A new Step of `kind` right after the Step at position `after`, on that Step's path; with no `after`, last on
+    the path named by `section`, `parent_step_id`, and `branch` (default: the body). A touch is due one business day
+    after the previous Step, the first on its path, an Action, and an If at once."""
     if kind not in KINDS:
         raise ValueError(f"Step kind must be one of {', '.join(KINDS)}")
+    if section not in SECTIONS:
+        raise ValueError(f"A section is one of {', '.join(SECTIONS)}.")
     with db:
         _tx(db)
         steps = sequence_steps(db, sequence_id)
-        position = (after if after is not None else len(steps)) + 1
+        if after is not None:
+            anchor = next((st for st in steps if st["position"] == after), None)
+            if anchor is None:
+                raise KeyError(f"no Step at position {after}")
+            if anchor["kind"] == "if":
+                raise Refused("Nothing follows an If on its path: add the Step to one of its paths.")
+            path = path_of(anchor)
+        else:
+            path = (section, parent_step_id, branch)
+            if (parent_step_id is None) != (branch is None):
+                raise ValueError("A path under an If names the If and its branch.")
+            mine = on_path(steps, path)
+            if mine and mine[-1]["kind"] == "if":
+                raise Refused("Nothing follows an If on its path: add the Step to one of its paths.")
+            after = mine[-1]["position"] if mine else (max((st["position"] for st in steps), default=0))
+        position = after + 1
         for st in reversed(steps):  # make room, highest first so (sequence, position) stays unique
             if st["position"] >= position:
                 db.execute("UPDATE sequence_steps SET position = position + 1 WHERE id = ?", (st["id"],))
+        first = not on_path(steps, path)
         step_id = db.execute(
-            "INSERT INTO sequence_steps (sequence_id, position, kind, gap_days, linkedin_move, action_kind)"
-            " VALUES (?, ?, ?, ?, ?, ?)",
-            (sequence_id, position, kind, 0 if position == 1 else 1, "connect" if kind == "linkedin" else None,
-             "enroll" if kind == "action" else None)).lastrowid
+            "INSERT INTO sequence_steps (sequence_id, position, section, parent_step_id, branch, kind, gap_days,"
+            " linkedin_move, action_kind, condition) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (sequence_id, position, *path, kind, 0 if first or kind in ("action", "if") else 1,
+             "connect" if kind == "linkedin" else None, action_kind if kind == "action" else None,
+             condition if kind == "if" else None)).lastrowid
         _touch(db, sequence_id)
     return step_id
 
@@ -207,7 +274,12 @@ def save_step(db, step_id: int, **fields) -> dict:
         raise ValueError(f"LinkedIn move is one of {', '.join(MOVES)}.")
     if "action_kind" in fields and fields["action_kind"] not in ACTION_KINDS:
         raise ValueError(f"An Action is one of {', '.join(ACTION_KINDS)}.")
-    fields = {k: (v or None) if k in ("at_time", "linkedin_move", "reply_to_step_id", "enroll_sequence_id") else v
+    if "condition" in fields and fields["condition"] not in CONDITIONS:
+        raise ValueError(f"An If checks one of {', '.join(CONDITIONS)}.")
+    if fields.get("pipeline") and fields["pipeline"] not in pipeline_mod.PIPELINES:
+        raise ValueError(f"A Pipeline is one of {', '.join(p.title() for p in pipeline_mod.PIPELINES)}.")
+    fields = {k: (v or None) if k in ("at_time", "linkedin_move", "reply_to_step_id", "enroll_sequence_id", "pipeline",
+                                       "stage") else v
               for k, v in fields.items()}
     with db:
         _tx(db)
@@ -223,14 +295,17 @@ def save_step(db, step_id: int, **fields) -> dict:
 
 @writer("write")
 def move_step(db, step_id: int, delta: int) -> None:
-    """Swap a Step with its neighbour (`delta` -1 up, +1 down)."""
+    """Swap a Step with its neighbour on its path (`delta` -1 up, +1 down); an If stays last on its path."""
     with db:
         _tx(db)
         st = db.execute("SELECT * FROM sequence_steps WHERE id = ?", (step_id,)).fetchone()
-        other = db.execute("SELECT id, position FROM sequence_steps WHERE sequence_id = ? AND position = ?",
-                           (st["sequence_id"], st["position"] + delta)).fetchone() if st and st["position"] else None
-        if other is None:
+        if st is None or st["position"] is None:
             return
+        mine = on_path(sequence_steps(db, st["sequence_id"]), path_of(st))
+        i = next(i for i, x in enumerate(mine) if x["id"] == step_id)
+        if not 0 <= i + delta < len(mine) or "if" in (mine[i]["kind"], mine[i + delta]["kind"]):
+            return
+        other = mine[i + delta]
         db.execute("UPDATE sequence_steps SET position = NULL WHERE id = ?", (step_id,))
         db.execute("UPDATE sequence_steps SET position = ? WHERE id = ?", (st["position"], other["id"]))
         db.execute("UPDATE sequence_steps SET position = ? WHERE id = ?", (other["position"], step_id))
@@ -240,43 +315,50 @@ def move_step(db, step_id: int, delta: int) -> None:
 @writer("write")
 def delete_step(db, step_id: int, now: datetime | None = None) -> tuple[int, dict]:
     """Delete a Step, live (FR-SEQ-24): Enrollments that have not reached it skip it; where it is the current
-    Due Task, that Task and its unsent Draft go and the next Step's Task comes due by its gap. Returns how many
-    Enrollments moved on, and what restore_step needs."""
+    Due Task, that Task and its unsent Draft go and the next Step's Task comes due by its gap. Deleting an If
+    deletes its paths and their On completions too. Returns how many Enrollments moved on, and what restore_step
+    needs."""
     now = now or clock.now()
     with db:
         _tx(db)
         st = dict(db.execute("SELECT * FROM sequence_steps WHERE id = ?", (step_id,)).fetchone())
+        gone = [st] + (_below(sequence_steps(db, st["sequence_id"]), step_id) if st["kind"] == "if" else [])
+        ids = [g["id"] for g in gone]
+        marks = ",".join("?" * len(ids))
         open_tasks = [dict(r) for r in db.execute(
             "SELECT t.* FROM tasks t JOIN enrollments e ON e.id = t.enrollment_id"
-            " WHERE t.step_id = ? AND t.state = 'DUE' AND e.state != 'FINISHED'", (step_id,))]
+            f" WHERE t.step_id IN ({marks}) AND t.state = 'DUE' AND e.state != 'FINISHED'", ids)]
         drafts = []
         for t in open_tasks:
             drafts += _drop_task(db, t["id"])
-        db.execute("UPDATE sequence_steps SET position = NULL WHERE id = ?", (step_id,))
-        db.execute("UPDATE sequence_steps SET position = position - 1 WHERE sequence_id = ? AND position > ?",
-                   (st["sequence_id"], st["position"]))
-        db.execute("UPDATE sequence_steps SET reply_to_step_id = NULL WHERE reply_to_step_id = ?", (step_id,))
+        for g in sorted(gone, key=lambda g: -g["position"]):
+            db.execute("UPDATE sequence_steps SET position = NULL WHERE id = ?", (g["id"],))
+            db.execute("UPDATE sequence_steps SET position = position - 1 WHERE sequence_id = ? AND position > ?",
+                       (st["sequence_id"], g["position"]))
+        db.execute(f"UPDATE sequence_steps SET reply_to_step_id = NULL WHERE reply_to_step_id IN ({marks})", ids)
         _touch(db, st["sequence_id"])
         before = _max_task(db)
         states = [dict(db.execute("SELECT * FROM enrollments WHERE id = ?", (t["enrollment_id"],)).fetchone()) for t in open_tasks]
         materialize(db, now)
-    return len(open_tasks), dict(step=st, tasks=open_tasks, drafts=drafts, after=before, enrollments=states)
+    return len(open_tasks), dict(step=st, steps=gone, tasks=open_tasks, drafts=drafts, after=before, enrollments=states)
 
 
 @writer("write")
 def restore_step(db, undo: dict) -> None:
-    """Put a deleted Step back, with the Tasks and Drafts it removed; Tasks made since for those Enrollments go."""
-    st = undo["step"]
+    """Put a deleted Step back (an If with its paths), with the Tasks and Drafts it removed; Tasks made since for
+    those Enrollments go."""
+    gone = undo.get("steps") or [undo["step"]]
     with db:
         _tx(db)
         enrollments = {t["enrollment_id"] for t in undo["tasks"]}
         for t in db.execute("SELECT id, enrollment_id FROM tasks WHERE id > ? AND state = 'DUE'", (undo["after"],)).fetchall():
             if t["enrollment_id"] in enrollments:
                 _drop_task(db, t["id"])
-        for later in reversed(sequence_steps(db, st["sequence_id"])):
-            if later["position"] >= st["position"]:
-                db.execute("UPDATE sequence_steps SET position = position + 1 WHERE id = ?", (later["id"],))
-        db.execute("UPDATE sequence_steps SET position = ? WHERE id = ?", (st["position"], st["id"]))
+        for st in sorted(gone, key=lambda g: g["position"]):
+            for later in reversed(sequence_steps(db, st["sequence_id"])):
+                if later["position"] >= st["position"]:
+                    db.execute("UPDATE sequence_steps SET position = position + 1 WHERE id = ?", (later["id"],))
+            db.execute("UPDATE sequence_steps SET position = ? WHERE id = ?", (st["position"], st["id"]))
         for t in undo["tasks"]:
             _insert(db, "tasks", t)
         for d in undo["drafts"]:
@@ -300,29 +382,79 @@ def _drop_task(db, task_id: int) -> list[dict]:
 
 
 def validate(db, sequence_id: int) -> list[tuple[int, str]]:
-    """Problems the editor shows on the Step row and detail pane (FR-SEQ-4)."""
+    """Problems the editor shows on the Step row and detail pane (FR-SEQ-4, FR-SEQ-32); apply refuses a Sequence
+    with any."""
     steps = sequence_steps(db, sequence_id)
+    byid = {st["id"]: st for st in steps}
     problems = []
     for i, st in enumerate(steps):
+        say = lambda text: problems.append((st["id"], text))  # noqa: E731
         for name in sorted({m for text in (st["subject"], st["body"], st["voicemail"]) for m in MARKER.findall(text)}
                            - set(FILL_INS)):
-            problems.append((st["id"], f"{{{name}}} is not a fill-in. Use {{first_name}}, {{last_name}}, or {{company}}."))
+            say(f"{{{name}}} is not a fill-in. Use {{first_name}}, {{last_name}}, or {{company}}.")
         if st["reply_to_step_id"]:
             if i == 0:
-                problems.append((st["id"], "Step 1 cannot reply to another Step: there is no earlier email. Clear Reply to."))
+                say("Step 1 cannot reply to another Step: there is no earlier email. Clear Reply to.")
             elif st["reply_to_step_id"] not in {s["id"] for s in steps[:i] if s["kind"] == "email"}:
-                problems.append((st["id"], "Reply to must name an earlier email Step."))
+                say("Reply to must name an earlier email Step.")
             if st["kind"] != "email":
-                problems.append((st["id"], "Only an email Step can reply in an earlier email's Thread."))
-        if st["action_kind"] == "enroll":
-            target = db.execute("SELECT * FROM sequences WHERE id = ?", (st["enroll_sequence_id"],)).fetchone()
-            if target is None:
-                problems.append((st["id"], "Name the Sequence this Action enrolls them in."))
-            elif target["id"] == sequence_id:
-                problems.append((st["id"], "An Action cannot enroll them in its own Sequence; they are still in it."))
-            elif target["archived_at"]:
-                problems.append((st["id"], f"{target['name']} is archived; restore it, or enrolling waits for you."))
+                say("Only an email Step can reply in an earlier email's Thread.")
+        mine = on_path(steps, path_of(st))
+        if st["kind"] == "if" and mine[-1]["id"] != st["id"]:
+            say("Nothing follows an If on its path: move the Steps after it onto one of its paths.")
+        if st["kind"] == "action":
+            problems += [(st["id"], text) for text in _action_problems(db, st, sequence_id, mine)]
+        if st["kind"] == "if":
+            problems += [(st["id"], text) for text in _if_problems(st, byid)]
     return problems
+
+
+def _stage_problem(st) -> str | None:
+    if st["pipeline"] not in pipeline_mod.PIPELINES:
+        return "Name the Pipeline: Revenue, Fundraising, or Talent."
+    try:
+        pipeline_mod.parse_stage(st["pipeline"], st["stage"] or "")
+    except pipeline_mod.Refused as e:
+        return f"{e}."
+    return None
+
+
+def _action_problems(db, st, sequence_id, mine) -> list[str]:
+    kind = st["action_kind"]
+    if kind == "set_stage":
+        return [p for p in [_stage_problem(st)] if p]
+    if kind == "set_value":
+        return [] if st["pipeline"] in pipeline_mod.PIPELINES and st["value"] is not None else \
+            ["Name the Pipeline and the Value to set."]
+    if kind == "enroll":
+        target = db.execute("SELECT * FROM sequences WHERE id = ?", (st["enroll_sequence_id"],)).fetchone()
+        if target is None:
+            return ["Name the Sequence this Action enrolls them in."]
+        if target["id"] == sequence_id and not (st["section"] == "completion" and mine[-1]["id"] == st["id"]):
+            return ["An Action that repeats this Sequence must be the last Step of an On completion."]
+        if target["archived_at"]:
+            return [f"{target['name']} is archived; restore it, or enrolling waits for you."]
+    return []
+
+
+def _if_problems(st, byid) -> list[str]:
+    cond = st["condition"]
+    if st["section"] == "start":
+        return ["An If cannot be in On start; put it in the Steps."]
+    if cond == "end_reason":
+        if st["section"] != "completion":
+            return ["How it finished is known only in an On completion; move this If there."]
+        reasons = [r.strip() for r in st["operand"].split(",") if r.strip()]
+        if not reasons or set(reasons) - set(FINISHING_REASONS):
+            return ["Name how it finished: " + ", ".join(REASON_LABEL[r] for r in FINISHING_REASONS) + "."]
+    if cond == "has_channel" and st["operand"] not in CHANNELS:
+        return ["Name the channel: email or phone."]
+    if cond == "stage":
+        problem = _stage_problem(st)
+        return [problem] if problem else []
+    if cond == "jeremy_picks" and not (st["subject"].strip() and st["true_label"].strip() and st["false_label"].strip()):
+        return ["Write the question and a label for each path."]
+    return []
 
 
 def person_fill(db, person_id: int) -> dict:
@@ -396,9 +528,10 @@ def parse_start(text: str, now: datetime) -> date | None:
 
 
 @writer("create")
-def enroll(db, person_id: int, sequence_id: int, now: datetime | None = None, start: date | None = None) -> int:
-    """One Person into one Sequence (FR-SEQ-6); its first Task counts from the enroll day, or from a later
-    Start date (FR-SEQ-25)."""
+def enroll(db, person_id: int, sequence_id: int, now: datetime | None = None, start: date | None = None,
+           organization_id: int | None = None) -> int:
+    """One Person into one Sequence (FR-SEQ-6), for one Organization (FR-SEQ-36; default: their only one); its
+    first Task counts from the enroll day, or from a later Start date (FR-SEQ-25). On start runs first."""
     now = now or clock.now()
     today = now.astimezone(LOCAL).date()
     if start and start < today:
@@ -406,9 +539,19 @@ def enroll(db, person_id: int, sequence_id: int, now: datetime | None = None, st
     starts = clock.iso(datetime.combine(start, time(0, 0), LOCAL)) if start and start > today else None
     with db:
         _tx(db)
-        eid = _enroll(db, person_id, sequence_id, now, starts)
+        eid = _enroll(db, person_id, sequence_id, now, starts,
+                      organization_id if organization_id is not None else default_organization(db, person_id))
         materialize(db, now)
     return eid
+
+
+def default_organization(db, person_id: int) -> int | None:
+    """The Organization an Enrollment is for when none is named: the Person's only one, else none."""
+    domains = inbox.person_organizations(db, person_id)
+    if len(domains) != 1:
+        return None
+    row = db.execute("SELECT id FROM organizations WHERE domain = ?", (domains[0],)).fetchone()
+    return row[0] if row else None
 
 
 def first_due(db, enrollment_id: int, now: datetime | None = None) -> str:
@@ -419,7 +562,8 @@ def first_due(db, enrollment_id: int, now: datetime | None = None) -> str:
     return f"on {_day(t[0])}"
 
 
-def _enroll(db, person_id: int, sequence_id: int, now: datetime, starts: str | None = None) -> int:
+def _enroll(db, person_id: int, sequence_id: int, now: datetime, starts: str | None = None,
+            organization_id: int | None = None) -> int:
     p = db.execute("SELECT display_name, unsubscribed_at FROM persons WHERE id = ?", (person_id,)).fetchone()
     if p is None:
         raise KeyError(f"person {person_id}")
@@ -434,8 +578,9 @@ def _enroll(db, person_id: int, sequence_id: int, now: datetime, starts: str | N
                       (person_id, sequence_id)).fetchone()
     if live:
         raise Refused(f"{p['display_name']} is already in {s['name']} ({live[0].title()}).")
-    return db.execute("INSERT INTO enrollments (person_id, sequence_id, state, enrolled_at, starts_at)"
-                      " VALUES (?, ?, 'ACTIVE', ?, ?)", (person_id, sequence_id, clock.iso(now), starts)).lastrowid
+    return db.execute("INSERT INTO enrollments (person_id, sequence_id, state, enrolled_at, starts_at, organization_id)"
+                      " VALUES (?, ?, 'ACTIVE', ?, ?, ?)",
+                      (person_id, sequence_id, clock.iso(now), starts, organization_id)).lastrowid
 
 
 @writer("write")
@@ -475,43 +620,90 @@ def _day(iso: str) -> str:
 
 
 def materialize(db, now: datetime | None = None) -> int:
-    """Make each Active Enrollment's next Task, do each enroll Action whose time has come, and make the Draft of
-    each email Task whose day has come; finish an Enrollment whose last Task is done. Idempotent (one Task per
-    Enrollment and Step, one Draft per Task), so it runs every minute from wake. Returns how many Tasks or
-    Drafts it made."""
+    """Make each running Enrollment's next Task, carry out each Action and If whose time has come, and make the
+    Draft of each email Task whose day has come; an Enrollment whose path runs out becomes Finishing and works that
+    path's On completion, then Finished. Idempotent (one Task per Enrollment and Step, one Draft per Task), so it
+    runs every minute from wake. Returns how many Tasks or Drafts it made."""
     now = now or clock.now()
     made = 0
     with db:
         _tx(db)
-        enrolled = 1
-        while enrolled:  # an enroll Action's new Enrollment gets its first Task in the same run
-            for e in db.execute("SELECT * FROM enrollments WHERE state = 'ACTIVE'").fetchall():
+        moved = 1
+        while moved:  # an Action or If done, or an Enrollment it made, gets its next Task in the same run
+            moved = 0
+            for e in db.execute("SELECT * FROM enrollments WHERE state IN ('ACTIVE', 'FINISHING')").fetchall():
                 if db.execute("SELECT 1 FROM tasks WHERE enrollment_id = ? AND state = 'DUE'", (e["id"],)).fetchone():
                     continue
-                made += _next_task(db, e, now) is not None
-            enrolled = _enroll_tasks(db, now)
-            made += enrolled
+                moved += _next_task(db, e, now) is not None
+            moved += _auto_tasks(db, now)
+            made += moved
         today = now.astimezone(LOCAL).date()
         for t in db.execute(
                 "SELECT t.*, s.kind, s.reply_to_step_id, s.subject, s.body, e.person_id, e.sequence_id FROM tasks t"
                 " JOIN sequence_steps s ON s.id = t.step_id JOIN enrollments e ON e.id = t.enrollment_id"
-                " WHERE t.state = 'DUE' AND e.state = 'ACTIVE' AND s.kind = 'email' AND t.flag IS NULL"
+                " WHERE t.state = 'DUE' AND e.state IN ('ACTIVE', 'FINISHING') AND s.kind = 'email' AND t.flag IS NULL"
                 " AND NOT EXISTS (SELECT 1 FROM composition_drafts d WHERE d.task_id = t.id)").fetchall():
             if datetime.fromisoformat(t["due_at"]).astimezone(LOCAL).date() <= today:
                 made += _task_draft(db, t)
     return made
 
 
+def _last_task(db, enrollment_id: int):
+    return db.execute("SELECT t.*, s.position AS step_position, s.section, s.parent_step_id, s.branch, s.kind"
+                      " FROM tasks t JOIN sequence_steps s ON s.id = t.step_id"
+                      " WHERE t.enrollment_id = ? ORDER BY t.id DESC LIMIT 1", (enrollment_id,)).fetchone()
+
+
+def _enter(steps, path, taken):
+    """The first Step not yet worked on a path, else what follows the path's end."""
+    mine = [st for st in on_path(steps, path) if st["id"] not in taken]
+    return mine[0] if mine else _end(steps, path, taken)
+
+
+def _end(steps, path, taken):
+    """Past the end of a path: On start runs on into the body; a body path ends ("end", path), which opens its On
+    completion; an On completion's end finishes the Enrollment."""
+    if path[0] == "start":
+        return _enter(steps, ("body", None, None), taken)
+    return ("end", path) if path[0] == "body" else ("finished",)
+
+
+def _successor(steps, last, taken):
+    if last is None:
+        return _enter(steps, ("start", None, None), taken)
+    if last["kind"] == "if" and last["choice"] is not None:
+        return _enter(steps, (last["section"], last["step_id"], last["choice"]), taken)
+    path = (last["section"], last["parent_step_id"], last["branch"])
+    rest = [st for st in on_path(steps, path) if st["id"] not in taken
+            and (last["step_position"] is None or st["position"] > last["step_position"])]
+    return rest[0] if rest else _end(steps, path, taken)
+
+
+def current_path(db, enrollment_id: int) -> tuple:
+    """The path an Enrollment is on now: its Due Task's, else its last Task's; On start counts as the body."""
+    last = _last_task(db, enrollment_id)
+    if last is None or last["section"] == "start":
+        return ("body", None, None)
+    if last["kind"] == "if" and last["choice"] is not None:
+        return (last["section"], last["step_id"], last["choice"])
+    return (last["section"], last["parent_step_id"], last["branch"])
+
+
 def _next_task(db, e, now: datetime, due: datetime | None = None) -> int | None:
-    """The Task for the Step after this Enrollment's last one, or Completed when there is none."""
-    last = db.execute("SELECT t.done_at, s.position FROM tasks t JOIN sequence_steps s ON s.id = t.step_id"
-                      " WHERE t.enrollment_id = ? ORDER BY t.id DESC LIMIT 1", (e["id"],)).fetchone()
+    """The Task for the Step after this Enrollment's last one. At the end of a body path the Enrollment becomes
+    Finishing (Completed, unless Jeremy named how it finished) and works that path's On completion; at the end
+    of that it is Finished."""
+    steps = sequence_steps(db, e["sequence_id"])
+    last = _last_task(db, e["id"])
     taken = {r[0] for r in db.execute("SELECT step_id FROM tasks WHERE enrollment_id = ?", (e["id"],))}
-    after = last["position"] if last and last["position"] is not None else 0  # a deleted last Step: the first not taken
-    step = next((s for s in sequence_steps(db, e["sequence_id"]) if s["position"] > after and s["id"] not in taken), None)
-    if step is None:
-        db.execute("UPDATE enrollments SET state = 'FINISHED', reason = 'COMPLETED', finished_at = ? WHERE id = ?",
-                   (clock.iso(now), e["id"]))
+    step = _successor(steps, last, taken)
+    if isinstance(step, tuple) and step[0] == "end":
+        db.execute("UPDATE enrollments SET state = 'FINISHING', reason = coalesce(reason, 'COMPLETED') WHERE id = ?",
+                   (e["id"],))
+        step = _enter(steps, completion_of(step[1]), taken)
+    if isinstance(step, tuple):
+        db.execute("UPDATE enrollments SET state = 'FINISHED', reason = coalesce(reason, 'COMPLETED'), finished_at = ?"
+                   " WHERE id = ?", (clock.iso(now), e["id"]))
         return None
     base = datetime.fromisoformat(last["done_at"]) if last else datetime.fromisoformat(e["starts_at"] or e["enrolled_at"])
     due = due or due_date(base, step["gap_days"], step["at_time"])
@@ -519,34 +711,92 @@ def _next_task(db, e, now: datetime, due: datetime | None = None) -> int | None:
                       (e["id"], step["id"], clock.iso(due))).lastrowid
 
 
-def _enroll_tasks(db, now: datetime) -> int:
-    """Do the enroll Actions whose time has come: enroll the Person in the Action's Sequence. One who responded
-    during this Enrollment, or went through that Sequence before, waits for Jeremy (flag), and so does a
-    refused enroll; the second rule also ends a loop of Sequences that enroll each other."""
+def _auto_tasks(db, now: datetime) -> int:
+    """Carry out the Actions and Ifs whose time has come (FR-SEQ-27, FR-SEQ-29). An Action that cannot run waits
+    for Jeremy (flag); an If asking Jeremy waits for his pick."""
     done = 0
     for t in db.execute(
-            "SELECT t.id, t.due_at, s.enroll_sequence_id, e.person_id, e.responded_at FROM tasks t"
+            "SELECT t.id, t.due_at, t.enrollment_id, s.id AS step_id FROM tasks t"
             " JOIN sequence_steps s ON s.id = t.step_id JOIN enrollments e ON e.id = t.enrollment_id"
-            " WHERE t.state = 'DUE' AND e.state = 'ACTIVE' AND s.action_kind = 'enroll' AND t.flag IS NULL").fetchall():
+            " WHERE t.state = 'DUE' AND e.state IN ('ACTIVE', 'FINISHING') AND t.flag IS NULL"
+            " AND (s.kind = 'action' OR (s.kind = 'if' AND s.condition != 'jeremy_picks'))").fetchall():
         if datetime.fromisoformat(t["due_at"]) > now:
             continue
-        target = db.execute("SELECT name FROM sequences WHERE id = ?", (t["enroll_sequence_id"],)).fetchone()
-        before = db.execute("SELECT 1 FROM enrollments WHERE person_id = ? AND sequence_id = ?",
-                            (t["person_id"], t["enroll_sequence_id"])).fetchone()
-        flag = ("Action names no Sequence" if target is None
-                else f"they responded {_day(t['responded_at'])}" if t["responded_at"]
-                else f"already went through {target['name']}" if before else None)
-        if flag is None:
-            try:
-                _enroll(db, t["person_id"], t["enroll_sequence_id"], now)
-            except Refused as e:
-                flag = str(e)
-        if flag:
+        st = dict(db.execute("SELECT * FROM sequence_steps WHERE id = ?", (t["step_id"],)).fetchone())
+        e = dict(db.execute("SELECT * FROM enrollments WHERE id = ?", (t["enrollment_id"],)).fetchone())
+        if st["kind"] == "if":
+            db.execute("UPDATE tasks SET choice = ? WHERE id = ?", (int(check(db, st, e)), t["id"]))
+            _close(db, t["id"], "DONE", now)
+        elif flag := _run_action(db, t["id"], st, e, now):
             db.execute("UPDATE tasks SET flag = ? WHERE id = ?", (flag, t["id"]))
             continue
-        _close(db, t["id"], "DONE", now)
         done += 1
     return done
+
+
+def check(db, st: dict, e: dict) -> bool:
+    """An If's condition for one Enrollment (FR-SEQ-29)."""
+    cond = st["condition"]
+    if cond == "end_reason":
+        return (e["reason"] or "") in {r.strip() for r in st["operand"].split(",")}
+    if cond == "has_channel":
+        return db.execute("SELECT 1 FROM identities WHERE person_id = ? AND kind = ?",
+                          (e["person_id"], st["operand"])).fetchone() is not None
+    if cond == "stage":
+        held = pipeline_mod.current(db, e["organization_id"]) if e["organization_id"] else {}
+        return held.get(st["pipeline"], {}).get("stage") == st["stage"]
+    raise ValueError(f"{cond} is not checked by itself")
+
+
+def _run_action(db, task_id: int, st: dict, e: dict, now: datetime) -> str | None:
+    """Carry out one Action and close its Task; returns why it waits for Jeremy instead."""
+    org, kind = e["organization_id"], st["action_kind"]
+    if kind in ("set_stage", "set_value", "end_for_others") and org is None:
+        return "no Organization: set the one this Enrollment is for"
+    try:
+        if kind == "set_stage":
+            pipeline_mod.set_stage(db, org, st["pipeline"], st["stage"])
+        elif kind == "set_value":
+            pipeline_mod.set_value(db, org, st["pipeline"], st["value"])
+        elif kind == "end_for_others":
+            for other in db.execute("SELECT id FROM enrollments WHERE sequence_id = ? AND organization_id = ?"
+                                    " AND person_id != ? AND state != 'FINISHED'",
+                                    (e["sequence_id"], org, e["person_id"])).fetchall():
+                _finish(db, other["id"], "CANCELED", now)
+        elif kind == "enroll":
+            return _enroll_action(db, task_id, st, e, now)
+    except (pipeline_mod.Refused, Refused) as x:
+        return str(x)
+    _close(db, task_id, "DONE", now)
+    return None
+
+
+def _enroll_action(db, task_id: int, st: dict, e: dict, now: datetime) -> str | None:
+    """Enroll the Person in the Action's Sequence, for the same Organization. One who responded during this
+    Enrollment (outside an On completion, where Jeremy already said how it finished), or went through that
+    Sequence before, waits for Jeremy; the second rule also ends a loop of Sequences that enroll each other. A
+    Sequence enrolling them in itself repeats it: this Enrollment finishes first (FR-SEQ-40)."""
+    target = db.execute("SELECT name FROM sequences WHERE id = ?", (st["enroll_sequence_id"],)).fetchone()
+    repeat = st["enroll_sequence_id"] == e["sequence_id"]
+    before = not repeat and db.execute("SELECT 1 FROM enrollments WHERE person_id = ? AND sequence_id = ?",
+                                       (e["person_id"], st["enroll_sequence_id"])).fetchone()
+    flag = ("Action names no Sequence" if target is None
+            else f"they responded {_day(e['responded_at'])}" if e["responded_at"] and not repeat and st["section"] != "completion"
+            else f"already went through {target['name']}" if before else None)
+    if flag:
+        return flag
+    _close(db, task_id, "DONE", now)
+    if repeat:
+        db.execute("UPDATE enrollments SET state = 'FINISHED', reason = coalesce(reason, 'COMPLETED'), finished_at = ?"
+                   " WHERE id = ?", (clock.iso(now), e["id"]))
+    try:
+        _enroll(db, e["person_id"], st["enroll_sequence_id"], now, organization_id=e["organization_id"])
+    except Refused as x:
+        db.execute("UPDATE tasks SET state = 'DUE', done_at = NULL WHERE id = ?", (task_id,))
+        if repeat:
+            db.execute("UPDATE enrollments SET state = ?, finished_at = NULL WHERE id = ?", (e["state"], e["id"]))
+        return str(x)
+    return None
 
 
 def _task_draft(db, t) -> int:
@@ -605,14 +855,18 @@ def complete_task(db, task_id: int, now: datetime | None = None) -> dict:
     now = now or clock.now()
     with db:
         _tx(db)
-        t = db.execute("SELECT s.kind, s.action_kind, s.enroll_sequence_id, e.person_id FROM tasks t JOIN sequence_steps s ON s.id = t.step_id"
+        t = db.execute("SELECT s.kind, s.action_kind, s.condition, s.enroll_sequence_id, e.person_id, e.organization_id"
+                       " FROM tasks t JOIN sequence_steps s ON s.id = t.step_id"
                        " JOIN enrollments e ON e.id = t.enrollment_id WHERE t.id = ?", (task_id,)).fetchone()
         if t and t["kind"] == "email":
             raise Refused("An email Task is done when its Draft sends.")
+        if t and t["kind"] == "if":
+            raise Refused("Pick a path for this If: 1 or 2.")
         enrolling = t and t["action_kind"] == "enroll"
         if enrolling and t["enroll_sequence_id"] is None:
             raise Refused("This Action names no Sequence; name one in its Step, or skip the Task.")
-        enrolled = _enroll(db, t["person_id"], t["enroll_sequence_id"], now) if enrolling else None
+        enrolled = _enroll(db, t["person_id"], t["enroll_sequence_id"], now,
+                           organization_id=t["organization_id"]) if enrolling else None
         undo = _close(db, task_id, "DONE", now) | dict(enrolled=enrolled)
         materialize(db, now)
     return undo
@@ -640,9 +894,9 @@ def undo_task(db, undo: dict) -> None:
             _drop_task(db, t["id"])
         if undo.get("enrolled"):  # the Enrollment an enroll Action made
             db.execute("DELETE FROM enrollments WHERE id = ?", (undo["enrolled"],))
-        db.execute("UPDATE tasks SET state = ?, done_at = ?, thread_id = ?, flag = ? WHERE id = ?",
+        db.execute("UPDATE tasks SET state = ?, done_at = ?, thread_id = ?, flag = ?, choice = ? WHERE id = ?",
                    (undo["task"]["state"], undo["task"]["done_at"], undo["task"]["thread_id"], undo["task"]["flag"],
-                    undo["task"]["id"]))
+                    undo["task"].get("choice"), undo["task"]["id"]))
         e = undo["enrollment"]
         db.execute("UPDATE enrollments SET state = ?, reason = ?, finished_at = ? WHERE id = ?",
                    (e["state"], e["reason"], e["finished_at"], e["id"]))
@@ -660,14 +914,15 @@ def tasks_due(db, now: datetime | None = None) -> list[dict]:
     today = now.astimezone(LOCAL).date()
     out = []
     for r in db.execute(
-            "SELECT t.*, s.kind, s.action_kind, s.position, s.at_time, s.subject, s.body, s.voicemail, s.linkedin_move, s.reply_to_step_id,"
+            "SELECT t.*, s.kind, s.action_kind, s.condition, s.true_label, s.false_label, s.position, s.at_time, s.subject,"
+            " s.body, s.voicemail, s.linkedin_move, s.reply_to_step_id,"
             " e.person_id, e.sequence_id, coalesce(e.starts_at, e.enrolled_at) AS starts_at, q.name AS sequence, p.display_name AS person,"
             " (SELECT count(*) FROM sequence_steps x WHERE x.sequence_id = q.id AND x.position IS NOT NULL) AS steps,"
             " (SELECT id FROM composition_drafts d WHERE d.task_id = t.id) AS draft_id,"
             " (SELECT name FROM sequences x WHERE x.id = s.enroll_sequence_id) AS enroll_sequence"
             " FROM tasks t JOIN sequence_steps s ON s.id = t.step_id JOIN enrollments e ON e.id = t.enrollment_id"
             " JOIN sequences q ON q.id = e.sequence_id JOIN persons p ON p.id = e.person_id"
-            " WHERE t.state = 'DUE' AND e.state = 'ACTIVE' AND NOT EXISTS (SELECT 1 FROM composition_drafts d"
+            " WHERE t.state = 'DUE' AND e.state IN ('ACTIVE', 'FINISHING') AND NOT EXISTS (SELECT 1 FROM composition_drafts d"
             " WHERE d.task_id = t.id AND d.send_at IS NOT NULL AND d.send_error IS NULL) ORDER BY t.due_at, t.id"):
         due = datetime.fromisoformat(r["due_at"])
         day = due.astimezone(LOCAL).date()
@@ -707,7 +962,7 @@ def task_sent(db, draft: dict, thread_id: int, now: datetime) -> None:
     state = db.execute("SELECT e.state FROM tasks t JOIN enrollments e ON e.id = t.enrollment_id WHERE t.id = ?",
                        (draft["task_id"],)).fetchone()
     _close(db, draft["task_id"], "DONE", now, thread_id)  # it went out, so it is done even while Paused
-    if state and state[0] == "ACTIVE":
+    if state and state[0] in ("ACTIVE", "FINISHING"):
         materialize(db, now)
 
 
@@ -737,28 +992,29 @@ def task_draft_restored(db, draft: dict) -> None:
 # --- pause, resume, finish ----------------------------------------------------
 
 def pause_person(db, person_id: int, at: datetime, why: str) -> int:
-    """Anything inbound from the Person, or a connected call, pauses their Active Enrollments (FR-SEQ-12);
-    messages older than the Enrollment (imports) do not. Runs inside ingest's transaction."""
+    """Anything inbound from the Person, or a connected call, pauses their Active and Finishing Enrollments
+    (FR-SEQ-12, FR-SEQ-35); a Finishing one keeps how it finished. Messages older than the Enrollment (imports)
+    do not. Runs inside ingest's transaction."""
     if not any(c[1] == "responded_at" for c in db.execute("PRAGMA table_info(enrollments)")):
         return 0  # a database still being built up to schema 20 (migration tests ingest along the way)
     db.execute("UPDATE enrollments SET responded_at = ? WHERE person_id = ? AND state != 'FINISHED'"
                " AND responded_at IS NULL AND enrolled_at <= ?", (clock.iso(at), person_id, clock.iso(at)))
     return db.execute("UPDATE enrollments SET state = 'PAUSED', paused_at = ?, pause_reason = ?"
-                      " WHERE person_id = ? AND state = 'ACTIVE' AND enrolled_at <= ?",
+                      " WHERE person_id = ? AND state IN ('ACTIVE', 'FINISHING') AND enrolled_at <= ?",
                       (clock.iso(at), why, person_id, clock.iso(at))).rowcount
 
 
 @writer("write")
 def resume(db, enrollment_id: int, now: datetime | None = None) -> None:
-    """Paused to Active; the next Task is due at once (FR-SEQ-13)."""
+    """Paused to Active, or back to Finishing when it was paused there; the next Task is due at once (FR-SEQ-13)."""
     now = now or clock.now()
     with db:
         _tx(db)
         e = db.execute("SELECT * FROM enrollments WHERE id = ?", (enrollment_id,)).fetchone()
         if e is None or e["state"] != "PAUSED":
             raise Refused("Only a Paused Enrollment resumes.")
-        db.execute("UPDATE enrollments SET state = 'ACTIVE', paused_at = NULL, pause_reason = NULL WHERE id = ?",
-                   (enrollment_id,))
+        db.execute("UPDATE enrollments SET state = CASE WHEN reason IS NULL THEN 'ACTIVE' ELSE 'FINISHING' END,"
+                   " paused_at = NULL, pause_reason = NULL WHERE id = ?", (enrollment_id,))
         if db.execute("SELECT 1 FROM tasks WHERE enrollment_id = ? AND state = 'DUE'", (enrollment_id,)).fetchone():
             db.execute("UPDATE tasks SET due_at = ? WHERE enrollment_id = ? AND state = 'DUE' AND due_at > ?",
                        (clock.iso(now), enrollment_id, clock.iso(now)))
@@ -789,10 +1045,12 @@ def _restore_finish(db, undo: dict) -> None:
 
 @writer("write")
 def finish(db, enrollment_id: int, reason: str, now: datetime | None = None) -> list[dict]:
-    """End an Enrollment as Completed, Unsubscribed, or Canceled (FR-SEQ-14); its unsent Task Drafts go.
-    Unsubscribed also marks the Person and ends every Sequence they are in. Returns what restore_finish needs."""
-    if reason not in ("COMPLETED", "UNSUBSCRIBED", "CANCELED"):
-        raise ValueError("reason is COMPLETED, UNSUBSCRIBED, or CANCELED")
+    """End an Enrollment (FR-SEQ-33, FR-SEQ-34). Goal met, Not Right Now, Lost, or Completed make it Finishing: the
+    current Task and its unsent Draft go, and the On completion of the path it was on runs. Canceled and
+    Unsubscribed end it at once with no On completion; Unsubscribed also marks the Person and ends every Sequence
+    they are in. Returns what restore_finish needs."""
+    if reason not in END_REASONS:
+        raise ValueError(f"reason is one of {', '.join(END_REASONS)}")
     now = now or clock.now()
     with db:
         _tx(db)
@@ -801,7 +1059,81 @@ def finish(db, enrollment_id: int, reason: str, now: datetime | None = None) -> 
             raise Refused("This Enrollment has already finished.")
         if reason == "UNSUBSCRIBED":
             return _unsubscribe(db, e["person_id"], now)
-        return [_finish(db, enrollment_id, reason, now)]
+        if reason == "CANCELED":
+            return [_finish(db, enrollment_id, reason, now)]
+        if e["reason"] is not None:
+            raise Refused(f"It is already finishing as {REASON_LABEL[e['reason']]}; Cancel it to stop its On completion.")
+        mark = _mark(db)
+        path = current_path(db, enrollment_id)
+        for t in db.execute("SELECT id FROM tasks WHERE enrollment_id = ? AND state = 'DUE'", (enrollment_id,)).fetchall():
+            _drop_task(db, t["id"])
+        db.execute("UPDATE enrollments SET state = 'FINISHING', reason = ?, paused_at = NULL, pause_reason = NULL"
+                   " WHERE id = ?", (reason, enrollment_id))
+        steps = sequence_steps(db, e["sequence_id"])
+        taken = {r[0] for r in db.execute("SELECT step_id FROM tasks WHERE enrollment_id = ?", (enrollment_id,))}
+        first = _enter(steps, completion_of(path), taken)
+        if isinstance(first, tuple):
+            db.execute("UPDATE enrollments SET state = 'FINISHED', finished_at = ? WHERE id = ?",
+                       (clock.iso(now), enrollment_id))
+        else:
+            db.execute("INSERT INTO tasks (enrollment_id, step_id, due_at, state) VALUES (?, ?, ?, 'DUE')",
+                       (enrollment_id, first["id"], clock.iso(due_date(now, first["gap_days"], first["at_time"]))))
+        materialize(db, now)
+        return [dict(rollback=mark)]
+
+
+def _mark(db) -> dict:
+    """What a finish with On completion may change, so restore_finish can put it back: every Enrollment, the Due
+    Tasks and their Drafts, and the highest ids. ponytail: snapshots whole small tables; one user, a few dozen rows."""
+    due = [dict(r) for r in db.execute("SELECT * FROM tasks WHERE state = 'DUE'")]
+    return dict(enrollments=[dict(r) for r in db.execute("SELECT * FROM enrollments")], tasks=due,
+                drafts=[dict(r) for r in db.execute("SELECT * FROM composition_drafts WHERE task_id IN"
+                                                    " (SELECT id FROM tasks WHERE state = 'DUE')")],
+                max_task=_max_task(db), max_enrollment=db.execute("SELECT coalesce(max(id), 0) FROM enrollments").fetchone()[0],
+                max_log=db.execute("SELECT coalesce(max(id), 0) FROM pipeline_log").fetchone()[0])
+
+
+def _rollback(db, mark: dict) -> None:
+    for t in db.execute("SELECT id FROM tasks WHERE id > ?", (mark["max_task"],)).fetchall():
+        _drop_task(db, t["id"])
+    for e in db.execute("SELECT id FROM enrollments WHERE id > ?", (mark["max_enrollment"],)).fetchall():
+        for t in db.execute("SELECT id FROM tasks WHERE enrollment_id = ?", (e["id"],)).fetchall():
+            _drop_task(db, t["id"])
+        db.execute("DELETE FROM enrollments WHERE id = ?", (e["id"],))
+    for r in mark["enrollments"]:
+        db.execute(f"UPDATE enrollments SET {', '.join(f'{k} = ?' for k in r if k != 'id')} WHERE id = ?",
+                   (*(v for k, v in r.items() if k != "id"), r["id"]))
+    for t in mark["tasks"]:
+        if db.execute("SELECT 1 FROM tasks WHERE id = ?", (t["id"],)).fetchone():
+            db.execute("UPDATE tasks SET state = 'DUE', done_at = NULL, flag = ?, choice = ? WHERE id = ?",
+                       (t["flag"], t["choice"], t["id"]))
+        else:
+            _insert(db, "tasks", t)
+    have = {r[0] for r in db.execute("SELECT id FROM composition_drafts")}
+    for d in mark["drafts"]:
+        if d["id"] not in have:
+            _insert(db, "composition_drafts", d)
+    for r in db.execute("SELECT id FROM pipeline_log WHERE id > ? AND kind != 'UNDO'", (mark["max_log"],)).fetchall():
+        pipeline_mod.undo(db, r["id"])
+
+
+@writer("create")
+def pick(db, task_id: int, choice: int, now: datetime | None = None) -> dict:
+    """Jeremy answers an If that asks him (FR-SEQ-31): 1 takes its true path, 0 its false path. Returns what
+    undo_task needs."""
+    now = now or clock.now()
+    if choice not in (0, 1):
+        raise ValueError("choice is 1 (the first path) or 0 (the second)")
+    with db:
+        _tx(db)
+        t = db.execute("SELECT t.state, s.kind, s.condition FROM tasks t JOIN sequence_steps s ON s.id = t.step_id"
+                       " WHERE t.id = ?", (task_id,)).fetchone()
+        if t is None or t["kind"] != "if" or t["condition"] != "jeremy_picks" or t["state"] != "DUE":
+            raise Refused("Only a Due If that asks you takes a pick.")
+        undo = _close(db, task_id, "DONE", now)
+        db.execute("UPDATE tasks SET choice = ? WHERE id = ?", (choice, task_id))
+        materialize(db, now)
+    return undo
 
 
 def unsubscribe(db, person_id: int, now: datetime | None = None) -> list[dict]:
@@ -824,7 +1156,9 @@ def restore_finish(db, undo: list[dict]) -> None:
     with db:
         _tx(db)
         for u in undo:
-            if "person" in u:
+            if "rollback" in u:
+                _rollback(db, u["rollback"])
+            elif "person" in u:
                 db.execute("UPDATE persons SET unsubscribed_at = ? WHERE id = ?", (u["unsubscribed_at"], u["person"]))
             else:
                 _restore_finish(db, u)
