@@ -120,3 +120,21 @@ def test_agent_lists_resumes_and_finishes_enrollments(db, close_seq, capsys):  #
     assert f"{eid}\tDana Roy\tRevenue: Close\tPaused\tharbourline.example" in out
     assert "Resumed Revenue: Close" in out and "Finished Revenue: Close: Goal met. Its On completion ran." in out
     assert [e["sequence"] for e in sq.enrollments(db, dana) if e["state"] == "ACTIVE"] == ["Revenue: Onboard"]
+
+
+def test_g1_a_chained_warm_run_moves_to_the_agreed_date(db, close_seq, capsys):  # noqa: F811
+    """G1: Goal met chains into the next Sequence at once; the agent puts that run on the agreed date."""
+    from datetime import timedelta
+    from types import SimpleNamespace as N
+    from comms_terminal import agent
+    from test_sequences import MONDAY, person
+    dana = person(db, "dana@harbourline.example", "Dana Roy")
+    eid = sq.enroll(db, dana, close_seq["close"], MONDAY)
+    sq.finish(db, eid, "GOAL_MET", MONDAY)
+    onboard = next(e for e in sq.enrollments(db, dana) if e["sequence"] == "Revenue: Onboard")
+    assert [t["kind"] for t in sq.tasks_due(db, MONDAY)] == ["call"]  # due at once
+    agent.run(N(cmd="enrollment", enrollment_cmd="start", id=onboard["id"], date="2026-10-28"), db)
+    assert "now starts Wed Oct 28" in capsys.readouterr().out
+    assert sq.tasks_due(db, MONDAY) == [] and [t["kind"] for t in sq.tasks_due(db, MONDAY + timedelta(days=9))] == ["call"]
+    with pytest.raises(SystemExit, match="before today"):
+        agent.run(N(cmd="enrollment", enrollment_cmd="start", id=onboard["id"], date="2026-10-01"), db)

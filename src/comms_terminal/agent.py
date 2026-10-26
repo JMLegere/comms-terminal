@@ -1,6 +1,6 @@
 """Commands for a terminal agent: Threads, Drafts, and Due Tasks as Markdown, changes to a Draft, enrolling a
 Person in a Sequence, writing Sequences (whole, as Markdown, or Step by Step; FR-SEQ-44), Jeremy's calendar Events,
-Enrollments (list, resume, finish; Jeremy, 2026-10-26, superseding FR-SEQ-22 for these two), and Pipelines (show,
+Enrollments (list, resume, start on an agreed date, finish; Jeremy, 2026-10-26, superseding FR-SEQ-22), and Pipelines (show,
 Target, Stage and Value). Nothing here sends or completes a Task; Jeremy does that from the console."""
 
 import json
@@ -55,6 +55,9 @@ def add_parsers(sub):
     x.add_argument("person", nargs="?", help="only this Person (id, email address, or exact name)")
     x = es.add_parser("resume", help="resume a Paused Enrollment; its next Task is due now")
     x.add_argument("id", type=int)
+    x = es.add_parser("start", help="put a running Enrollment on the agreed date: its Due Task comes due that day")
+    x.add_argument("id", type=int)
+    x.add_argument("date", help="YYYY-MM-DD, or a number of days from today")
     x = es.add_parser("finish", help="finish an Enrollment; Goal met, Not Right Now, and Lost run its On completion")
     x.add_argument("id", type=int)
     x.add_argument("reason", type=str.upper, choices=sequences.END_REASONS)
@@ -261,6 +264,12 @@ def enrollment_cmd(db, a) -> str:
     if c == "resume":
         sequences.resume(db, a.id)
         return f"Resumed {e['name']}: the next Task is due now.\n"
+    if c == "start":
+        day = sequences.parse_start(a.date, clock.now())
+        if day is None:
+            raise ValueError(f"{a.date!r} is neither YYYY-MM-DD nor a number of days")
+        sequences.reschedule(db, a.id, day)
+        return f"{e['name']} now starts {day:%a %b} {day.day}: its Due Task comes due that day.\n"
     sequences.finish(db, a.id, a.reason)
     runs = " Its On completion ran." if a.reason in sequences.FINISHING_REASONS else ""
     return f"Finished {e['name']}: {sequences.REASON_LABEL[a.reason]}.{runs}\n"

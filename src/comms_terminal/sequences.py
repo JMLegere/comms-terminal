@@ -14,7 +14,7 @@ Unsubscribed end it at once. Nothing here sends: email Tasks go out through Draf
 Interface: create_sequence, rename_sequence, sequences, sequence_steps, archive_sequence, restore_sequence,
 delete_sequence, add_step, save_step, move_step, delete_step, restore_step, validate, fill, enroll,
 default_organization, materialize, check, current_path, tasks_due, complete_task, skip_task, pick, undo_task,
-pause_person, resume, finish, unsubscribe, restore_finish, enrollments; paths: path_of, on_path, completion_of;
+pause_person, resume, reschedule, finish, unsubscribe, restore_finish, enrollments; paths: path_of, on_path, completion_of;
 hooks for inbox: task_sent, task_draft_deleted, task_draft_restored, send_problem.
 """
 
@@ -1091,6 +1091,34 @@ def resume(db, enrollment_id: int, now: datetime | None = None) -> None:
         else:
             _next_task(db, db.execute("SELECT * FROM enrollments WHERE id = ?", (enrollment_id,)).fetchone(), now, due=now)
         materialize(db, now)
+
+
+@writer("write")
+def reschedule(db, enrollment_id: int, start: date, now: datetime | None = None) -> dict:
+    """Put a running Enrollment on an agreed date (G1, .agents/discovery/2026-10-26-mainline-sequences.md): its Due
+    Task comes due that day, at its Step's time; before any touch is done, the Start date moves too, so Day numbers
+    count from it. For a warm run that a chain started at once. Returns the old values."""
+    now = now or clock.now()
+    if start < now.astimezone(LOCAL).date():
+        raise Refused(f"{start:%b} {start.day} is before today.")
+    with db:
+        _tx(db)
+        e = db.execute("SELECT * FROM enrollments WHERE id = ?", (enrollment_id,)).fetchone()
+        if e is None or e["state"] == "FINISHED":
+            raise Refused("Only a running Enrollment can be rescheduled.")
+        touched = db.execute("SELECT 1 FROM tasks t JOIN sequence_steps s ON s.id = t.step_id WHERE t.enrollment_id = ?"
+                             f" AND t.state != 'DUE' AND s.kind IN ({','.join('?' * len(TOUCHES))})",
+                             (enrollment_id, *TOUCHES)).fetchone()
+        old = dict(starts_at=e["starts_at"], tasks={})
+        if not touched:
+            db.execute("UPDATE enrollments SET starts_at = ? WHERE id = ?",
+                       (clock.iso(datetime.combine(start, time(0, 0), LOCAL)), enrollment_id))
+        for t in db.execute("SELECT t.id, t.due_at, s.at_time FROM tasks t JOIN sequence_steps s ON s.id = t.step_id"
+                            " WHERE t.enrollment_id = ? AND t.state = 'DUE'", (enrollment_id,)).fetchall():
+            old["tasks"][t["id"]] = t["due_at"]
+            due = datetime.combine(start, time.fromisoformat(t["at_time"]) if t["at_time"] else time(0, 0), LOCAL)
+            db.execute("UPDATE tasks SET due_at = ? WHERE id = ?", (clock.iso(due.astimezone(timezone.utc)), t["id"]))
+    return old
 
 
 def _finish(db, enrollment_id: int, reason: str, now: datetime) -> dict:
