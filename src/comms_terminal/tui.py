@@ -5834,8 +5834,9 @@ class StepEditor(Vertical):
 
 
 class UnattendedPage(TablePage):
-    """Today's Unattended Organizations (FR-OA-6): in an open or paying Stage with no Todo or Snoozed Thread and no
-    unfinished Enrollment. Enter opens the Organization; its Pipeline section fills the right pane."""
+    """Today's Unattended Organizations (FR-OA-6, FR-SEQ-38): in an open or paying Stage with no Todo or Snoozed
+    Thread and no Active or Finishing Enrollment for them. Enter opens the Organization; its Pipeline section fills
+    the right pane."""
     KIND = "organizations"
     SIDE = f"{ICON['organization']} organization"
     COLUMNS = ("", "Organization", "Stage", "Last message")
