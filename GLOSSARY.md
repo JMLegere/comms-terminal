@@ -108,34 +108,58 @@ One address a Person sends from: an email address, a Slack user, or a phone numb
 _Avoid_: Address (when it may be a Slack user), Account, Handle
 
 **Organization**:
-A company or group that Persons belong to.
+A company or group that Persons belong to. A Person dealt with on their own account, such as an angel investor or a candidate, gets a Sole proprietorship.
 _Avoid_: Account, Company, Tenant
+
+**Sole proprietorship**:
+An Organization that stands for one Person acting on their own account, so their place in a Pipeline is kept apart from their employer's.
+_Avoid_: Personal organization, Individual account
 
 **Membership**:
 A Person's place in an Organization. A Person can belong to several Organizations. It follows the Person's company email domain, never a free-mail domain such as gmail.com; Jeremy's own additions and removals always win.
 _Avoid_: Affiliation, Employment
 
 **Unattended**:
-An Organization in a Pipeline, in an open or paying Stage, whose People have no Todo or Snoozed Thread and no unfinished Enrollment, so nothing will bring it back to Jeremy.
+An Organization in a Pipeline, in an open or paying Stage, with no Todo or Snoozed Thread among its People and no Active Enrollment for it, so nothing will bring it back to Jeremy.
 _Avoid_: Stalled, Dropped, No next step
 
 ## Outreach
 
 **Sequence**:
-An ordered set of Steps, each due a number of business days after the previous one is done, that Jeremy runs for one Person at a time.
+An ordered set of Steps, each due a number of business days after the previous one is done, that Jeremy runs for one Person at a time. It opens with On start and every path through it ends with its own On completion; its paths never rejoin.
 _Avoid_: Campaign, Cadence, Workflow
 
+**On start**:
+The Steps a Sequence runs the moment an Enrollment begins.
+_Avoid_: Trigger, Entry step
+
+**On completion**:
+The Steps at the end of one path through a Sequence, run when an Enrollment on that path finishes; they usually check how it finished to choose what follows.
+_Avoid_: Exit step, Goal, Finally
+
 **Step**:
-One touch in a Sequence, of one kind (email, call, LinkedIn, letter, or Enrollment), holding everything needed to do it. A Step is the template; each Enrollment works it as a Task. An Enrollment Step chains Sequences: on its day it enrolls the Person in another Sequence, unless they responded during this one or went through that one before, when its Task waits for Jeremy.
-_Avoid_: Touch, Action, Task (for one Person's copy)
+One item in a Sequence, of one kind: a touch (email, call, LinkedIn, or letter) that Jeremy does, an Action that the console does, or an If that chooses a path. A Step is the template; each Enrollment works it as a Task.
+_Avoid_: Touch (for an Action or If), Task (for one Person's copy)
+
+**Action**:
+A Step the console carries out itself, such as setting a Stage or enrolling the Person in another Sequence. It checks no condition. An enrolling Action waits for Jeremy when the Person responded during this Enrollment or already went through that Sequence, unless the Sequence is enrolling them in itself to repeat.
+_Avoid_: Automation, Update, Enrollment Step
+
+**If**:
+A Step that checks one condition and sends the Enrollment down its true path or its false path. It checks how the Enrollment finished, whether the Person has a way to be reached, the Organization's Stage, or asks Jeremy to pick.
+_Avoid_: Condition, Branch, Switch, Filter
 
 **Enrollment**:
-One Person's run through one Sequence. It is Active, Paused, or Finished. Anything inbound from the Person, or a connected call, pauses it for Jeremy to resume or finish.
+One Person's run through one Sequence, for one Organization. It is Active, Paused, Finishing, or Finished. Anything inbound from the Person, or a connected call, pauses it for Jeremy to resume or finish; a Paused Enrollment needs Jeremy's attention until he does.
 _Avoid_: Lead, Prospect, Membership
 
 **Finished**:
-An Enrollment that has ended, as Completed (its last Task is done), Unsubscribed, or Canceled (Jeremy stopped it).
+An Enrollment that has ended, as Completed (its last Task is done), Goal met (Jeremy saw what the Sequence was for), Not Right Now (the Person wants to come back to it later), Lost (the Person said no; an Action then sets the Organization's Stage, which is a separate thing), Unsubscribed, or Canceled (Jeremy stopped it, or the Sequence or Person was tidied away). A Canceled Enrollment runs no On completion.
 _Avoid_: Exited, Unenrolled, Done, Other
+
+**Finishing**:
+An Enrollment whose end reason is known while its On completion Steps are still being worked; it becomes Finished when they are done. A reply pauses it as usual.
+_Avoid_: Closing, Wrapping up
 
 **Unsubscribed**:
 A Person who asked not to be contacted; they cannot be enrolled in any Sequence again.
@@ -176,11 +200,11 @@ _Avoid_: Tactic, Attempt
 ## Pipeline
 
 **Pipeline**:
-One staged flow of Organizations toward an outcome: Revenue (customers, toward revenue) or Fundraising (investors, toward a round). Each has its own Stages and its own Target.
+One staged flow of Organizations toward an outcome: Revenue (customers, toward revenue), Fundraising (investors, toward a round), or Talent (candidates, toward joining). Each has its own Stages; Revenue and Fundraising also have a Target.
 _Avoid_: Funnel, Deal list, Bowtie (when meaning the Revenue Pipeline itself)
 
 **Stage**:
-Where an Organization stands in one Pipeline. Revenue Stages follow the Bowtie: Awareness, Education, Prioritization, Selection, Commit, Onboarding, Impact, Expansion, then Lost or Churned. An Organization enters Impact when its first payment arrives; Onboarding means signed but not yet paying. Fundraising Stages: Research, Outreach, Meeting, Diligence, Soft commit, Closed, Passed. An Organization with no Stage is in no Pipeline, and it may hold a Stage in each Pipeline at once. Jeremy sets every Stage change himself.
+Where an Organization stands in one Pipeline. Revenue Stages follow the Bowtie: Awareness, Education, Prioritization, Selection, Commit, Onboarding, Impact, Expansion, then Lost or Churned. An Organization enters Impact when its first payment arrives; Onboarding means signed but not yet paying. Fundraising Stages: Research, Outreach, Meeting, Diligence, Soft commit, Closed, Passed. Talent Stages: Explore, Role fit, Offer, Start, then Joined or Lost. An Organization with no Stage is in no Pipeline, and it may hold a Stage in each Pipeline at once. An Action in a Sequence sets a Stage, and Jeremy may set one himself at any time; the latest change stands.
 _Avoid_: Status, Account Stage (Attio's name for it), Deal stage
 
 **Stage history**:
