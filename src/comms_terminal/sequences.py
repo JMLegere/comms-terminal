@@ -215,6 +215,64 @@ def _below(steps: list[dict], step_id: int) -> list[dict]:
     return out
 
 
+def outline(steps: list[dict]) -> list[dict]:
+    """The Steps pane's rows (FR-SEQ-43): a header for each path, then its Steps, indented under the If they hang
+    from. Each row is {step, path, depth, label}; a header row has no step, and `n` on it adds to its path."""
+    rows = []
+
+    def head(path, depth, label):
+        rows.append(dict(step=None, path=path, depth=depth, label=label))
+
+    def walk(path, depth, completes):
+        mine = on_path(steps, path)
+        for st in mine:
+            rows.append(dict(step=st, path=path, depth=depth, label=None))
+            if st["kind"] == "if":
+                for branch, label in ((1, st["true_label"] or "true"), (0, st["false_label"] or "false")):
+                    child = (st["section"], st["id"], branch)
+                    head(child, depth + 1, f"{'✓' if branch else '✗'} {label}")
+                    walk(child, depth + 1, st["section"] == "body")
+        if completes and not (mine and mine[-1]["kind"] == "if"):
+            done = completion_of(path)
+            head(done, depth, "On completion")
+            walk(done, depth, False)
+
+    head(("start", None, None), 0, "On start")
+    walk(("start", None, None), 0, False)
+    head(("body", None, None), 0, "Steps")
+    walk(("body", None, None), 0, True)
+    return rows
+
+
+ACTION_LABEL = {"set_stage": "Set Stage", "enroll": "Enroll", "end_for_others": "End for others", "set_value": "Set Value"}
+CONDITION_LABEL = {"end_reason": "How it finished", "has_channel": "Has channel", "stage": "Stage",
+                   "jeremy_picks": "You pick"}
+
+
+def step_summary(st: dict, names: dict) -> str:
+    """One line for a Step's What column and a Task: what it says or does."""
+    if st["kind"] == "action":
+        kind = st["action_kind"]
+        if kind == "enroll":
+            return f"enroll in {names.get(st['enroll_sequence_id'], '?')}"
+        if kind == "set_stage":
+            return f"{(st['pipeline'] or '?').title()} → {st['stage'] or '?'}"
+        if kind == "set_value":
+            return f"{(st['pipeline'] or '?').title()} Value {st['value'] if st['value'] is not None else '?'}"
+        return "end this Sequence for the Organization's other People"
+    if st["kind"] == "if":
+        cond = st["condition"]
+        if cond == "end_reason":
+            return "finished as " + " or ".join(REASON_LABEL.get(r.strip(), r) for r in st["operand"].split(",") if r.strip())
+        if cond == "has_channel":
+            return f"has {st['operand'] or '?'}"
+        if cond == "stage":
+            return f"{(st['pipeline'] or '?').title()} Stage is {st['stage'] or '?'}"
+        return st["subject"] or "you pick"
+    return (st["subject"] if st["kind"] == "email" else (st["linkedin_move"] or "") if st["kind"] == "linkedin"
+            else "") or st["body"]
+
+
 @writer("create")
 def add_step(db, sequence_id: int, kind: str, after: int | None = None, *, section: str = "body",
              parent_step_id: int | None = None, branch: int | None = None, action_kind: str = "enroll",
@@ -543,6 +601,18 @@ def enroll(db, person_id: int, sequence_id: int, now: datetime | None = None, st
                       organization_id if organization_id is not None else default_organization(db, person_id))
         materialize(db, now)
     return eid
+
+
+def organization_choices(db, person_id: int) -> list[dict]:
+    """The Organizations an Enrollment can be for (FR-SEQ-36): the Person's, the one their latest message came
+    from first; the enroll dialog adds "New sole proprietorship"."""
+    orgs = [dict(r) for d in inbox.person_organizations(db, person_id)
+            for r in db.execute("SELECT id, name, domain FROM organizations WHERE domain = ?", (d,))]
+    last = db.execute("SELECT i.value FROM thread_activities a JOIN identities i ON i.id = a.identity_id"
+                      " WHERE i.person_id = ? AND i.kind = 'email' ORDER BY a.occurred_at DESC, a.id DESC LIMIT 1",
+                      (person_id,)).fetchone()
+    key = inbox._org(last[0].split("@")[-1]) if last else None
+    return sorted(orgs, key=lambda o: o["domain"] != key)
 
 
 def default_organization(db, person_id: int) -> int | None:

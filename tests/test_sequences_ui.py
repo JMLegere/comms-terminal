@@ -108,7 +108,7 @@ def test_steps_selection_survives_a_refresh_and_an_unchanged_editor_never_saves(
         app.screen.query_one(StepEditor).query_one("#f-gap", Input).focus()
         await pilot.pause()
         before = edited()
-        await pilot.click("#steps", offset=(5, 2))  # Step 2's row, under the header
+        await pilot.click("#steps", offset=(5, 4))  # Step 2's row: under the header, On start, and Steps
         await pilot.pause()
         seen["unchanged editor saved"] = edited() != before
         app.screen.query_one(StepEditor).query_one("#f-body", TextArea).text = "typed, not saved yet"
@@ -125,8 +125,8 @@ def test_steps_selection_survives_a_refresh_and_an_unchanged_editor_never_saves(
 
     run(Console(path), [scenario], size=(187, 40))
     assert seen["unchanged editor saved"] is False
-    assert seen["after refresh"] == (1, f"step:{second}", "typed, not saved yet")
-    assert seen["other sequence"] == (other, 0) and first
+    assert seen["after refresh"] == (3, f"step:{second}", "typed, not saved yet")
+    assert seen["other sequence"] == (other, 2) and first  # its first Step, below On start and Steps
 
 
 def test_enroll_from_people_then_do_skip_and_undo_tasks(tmp_path):
@@ -144,6 +144,9 @@ def test_enroll_from_people_then_do_skip_and_undo_tasks(tmp_path):
         await pilot.press("s")
         await pilot.pause()
         assert isinstance(app.screen, Pick)
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, Pick)  # the Organization: her latest message's is first
         await pilot.press("enter")
         await pilot.pause()
         assert isinstance(app.screen, Pick)  # Start today is first
@@ -183,7 +186,7 @@ def test_enroll_with_a_later_start_date(tmp_path):  # FR-SEQ-25
         await pilot.pause()
         page = app.main.current
         page.query_one(DataTable).move_cursor(row=next(i for i, (p, _) in enumerate(page.items) if p.get("id") == ana))
-        for key in ("s", "enter"):  # the Sequence
+        for key in ("s", "enter", "enter"):  # the Sequence, then her Organization
             await pilot.press(key)
             await pilot.pause()
         choose(app, "later")
@@ -348,6 +351,9 @@ def test_sequence_step_names_its_sequence_and_a_waiting_task_enrolls_on_e(tmp_pa
         choose(app, "action")
         await pilot.press("enter")
         await pilot.pause()
+        choose(app, "enroll")  # what the Action does
+        await pilot.press("enter")
+        await pilot.pause()
         editor = app.main.query_one(StepEditor)
         editor.query_one("#f-sequence", Input).value = "Nowhere"
         seen["refused"] = editor.save()
@@ -395,3 +401,104 @@ def test_f_changes_the_email_connection_a_sequence_sends_from(tmp_path):
 
     run(Console(path), [scenario])
     assert inbox.connect(path).execute("SELECT connection_id FROM sequences WHERE id = ?", (s,)).fetchone()[0] == new
+
+
+def test_outline_adds_an_if_with_two_paths_and_tasks_answer_it_with_1_or_2(tmp_path):
+    """FR-SEQ-43 and FR-SEQ-31: n on the Steps heading adds an If that asks Jeremy; its paths and their On
+    completions appear as headings; 2 on its Task takes the second path."""
+    path, _ = seeded(tmp_path)
+    db = inbox.connect(path)
+    s = sq.create_sequence(db, "Proposal")
+    ana = next(p["id"] for p in inbox.people(db) if p["name"] == "Ana Ruiz")
+    seen = {}
+
+    async def scenario(app, pilot):
+        app.main.go("sequences")
+        await pilot.pause()
+        page = app.main.current
+        page.query_one("#steps").focus()
+        page.query_one("#steps", DataTable).move_cursor(row=1)  # the Steps heading
+        await pilot.press("n")
+        await pilot.pause()
+        choose(app, "if")
+        await pilot.press("enter")
+        await pilot.pause()
+        choose(app, "jeremy_picks")
+        await pilot.press("enter")
+        await pilot.pause()
+        (ask,) = sq.sequence_steps(app.db, s)
+        sq.save_step(app.db, ask["id"], subject="Ready to sign?", true_label="Send contract", false_label="Not yet")
+        sq.add_step(app.db, s, "letter", parent_step_id=ask["id"], branch=0)
+        page.show_sequence()
+        await pilot.pause()
+        seen["outline"] = [(x["label"] or x["step"]["kind"], x["depth"]) for x in page.lines]
+        sq.enroll(app.db, ana, s)
+        app.main.go("tasks")
+        await pilot.pause()
+        seen["task"] = app.main.current.selected()["kind"]
+        await pilot.press("2")
+        await pilot.pause()
+        seen["after"] = [t["kind"] for t in sq.tasks_due(app.db)]
+
+    run(Console(path), [scenario], size=(187, 40))
+    assert seen["outline"] == [("On start", 0), ("Steps", 0), ("if", 0), ("✓ Send contract", 1),
+                               ("On completion", 1), ("✗ Not yet", 1), ("letter", 1), ("On completion", 1)]
+    assert seen["task"] == "if" and seen["after"] == ["letter"]
+
+
+def test_today_lists_a_paused_enrollment_and_f_finishes_it_as_goal_met(tmp_path):
+    """FR-SEQ-39: a paused Enrollment shows in Today's Paused list until Jeremy resumes or finishes it."""
+    path, _ = seeded(tmp_path)
+    db, s = calls(path)
+    ana = next(p["id"] for p in inbox.people(db) if p["name"] == "Ana Ruiz")
+    eid = sq.enroll(db, ana, s)
+    with db:
+        sq.pause_person(db, ana, clock.now(), "replied")
+    seen = {}
+
+    async def scenario(app, pilot):
+        app.main.go("today")
+        await pilot.pause()
+        today = app.main.current
+        seen["paused"] = [e["person"] for e in sq.paused(app.db)]
+        seen["shown"] = today.paused.parent.display
+        today.enter(today.paused, 1)
+        await pilot.pause()
+        seen["focus"] = today.paused.has_focus_within
+        await pilot.press("f")
+        await pilot.pause()
+        choose(app, "GOAL_MET")
+        await pilot.press("enter")
+        await pilot.pause()
+
+    run(Console(path), [scenario], size=(187, 40))
+    assert seen["paused"] == ["Ana Ruiz"] and seen["shown"] is True and seen["focus"] is True
+    assert tuple(db.execute("SELECT state, reason FROM enrollments WHERE id = ?", (eid,)).fetchone()) == ("FINISHED", "GOAL_MET")
+
+
+def test_enroll_into_a_new_sole_proprietorship(tmp_path):
+    """FR-SEQ-36, FR-SEQ-37: the enroll dialog offers the Person's Organizations and a new Sole proprietorship."""
+    path, _ = seeded(tmp_path)
+    db, s = calls(path)
+    ana = next(p["id"] for p in inbox.people(db) if p["name"] == "Ana Ruiz")
+    seen = {}
+
+    async def scenario(app, pilot):
+        app.main.go("people")
+        await pilot.pause()
+        page = app.main.current
+        page.query_one(DataTable).move_cursor(row=next(i for i, (p, _) in enumerate(page.items) if p.get("id") == ana))
+        for key in ("s", "enter"):
+            await pilot.press(key)
+            await pilot.pause()
+        seen["choices"] = [o for o, _ in app.screen.options]
+        choose(app, "sole")
+        await pilot.press("enter")
+        await pilot.pause()
+        await pilot.press("enter")  # Start today
+        await pilot.pause()
+
+    run(Console(path), [scenario], size=(187, 40))
+    assert seen["choices"][-1] == "sole"
+    org = db.execute("SELECT o.domain FROM enrollments e JOIN organizations o ON o.id = e.organization_id").fetchone()[0]
+    assert org == inbox.sole_key(ana)

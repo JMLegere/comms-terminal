@@ -130,7 +130,7 @@ Page { height: 1fr; }
 .todaypane DataTable { height: auto; max-height: 30vh; }
 #todaythreads DataTable { max-height: 50vh; }
 .todaypane.fill, .todaypane.fill Page { height: 1fr; }
-#todaythreads.fill DataTable, #todaytasks.fill DataTable, #todaydrafts.fill DataTable, #todayorgs.fill DataTable {
+#todaythreads.fill DataTable, #todaytasks.fill DataTable, #todaydrafts.fill DataTable, #todaypaused.fill DataTable, #todayorgs.fill DataTable {
     height: 1fr; max-height: 100%; }
 .todaypane #legend, .todaypane #below { display: none; }
 .todaypane #table { margin-top: 0; }
@@ -630,13 +630,14 @@ HELP = [  # (group, [(keys, what it does)]) — the full key map; Gmail-style wh
                ("x", "skip: the next Step counts from today (z undoes)"), ("/", "filter by kind or Sequence"),
                ("n", "a reply Task whose email was skipped: start a new Thread instead"),
                ("enter", "an email Task: edit its Draft, or open its Thread's reply box"),
-               ("p", "open the person"), ("y", "copy the Task and its person as Markdown for an agent")]),
-    ("Sequences", [("enter", "move from a Sequence to its Steps (esc back)"), ("n", "new Sequence, or new Step in the Steps pane"),
+               ("p", "open the person"), ("y", "copy the Task and its person as Markdown for an agent"),
+               ("1 / 2", "an If that asks you (also on a Person page): take its first or second path")]),
+    ("Sequences", [("enter", "move from a Sequence to its Steps (esc back)"), ("n", "new Sequence; in Steps, a Step after the selected one, or on the selected heading's path (✓ ✗ On start On completion)"),
                    ("a", "archive a Sequence (asks about its live Enrollments), or restore an archived one"),
                    ("x", "delete an unused Sequence, or a Step (Enrollments on it move on; z undoes)"),
                    ("J / K", "move a Step down / up"), ("R", "rename a Sequence"), ("ctrl+s", "save the Step being edited")]),
     ("Enroll", [("s", "People or a Person page: enroll in a Sequence, starting today or on a later date"), ("r", "Person page: resume a Paused Enrollment"),
-                ("f", "Person page: finish an Enrollment (Canceled, Unsubscribed, Completed)")]),
+                ("f", "Person page or Today's Paused list: finish an Enrollment (Goal met, Not Right Now, Lost run its On completion; Canceled, Unsubscribed)")]),
     ("Case", [("n", "Cases views: start a case (a goal) with no threads yet"),
               ("enter", "Cases views or a case header row: open the case"),
               ("j / k", "select a thread card (↑/↓ also work)"), ("enter", "show or hide a done thread"),
@@ -907,7 +908,8 @@ class Rail(OptionList):
         gap = Option("", disabled=True)
         try:
             today = inbox.today(db)
-            waiting = len(today["threads"]) + len(today["tasks"]) + len(today["drafts"]) + len(today["unattended"])
+            waiting = (len(today["threads"]) + len(today["tasks"]) + len(today["drafts"]) + len(today["paused"])
+                       + len(today["unattended"]))
         except Exception:  # a failed Draft read must not take the rail down; the Drafts list says why
             waiting = ""
         opts = [item("today", "today", "Today", waiting), item("calendar", "calendar", "Calendar"), gap,
@@ -3909,11 +3911,13 @@ def rollup_text(rollup: str | None, wakes, unattended: bool) -> str:
     return f"[{PALETTE['blue']}]Todo[/]" if rollup == "Todo" else f"[{PALETTE['grey1']}]{rollup or 'Done'}[/]"
 
 
-def card(o: dict, now) -> str:
+def card(o: dict, now, valued: bool = True) -> str:
+    """A board card; a Pipeline with no math (Talent) has no Value to ask for."""
     g = PALETTE["grey1"]
-    value = f"CAD {pipeline.money(o['value'])}" if o["value"] is not None else f"[{PALETTE['red']}]no Value[/]"
+    value = f"CAD {pipeline.money(o['value'])} · " if o["value"] is not None else \
+        f"[{PALETTE['red']}]no Value[/] · " if valued else ""
     last = when(o["last_message"].isoformat(), now) if o["last_message"] else "—"
-    return (f"[b]{escape(o['name'])}[/]\n{value} · {o['days']}d\n{rollup_text(o['rollup'], o['wakes'], o['unattended'])}"
+    return (f"[b]{escape(o['name'])}[/]\n{value}{o['days']}d\n{rollup_text(o['rollup'], o['wakes'], o['unattended'])}"
             f"\n[{g}]last message {last}[/]")
 
 
@@ -3923,16 +3927,16 @@ class BoardColumn(OptionList):
     BINDINGS = [Binding("j", "cursor_down", show=False), Binding("k", "cursor_up", show=False),
                 Binding("s", "stage", "stage"), Binding("v", "value", "value")]
 
-    def __init__(self, stage: str, **kw):
+    def __init__(self, stage: str, valued: bool = True, **kw):
         super().__init__(**kw)
-        self.stage, self.orgs = stage, []
+        self.stage, self.orgs, self.valued = stage, [], valued
 
     def show(self, orgs: list, now):
         keep = self.highlighted
         self.orgs = orgs
         self.clear_options()
         for i, o in enumerate(orgs):
-            self.add_option(Option(card(o, now), id=str(i)))
+            self.add_option(Option(card(o, now, self.valued), id=str(i)))
             if i < len(orgs) - 1:
                 self.add_option(None)  # a separator line between cards
         if not orgs:
@@ -3986,13 +3990,14 @@ class PipelinePage(Page):
 
     def compose(self) -> ComposeResult:
         cols = [Vertical(Static(id=f"plhead{i}", classes="plcolhead"),
-                         BoardColumn(stage, id=f"plcol{i}", classes="plcards"), classes="plcol")
+                         BoardColumn(stage, self.p in pipeline.MATH, id=f"plcol{i}", classes="plcards"), classes="plcol")
                 for i, stage in enumerate(self.columns)]
         with VerticalScroll(id="plscroll"):
             yield Horizontal(box("THIS WEEK", Static(id="plweek"), id="plweekbox"),
                              box("PROGRESS", Static(id="plprogress"), id="plprogressbox"), id="pltop")
             yield box("CONSTRAINT", Static(id="plconstraint"), classes="plred", id="plconstraintbox")
-            yield box("ORGANIZATIONS  ·  each Stage, how many move on  ·  enter opens · s Stage · v Value · ←/→",
+            yield box("ORGANIZATIONS  ·  each Stage, how many move on  ·  enter opens · s Stage · v Value · ←/→"
+                      if self.p in pipeline.MATH else "ORGANIZATIONS  ·  each Stage  ·  enter opens · s Stage · ←/→",
                       HorizontalScroll(*cols, id="plboard"))
             yield box("WEEKLY REVIEW", DataTable(id="plweekly", cursor_type="none", show_cursor=False),
                       Static(id="pllegend"), id="plweeklybox")
@@ -4023,8 +4028,9 @@ class PipelinePage(Page):
         c = m["summary"]["constraint"]
         for i, stage in enumerate(self.columns):
             r = rows[stage]
-            hot = c is not None and bool(r.get("constraint") or (r.get("measure") and r["measure"] == c["stage"]))
-            self.query_one(f"#plhead{i}", Static).update(column_head(r, hot))
+            hot = not board_only and c is not None and bool(r.get("constraint") or (r.get("measure") and r["measure"] == c["stage"]))
+            head = f"[b #654735]{r['stage']}[/]\n[b]{len(r['orgs'])}[/]" if board_only else column_head(r, hot)
+            self.query_one(f"#plhead{i}", Static).update(head)
             self.query_one(f"#plcol{i}", BoardColumn).show(r["orgs"], m["now"])
         table = self.query_one("#plweekly", DataTable)
         table.clear()
@@ -4075,6 +4081,10 @@ class PipelinePage(Page):
         return True
 
     def action_copy(self):
+        if self.p not in pipeline.MATH:
+            copy_for_agent(self.app, pipeline.board_markdown(self.app.db, self.p) + "\nFresh copy: `comms-terminal pipeline"
+                           f" {self.p.lower()}`\n", f"the {pipeline.NAMES[self.p]} Pipeline")
+            return
         copy_for_agent(self.app, pipeline.markdown(self.m) + f"\nFresh copy: `comms-terminal pipeline "
                        f"{self.m['name'].lower()}`\n", f"the {self.m['name']} Pipeline")
 
@@ -4086,7 +4096,8 @@ class PersonPage(Page):
                 Binding("n", "rename", "rename"), Binding("a", "add", "add identity"),
                 Binding("x", "remove", "remove identity"), Binding("s", "enroll", "enroll in Sequence"),
                 Binding("r", "resume", "resume"), Binding("f", "finish", "finish"),
-                Binding("o", "organizations", "organizations")]
+                Binding("o", "organizations", "organizations"),
+                Binding("1", "pick(1)", show=False), Binding("2", "pick(0)", show=False)]
 
     def __init__(self, person_id: int):
         super().__init__()
@@ -4150,6 +4161,9 @@ class PersonPage(Page):
 
     def action_finish(self):
         finish_enrollment(self.app, self.person_id)
+
+    def action_pick(self, choice):
+        pick_task(self.app, self.person_id, choice)
 
     def action_back(self):
         self.app.main.back()
@@ -4751,9 +4765,11 @@ class CasePage(Page, ThreadActions):
 # (.agents/prd/2026-10-16-sequencing.md; layout from the accepted storybook/native/sequencing.py mocks)
 
 KIND_LABEL = {"email": "Email", "call": "Call", "linkedin": "LinkedIn", "letter": "Letter", "action": "Action", "if": "If"}
-FINISH_REASONS = [("CANCELED", "Canceled · you stopped it; enrolling again is allowed"),
-                  ("UNSUBSCRIBED", "Unsubscribed · they asked to stop; ends every Sequence for them"),
-                  ("COMPLETED", "Completed · count it as done")]
+FINISH_REASONS = [("GOAL_MET", "Goal met · what it was for happened; its On completion runs"),
+                  ("NOT_RIGHT_NOW", "Not Right Now · they want to come back to it later; its On completion runs"),
+                  ("LOST", "Lost · they said no; its On completion runs"),
+                  ("CANCELED", "Canceled · you stopped it; no On completion, enrolling again is allowed"),
+                  ("UNSUBSCRIBED", "Unsubscribed · they asked to stop; ends every Sequence for them")]
 
 
 def props_head(icon_name: str, text: str) -> str:
@@ -4797,9 +4813,14 @@ def enroll_person(app, person_id: int, name: str):
                 else f"{escape(q['name'])} · {q['steps']} Steps") for q in active]
     names = {str(q["id"]): q["name"] for q in active}
 
+    picked = {}
+
     def enroll(sid, start=None):
         try:
-            eid = sequences.enroll(app.db, person_id, int(sid), start=start)
+            org = picked.get("org")
+            if org == "sole":
+                org = inbox.create_sole_proprietorship(app.db, person_id)
+            eid = sequences.enroll(app.db, person_id, int(sid), start=start, organization_id=org)
         except sequences.Refused as e:
             app.notify(f"Not enrolled: {e}", severity="error")
             return
@@ -4826,8 +4847,17 @@ def enroll_person(app, person_id: int, name: str):
                 enroll(sid)
             elif choice == "later":
                 app.push_screen(Ask("Start on", "2026-12-01, or a number of days from today"), typed)
-        app.push_screen(Pick(f"Start {names[sid]}", [("today", "Start today"), ("later", "Start later…")],
-                             "Start later holds the first Task until that day."), when)
+        def start(org):
+            if org is None:
+                return
+            picked["org"] = None if org == "none" else "sole" if org == "sole" else int(org)
+            app.push_screen(Pick(f"Start {names[sid]}", [("today", "Start today"), ("later", "Start later…")],
+                                 "Start later holds the first Task until that day."), when)
+        orgs = [(str(o["id"]), escape(o["name"])) for o in sequences.organization_choices(app.db, person_id)]
+        app.push_screen(Pick(f"For which Organization? · {name}", orgs + [("sole", f"New sole proprietorship: {escape(name)}")]
+                             + ([] if orgs else [("none", "[#928374]None for now[/]")]),
+                             "Its Actions set this Organization's Stage. First: the one their latest message came from."),
+                        start)
     app.push_screen(Pick(f"Enroll {name}", options, "Every active Sequence. One live Enrollment per Person per Sequence."),
                     chosen)
 
@@ -4844,6 +4874,20 @@ def pick_enrollment(app, person_id: int, states: tuple, then):
                         lambda eid: eid and then(next(e for e in live if str(e["id"]) == eid)))
 
 
+def pick_task(app, person_id: int, choice: int):
+    """1 or 2 on a Person page: answer their If that asks Jeremy (FR-SEQ-31)."""
+    asks = [t for t in sequences.tasks_due(app.db) if t["person_id"] == person_id and t["kind"] == "if"
+            and t["condition"] == "jeremy_picks"]
+    if not asks:
+        app.notify("Nothing is waiting for your pick here.", severity="warning")
+        return
+    t = asks[0]
+    undo = sequences.pick(app.db, t["id"], choice)
+    app.offer_undo(f"{t['person']}: {t['subject']} → {t['true_label'] if choice else t['false_label']}.",
+                   lambda: sequences.undo_task(app.db, undo))
+    app.main.refresh_all()
+
+
 def resume_enrollment(app, person_id: int):
     def go(e):
         sequences.resume(app.db, e["id"])
@@ -4857,12 +4901,18 @@ def finish_enrollment(app, person_id: int):
         def go(why):
             if why is None:
                 return
-            undo = sequences.finish(app.db, e["id"], why)
-            app.offer_undo(f"Finished {e['sequence']}: {why.title()}. Its unsent Task Drafts are gone.",
+            try:
+                undo = sequences.finish(app.db, e["id"], why)
+            except sequences.Refused as x:
+                app.notify(f"Not finished: {x}", severity="error")
+                return
+            runs = " Its On completion ran." if why in sequences.FINISHING_REASONS else ""
+            app.offer_undo(f"Finished {e['sequence']}: {sequences.REASON_LABEL[why]}.{runs} Its unsent Task Drafts are gone.",
                            lambda: sequences.restore_finish(app.db, undo))
             app.main.refresh_all()
-        app.push_screen(Pick(f"Finish {e['sequence']}", FINISH_REASONS), go)
-    pick_enrollment(app, person_id, ("ACTIVE", "PAUSED"), reason)
+        options = FINISH_REASONS if e["reason"] is None else [r for r in FINISH_REASONS if r[0] in ("CANCELED", "UNSUBSCRIBED")]
+        app.push_screen(Pick(f"Finish {e['sequence']}", options), go)
+    pick_enrollment(app, person_id, ("ACTIVE", "PAUSED", "FINISHING"), reason)
 
 
 def task_props(t: dict) -> str:
@@ -4920,6 +4970,15 @@ class TaskPane(Horizontal):
                     yield Static("\n[#928374]LinkedIn replies do not reach Inbox. If they reply there, pause on their Person page.[/]")
                 elif t["kind"] == "letter":
                     yield Static(f"[#928374]{ICON['letter']} letter[/]\n{text(t['body'])}")
+                elif t["kind"] == "if":
+                    yield Static(f"[b]{escape(t['subject'] or 'You pick')}[/]")
+                    yield Static(f"\n[b #45707a]1[/] {escape(t['true_label'])}    [b #45707a]2[/] {escape(t['false_label'])}")
+                    if t["body"]:
+                        yield Static(f"\n[#928374]{ICON['summary']} note[/]\n{text(t['body'])}")
+                elif t["kind"] == "action" and t["action_kind"] != "enroll":
+                    yield Static(f"[b]{escape(sequences.ACTION_LABEL[t['action_kind']])}[/]")
+                    if t["flag"]:
+                        yield Static(f"[#c14a4a]{ICON['warn']} Waiting for you: {escape(t['flag'])}. e marks it done, x skips.[/]")
                 elif t["action_kind"] == "enroll":
                     yield Static(f"[b]Enroll in {escape(t['enroll_sequence'] or 'no Sequence')}[/]")
                     if t["flag"]:
@@ -4948,6 +5007,8 @@ class TaskPane(Horizontal):
     def hint(self):
         if self.item["kind"] == "email":
             return "n new Thread · x skip · p person" if self.item["flag"] == "reply target skipped" else "enter open Thread · x skip · p person"
+        if self.item["kind"] == "if":
+            return f"1 {self.item['true_label']} · 2 {self.item['false_label']} · x skip · p person"
         if self.item["action_kind"] == "enroll":
             return "e enroll · next · x skip · next · p person"
         return "e done · next · x skip · next · p person · y copy for agent"
@@ -5010,7 +5071,8 @@ class TasksPage(Page):
     BINDINGS = [Binding("j", "down", "move", key_display="j/k"), Binding("k", "up", show=False),
                 Binding("e", "done", "done · next"), Binding("x", "skip", "skip · next"),
                 Binding("n", "new_thread", show=False), Binding("slash", "filter", "filter", key_display="/"),
-                Binding("p", "person", "person"), Binding("y", "copy", "copy for agent")]
+                Binding("p", "person", "person"), Binding("y", "copy", "copy for agent"),
+                Binding("1", "pick(1)", "first path", show=False), Binding("2", "pick(0)", "second path", show=False)]
 
     def __init__(self):
         super().__init__()
@@ -5152,6 +5214,9 @@ class TasksPage(Page):
         if t["kind"] == "email":
             self.app.notify("An email Task is done when its Draft sends: ctrl+enter in the Draft, or enter to open its Thread.")
             return
+        if t["kind"] == "if":
+            self.app.notify(f"Pick a path: 1 {t['true_label']} · 2 {t['false_label']}.")
+            return
         nxt = self._next_after(t)
         try:
             undo = sequences.complete_task(self.app.db, t["id"])
@@ -5161,6 +5226,17 @@ class TasksPage(Page):
         done = f"Enrolled {t['person']} in {t['enroll_sequence']}." if t["action_kind"] == "enroll" else \
             f"Done: {t['person']}, Day {t['day']} {KIND_LABEL[t['kind']]}."
         self.app.offer_undo(done, lambda: sequences.undo_task(self.app.db, undo))
+        self.refresh_data(select_id=nxt)
+
+    def action_pick(self, choice):
+        """1 or 2 on an If that asks Jeremy (FR-SEQ-31): the Enrollment takes that path."""
+        t = self.selected()
+        if not t or t["kind"] != "if" or t["condition"] != "jeremy_picks":
+            return
+        nxt = self._next_after(t)
+        undo = sequences.pick(self.app.db, t["id"], choice)
+        label = t["true_label"] if choice else t["false_label"]
+        self.app.offer_undo(f"{t['person']}: {t['subject']} → {label}.", lambda: sequences.undo_task(self.app.db, undo))
         self.refresh_data(select_id=nxt)
 
     def action_skip(self):
@@ -5267,7 +5343,7 @@ class SequencesPage(Page):
 
     def __init__(self):
         super().__init__()
-        self.rows, self.show_archived, self.sequence_id, self.steps = [], False, None, []
+        self.rows, self.show_archived, self.sequence_id, self.steps, self.lines = [], False, None, [], []
 
     def compose(self):
         top = Vertical(id="seqpane", classes="stackpane")
@@ -5326,45 +5402,60 @@ class SequencesPage(Page):
             return None
         return self.rows[min(self.query_one("#seqs", DataTable).cursor_row, len(self.rows) - 1)]
 
-    def show_sequence(self, step_row=None):
+    def show_sequence(self, step_row=None, step_id=None):
+        """The Steps pane as an outline (FR-SEQ-43): On start, the Steps, each If's two paths indented beneath it,
+        and each path's own On completion; `n` on a heading adds a Step to that path."""
         q = self.selected_sequence()
         table = self.query_one("#steps", DataTable)
-        if step_row is None and q and q["id"] == self.sequence_id and self.steps:  # a refresh keeps the Step
-            kept = self.selected_step()["id"]
-            ids = [s["id"] for s in sequences.sequence_steps(self.app.db, q["id"])]
-            step_row = ids.index(kept) if kept in ids else table.cursor_row
+        if step_row is None and step_id is None and q and q["id"] == self.sequence_id and self.lines:
+            kept = self.selected_line()  # a refresh keeps the Step, or the heading
+            step_id = kept["step"]["id"] if kept["step"] else None
+            step_row = None if step_id else table.cursor_row
         self.sequence_id = q["id"] if q else None
         narrow = self.size.width < 60
         table.clear(columns=True)
         table.add_columns(*(("#", "", "Step") if narrow else ("#", "", "Step", "Gap", "Time", "What")))
         self.steps = sequences.sequence_steps(self.app.db, q["id"]) if q else []
+        self.lines = sequences.outline(self.steps) if q else []
         problems = dict(sequences.validate(self.app.db, q["id"])) if q else {}
         by_id = {s["id"]: s for s in self.steps}
         names = dict(self.app.db.execute("SELECT id, name FROM sequences").fetchall())
-        for s in self.steps:
+        for line in self.lines:
+            s, pad = line["step"], "  " * line["depth"]
+            if s is None:
+                cells = ("", "", f"{pad}[b #7c6f64]{escape(line['label'])}[/]")
+                table.add_row(*cells) if narrow else table.add_row(*cells, "", "", "")
+                continue
             reply = f" [#928374]↩ {by_id[s['reply_to_step_id']]['position']}[/]" if s["reply_to_step_id"] in by_id else ""
             flag = f" [#c14a4a]{ICON['warn']}[/]" if s["id"] in problems else ""
-            what = (s["subject"] if s["kind"] == "email" else (s["linkedin_move"] or "") if s["kind"] == "linkedin"
-                    else f"enroll in {names[s['enroll_sequence_id']]}" if s["enroll_sequence_id"] in names else "") or s["body"]
-            cells = (f"[#928374]{s['position']}[/]", f"[#654735]{ICON[s['kind']]}[/]", KIND_LABEL[s["kind"]] + reply + flag)
+            label = sequences.ACTION_LABEL.get(s["action_kind"]) if s["kind"] == "action" else \
+                f"If · {sequences.CONDITION_LABEL[s['condition']]}" if s["kind"] == "if" else KIND_LABEL[s["kind"]]
+            what = sequences.step_summary(s, names)
+            cells = (f"[#928374]{s['position']}[/]", f"[#654735]{ICON[s['kind']]}[/]", pad + label + reply + flag)
             table.add_row(*cells) if narrow else table.add_row(
-                *cells, "day 0" if s["position"] == 1 else f"+{s['gap_days']}", s["at_time"] or "[#928374]·[/]",
+                *cells, f"+{s['gap_days']}", s["at_time"] or "[#928374]·[/]",
                 f"[#928374]{escape(what.splitlines()[0][:60] if what else '')}[/]")
-        if not self.steps:
-            table.add_row("", "", "[#928374]No Steps yet. n adds the first Step.[/]" if q else "", *(() if narrow else ("", "", "")))
-        table.show_cursor = bool(self.steps)
-        if step_row is not None and self.steps:
-            table.move_cursor(row=min(step_row, len(self.steps) - 1))
+        table.show_cursor = bool(self.lines)
+        if step_id is not None:
+            step_row = next((i for i, x in enumerate(self.lines) if x["step"] and x["step"]["id"] == step_id), step_row)
+        if step_row is None and self.lines:  # the first Step, else the Steps heading
+            step_row = next((i for i, x in enumerate(self.lines) if x["step"]), 2)
+        if step_row is not None and self.lines:
+            table.move_cursor(row=min(step_row, len(self.lines) - 1))
         pane = self.query_one("#steppane")
         pane.border_title = pill(f"{ICON['sequence']} steps · {escape(q['name'])}" if q else f"{ICON['sequence']} steps", "blue")
-        pane.border_subtitle = (f"[#928374]{len(self.steps)} Steps · {q['active']} active · edits apply to Tasks not yet due[/]"
-                                if q else "")
+        pane.border_subtitle = (f"[#928374]{len(self.steps)} Steps · {q['active']} active · n on a heading adds to that path ·"
+                                " edits apply to Tasks not yet due[/]" if q else "")
         self.show_side()
 
-    def selected_step(self):
-        if not self.steps:
+    def selected_line(self):
+        if not self.lines:
             return None
-        return self.steps[min(self.query_one("#steps", DataTable).cursor_row, len(self.steps) - 1)]
+        return self.lines[min(self.query_one("#steps", DataTable).cursor_row, len(self.lines) - 1)]
+
+    def selected_step(self):
+        line = self.selected_line()
+        return line["step"] if line else None
 
     def show_side(self):
         """The side pane follows focus: the Step editor while the Steps pane has focus, else the Sequence."""
@@ -5506,19 +5597,42 @@ class SequencesPage(Page):
         self.after_change()
 
     def new_step(self):
+        """n: a new Step after the selected one on its path, or last on the path of the selected heading; an If
+        asks what it checks and an Action what it does."""
         if self.sequence_id is None:
             return
-        st = self.selected_step()
+        line = self.selected_line()
+        st = line["step"] if line else None
+        if st and st["kind"] == "if":
+            self.app.notify("Nothing follows an If on its path: select ✓ or ✗ under it to add to a path.", severity="warning")
+            return
+        path = line["path"] if line else ("body", None, None)
+
+        def add(kind, **how):
+            try:
+                sid = sequences.add_step(self.app.db, self.sequence_id, kind, after=st["position"] if st else None,
+                                         section=path[0], parent_step_id=path[1], branch=path[2], **how)
+            except sequences.Refused as e:
+                self.app.notify(str(e), severity="error")
+                return
+            self.app.main.showing = None
+            self.show_sequence(step_id=sid)
+            self.query_one("#steps").focus()
 
         def chosen(kind):
-            if kind is None:
-                return
-            sid = sequences.add_step(self.app.db, self.sequence_id, kind, after=st["position"] if st else None)
-            self.app.main.showing = None
-            self.show_sequence(step_row=next(i for i, s in enumerate(sequences.sequence_steps(self.app.db, self.sequence_id))
-                                             if s["id"] == sid))
-            self.query_one("#steps").focus()
-        self.app.push_screen(Pick("New Step", [(k, f"{ICON[k]} {KIND_LABEL[k]}") for k in KIND_LABEL if k != "if"]), chosen)  # Ifs arrive with the outline (Phase 4)
+            if kind == "action":
+                self.app.push_screen(Pick("Action does", list(sequences.ACTION_LABEL.items())),
+                                     lambda k: k and add("action", action_kind=k))
+            elif kind == "if":
+                if path[0] == "start":
+                    self.app.notify("An If cannot be in On start.", severity="warning")
+                    return
+                options = [(c, label) for c, label in sequences.CONDITION_LABEL.items()
+                           if c != "end_reason" or path[0] == "completion"]
+                self.app.push_screen(Pick("If checks", options), lambda c: c and add("if", condition=c))
+            elif kind is not None:
+                add(kind)
+        self.app.push_screen(Pick("New Step", [(k, f"{ICON[k]} {KIND_LABEL[k]}") for k in KIND_LABEL]), chosen)
 
     def delete_step(self):
         st = self.selected_step()
@@ -5526,7 +5640,8 @@ class SequencesPage(Page):
             return
         row = self.query_one("#steps", DataTable).cursor_row
         moved, undo = sequences.delete_step(self.app.db, st["id"])
-        self.app.offer_undo(f"Step {st['position']} deleted. {moved} Enrollment{'s' * (moved != 1)} on it moved to the next Step.",
+        what = "and its paths " if st["kind"] == "if" else ""
+        self.app.offer_undo(f"Step {st['position']} {what}deleted. {moved} Enrollment{'s' * (moved != 1)} on it moved on.",
                             lambda: sequences.restore_step(self.app.db, undo))
         self.app.main.showing = None
         self.show_sequence(step_row=row)
@@ -5537,14 +5652,26 @@ class SequencesPage(Page):
             return
         sequences.move_step(self.app.db, st["id"], delta)
         self.app.main.showing = None
-        self.show_sequence(step_row=st["position"] - 1 + delta)
+        self.show_sequence(step_id=st["id"])
 
 
 class StepEditor(Vertical):
     """One Step's fields and text, with a preview for an enrolled Person (FR-SEQ-18); ctrl+s or leaving saves."""
     BINDINGS = [Binding("ctrl+s", "save", "save Step"), Binding("escape", "close", "back to Steps")]
     FIELDS = {"email": ("Gap", "Time", "Reply to", "Subject"), "call": ("Gap", "Time"),
-              "linkedin": ("Gap", "Time", "Move"), "letter": ("Gap", "Time"), "action": ("Gap", "Time", "Sequence")}
+              "linkedin": ("Gap", "Time", "Move"), "letter": ("Gap", "Time")}
+    ACTION_FIELDS = {"set_stage": ("Gap", "Time", "Pipeline", "Stage"), "enroll": ("Gap", "Time", "Sequence"),
+                     "end_for_others": ("Gap", "Time"), "set_value": ("Gap", "Time", "Pipeline", "Value")}
+    IF_FIELDS = {"end_reason": ("Gap", "Is", "Path 1", "Path 2"), "has_channel": ("Gap", "Is", "Path 1", "Path 2"),
+                 "stage": ("Gap", "Pipeline", "Stage", "Path 1", "Path 2"),
+                 "jeremy_picks": ("Gap", "Question", "Path 1", "Path 2")}
+
+    def fields(self, st) -> tuple:
+        if st["kind"] == "action":
+            return self.ACTION_FIELDS[st["action_kind"]]
+        if st["kind"] == "if":
+            return self.IF_FIELDS[st["condition"]]
+        return self.FIELDS[st["kind"]]
 
     def __init__(self, step_id: int):
         super().__init__(classes="stepeditor")
@@ -5557,6 +5684,11 @@ class StepEditor(Vertical):
         values = {"Gap": str(st["gap_days"]), "Time": st["at_time"] or "", "Subject": st["subject"],
                   "Reply to": str(steps[st["reply_to_step_id"]]["position"]) if st["reply_to_step_id"] in steps else "",
                   "Move": st["linkedin_move"] or "connect",
+                  "Pipeline": (st["pipeline"] or "").title(), "Stage": st["stage"] or "",
+                  "Value": "" if st["value"] is None else str(st["value"]), "Question": st["subject"],
+                  "Path 1": st["true_label"], "Path 2": st["false_label"],
+                  "Is": ", ".join(sequences.REASON_LABEL.get(r.strip(), r) for r in st["operand"].split(",") if r.strip())
+                  if st["condition"] == "end_reason" else st["operand"],
                   "Sequence": sequences.get_sequence(self.app.db, st["enroll_sequence_id"])["name"] if st["enroll_sequence_id"] else ""}
         with TextScroll(classes="timeline", can_focus=False):
             yield Static(classes="thead")
@@ -5564,7 +5696,7 @@ class StepEditor(Vertical):
             yield Static(classes="preview")
         with Vertical(classes="composer open"):
             with Vertical(classes="fields"):
-                for label in self.FIELDS[st["kind"]]:
+                for label in self.fields(st):
                     with Horizontal(classes="field"):
                         yield Static(label, classes="flabel")
                         yield Input(values[label], placeholder={"Gap": "business days after the previous Step",
@@ -5572,9 +5704,18 @@ class StepEditor(Vertical):
                                                                 "Reply to": "an earlier email Step's number, or empty for a new Thread",
                                                                 "Subject": "subject with {first_name} {last_name} {company}",
                                                                 "Move": "connect, message, or engage",
+                                                                "Pipeline": "Revenue, Fundraising, or Talent",
+                                                                "Stage": "a Stage of that Pipeline",
+                                                                "Value": "CAD, e.g. 90k",
+                                                                "Question": "what you decide, e.g. Ready to sign?",
+                                                                "Path 1": "label of the first path (yes)",
+                                                                "Path 2": "label of the second path (no)",
+                                                                "Is": "Goal met, Not Right Now, Lost, Completed"
+                                                                if st["condition"] == "end_reason" else "email or phone",
                                                                 "Sequence": "the Sequence to enroll them in, by name"}[label],
                                     classes="fvalue", id=f"f-{label.lower().replace(' ', '')}")
-            label = {"email": "body", "call": "script", "linkedin": "note", "letter": "letter", "action": "note"}[st["kind"]]
+            label = {"email": "body", "call": "script", "linkedin": "note", "letter": "letter", "action": "note",
+                     "if": "note"}[st["kind"]]
             if st["action_kind"] == "enroll":
                 yield Static("[#928374]enrolls them on its day · waits for you if they responded[/]", classes="replyhint")
             yield Static(f"[#928374]{label} · fill-ins {{first_name}} {{last_name}} {{company}}[/]", classes="replyhint")
@@ -5600,6 +5741,25 @@ class StepEditor(Vertical):
             out["subject"] = subject
         if (move := get("move")) is not None:
             out["linkedin_move"] = move
+        if (p := get("pipeline")) is not None:
+            out["pipeline"] = p.upper() or None
+        if (stage := get("stage")) is not None:
+            out["stage"] = stage
+        if (value := get("value")) is not None:
+            out["value"] = pipeline.parse_amount(value) if value else None
+        if (question := get("question")) is not None:
+            out["subject"] = question
+        if (one := get("path1")) is not None:
+            out["true_label"] = one
+        if (two := get("path2")) is not None:
+            out["false_label"] = two
+        if (is_ := get("is")) is not None:
+            if self.step["condition"] == "end_reason":
+                codes = {v.lower(): k for k, v in sequences.REASON_LABEL.items()}
+                out["operand"] = ",".join(codes.get(w.strip().lower(), w.strip().upper().replace(" ", "_"))
+                                          for w in is_.split(",") if w.strip())
+            else:
+                out["operand"] = is_.lower()
         if (name := get("sequence")) is not None:
             found = self.app.db.execute("SELECT id FROM sequences WHERE lower(name) = lower(?) ORDER BY archived_at IS NOT NULL, id",
                                         (name,)).fetchone()
@@ -5612,8 +5772,12 @@ class StepEditor(Vertical):
     def save(self) -> bool:
         if not self.query("#f-body"):
             return True
-        v = self.values()
-        blank = ("at_time", "linkedin_move", "reply_to_step_id")  # save_step stores an empty one as NULL
+        try:
+            v = self.values()
+        except pipeline.Refused as e:
+            self.query(".replyhint").last().update(f"[#c14a4a]Not saved: {escape(str(e))}[/]")
+            return False
+        blank = ("at_time", "linkedin_move", "reply_to_step_id", "pipeline", "stage")  # save_step stores an empty one as NULL
         if all((self.step.get(k) or None) == (val or None) if k in blank else self.step.get(k) == val
                for k, val in v.items()):
             return True
@@ -5623,7 +5787,7 @@ class StepEditor(Vertical):
             if isinstance(v.get("enroll_sequence_id"), str):
                 raise ValueError(f"No Sequence is named {v['enroll_sequence_id']}.")
             self.step = sequences.save_step(self.app.db, self.step_id, **v)
-        except ValueError as e:
+        except (ValueError, pipeline.Refused) as e:
             self.query(".replyhint").last().update(f"[#c14a4a]Not saved: {escape(str(e))}[/]")
             return False
         self.query(".replyhint").last().update("[#928374]saved · edits apply to Tasks not yet due · esc back to Steps[/]")
@@ -5650,7 +5814,9 @@ class StepEditor(Vertical):
     def paint(self):
         st = self.step
         problems = [m for sid, m in sequences.validate(self.app.db, st["sequence_id"]) if sid == self.step_id]
-        self.query_one(".thead").update(f"[b #45707a]Step {st['position']} · {KIND_LABEL[st['kind']]}[/]\n")
+        kind = sequences.ACTION_LABEL.get(st["action_kind"]) if st["kind"] == "action" else \
+            f"If · {sequences.CONDITION_LABEL[st['condition']]}" if st["kind"] == "if" else KIND_LABEL[st["kind"]]
+        self.query_one(".thead").update(f"[b #45707a]Step {st['position']} · {kind}[/]\n")
         self.query_one(".problems").update("\n".join(f"[#c14a4a]{ICON['warn']} {escape(m)}[/]" for m in problems))
         who = self.app.db.execute("SELECT e.person_id, p.display_name FROM enrollments e JOIN persons p ON p.id = e.person_id"
                                   " WHERE e.sequence_id = ? ORDER BY e.state != 'ACTIVE', e.id DESC LIMIT 1",
@@ -5707,6 +5873,58 @@ class UnattendedPage(TablePage):
         self.app.main.open(lambda: OrganizationPage(o["domain"]))
 
 
+class PausedPage(TablePage):
+    """Today's Paused Enrollments (FR-SEQ-39): a reply or call paused each, and it waits for Jeremy to resume or
+    finish it. Enter opens the Person; r resumes; f finishes."""
+    KIND = "sequence"
+    SIDE = f"{ICON['person']} person"
+    COLUMNS = ("", "Person", "Sequence", "Paused")
+    BINDINGS = [Binding("r", "resume", "resume"), Binding("f", "finish", "finish")]
+
+    def rows(self):
+        now = clock.local()
+        return [(e, (f"[{PALETTE['yellow']}]{ICON['sequence']}[/]", f"[b]{escape(e['person'])}[/]",
+                     f"[#928374]{escape(e['sequence'])}" + (f" · finishing as {sequences.REASON_LABEL[e['reason']]}"
+                                                            if e["reason"] else "") + "[/]",
+                     f"[#928374]{e['pause_reason'] or 'paused'} {when(e['paused_at'], now)}[/]"))
+                for e in sequences.paused(self.app.db)]
+
+    def refresh_data(self):
+        if not self.query(DataTable) or not self.on_screen:
+            return
+        super().refresh_data()
+        if self.host is not None:
+            self.host.list_changed(self)
+        if self.active:
+            self.show_selected()
+
+    def show_selected(self):
+        e = self.selected()
+        if e is None:
+            return
+        self.app.main.showing = f"paused:{e['id']}"
+        self.app.main.show_side(f"[b]{escape(e['person'])}[/]\n\n" + sequence_section(self.app.db, e["person_id"], keys=False)
+                                + "\n\n[#928374]r resume · f finish · enter opens the Person[/]")
+
+    def on_data_table_row_highlighted(self, event):
+        event.stop()
+        if self.active:
+            self.show_selected()
+
+    def action_resume(self):
+        e = self.selected()
+        if e:
+            resume_enrollment(self.app, e["person_id"])
+
+    def action_finish(self):
+        e = self.selected()
+        if e:
+            finish_enrollment(self.app, e["person_id"])
+
+    def open(self, e):
+        self.app.main.open(lambda: PersonPage(e["person_id"]))
+
+
 class TodayPage(Page):
     """Today (GLOSSARY; .agents/prd/2026-10-17-today-view.md): Todo Threads, Due Tasks, the Drafts not shown
     through them, and Unattended Organizations, stacked in that order; a list with nothing in it hides. The list holding the cursor fills the
@@ -5714,7 +5932,7 @@ class TodayPage(Page):
     TITLE = f"{ICON['today']} today"
     RAIL = "today"
     BINDINGS = [Binding("tab", "next_list", show=False)]
-    PANES = ("todaythreads", "todaytasks", "todaydrafts", "todayorgs")
+    PANES = ("todaythreads", "todaytasks", "todaydrafts", "todaypaused", "todayorgs")
 
     def __init__(self):
         super().__init__()
@@ -5722,14 +5940,14 @@ class TodayPage(Page):
         threads.fixed_view = 0
         self.threads, self.tasks = threads, TasksPage()
         self.drafts = DraftsPage(include=lambda d: inbox.today_draft(self.app.db, d))
-        self.orgs = UnattendedPage()
+        self.paused, self.orgs = PausedPage(), UnattendedPage()
         for page in self.lists:
             page.host = self
         self.current_list = threads
 
     @property
     def lists(self):
-        return [self.threads, self.tasks, self.drafts, self.orgs]
+        return [self.threads, self.tasks, self.drafts, self.paused, self.orgs]
 
     @property
     def active_list(self):
@@ -5779,6 +5997,8 @@ class TodayPage(Page):
             title = pill(f"{ICON['tasks']} tasks · {n}", "blue") + (f" [b #c14a4a]{late} overdue[/]" if late else "")
         elif page is self.drafts:
             title = pill(f"{ICON['edited']} drafts · {n}", "blue")
+        elif page is self.paused:
+            title = pill(f"{ICON['sequence']} paused · {n}", "yellow")
         else:
             title = pill(f"{ICON['organization']} unattended · {n}", "red")
         page.parent.border_title = title
@@ -7419,6 +7639,6 @@ class Console(App):
         for e in sequences.pauses_since(self.db, since):
             why = "called" if e["pause_reason"] == "call" else "replied"
             self.notify(f"{e['person']} {why}: their {e['sequence']} Enrollment paused and its Tasks are hidden. "
-                        f"Resume on their Person page (r).", timeout=20)
+                        f"Resume or finish it in Today's Paused list or on their Person page (r, f).", timeout=20)
             since = max(since, e["paused_at"])
         self.paused_seen = max(since, clock.iso(clock.now()))
