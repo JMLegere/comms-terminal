@@ -96,9 +96,13 @@ def describe_sequence(db, sequence_id: int, description: str) -> None:
 
 @writer("write")
 def set_connection(db, sequence_id: int, connection_id: int) -> None:
+    """Its email Tasks send from `connection_id`; Due Tasks flagged for having none get their Drafts on the next
+    materialize."""
     with db:
         db.execute("UPDATE sequences SET connection_id = ?, updated_at = ? WHERE id = ?",
                    (connection_id, clock.iso(clock.now()), sequence_id))
+        db.execute("UPDATE tasks SET flag = NULL WHERE flag = 'Sequence has no Connection' AND state = 'DUE'"
+                   " AND enrollment_id IN (SELECT id FROM enrollments WHERE sequence_id = ?)", (sequence_id,))
 
 
 def sequence_steps(db, sequence_id: int) -> list[dict]:

@@ -105,3 +105,17 @@ def test_w_sets_use_when_in_the_console(tmp_path):
     run(Console(path), [scenario])
     assert inbox.connect(path).execute("SELECT description FROM sequences WHERE id = ?", (s,)).fetchone()[0] \
         == "priority not yet verified"
+
+
+def test_setting_sends_from_gives_flagged_tasks_their_drafts(db):
+    with db:
+        db.execute("INSERT INTO connections (id, platform, external_id, self_id, label, connected_at)"
+                   " VALUES (2, 'gmail', 'j@agentmaple.example', 'j@agentmaple.example', 'Email', ?)", (MONDAY.isoformat(),))
+    s = brief(db)  # two email Connections: a new Sequence sends from neither until one is chosen
+    sq.enroll(db, person(db, "dana@harbourline.example", "Dana Roy", org="Harbourline"), s, MONDAY)
+    (t,) = sq.tasks_due(db, MONDAY)
+    assert db.execute("SELECT flag FROM tasks WHERE id = ?", (t["id"],)).fetchone()[0] == "Sequence has no Connection"
+    out = agent.sequence_cmd(db, SimpleNamespace(sequence_cmd="sends-from", sequence=str(s), connection=2))
+    assert "sends from" in out
+    inbox.wake(db, MONDAY)
+    assert draft_of(db, t["id"])["sender"] == "j@agentmaple.example"

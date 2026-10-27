@@ -49,6 +49,9 @@ def add_parsers(sub):
     x = qs.add_parser("rename", help="rename a Sequence")
     x.add_argument("sequence")
     x.add_argument("name")
+    x = qs.add_parser("sends-from", help="the email Connection a Sequence's email Tasks send from (ids: `drafts`)")
+    x.add_argument("sequence")
+    x.add_argument("connection", type=int)
     x = qs.add_parser("archive", help="archive a Sequence; its live Enrollments carry on")
     x.add_argument("sequence")
     en = sub.add_parser("enrollment", help="Enrollments: list, resume a Paused one, finish one with a reason")
@@ -303,6 +306,12 @@ def sequence_cmd(db, a) -> str:
     q = find_sequence(db, a.sequence)
     if c == "show":
         return sequence_md.render(db, q["id"])
+    if c == "sends-from":
+        conn = next((m for m in sequences.email_connections(db) if m["id"] == a.connection), None)
+        if conn is None:
+            raise ValueError(f"Connection {a.connection} is not an email Connection")
+        sequences.set_connection(db, q["id"], a.connection)
+        return f"{q['name']} sends from {connection_label(conn)}.\n"
     if c == "rename":
         sequences.rename_sequence(db, q["id"], a.name)
         return f"Renamed {q['name']} to {a.name}.\n"
