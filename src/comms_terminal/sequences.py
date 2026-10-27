@@ -11,7 +11,7 @@ Person pauses their Enrollments. When a body path runs out, or Jeremy finishes i
 Lost, the Enrollment is Finishing and works that path's On completion, then is Finished; Canceled and
 Unsubscribed end it at once. Nothing here sends: email Tasks go out through Drafts and reply boxes.
 
-Interface: create_sequence, rename_sequence, sequences, sequence_steps, archive_sequence, restore_sequence,
+Interface: create_sequence, rename_sequence, describe_sequence, sequences, sequence_steps, archive_sequence, restore_sequence,
 delete_sequence, add_step, save_step, move_step, delete_step, restore_step, validate, fill, enroll,
 default_organization, materialize, check, current_path, tasks_due, complete_task, skip_task, pick, undo_task,
 pause_person, resume, reschedule, finish, unsubscribe, restore_finish, enrollments; paths: path_of, on_path, completion_of;
@@ -42,7 +42,7 @@ FILL_INS = ("first_name", "last_name", "company")
 MARKER = re.compile(r"\{(\w+)\}")
 STEP_FIELDS = ("kind", "gap_days", "at_time", "subject", "body", "voicemail", "linkedin_move", "reply_to_step_id",
                "enroll_sequence_id", "action_kind", "pipeline", "stage", "value", "condition", "operand", "true_label",
-               "false_label")
+               "false_label", "needs_edit")
 
 
 class Refused(ValueError):
@@ -84,6 +84,14 @@ def rename_sequence(db, sequence_id: int, name: str) -> None:
         raise ValueError("A Sequence needs a name.")
     with db:
         db.execute("UPDATE sequences SET name = ?, updated_at = ? WHERE id = ?", (name.strip(), clock.iso(clock.now()), sequence_id))
+
+
+@writer("write")
+def describe_sequence(db, sequence_id: int, description: str) -> None:
+    """Its one-line "use when", shown in the Sequence list and the enroll picker."""
+    with db:
+        db.execute("UPDATE sequences SET description = ?, updated_at = ? WHERE id = ?",
+                   (" ".join(description.split()), clock.iso(clock.now()), sequence_id))
 
 
 @writer("write")
@@ -336,6 +344,8 @@ def save_step(db, step_id: int, **fields) -> dict:
         raise ValueError(f"An If checks one of {', '.join(CONDITIONS)}.")
     if fields.get("pipeline") and fields["pipeline"] not in pipeline_mod.PIPELINES:
         raise ValueError(f"A Pipeline is one of {', '.join(p.title() for p in pipeline_mod.PIPELINES)}.")
+    if "needs_edit" in fields and fields["needs_edit"] not in (0, 1):
+        raise ValueError("Needs edit is 1 (its Drafts must be changed before sending) or 0.")
     fields = {k: (v or None) if k in ("at_time", "linkedin_move", "reply_to_step_id", "enroll_sequence_id", "pipeline",
                                        "stage") else v
               for k, v in fields.items()}
@@ -709,7 +719,7 @@ def materialize(db, now: datetime | None = None) -> int:
             made += moved
         today = now.astimezone(LOCAL).date()
         for t in db.execute(
-                "SELECT t.*, s.kind, s.reply_to_step_id, s.subject, s.body, e.person_id, e.sequence_id FROM tasks t"
+                "SELECT t.*, s.kind, s.reply_to_step_id, s.subject, s.body, s.needs_edit, e.person_id, e.sequence_id FROM tasks t"
                 " JOIN sequence_steps s ON s.id = t.step_id JOIN enrollments e ON e.id = t.enrollment_id"
                 " WHERE t.state = 'DUE' AND e.state IN ('ACTIVE', 'FINISHING') AND s.kind = 'email' AND t.flag IS NULL"
                 " AND NOT EXISTS (SELECT 1 FROM composition_drafts d WHERE d.task_id = t.id)").fetchall():
@@ -899,6 +909,8 @@ def _task_draft(db, t) -> int:
         missing += [m for m in more if m not in missing]
         d = inbox.save_draft(db, dict(connection_id=conn["id"], kind="email", sender=conn["self_id"], to=address[0],
                                       cc="", subject=subject, body=body), task_id=t["id"])
+    if t["needs_edit"]:
+        db.execute("UPDATE composition_drafts SET needs_edit = 1 WHERE id = ?", (d["id"],))
     if missing:
         db.execute("UPDATE tasks SET flag = ? WHERE id = ?", (" ".join(f"{{{m}}}" for m in missing), t["id"]))
     return 1
@@ -1009,7 +1021,10 @@ def tasks_due(db, now: datetime | None = None) -> list[dict]:
 # --- hooks from inbox ---------------------------------------------------------
 
 def send_problem(db, draft: dict, text: str | None = None) -> str | None:
-    """Why a Task Draft cannot send yet: a fill-in marker left, or its Enrollment is Paused or Finished."""
+    """Why a Draft cannot send yet: it Needs edit and its text is unchanged (`text` is a reply box's), or, for a
+    Task Draft, a fill-in marker is left or its Enrollment is Paused or Finished."""
+    if draft.get("needs_edit") and (text is None or text.strip() == draft["body"].strip()):
+        return "Not sent: this Draft Needs edit. Change its text first."
     if not draft.get("task_id"):
         return None
     e = db.execute("SELECT e.state, p.display_name FROM tasks t JOIN enrollments e ON e.id = t.enrollment_id"

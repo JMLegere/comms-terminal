@@ -239,6 +239,7 @@ CREATE TABLE composition_drafts (
   task_id INTEGER REFERENCES tasks (id),  -- an email Task's Draft (Sequences)
   send_at TEXT,  -- send later: when the service sends it
   send_error TEXT,  -- why a scheduled send did not go out
+  needs_edit INTEGER NOT NULL DEFAULT 0 CHECK (needs_edit IN (0, 1)),  -- unsendable until its text changes
   CHECK ((kind = 'email' AND subject IS NOT NULL)
          OR (kind IN ('sms', 'slack') AND subject IS NULL AND cc = ''))
 ) STRICT;
@@ -286,7 +287,8 @@ CREATE TABLE sequences (
   connection_id INTEGER REFERENCES connections (id),  -- the email Connection its email Tasks send from
   archived_at   TEXT,
   created_at    TEXT NOT NULL,
-  updated_at    TEXT NOT NULL
+  updated_at    TEXT NOT NULL,
+  description   TEXT NOT NULL DEFAULT ''  -- its "use when" line
 ) STRICT;
 
 -- A Step is the template; position NULL marks a deleted Step, kept because Tasks name it. Positions run in outline
@@ -316,6 +318,7 @@ CREATE TABLE sequence_steps (
   operand            TEXT NOT NULL DEFAULT '',  -- end reasons (comma-separated) or a channel (email, phone, linkedin)
   true_label         TEXT NOT NULL DEFAULT '',
   false_label        TEXT NOT NULL DEFAULT '',
+  needs_edit         INTEGER NOT NULL DEFAULT 1 CHECK (needs_edit IN (0, 1)),  -- its Drafts start as Needs edit
   UNIQUE (sequence_id, position),
   CHECK ((parent_step_id IS NULL) = (branch IS NULL)),
   CHECK ((kind = 'action') = (action_kind IS NOT NULL)),

@@ -25,7 +25,7 @@ from typing import Protocol, Sequence
 from . import clock, files, platforms
 from .writers import writer
 
-SCHEMA_VERSION = 29
+SCHEMA_VERSION = 30
 WAIT = timedelta(days=4)  # Waiting for them ends after this with no reply: back to Todo to follow up (#116)
 EMAIL_CONFIRMATION_PENDING = "Email confirmation pending; wait for its sent receipt before replying."
 MIGRATIONS = {  # version -> statement that upgrades an existing database to it
@@ -581,6 +581,12 @@ BEGIN
   SELECT RAISE(ABORT, 'the pipeline log is append-only');
 END;
 PRAGMA legacy_alter_table = OFF;""",
+    # Mainline Sequences (.agents/design/2026-10-27-mainline-sequences.md): a Sequence's "use when" line, and Needs
+    # edit: a Draft from a Step starts unsendable until changed. Steps that existed before keep sending as they did.
+    30: """ALTER TABLE sequences ADD COLUMN description TEXT NOT NULL DEFAULT '';
+ALTER TABLE sequence_steps ADD COLUMN needs_edit INTEGER NOT NULL DEFAULT 1 CHECK (needs_edit IN (0, 1));
+UPDATE sequence_steps SET needs_edit = 0;
+ALTER TABLE composition_drafts ADD COLUMN needs_edit INTEGER NOT NULL DEFAULT 0 CHECK (needs_edit IN (0, 1));""",
 }
 
 # ponytail: fixed list; extend when a free-mail sender forms an Organization by mistake.
@@ -868,12 +874,23 @@ def save_draft(db, values: dict, *, draft_id: int | None = None,
         else:
             saved = db.execute(
                 'UPDATE composition_drafts SET connection_id = ?, kind = ?, sender = ?, "to" = ?,'
-                " cc = ?, subject = ?, body = ?, revision = revision + 1, updated_at = ?"
-                " WHERE id = ? AND revision = ?", (*envelope, at, draft_id, expected_revision)).rowcount
+                " cc = ?, subject = ?, body = ?, revision = revision + 1, updated_at = ?,"
+                " needs_edit = CASE WHEN subject IS ? AND body = ? THEN needs_edit ELSE 0 END"  # a changed text clears it
+                " WHERE id = ? AND revision = ?",
+                (*envelope, at, values["subject"], values["body"], draft_id, expected_revision)).rowcount
             if not saved:
                 get_draft(db, draft_id)  # a missing row is distinct from a stale writer
                 raise DraftConflict("Draft changed since this revision; reload before saving.")
         return get_draft(db, draft_id)
+
+
+@writer("write")
+def mark_needs_edit(db, draft_id: int) -> dict:
+    """Needs edit: the Draft cannot send until its text is changed (GLOSSARY). The revision stays."""
+    with db:
+        get_draft(db, draft_id)
+        db.execute("UPDATE composition_drafts SET needs_edit = 1 WHERE id = ?", (draft_id,))
+    return get_draft(db, draft_id)
 
 
 @writer("write")

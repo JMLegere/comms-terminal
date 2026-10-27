@@ -19,6 +19,10 @@ An unsent email, SMS, or Slack composition with its own Connection, recipients, 
 A send that was started but never confirmed or refused, so the message may or may not have gone out. A Draft stays locked until Jeremy marks it sent, which removes it without making a Thread, or explicitly sends it again. A reply has no lock: nothing is recorded, its text and staged files stay, and Jeremy checks the Thread before sending again.
 _Avoid_: Failed send, Pending
 
+**Needs edit**:
+A Draft that cannot be sent until it is changed. A Draft made from a Sequence Step starts this way unless the Step says otherwise, and Jeremy or an agent can mark any Draft this way. Any saved change to its text clears it.
+_Avoid_: Locked (that is Send outcome unknown), Draft lock, Hold
+
 **Draft revision**:
 The monotonically increasing version of a saved Draft, checked before a later save may replace it.
 
@@ -196,6 +200,34 @@ _Avoid_: Concession, Discount, Incentive, Sweetener
 **Play**:
 One deliberate use of a Lever, Sequence, or sales recipe on one deal, recorded with its result.
 _Avoid_: Tactic, Attempt
+
+**Mainline**:
+The chain of Sequences, one for each open or paying Stage of a Pipeline, that carries a Relationship from first contact to the end of that Pipeline. Each one sets its own Stage in On start, and a Goal met hands the Relationship to the next.
+_Avoid_: Main sequence, Funnel, Track
+
+**Off-ramp**:
+A Sequence for a situation outside the Mainline, such as Stalled signature, Deferred start or Nurture. It sets no Stage.
+_Avoid_: Side sequence, Recipe Sequence
+
+**Exit evidence**:
+The observable fact that shows a Stage's purpose is met, such as an agreed first conversation or an executed agreement. Finishing a Mainline Sequence as Goal met records that Jeremy saw it.
+_Avoid_: Exit criteria, Definition of done, Qualification
+
+**Cold**:
+A Relationship with no conversation yet with this Person: no reply and no meeting.
+_Avoid_: New, Unwarmed
+
+**Warm**:
+A Relationship in which a conversation with this Person exists.
+_Avoid_: Engaged, Hot
+
+**Close-out**:
+The last touch to a Cold or silent Person: an easy way to say "not now", with a dated reopening trigger.
+_Avoid_: Breakup email, Final nudge, Last chance
+
+**Agreed next step**:
+A next step with a date and an owner that both sides accepted. A Warm Sequence starts on its date.
+_Avoid_: Follow-up, Next action, Nudge
 
 ## Pipeline
 

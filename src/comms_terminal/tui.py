@@ -2714,6 +2714,7 @@ def draft_text(values, connection_label, history, raw=None, ref=None, staged=())
         lines.append(f"- Draft: {ref[0]} · revision {ref[1]} · change it with "
                      f"`comms-terminal draft {ref[0]} --revision {ref[1]} --body -` (also --to, --cc, --subject)")
     lines += [f"- Reply to: Thread {values['thread_id']} (its reply box sends it)"] if values.get("thread_id") else []
+    lines += ["- Needs edit: it cannot send until its text is changed"] if values.get("needs_edit") else []
     lines += [f"- Connection: {connection_label}",
               f"- From: {values['sender'] or 'not selected'}", f"- To: {values['to'] or 'not selected'}"]
     lines += [f"- Cc: {values['cc']}"] if values["cc"] else []
@@ -3256,11 +3257,13 @@ class DraftsPage(Page):
             state = "unsaved"
         elif draft.get("send_error"):
             state = "failed"  # a scheduled send did not go out
+        elif draft.get("needs_edit"):
+            state = "edit me"  # Needs edit: unsendable until its text changes
         elif draft.get("send_at"):
             state = f"{ICON['time']} {datetime.fromisoformat(draft['send_at']).astimezone():%a}"
         else:
             state = "saved"
-        status = f"[{'#c14a4a' if state == 'failed' else '#928374'}]{state:7}[/]"
+        status = f"[{'#c14a4a' if state == 'failed' else '#b47109' if state == 'edit me' else '#928374'}]{state:7}[/]"
         shown = cut(("reply · " if draft["thread_id"] else "") + title, room)
         shown = f"[#45707a]{shown[:5]}[/]{escape(shown[5:])}" if draft["thread_id"] else escape(shown)
         return (status, shown) if len(self.columns) == 2 else (
@@ -4810,7 +4813,8 @@ def enroll_person(app, person_id: int, name: str):
         app.notify("No Sequences yet: make one under Sequences (n).", severity="warning")
         return
     options = [(str(q["id"]), f"[#928374]{escape(q['name'])} · already in it, {live[q['id']].title()}[/]" if q["id"] in live
-                else f"{escape(q['name'])} · {q['steps']} Steps") for q in active]
+                else f"{escape(q['name'])} · {q['steps']} Steps" + (f"\n[#928374]{escape(q['description'])}[/]" if q["description"] else ""))
+               for q in active]
     names = {str(q["id"]): q["name"] for q in active}
 
     picked = {}
@@ -5289,7 +5293,8 @@ class TasksPage(Page):
 class SequencesTable(ClickTable):
     BINDINGS = [Binding("enter", "steps", "Steps"), Binding("n", "new_sequence", "new Sequence"),
                 Binding("a", "archive", "archive / restore"), Binding("x", "delete_sequence", "delete"),
-                Binding("R", "rename", "rename"), Binding("f", "sends_from", "sends from")]
+                Binding("R", "rename", "rename"), Binding("w", "describe", "use when"),
+                Binding("f", "sends_from", "sends from")]
 
     def action_steps(self):
         self.screen.query_one(SequencesPage).enter_steps()
@@ -5305,6 +5310,9 @@ class SequencesTable(ClickTable):
 
     def action_rename(self):
         self.screen.query_one(SequencesPage).rename()
+
+    def action_describe(self):
+        self.screen.query_one(SequencesPage).describe()
 
     def action_sends_from(self):
         self.screen.query_one(SequencesPage).sends_from()
@@ -5380,18 +5388,19 @@ class SequencesPage(Page):
         table = self.query_one("#seqs", DataTable)
         keep = self.sequence_id
         table.clear(columns=True)
-        table.add_columns(*(("", "Sequence", "Due") if narrow else ("", "Sequence", "Enrolled", "Due")))
+        table.add_columns(*(("", "Sequence", "Due") if narrow else ("", "Sequence", "Use when", "Enrolled", "Due")))
         for q in self.rows:
             if q is None:
                 head = (f"[#928374]{ICON['expanded' if self.show_archived else 'collapsed']}[/]", f"[#928374]Archived · {len(archived)}[/]")
-                table.add_row(*head, "", *(() if narrow else ("",)))
+                table.add_row(*head, "", *(() if narrow else ("", "")))
                 continue
             enrolled = (f"{q['active']} active" + (f" · {q['paused']} paused" if q["paused"] else "")
                         if q["active"] or q["paused"] else "[#928374]never used[/]")
             due = f"[#45707a]{q['due_today']}[/]" if q["due_today"] else "[#928374]·[/]"
             icon = f"[#928374]{ICON['archive']}[/]" if q["archived_at"] else f"[#654735]{ICON['sequence']}[/]"
             name = f"[b]{escape(q['name'])}[/]" if not q["archived_at"] else f"[#928374]{escape(q['name'])}[/]"
-            table.add_row(icon, name, due) if narrow else table.add_row(icon, name, enrolled, due)
+            when = f"[#928374]{escape(q['description'])}[/]"
+            table.add_row(icon, name, due) if narrow else table.add_row(icon, name, when, enrolled, due)
         ids = [q and q["id"] for q in self.rows]
         table.move_cursor(row=ids.index(keep) if keep is not None and keep in ids else 0)
         self.query_one("#seqpane").border_subtitle = f"[#928374]{len(active)} active · {len(archived)} archived[/]"
@@ -5483,9 +5492,10 @@ class SequencesPage(Page):
         size = f"{q['steps']} Steps · {q['days']} days" if q["steps"] else "no Steps yet"
         enrolled = (f"{q['active']} active · {q['paused']} paused · {q['finished']} finished\n[#928374]{q['due_today']} Tasks due today[/]"
                     if q["used"] else "none\n[#928374]Enroll People from People (s) once it has Steps.[/]")
-        keys = "a restores it" if q["archived_at"] else "enter edits its Steps · f changes sends from · a archives"
+        keys = "a restores it" if q["archived_at"] else "enter edits its Steps · w use when · f changes sends from · a archives"
         pane.mount(Static(
             f"{props_head('sequence', 'sequence')}\n[b]{escape(q['name'])}[/]\n[#928374]{size} · edited {stamp(q['updated_at'])}[/]"
+            + (f"\nUse when: {escape(q['description'])}" if q["description"] else "\n[#928374]No use-when line: w adds one.[/]")
             + (f"\n[#928374]{ICON['archive']} archived {stamp(q['archived_at'])}[/]" if q["archived_at"] else "") + "\n\n"
             f"{props_head('connection', 'sends from')}\n{escape(connection_label(conn)) if conn else '[#c14a4a]no email Connection[/]'}\n\n"
             f"{props_head('people', 'enrollments')}\n{enrolled}\n\n[#928374]{keys}[/]", classes="threadempty"))
@@ -5546,6 +5556,18 @@ class SequencesPage(Page):
                 sequences.rename_sequence(self.app.db, q["id"], name)
                 self.after_change()
         self.app.push_screen(Ask(f"Rename {q['name']}", q["name"]), named)
+
+    def describe(self):
+        """w: the selected Sequence's one-line "use when"."""
+        q = self.selected_sequence()
+        if q is None:
+            return
+
+        def typed(text):
+            if text and text != q["description"]:
+                sequences.describe_sequence(self.app.db, q["id"], text)
+                self.after_change()
+        self.app.push_screen(Ask(f"Use {q['name']} when", q["description"] or "e.g. they replied and a call is booked"), typed)
 
     def sends_from(self):
         """f: the email Connection the selected Sequence's email Tasks send from, any of Jeremy's addresses."""

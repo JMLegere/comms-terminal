@@ -27,6 +27,8 @@ def add_parsers(sub):
     for field in ("to", "cc", "subject"):
         d.add_argument(f"--{field}")
     d.add_argument("--body", help="the body, or - to read it from stdin")
+    d.add_argument("--needs-edit", action="store_true",
+                   help="mark it Needs edit, after any changes: it cannot send until its text is changed")
     sub.add_parser("tasks", help="Due Tasks as Markdown, each with its Person and Draft (Sequences)")
     e = sub.add_parser("enroll", help="enroll one Person in a Sequence; its first Task is due today, or from --start")
     e.add_argument("person", help="a Person id, email address, or exact name")
@@ -36,7 +38,7 @@ def add_parsers(sub):
                                  " proprietorship (default: their only Organization)")
     q = sub.add_parser("sequence", help="Sequences: list, show or apply one as Markdown, new, rename, archive")
     qs = q.add_subparsers(dest="sequence_cmd", required=True)
-    qs.add_parser("list", help="every Sequence: id, name, Steps, Enrollments")
+    qs.add_parser("list", help="every Sequence: id, name, Steps, Enrollments, use when")
     x = qs.add_parser("show", help="one Sequence as Markdown (the shape `apply` reads)")
     x.add_argument("sequence", help="a Sequence id or exact name")
     x = qs.add_parser("apply", help="create or update a Sequence from Markdown; prints each change")
@@ -141,7 +143,8 @@ def run(a, db):
             changes = {k: getattr(a, k) for k in ("to", "cc", "subject", "body") if getattr(a, k) is not None}
             if changes.get("body") == "-":
                 changes["body"] = sys.stdin.read()
-            print(draft(db, a.id, changes, a.revision, a.connection, getattr(a, "thread", None)), end="")
+            print(draft(db, a.id, changes, a.revision, a.connection, getattr(a, "thread", None),
+                        getattr(a, "needs_edit", False)), end="")
     except (KeyError, ValueError, inbox.DraftConflict) as e:  # Refused and sequence_md.Invalid are ValueErrors
         raise SystemExit(f"comms-terminal {a.cmd}: {e.args[0] if e.args else e}") from e
 
@@ -180,7 +183,7 @@ def thread(db, thread_id, socket) -> str:
     return thread_text(v, files.raw_dir(db), context)
 
 
-def draft(db, ref, changes, revision, connection_id, thread_id=None) -> str:
+def draft(db, ref, changes, revision, connection_id, thread_id=None, needs_edit=False) -> str:
     if ref == "new" and thread_id is not None:  # a reply Draft: the Thread gives its envelope
         if old := inbox.reply_draft(db, thread_id):
             raise ValueError(f"Thread {thread_id} already has reply Draft {old['id']}: change it with "
@@ -208,6 +211,8 @@ def draft(db, ref, changes, revision, connection_id, thread_id=None) -> str:
                 raise ValueError(f"pass --revision {d['revision']} (the revision you read) to change Draft {d['id']}")
             d = inbox.save_draft(db, {k: d[k] for k in DRAFT_FIELDS} | changes, draft_id=d["id"],
                                  expected_revision=revision)
+    if needs_edit:
+        d = inbox.mark_needs_edit(db, d["id"])
     c = next((c for c in inbox.connections(db) if c["id"] == d["connection_id"]), None)
     history = draft_history(db, d["kind"], d["connection_id"], d["to"]) or []
     return draft_text(d, connection_label(c), history, files.raw_dir(db), (d["id"], d["revision"]),
@@ -286,7 +291,8 @@ def sequence_cmd(db, a) -> str:
     c = a.sequence_cmd
     if c == "list":
         return "".join(f"{q['id']}\t{q['name']}\t{q['steps']} Steps\t{q['active']} active · {q['paused']} paused"
-                       + (" · archived" if q["archived_at"] else "") + "\n" for q in sequences.sequences(db))
+                       + (" · archived" if q["archived_at"] else "") + (f"\t{q['description']}" if q["description"] else "")
+                       + "\n" for q in sequences.sequences(db))
     if c == "apply":
         text = sys.stdin.read() if a.file == "-" else open(a.file, encoding="utf-8").read()
         changes = sequence_md.apply(db, text, dry_run=a.dry_run)
@@ -337,7 +343,7 @@ def step_cmd(db, a) -> str:
             raise ValueError(f"{pair!r} is not field=value")
         if key == "enroll":
             key, value = "enroll_sequence_id", find_sequence(db, value)["id"]
-        elif key in ("gap_days",):
+        elif key in ("gap_days", "needs_edit"):
             value = int(value)
         elif key == "value":
             value = pipeline.parse_amount(value) if value else None

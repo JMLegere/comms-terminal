@@ -209,6 +209,8 @@ Thread, Person, Organization, and Case pages show separate details-column sectio
 - **Enrolling** (`s`): Sequence, then the Organization it is for (the Person's Organizations, the one their latest message came from first, and `New sole proprietorship: <name>`), then the Start date.
 - **Finishing** (`f`): Goal met, Not Right Now, Lost (each runs the path's On completion), Canceled, Unsubscribed. A Finishing Enrollment offers only Canceled and Unsubscribed.
 - **Picks**: an If that asks Jeremy shows its question and `1 <label>  2 <label>` on Tasks and on the Person page; `1` or `2` answers, and `z` undoes.
+- **Use when** (`w` on the Sequences list): a one-line "use when", shown in the list (wide), the side pane, and the enroll picker under each name.
+- **Needs edit**: a Draft from a Step whose text is still a brief shows `edit me` in the Drafts list; sending it says to change its text first.
 - **Today**: a yellow `paused · N` list after Drafts: Person, Sequence (with "finishing as …"), and when it paused; `r` resumes, `f` finishes, `enter` opens the Person. The rail count includes it; the pause toast points to it.
 - **Talent**: the Pipeline page shows only the board, with Stage names and counts and no rates, Constraint, Value, This week, Progress, or Weekly review; `y` copies `comms-terminal pipeline talent`.
 

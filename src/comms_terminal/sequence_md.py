@@ -4,10 +4,11 @@
 reports what it changed (or would change, on a dry run). The shape mirrors the console's outline:
 
     # Revenue: Close
+    Use when: they agreed the plan and the proposal is next.
     ## On start
     - action (gap 0): set_stage Revenue Commit
     ## Steps
-    - email (gap 0, at 09:00): Proposal for {company}
+    - email (gap 0, at 09:00, ready): Proposal for {company}
       > Hi {first_name}, the proposal is attached.
     - call (gap 2)
       > Ask who signs and when.
@@ -27,7 +28,8 @@ reports what it changed (or would change, on a dry run). The shape mirrors the c
         - action (gap 0): set_stage Revenue Lost
 
 `>` lines are a Step's text (email body, call script, LinkedIn or Action note); `>>` lines a call's voicemail. An
-email's `reply N` names the Nth email in the file. Apply keeps a Step where the same kind sits at the same place, so
+email's `reply N` names the Nth email in the file, and `ready` marks an email whose Drafts can send unchanged (without it,
+they start as Needs edit). Apply keeps a Step where the same kind sits at the same place, so
 Enrollments already on it carry on; it tries the change on a copy first and refuses a Sequence with problems.
 """
 
@@ -52,7 +54,7 @@ def render(db, sequence_id: int) -> str:
     steps = sq.sequence_steps(db, sequence_id)
     names = dict(db.execute("SELECT id, name FROM sequences").fetchall())
     emails = [st["id"] for st in _document_order(steps) if st["kind"] == "email"]
-    out = [f"# {seq['name']}", "## On start"]
+    out = [f"# {seq['name']}"] + ([f"Use when: {seq['description']}"] if seq["description"] else []) + ["## On start"]
     out += _path(steps, ("start", None, None), 0, names, emails)
     out += ["## Steps"] + _path(steps, ("body", None, None), 0, names, emails)
     root = sq.on_path(steps, ("body", None, None))
@@ -89,6 +91,8 @@ def _head(st, names, emails) -> str:
     attrs = [f"gap {st['gap_days']}"] + ([f"at {st['at_time']}"] if st["at_time"] else [])
     if st["reply_to_step_id"] in emails:
         attrs.append(f"reply {emails.index(st['reply_to_step_id']) + 1}")
+    if st["kind"] == "email" and not st["needs_edit"]:
+        attrs.append("ready")
     kind = st["kind"]
     if kind == "email":
         rest = st["subject"]
@@ -113,16 +117,18 @@ def _head(st, names, emails) -> str:
 # --- parse --------------------------------------------------------------------
 
 def parse(text: str) -> dict:
-    """{name, start: [step], body: [step], completion: [step]}; a step is a dict of its fields plus `yes`, `no`
+    """{name, description, start: [step], body: [step], completion: [step]}; a step is a dict of its fields plus `yes`, `no`
     (paths), `yes_done`, `no_done` (their On completions) for an If, and `reply` (an email number)."""
     lines = [ln.rstrip() for ln in text.splitlines()]
-    name, sections, current = None, {"start": [], "body": [], "completion": []}, None
+    name, description, sections, current = None, "", {"start": [], "body": [], "completion": []}, None
     blocks = {"On start": "start", "Steps": "body", "On completion": "completion"}
     i, rows = 0, []
     while i < len(lines):
         ln = lines[i]
         if ln.startswith("# ") and name is None:
             name = ln[2:].strip()
+        elif ln.startswith("Use when:") and current is None:
+            description = ln.removeprefix("Use when:").strip()
         elif ln.startswith("## "):
             current = blocks.get(ln[3:].strip())
             if current is None:
@@ -139,7 +145,7 @@ def parse(text: str) -> dict:
         sections[section], rest = _steps(mine, 0)
         if rest:
             raise Invalid(f"line {rest[0][0]}: indented too far")
-    return dict(name=name, **sections)
+    return dict(name=name, description=description, **sections)
 
 
 def _indent(ln: str) -> int:
@@ -184,7 +190,7 @@ def _steps(rows, depth):
 def _fields(n, kind, attrs, rest) -> dict:
     st = dict(kind=kind, gap_days=0, at_time=None, subject="", linkedin_move=None, action_kind=None, condition=None,
               pipeline=None, stage=None, value=None, operand="", enroll=None, reply=None, true_label="",
-              false_label="", yes=[], no=[], yes_done=[], no_done=[], line=n)
+              false_label="", needs_edit=1, yes=[], no=[], yes_done=[], no_done=[], line=n)
     for a in [a.strip() for a in attrs.split(",") if a.strip()]:
         word, _, val = a.partition(" ")
         if word == "gap" and val.isdigit():
@@ -193,8 +199,10 @@ def _fields(n, kind, attrs, rest) -> dict:
             st["at_time"] = val
         elif word == "reply" and val.isdigit():
             st["reply"] = int(val)
+        elif a == "ready" and kind == "email":
+            st["needs_edit"] = 0
         else:
-            raise Invalid(f"line {n}: unknown {a!r}: use gap N, at HH:MM, reply N")
+            raise Invalid(f"line {n}: unknown {a!r}: use gap N, at HH:MM, reply N, ready (email)")
     word, _, arg = rest.partition(" ")
     if kind == "email":
         st["subject"] = rest
@@ -231,7 +239,7 @@ def _fields(n, kind, attrs, rest) -> dict:
 
 FIELDS = ("gap_days", "at_time", "subject", "body", "voicemail", "linkedin_move", "action_kind", "condition",
           "pipeline", "stage", "value", "operand", "true_label", "false_label", "enroll_sequence_id",
-          "reply_to_step_id")
+          "reply_to_step_id", "needs_edit")
 
 
 def apply(db, text: str, dry_run: bool = False) -> list[str]:
@@ -254,6 +262,9 @@ def _apply(db, plan) -> list[str]:
     changes = [] if row else [f"+ Sequence {plan['name']}"]
     sid = row[0] if row else sq.create_sequence(db, plan["name"])
     names[plan["name"].lower()] = sid
+    if db.execute("SELECT description FROM sequences WHERE id = ?", (sid,)).fetchone()[0] != plan["description"]:
+        sq.describe_sequence(db, sid, plan["description"])
+        changes.append(f"~ Use when: {plan['description'] or '(none)'}")
     emails, pending = [], []  # email step ids in file order; (step id, email number) reply links
     for path in (("start", None, None), ("body", None, None), ("completion", None, None)):
         _sync(db, sid, path, plan[path[0]], changes, names, emails, pending)

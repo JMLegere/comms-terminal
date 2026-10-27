@@ -39,7 +39,8 @@ def sequence_with_steps(outreach, name, datatable):
     for row in datatable[1:]:
         r = dict(zip(head, row))
         step = sequences.add_step(outreach.db, sid, r["Kind"])
-        sequences.save_step(outreach.db, step, gap_days=int(r["Gap"]), subject=r["Subject"], body=r["Body"])
+        sequences.save_step(outreach.db, step, gap_days=int(r["Gap"]), subject=r["Subject"], body=r["Body"],
+                            needs_edit=0)  # the table's emails are finished templates
     outreach.sequences[name] = sid
 
 

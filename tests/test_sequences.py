@@ -46,14 +46,15 @@ def person(db, address, name, at=MONDAY - 30 * DAY, org=None):
 
 
 def secret(db):
-    """Four Steps: an email, a call the next day, a reply to the email, a LinkedIn connect."""
+    """Four Steps: an email, a call the next day, a reply to the email, a LinkedIn connect. Its emails are ready
+    templates, so their Drafts send unchanged."""
     s = sq.create_sequence(db, "Secret Sequence")
     one = sq.add_step(db, s, "email")
-    sq.save_step(db, one, subject="Pilot with {company}", body="Hi {first_name}, a pilot at {company}?")
+    sq.save_step(db, one, subject="Pilot with {company}", body="Hi {first_name}, a pilot at {company}?", needs_edit=0)
     call = sq.add_step(db, s, "call")
     sq.save_step(db, call, body="Script for {first_name}", voicemail="Voicemail")
     again = sq.add_step(db, s, "email")
-    sq.save_step(db, again, gap_days=3, body="Following up, {first_name}.", reply_to_step_id=one)
+    sq.save_step(db, again, gap_days=3, body="Following up, {first_name}.", reply_to_step_id=one, needs_edit=0)
     sq.add_step(db, s, "linkedin")
     return s, sq.sequence_steps(db, s)
 

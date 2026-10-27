@@ -31,7 +31,7 @@ def calls(path):
     s = sq.create_sequence(db, "Call first")
     call = sq.add_step(db, s, "call")
     sq.save_step(db, call, body="Hi {first_name}")
-    sq.save_step(db, sq.add_step(db, s, "email"), subject="Hello {first_name}", body="Hi {first_name}")
+    sq.save_step(db, sq.add_step(db, s, "email"), subject="Hello {first_name}", body="Hi {first_name}", needs_edit=0)
     return db, s
 
 
@@ -300,7 +300,7 @@ def test_an_email_task_sends_from_the_tasks_page_and_the_next_task_follows(tmp_p
     path, ids = seeded(tmp_path)
     db = inbox.connect(path)
     s = sq.create_sequence(db, "Email first")
-    sq.save_step(db, sq.add_step(db, s, "email"), subject="Hello {first_name}", body="Hi {first_name}")
+    sq.save_step(db, sq.add_step(db, s, "email"), subject="Hello {first_name}", body="Hi {first_name}", needs_edit=0)
     sq.add_step(db, s, "call")
     ana = next(p["id"] for p in inbox.people(db) if p["name"] == "Ana Ruiz")
     sq.enroll(db, ana, s)
