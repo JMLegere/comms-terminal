@@ -317,7 +317,7 @@ _Avoid_: Dashboard, Execution view
 ## Sources
 
 **Platform**:
-The service a Connection runs through: Gmail, Fastmail, Slack, Quo, or Google Calendar (read only: Meetings come in, nothing goes out); later WhatsApp, LinkedIn, or tool comments. Each Platform has one adapter.
+The service a Connection runs through: Gmail, Fastmail, Slack, Quo, or Google Calendar (Meetings come in; the only thing that goes out is Jeremy's Response to an invite); later WhatsApp, LinkedIn, or tool comments. Each Platform has one adapter.
 _Avoid_: Medium, Channel (when meaning the service), Email (Gmail and Fastmail are separate Platforms)
 
 **Message format**:
@@ -339,7 +339,7 @@ _Avoid_: Integration, Connection, Platform (for Tana, Attio, or Linear)
 ## Calendar
 
 **Calendar**:
-The page that lays Calendar Items out over time, read from Jeremy's work calendar. Jeremy reads it here and changes Events in Google Calendar.
+The page that lays Calendar Items out over time, read from Jeremy's work calendar. Jeremy reads it here, responds to invites from their Threads, and changes Events in Google Calendar.
 _Avoid_: Agenda, Schedule
 
 **Event**:
@@ -361,6 +361,10 @@ _Avoid_: OOO (alone)
 **Invite state**:
 Jeremy's answer to an Event he was invited to: Accepted, Tentative, Unanswered, or Declined.
 _Avoid_: RSVP, Response status
+
+**Respond**:
+To set Jeremy's Invite state on an Event he was invited to, from its Meeting Thread or invitation email Thread: Accept (Accepted), Maybe (Tentative), or Decline (Declined). Google Calendar records it and tells the organizer, as Gmail's invitation buttons do. A Response on a repeating series answers the whole series. Only Jeremy responds; agents never do.
+_Avoid_: RSVP, Reply (for an invite)
 
 **Calendar Item**:
 Anything placed on the Calendar: an Event, a Task on its day, a Snoozed Thread at the time it wakes, a Draft at the time it is set to send, or an Enrollment on the day it starts.

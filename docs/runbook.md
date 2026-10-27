@@ -180,6 +180,19 @@ The Calendar (FR-13d, ADR 0005) reads the primary calendar's **Secret address in
 - **Rotate**: Reset the secret address in Google, encrypt the new one over the old file, and restart. Until then fetches fail (404) and the Calendar shows Google Calendar broken after three tries.
 - **Meetings** (ADR 0007): with the credential, the service creates the `gcal` Connection (`Google Calendar` under connections) the first time it starts, and that moment is go-live: only Events first seen after it become Meeting Threads, so nothing is backfilled. A Meeting Thread needs an attendee outside Agent Maple. The journal shows `meetings recorded: N` after a calendar change that booked, cancelled, or declined one; held occurrences are recorded by the minute's wake pass. Removing the credential stops new Meeting Activities; the Connection and its Threads stay.
 
+## 3h. Respond to invites (Google Calendar API)
+
+Status: planned (FR-13e, ADR 0009). The service code, `scripts/oauth_google.py`, and the unit's credential line arrive in the invite responses PRD's Phases 2–3; until then this section only prepares the Google side.
+
+Responses (FR-13e) set Jeremy's answer on his copy of an Event through the Google Calendar API. The service holds one optional credential, `google-calendar-oauth`: JSON with `client_id`, `client_secret`, and `refresh_token`. It is a bearer secret with full calendar access: anyone holding it reads and changes every Event. Never paste it in chat, logs, screenshots, or the database.
+
+- **Google side (once)**: in Agent Maple's Google Workspace, a Google Cloud project with the Google Calendar API enabled; OAuth consent screen user type **Internal** (an External app in testing mode loses its refresh token after seven days); an OAuth client of type **Desktop app**. Done 2026-10-27: project `agent-maple` (user type Internal, Google Calendar API enabled), Desktop client **Comms Terminal**. Its downloaded JSON lives only at `~/.config/comms-terminal/google-oauth-client.json` (0600) on Mani, the sign-in script's input; keep it out of chat.
+- **Sign in**: on Mani, `uv run python scripts/oauth_google.py` opens Google's consent page for `jeremy@agentmaple.com` with the `https://www.googleapis.com/auth/calendar` scope and writes the credential JSON only to the stdin of `systemd-creds encrypt` on Oracle.
+- **Oracle**: install with `systemd-creds encrypt --name=google-calendar-oauth - /etc/credstore.encrypted/comms-terminal.google-calendar-oauth` (stdin, mode 0600), then `systemctl daemon-reload` and `systemctl restart comms-terminal`. The service keeps a rotated refresh token in `google-calendar-oauth.json` (0600) beside the database. Without the credential, `i` on a Thread reports Responses unavailable and nothing else changes.
+- **Check**: `i` then `y` on a test invite's Thread; Google Calendar shows Accepted, and the Calendar shows it within a minute.
+- **Revoke**: Google Account (`jeremy@agentmaple.com`) → Security → Your connections to third-party apps & services → the Comms Terminal app → Delete all connections. The bottom bar then shows Google Calendar writes broken.
+- **Remove**: delete `/etc/credstore.encrypted/comms-terminal.google-calendar-oauth` and the state file `google-calendar-oauth.json`, then restart the service.
+
 ## 3. Connect Slack
 
 1. **You:** https://api.slack.com/apps → Create New App → From a manifest → paste `deploy/slack-app-manifest.yml`. Save the signing secret (Basic Information) as `~/.config/comms-terminal/slack-signing-secret`.

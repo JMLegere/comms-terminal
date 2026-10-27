@@ -17,6 +17,7 @@
   - Plain behavior evidence: Plain docs and GraphQL schema, read 2026-10-10 (cited in §9).
 - **Implementation authorization**: Phase 0 (done) and the BDD setup. Phases 1–6, external accounts, DNS changes, and installing services each need separate explicit approval. Connecting real accounts is Jeremy's own step after the build (FR-1).
 - **History limits**: Built from the full 2026-10-10 session plus the artifacts above. Exact times exist only for observed clock readings or file modification times.
+- **Invite responses, 2026-10-27**: PRD approved (`.agents/prd/2026-10-27-invite-responses.md`); Phases 0–1 authorized; Phases 2–6 need separate approval.
 - **Emoji reactions, 2026-10-25**: local implementation is authorized and **in progress; integrated behavior and rendered states are not yet verified**. Six accepted synthetic design previews establish their visual design only. Actual Slack grants/access, exact live actions, failure-state visual acceptance, the five-opportunity user trial, and release/deployment remain separate gates.
 
 ## 2. Executive framing
@@ -178,6 +179,7 @@ Status key in brackets:
   - [D] Calendar sits in the rail under Today: one month grid of week rows that scrolls without pages, a separator row where each month starts, opening on two weeks before through two weeks after this week. A day cell lists its Events (declined dimmed, unanswered marked `?`, Deleted struck through) and one count line for Tasks, Snoozed Threads, scheduled Drafts, and Enrollment starts. The right pane lists every Calendar Item of the cursor's day; Enter opens an Event's details (attendees linked to People, Threads, Cases, and Organizations; join link; Context sources) or the Thread, Task, Draft, or Person.
   - [D] The bottom bar shows the Event in progress with the time left, then the next timed Event on any day; Declined, All-day, and Deleted Events do not count. After three failed fetches the Calendar shows its last copy with "as of" and the bottom bar shows Google Calendar broken.
   - [D] Agents read Events with `comms-terminal events` (expanded, local time, `--json`). Reason: Jeremy leaves the terminal for a browser to see his schedule (2026-10-20, `.agents/discovery/2026-10-20-calendar.md`).
+- **FR-13e** [C]: Jeremy Responds to an invite from its Meeting Thread or invitation email Thread (decision #141, ADR 0009): `i` opens "Respond: y yes · m maybe · n no", and the second key answers; Esc cancels. The service sets his own response on his copy of the Event through the Google Calendar API, and Google tells the organizer. A Meeting Thread's Response answers the whole series; an invitation for one occurrence answers that occurrence. Each confirmed Response is a Meeting Activity from Jeremy; Thread Status does not change. The feed stays the only source of the Invite state shown. Agents read Invite state and never respond. Requirements FR-IR-1–11, NFR-IR-1–5, and acceptance scenarios AS-IR-1–7 are in the invite responses PRD (`.agents/prd/2026-10-27-invite-responses.md`); discovery `.agents/discovery/2026-10-27-invite-actions.md`.
 
 ### Console
 
@@ -187,7 +189,7 @@ Status key in brackets:
   - [D] I Ignore; C add to Case. Reason: Plain ignores through status changes and workflows, and has no Case.
   - [D] Enter opens the Thread in the console; O shows a Ctrl-clickable link to it in Gmail or Slack. Reason: reading full context in the native app; Attachments open from their chips (#130). Other console keys: `docs/design/console.md` §4.
 - **FR-14b** [C]: **Today** is where the console opens: one page stacking Todo Threads (grouped by Case), Due Tasks, and the Drafts not shown through them (Today (`inbox.today`) lists a Task's Draft only through its due Task, and a reply Draft only when its Thread is not Todo). Key `1` opens it. Requirements FR-T1–16 and acceptance scenarios AS-T1–10 are in the Today PRD (`.agents/prd/2026-10-17-today-view.md`).
-- **FR-15** [C]: The console sends replies Jeremy writes. The narrow Slack-reaction exception permits only Jeremy's explicit add/remove of his own reaction on one captured source message through its intended Connection. It never edits or deletes messages, archives conversations, or changes Gmail/Slack read markers. Automated or agent-initiated reactions and changes to other people's reactions remain prohibited.
+- **FR-15** [C]: The console sends replies Jeremy writes. The narrow Slack-reaction exception permits only Jeremy's explicit add/remove of his own reaction on one captured source message through its intended Connection. It never edits or deletes messages, archives conversations, or changes Gmail/Slack read markers. Automated or agent-initiated reactions and changes to other people's reactions remain prohibited. A second narrow exception: Jeremy's explicit Response to an invite (FR-13e); agents never respond.
 - **FR-R** [C]: Keyboard-only Slack acknowledgements use temporary React mode on an expanded captured message in the active Thread or selected Case Thread card: `v`, bounded `j/k` or arrow selection, then ready `1/2/3` for Like, Thanks, or Looking. Checked choices represent Jeremy's membership only; activating one removes only his membership. Entry and Esc may read state but perform zero mutations; checking consumes early digits without buffering or page navigation. One explicit ready choice sends once and returns to reading with message-bound feedback.
   - Normal reading shows all existing reaction-group totals, including other participants, with own membership marked separately. Snapshots load on initial Thread display, settled user-driven Thread selection, explicit reopen/F5, and the affected message after a confirmed own change. Fresh own-state checks on React entry/selection remain required. Internal repaint, resize, timers, replica sync, and unselected Case cards add no reaction reads; this preserves event-driven message completeness (#66).
   - Unavailable reads, definitive refusals, unknown writes, and review-required edits remain distinct. Recovery checks the original message/Connection read-only; a successful read proves current membership, not which request caused it. Count-refresh failure preserves a confirmed write and exposes unavailable/stale totals. No automatic retry, queued key, optimistic provider queue, reaction Activity, schema migration, or Status/Case/Task/Enrollment change.
@@ -203,7 +205,7 @@ Status key in brackets:
 
 ### Organization actions
 
-- **FR-OA** [C]: Threads do the work and an Organization only reads them (ADR 0007). A Person belongs to the Organizations of their company email domains, plus Jeremy's own additions and less his removals (Membership: `o` on a Person, `p` on an Organization). An Organization's roll-up is the earliest of Todo, Snoozed, and Done over the Threads its People wrote in or were addressed in, with an unfinished Enrollment counting as Snoozed; in an open or paying Stage and Done, it is Unattended, and Today, the Pipeline board, and the Organization page show it. A Snooze always has a date. Google Calendar is a read-only Platform: each Event with someone outside Agent Maple, first seen after go-live, is one Thread in Todo, and each held, cancelled, or declined occurrence is a Meeting Activity that puts it back in Todo. Detail: `.agents/prd/2026-10-24-organization-actions.md` (FR-OA-1..16); design: `docs/design/console.md` § Today, § Pipeline, § Meetings.
+- **FR-OA** [C]: Threads do the work and an Organization only reads them (ADR 0007). A Person belongs to the Organizations of their company email domains, plus Jeremy's own additions and less his removals (Membership: `o` on a Person, `p` on an Organization). An Organization's roll-up is the earliest of Todo, Snoozed, and Done over the Threads its People wrote in or were addressed in, with an unfinished Enrollment counting as Snoozed; in an open or paying Stage and Done, it is Unattended, and Today, the Pipeline board, and the Organization page show it. A Snooze always has a date. Google Calendar is a Platform read through its feed, written to only by Jeremy's Responses (FR-13e): each Event with someone outside Agent Maple, first seen after go-live, is one Thread in Todo, and each held, cancelled, or declined occurrence is a Meeting Activity that puts it back in Todo. Detail: `.agents/prd/2026-10-24-organization-actions.md` (FR-OA-1..16); design: `docs/design/console.md` § Today, § Pipeline, § Meetings.
 
 ### Non-functional
 
@@ -266,6 +268,7 @@ Executable form: `features/<domain>.feature` (Gherkin via pytest-bdd), each scen
 - **FR-1, FR-3–FR-3b, FR-5, AS-3, AS-11, AS-19**: steps 2.1–2.2 → `features/email.feature`.
 - **FR-1, FR-4, FR-4a, FR-4c, AS-15, AS-17**: steps 3.1–3.4 → `features/slack.feature`.
 - **FR-R, narrow FR-15 exception; AS-R-01–15**: local reaction implementation/verification in progress → fake-provider and private-route coverage, Thread/Case keyboard tests, Slack-domain acceptance scenarios, and exact OAuth-scope assertions. Acceptance interface titles: **Slack Identity**, **Slack Reaction Snapshot**, **Slack Reaction Change**, **Slack Reactions** (`docs/design/api-and-database.md`). Actual runtime/rendered proof remains pending; synthetic previews do not establish implemented behavior. **AS-R-16** is Jeremy's separately authorized five-opportunity live trial.
+- **FR-13e, AS-IR-1–7**: invite responses PRD phases 1–6 → `features/calendar.feature`, `tests/test_gcal.py`, `tests/test_invite_responses.py`, `tests/test_invite_responses_ui.py`; live checks after release.
 - **NFR-2, AS-8**: step 4.1 → `features/sync.feature`.
 - **FR-13, FR-14**: steps 5.1–5.5 → console tests; build demo in step 6.3 on synthetic data.
 - **FR-13c**: decision #125 → `tests/test_linear.py`, `tests/test_linear_service.py`, and `tests/test_linear_console.py`; synthetic provider, actual private Unix route, matching/cache, and rendered page checks. See the [local implementation evidence](design/linear-context.md#local-implementation-evidence--2026-10-15) for results and regression-suite limitations. Live connection evidence is in the [connection receipt](design/linear-context.md#connection-receipt--2026-10-16).
@@ -1018,6 +1021,11 @@ All entries are dated 2026-10-10; exact times are unproven unless noted. Full de
   - Source: Jeremy's discovery, C4 review, and grilling (2026-10-24, `.agents/discovery/2026-10-24-pipeline-account-actions.md`); PRD approved 2026-10-25; "execute everything up to phase 5 of the prd".
   - Status: Built and shipped (2026-10-25): Phases 1 to 5 of `.agents/prd/2026-10-24-organization-actions.md`.
 
+- **141**
+  - Request / decision: Jeremy Responds to invites from the console (FR-13e, ADR 0009): Accept, Maybe, or Decline from the Meeting Thread or the invitation email Thread, through the Google Calendar API, with one sign-in held by the service (full calendar access). Reads stay on the secret iCal feed. Keys: `i`, then `y`/`m`/`n`. A Meeting Thread's Response covers the series; Status is unchanged; agents never respond. Supersedes #108's "RSVP stays in Gmail" and ADR 0005's statement that the console never writes to the calendar. Considered: open the Event in Google, the agents' own Google connection, Google's per-invitee response links (undocumented; missing for organizers outside Google, about a quarter of invites), and an emailed iMIP reply (Jeremy's own calendar would stay Unanswered).
+  - Source: Jeremy's discovery (2026-10-27, `.agents/discovery/2026-10-27-invite-actions.md`), "ok yes, E", and the PRD gap-closing answers: "One key, then pick", "i, for invite", "The whole series", "Status unchanged", "agents can't respond to invites.", "Keep full access + runbook", "Accept the risk" (Outlook organizers untested); PRD approved 2026-10-27, "Phase 0–1 only".
+  - Status: Approved; Phase 1 (contract: this entry, FR-13e, GLOSSARY, ADR 0009, runbook, console design, `@wip` scenarios) in progress 2026-10-27. Phases 2–6 not authorized.
+
 ## 8. Work log
 
 - **2026-10-10T18:20:22+00:00**
@@ -1157,6 +1165,12 @@ All entries are dated 2026-10-10; exact times are unproven unless noted. Full de
   - Activity: Slack connected (app A0C8LNM1YE6, events verified, rules #business #dev #incident), 7-day import, friendly channel and person names, one-to-one Slack threads in channels (#115); work moved to worktree `../comms-terminal-slack` (branch `slack-people`) while another session works in the main checkout
   - Result: 116 tests pass in the worktree
   - Evidence: `src/comms_terminal/slack.py`, `src/comms_terminal/inbox.py`, `tests/test_slack_mentions.py`, `features/slack.feature`
+  - Basis: Source-observed
+- **2026-10-27T21:51:17+00:00**
+  - Actor: Agent
+  - Activity: Invite responses Phase 1 (contract first, decision #141): FR-13e, the FR-15 and FR-OA notes, decision #141, traceability, GLOSSARY Respond, ADR 0009, runbook §3h, console design, and `@wip` scenarios in `features/calendar.feature`
+  - Result: in progress on branch `jeremy/invite-responses`; no code or credential changes
+  - Evidence: `.agents/prd/2026-10-27-invite-responses.md`
   - Basis: Source-observed
 
 ## 9. Sources and coverage check
