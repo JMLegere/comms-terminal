@@ -288,9 +288,9 @@ def step_summary(st: dict, names: dict) -> str:
 @writer("create")
 def add_step(db, sequence_id: int, kind: str, after: int | None = None, *, section: str = "body",
              parent_step_id: int | None = None, branch: int | None = None, action_kind: str = "enroll",
-             condition: str = "jeremy_picks") -> int:
+             condition: str = "jeremy_picks", front: bool = False) -> int:
     """A new Step of `kind` right after the Step at position `after`, on that Step's path; with no `after`, last on
-    the path named by `section`, `parent_step_id`, and `branch` (default: the body). A touch is due one business day
+    the path named by `section`, `parent_step_id`, and `branch` (default: the body), or first on it with `front`. A touch is due one business day
     after the previous Step, the first on its path, an Action, and an If at once."""
     if kind not in KINDS:
         raise ValueError(f"Step kind must be one of {', '.join(KINDS)}")
@@ -311,9 +311,12 @@ def add_step(db, sequence_id: int, kind: str, after: int | None = None, *, secti
             if (parent_step_id is None) != (branch is None):
                 raise ValueError("A path under an If names the If and its branch.")
             mine = on_path(steps, path)
-            if mine and mine[-1]["kind"] == "if":
+            if front and mine:
+                after = mine[0]["position"] - 1
+            elif mine and mine[-1]["kind"] == "if":
                 raise Refused("Nothing follows an If on its path: add the Step to one of its paths.")
-            after = mine[-1]["position"] if mine else (max((st["position"] for st in steps), default=0))
+            else:
+                after = mine[-1]["position"] if mine else (max((st["position"] for st in steps), default=0))
         position = after + 1
         for st in reversed(steps):  # make room, highest first so (sequence, position) stays unique
             if st["position"] >= position:

@@ -303,7 +303,8 @@ def _sync(db, sid, path, wanted, changes, names, emails, pending):
             if i > 0:
                 after = sq.on_path(sq.sequence_steps(db, sid), path)[i - 1]["position"]
             step_id = sq.add_step(db, sid, w["kind"], after, section=path[0], parent_step_id=path[1], branch=path[2],
-                                  action_kind=w["action_kind"] or "enroll", condition=w["condition"] or "jeremy_picks")
+                                  action_kind=w["action_kind"] or "enroll", condition=w["condition"] or "jeremy_picks",
+                                  front=i == 0)
             sq.save_step(db, step_id, **{k: v for k, v in fields.items() if k != "reply_to_step_id"})
             changes.append(f"+ {where}: {w['kind']} line {w['line']}")
         else:

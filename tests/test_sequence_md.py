@@ -138,3 +138,15 @@ def test_g1_a_chained_warm_run_moves_to_the_agreed_date(db, close_seq, capsys): 
     assert sq.tasks_due(db, MONDAY) == [] and [t["kind"] for t in sq.tasks_due(db, MONDAY + timedelta(days=9))] == ["call"]
     with pytest.raises(SystemExit, match="before today"):
         agent.run(N(cmd="enrollment", enrollment_cmd="start", id=onboard["id"], date="2026-10-01"), db)
+
+
+def test_apply_puts_a_new_first_step_before_an_if(db):  # noqa: F811
+    """The Bench edit (2026-10-27): replacing the first Step of a path that ends in an If."""
+    def bench(first):
+        return (f"# Talent 1 Bench\n## On start\n## Steps\n{first}\n"
+                "- if (gap 63): jeremy_picks Role open for them?\n  - yes \"Role open\":\n  - no \"Not yet\":\n")
+    md.apply(db, bench("- email (gap 0, ready): Good to catch up\n  > Hi"))
+    changes = md.apply(db, bench("- call (gap 0)\n  > Catch up"))
+    sid = db.execute("SELECT id FROM sequences WHERE name = 'Talent 1 Bench'").fetchone()[0]
+    assert [st["kind"] for st in sq.on_path(sq.sequence_steps(db, sid), ("body", None, None))] == ["call", "if"]
+    assert "- Steps: email (was Step 1)" in changes and md.apply(db, md.render(db, sid)) == []
