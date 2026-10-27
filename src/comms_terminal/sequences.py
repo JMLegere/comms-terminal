@@ -244,8 +244,8 @@ def outline(steps: list[dict]) -> list[dict]:
                     child = (st["section"], st["id"], branch)
                     head(child, depth + 1, f"{'✓' if branch else '✗'} {label}")
                     walk(child, depth + 1, st["section"] == "body")
-        if completes and not (mine and mine[-1]["kind"] == "if"):
-            done = completion_of(path)
+        done = completion_of(path) if completes else None
+        if completes and (on_path(steps, done) or not (mine and mine[-1]["kind"] == "if")):  # finishing early runs it
             head(done, depth, "On completion")
             walk(done, depth, False)
 

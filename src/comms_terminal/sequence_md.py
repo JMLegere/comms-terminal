@@ -58,8 +58,9 @@ def render(db, sequence_id: int) -> str:
     out += _path(steps, ("start", None, None), 0, names, emails)
     out += ["## Steps"] + _path(steps, ("body", None, None), 0, names, emails)
     root = sq.on_path(steps, ("body", None, None))
-    if not (root and root[-1]["kind"] == "if"):
-        out += ["## On completion"] + _path(steps, ("completion", None, None), 0, names, emails)
+    done = _path(steps, ("completion", None, None), 0, names, emails)
+    if done or not (root and root[-1]["kind"] == "if"):  # a path ending in an If may still finish early (Lost)
+        out += ["## On completion"] + done
     return "\n".join(out) + "\n"
 
 
@@ -81,7 +82,7 @@ def _path(steps, path, depth, names, emails) -> list[str]:
                 if st["section"] == "body":
                     child_steps = sq.on_path(steps, child)
                     done = sq.on_path(steps, sq.completion_of(child))
-                    if done and not (child_steps and child_steps[-1]["kind"] == "if"):
+                    if done:
                         out.append(f"{pad}    - on completion:")
                         out += _path(steps, sq.completion_of(child), depth + 3, names, emails)
     return out

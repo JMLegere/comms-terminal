@@ -150,3 +150,16 @@ def test_apply_puts_a_new_first_step_before_an_if(db):  # noqa: F811
     sid = db.execute("SELECT id FROM sequences WHERE name = 'Talent 1 Bench'").fetchone()[0]
     assert [st["kind"] for st in sq.on_path(sq.sequence_steps(db, sid), ("body", None, None))] == ["call", "if"]
     assert "- Steps: email (was Step 1)" in changes and md.apply(db, md.render(db, sid)) == []
+
+
+def test_show_keeps_an_on_completion_after_steps_that_end_in_an_if(db):  # noqa: F811
+    """Bench, 2026-10-27: Lost before the pick runs the top-level On completion, so show must round-trip it."""
+    text = ("# Talent 1 Bench\n## On start\n## Steps\n- email (gap 0, ready): Good to catch up\n  > Hi\n"
+            "- if (gap 63): jeremy_picks Role open for them?\n  - yes \"Role open\":\n  - no \"Not yet\":\n"
+            "## On completion\n- action (gap 0): set_stage Talent Lost\n")
+    md.apply(db, text)
+    sid = db.execute("SELECT id FROM sequences WHERE name = 'Talent 1 Bench'").fetchone()[0]
+    shown = md.render(db, sid)
+    assert "## On completion\n- action (gap 0): set_stage Talent Lost" in shown and md.apply(db, shown) == []
+    rows = sq.outline(sq.sequence_steps(db, sid))
+    assert ("completion", None, None) in [r["path"] for r in rows if r["step"] is None]  # the console shows it too
