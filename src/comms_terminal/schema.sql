@@ -338,6 +338,7 @@ CREATE TABLE enrollments (
   starts_at       TEXT,  -- a later Start date (FR-SEQ-25): the first Task counts from it; NULL is the enroll day
   responded_at    TEXT,  -- first reply or connected call; kept through Resume, so enroll Actions can tell
   organization_id INTEGER REFERENCES organizations (id),  -- the Organization it is for (FR-SEQ-36)
+  identity_id     INTEGER REFERENCES identities (id),  -- the email address it sends to; NULL: the default
   CHECK (state = 'PAUSED' OR (state IN ('FINISHING', 'FINISHED')) = (reason IS NOT NULL))  -- Paused keeps a Finishing reason
 ) STRICT;
 CREATE UNIQUE INDEX enrollments_live ON enrollments (person_id, sequence_id) WHERE state != 'FINISHED';

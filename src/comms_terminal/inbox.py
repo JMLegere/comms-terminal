@@ -25,7 +25,7 @@ from typing import Protocol, Sequence
 from . import clock, files, platforms
 from .writers import writer
 
-SCHEMA_VERSION = 30
+SCHEMA_VERSION = 31
 WAIT = timedelta(days=4)  # Waiting for them ends after this with no reply: back to Todo to follow up (#116)
 EMAIL_CONFIRMATION_PENDING = "Email confirmation pending; wait for its sent receipt before replying."
 MIGRATIONS = {  # version -> statement that upgrades an existing database to it
@@ -587,6 +587,7 @@ PRAGMA legacy_alter_table = OFF;""",
 ALTER TABLE sequence_steps ADD COLUMN needs_edit INTEGER NOT NULL DEFAULT 1 CHECK (needs_edit IN (0, 1));
 UPDATE sequence_steps SET needs_edit = 0;
 ALTER TABLE composition_drafts ADD COLUMN needs_edit INTEGER NOT NULL DEFAULT 0 CHECK (needs_edit IN (0, 1));""",
+    31: "ALTER TABLE enrollments ADD COLUMN identity_id INTEGER REFERENCES identities (id);",
 }
 
 # ponytail: fixed list; extend when a free-mail sender forms an Organization by mistake.

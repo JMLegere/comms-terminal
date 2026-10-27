@@ -601,9 +601,10 @@ def parse_start(text: str, now: datetime) -> date | None:
 
 @writer("create")
 def enroll(db, person_id: int, sequence_id: int, now: datetime | None = None, start: date | None = None,
-           organization_id: int | None = None) -> int:
-    """One Person into one Sequence (FR-SEQ-6), for one Organization (FR-SEQ-36; default: their only one); its
-    first Task counts from the enroll day, or from a later Start date (FR-SEQ-25). On start runs first."""
+           organization_id: int | None = None, identity_id: int | None = None) -> int:
+    """One Person into one Sequence (FR-SEQ-6), for one Organization (FR-SEQ-36; default: their only one), sending
+    to one of their email addresses (default: the first of `address_choices`); its first Task counts from the
+    enroll day, or from a later Start date (FR-SEQ-25). On start runs first."""
     now = now or clock.now()
     today = now.astimezone(LOCAL).date()
     if start and start < today:
@@ -612,7 +613,8 @@ def enroll(db, person_id: int, sequence_id: int, now: datetime | None = None, st
     with db:
         _tx(db)
         eid = _enroll(db, person_id, sequence_id, now, starts,
-                      organization_id if organization_id is not None else default_organization(db, person_id))
+                      organization_id if organization_id is not None else default_organization(db, person_id),
+                      identity_id)
         materialize(db, now)
     return eid
 
@@ -627,6 +629,15 @@ def organization_choices(db, person_id: int) -> list[dict]:
                       (person_id,)).fetchone()
     key = inbox._org(last[0].split("@")[-1]) if last else None
     return sorted(orgs, key=lambda o: o["domain"] != key)
+
+
+def address_choices(db, person_id: int, organization_id: int | None = None) -> list[dict]:
+    """The email addresses an Enrollment can send to, the default first: the one at its Organization, else the
+    one added last (Jeremy, 2026-10-27)."""
+    return [dict(r) for r in db.execute(
+        "SELECT i.id, i.value FROM identities i LEFT JOIN organizations o ON o.id = ?"
+        " WHERE i.person_id = ? AND i.kind = 'email' AND NOT i.blocked"
+        " ORDER BY i.value LIKE '%@' || o.domain DESC, i.id DESC", (organization_id, person_id))]
 
 
 def default_organization(db, person_id: int) -> int | None:
@@ -647,7 +658,7 @@ def first_due(db, enrollment_id: int, now: datetime | None = None) -> str:
 
 
 def _enroll(db, person_id: int, sequence_id: int, now: datetime, starts: str | None = None,
-            organization_id: int | None = None) -> int:
+            organization_id: int | None = None, identity_id: int | None = None) -> int:
     p = db.execute("SELECT display_name, unsubscribed_at FROM persons WHERE id = ?", (person_id,)).fetchone()
     if p is None:
         raise KeyError(f"person {person_id}")
@@ -662,9 +673,12 @@ def _enroll(db, person_id: int, sequence_id: int, now: datetime, starts: str | N
                       (person_id, sequence_id)).fetchone()
     if live:
         raise Refused(f"{p['display_name']} is already in {s['name']} ({live[0].title()}).")
-    return db.execute("INSERT INTO enrollments (person_id, sequence_id, state, enrolled_at, starts_at, organization_id)"
-                      " VALUES (?, ?, 'ACTIVE', ?, ?, ?)",
-                      (person_id, sequence_id, clock.iso(now), starts, organization_id)).lastrowid
+    if identity_id is not None and not db.execute("SELECT 1 FROM identities WHERE id = ? AND person_id = ?"
+                                                  " AND kind = 'email'", (identity_id, person_id)).fetchone():
+        raise Refused(f"That email address is not {p['display_name']}'s.")
+    return db.execute("INSERT INTO enrollments (person_id, sequence_id, state, enrolled_at, starts_at, organization_id,"
+                      " identity_id) VALUES (?, ?, 'ACTIVE', ?, ?, ?, ?)",
+                      (person_id, sequence_id, clock.iso(now), starts, organization_id, identity_id)).lastrowid
 
 
 @writer("write")
@@ -874,7 +888,8 @@ def _enroll_action(db, task_id: int, st: dict, e: dict, now: datetime) -> str | 
         db.execute("UPDATE enrollments SET state = 'FINISHED', reason = coalesce(reason, 'COMPLETED'), finished_at = ?"
                    " WHERE id = ?", (clock.iso(now), e["id"]))
     try:
-        _enroll(db, e["person_id"], st["enroll_sequence_id"], now, organization_id=e["organization_id"])
+        _enroll(db, e["person_id"], st["enroll_sequence_id"], now, organization_id=e["organization_id"],
+                identity_id=e["identity_id"])
     except Refused as x:
         db.execute("UPDATE tasks SET state = 'DUE', done_at = NULL WHERE id = ?", (task_id,))
         if repeat:
@@ -903,15 +918,16 @@ def _task_draft(db, t) -> int:
     else:
         seq = get_sequence(db, t["sequence_id"])
         conn = db.execute("SELECT * FROM connections WHERE id = ?", (seq["connection_id"],)).fetchone()
-        address = db.execute("SELECT value FROM identities WHERE person_id = ? AND kind = 'email' ORDER BY id LIMIT 1",
-                             (t["person_id"],)).fetchone()
+        e = db.execute("SELECT identity_id, organization_id FROM enrollments WHERE id = ?", (t["enrollment_id"],)).fetchone()
+        choices = address_choices(db, t["person_id"], e["organization_id"])
+        address = next((c["value"] for c in choices if c["id"] == e["identity_id"]), choices[0]["value"] if choices else None)
         if conn is None or address is None:
             db.execute("UPDATE tasks SET flag = ? WHERE id = ?",
                        ("no email address" if address is None else "Sequence has no Connection", t["id"]))
             return 0
         subject, more = fill(t["subject"], values)
         missing += [m for m in more if m not in missing]
-        d = inbox.save_draft(db, dict(connection_id=conn["id"], kind="email", sender=conn["self_id"], to=address[0],
+        d = inbox.save_draft(db, dict(connection_id=conn["id"], kind="email", sender=conn["self_id"], to=address,
                                       cc="", subject=subject, body=body), task_id=t["id"])
     if t["needs_edit"]:
         db.execute("UPDATE composition_drafts SET needs_edit = 1 WHERE id = ?", (d["id"],))

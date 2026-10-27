@@ -5,6 +5,7 @@ import re
 from comms_terminal import inbox
 
 UNDO = {
+    31: "ALTER TABLE enrollments DROP COLUMN identity_id;",
     30: "ALTER TABLE composition_drafts DROP COLUMN needs_edit; ALTER TABLE sequence_steps DROP COLUMN needs_edit;"
         " ALTER TABLE sequences DROP COLUMN description;",
     29: """PRAGMA foreign_keys = OFF; PRAGMA legacy_alter_table = ON;

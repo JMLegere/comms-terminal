@@ -4824,7 +4824,8 @@ def enroll_person(app, person_id: int, name: str):
             org = picked.get("org")
             if org == "sole":
                 org = inbox.create_sole_proprietorship(app.db, person_id)
-            eid = sequences.enroll(app.db, person_id, int(sid), start=start, organization_id=org)
+            eid = sequences.enroll(app.db, person_id, int(sid), start=start, organization_id=org,
+                                   identity_id=picked.get("identity"))
         except sequences.Refused as e:
             app.notify(f"Not enrolled: {e}", severity="error")
             return
@@ -4851,17 +4852,31 @@ def enroll_person(app, person_id: int, name: str):
                 enroll(sid)
             elif choice == "later":
                 app.push_screen(Ask("Start on", "2026-12-01, or a number of days from today"), typed)
-        def start(org):
+        def start():
+            app.push_screen(Pick(f"Start {names[sid]}", [("today", "Start today"), ("later", "Start later…")],
+                                 "Start later holds the first Task until that day."), when)
+
+        def address(identity):
+            if identity is None:
+                return
+            picked["identity"] = int(identity)
+            start()
+
+        def organization(org):
             if org is None:
                 return
             picked["org"] = None if org == "none" else "sole" if org == "sole" else int(org)
-            app.push_screen(Pick(f"Start {names[sid]}", [("today", "Start today"), ("later", "Start later…")],
-                                 "Start later holds the first Task until that day."), when)
+            addresses = sequences.address_choices(app.db, person_id, picked["org"] if isinstance(picked["org"], int) else None)
+            if len(addresses) < 2:
+                return start()
+            app.push_screen(Pick(f"Send to which address? · {name}", [(str(a["id"]), escape(a["value"])) for a in addresses],
+                                 "Its emails go here. First: the one at its Organization, else the one added last."),
+                            address)
         orgs = [(str(o["id"]), escape(o["name"])) for o in sequences.organization_choices(app.db, person_id)]
         app.push_screen(Pick(f"For which Organization? · {name}", orgs + [("sole", f"New sole proprietorship: {escape(name)}")]
                              + ([] if orgs else [("none", "[#928374]None for now[/]")]),
                              "Its Actions set this Organization's Stage. First: the one their latest message came from."),
-                        start)
+                        organization)
     app.push_screen(Pick(f"Enroll {name}", options, "Every active Sequence. One live Enrollment per Person per Sequence."),
                     chosen)
 

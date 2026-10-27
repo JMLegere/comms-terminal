@@ -119,3 +119,4 @@ def test_setting_sends_from_gives_flagged_tasks_their_drafts(db):
     assert "sends from" in out
     inbox.wake(db, MONDAY)
     assert draft_of(db, t["id"])["sender"] == "j@agentmaple.example"
+

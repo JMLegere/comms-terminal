@@ -36,6 +36,8 @@ def add_parsers(sub):
     e.add_argument("--start", help="a later Start date: YYYY-MM-DD, or a number of days from today")
     e.add_argument("--org", help="the Organization it is for: a domain or exact name, or `sole` for a new Sole"
                                  " proprietorship (default: their only Organization)")
+    e.add_argument("--to", help="the email address its emails go to; a new one is added to the Person (default: the"
+                                " one at its Organization, else the one added last)")
     q = sub.add_parser("sequence", help="Sequences: list, show or apply one as Markdown, new, rename, archive")
     qs = q.add_subparsers(dest="sequence_cmd", required=True)
     qs.add_parser("list", help="every Sequence: id, name, Steps, Enrollments, use when")
@@ -131,7 +133,8 @@ def run(a, db):
             due = sequences.tasks_due(db)
             print("".join(task_markdown(db, t) + "\n" for t in due) or "No Tasks due.\n", end="")
         elif a.cmd == "enroll":
-            print(enroll(db, a.person, a.sequence, getattr(a, "start", None), getattr(a, "org", None)))
+            print(enroll(db, a.person, a.sequence, getattr(a, "start", None), getattr(a, "org", None),
+                         getattr(a, "to", None)))
         elif a.cmd == "sequence":
             print(sequence_cmd(db, a), end="")
         elif a.cmd == "step":
@@ -222,7 +225,8 @@ def draft(db, ref, changes, revision, connection_id, thread_id=None, needs_edit=
                       staged_files(db, ("draft", d["id"])))
 
 
-def enroll(db, person: str, sequence: str, start: str | None = None, org: str | None = None) -> str:
+def enroll(db, person: str, sequence: str, start: str | None = None, org: str | None = None,
+           to: str | None = None) -> str:
     rows = db.execute("SELECT p.id FROM persons p WHERE CAST(p.id AS TEXT) = ? OR lower(p.display_name) = lower(?)"
                       " UNION SELECT person_id FROM identities WHERE lower(value) = lower(?) AND person_id IS NOT NULL",
                       (person, person, person)).fetchall()
@@ -240,8 +244,18 @@ def enroll(db, person: str, sequence: str, start: str | None = None, org: str | 
         org_id = inbox.create_sole_proprietorship(db, rows[0][0])
     elif org:
         org_id = pipeline.find_org(db, org)["id"]
-    eid = sequences.enroll(db, rows[0][0], match[0]["id"], now, start=day, organization_id=org_id)
-    return f"Enrolled in {match[0]['name']}: the first Task is due {sequences.first_due(db, eid, now)}."
+    identity_id = None
+    if to:
+        if "@" not in to:
+            raise ValueError(f"--to {to!r} is not an email address")
+        try:
+            inbox.add_identity(db, rows[0][0], "email", to)
+        except inbox.IdentityTaken:
+            raise ValueError(f"{to} belongs to another Person") from None
+        identity_id = db.execute("SELECT id FROM identities WHERE kind = 'email' AND value = ?", (to.lower(),)).fetchone()[0]
+    eid = sequences.enroll(db, rows[0][0], match[0]["id"], now, start=day, organization_id=org_id, identity_id=identity_id)
+    sent = f", sending to {to.lower()}" if to else ""
+    return f"Enrolled in {match[0]['name']}{sent}: the first Task is due {sequences.first_due(db, eid, now)}."
 
 
 def find_person(db, person: str) -> int:
