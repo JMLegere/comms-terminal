@@ -536,3 +536,28 @@ def test_the_latest_edit_to_a_task_draft_wins_over_a_newer_stored_copy(tmp_path,
 
     run(Console(path), [scenario], size=(187, 40))
     assert seen == {"stored": "Jeremy's latest words", "error": False, "can_leave": True}
+
+
+def test_an_open_task_draft_shows_a_newer_stored_copy_without_unsaved_typing(tmp_path):
+    """An agent changed the Task's Draft while it was open and untouched: the editor follows the newest copy."""
+    path, _ = seeded(tmp_path)
+    db = inbox.connect(path)
+    s = sq.create_sequence(db, "Email first")
+    sq.save_step(db, sq.add_step(db, s, "email"), subject="Hello {first_name}", body="Hi {first_name}", needs_edit=0)
+    ana = next(p["id"] for p in inbox.people(db) if p["name"] == "Ana Ruiz")
+    sq.enroll(db, ana, s)
+    seen = {}
+
+    async def scenario(app, pilot):
+        app.main.go("tasks")
+        await pilot.pause()
+        view = app.main.draft_view
+        stored = inbox.get_draft(db, view.draft_id)
+        inbox.save_draft(db, {k: stored[k] for k in ("connection_id", "kind", "sender", "to", "cc", "subject")}
+                         | {"body": "an agent's newer words"}, draft_id=view.draft_id, expected_revision=stored["revision"])
+        app.check_changes()
+        await pilot.pause()
+        seen["shown"] = app.main.draft_view.query_one(TextArea).text
+
+    run(Console(path), [scenario], size=(187, 40))
+    assert seen["shown"] == "an agent's newer words"

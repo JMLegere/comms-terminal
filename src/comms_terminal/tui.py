@@ -5166,9 +5166,11 @@ class TasksPage(Page):
     def show_selected(self):
         t = self.selected()
         showing = f"task:{t['id']}:{t['draft_id']}:{t['flag']}" if t else "task:none"
-        if self.app.main.showing == showing:
-            return
         view = self.app.main.draft_view
+        if self.app.main.showing == showing:
+            if view and t and view.draft_id == t["draft_id"]:  # follow a newer stored copy, as the Drafts list does
+                view.refresh_data(inbox.get_draft(self.app.db, t["draft_id"]))
+            return
         if view and not view.save(refresh=False):
             return
         self.app.main.showing = showing
