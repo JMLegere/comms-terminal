@@ -233,8 +233,8 @@ def test_run_composes_linear_context(database, monkeypatch):
         monkeypatch.setattr(serve, f"{name}_context", lambda db, name=name: name)
     monkeypatch.setattr(serve, "hooks_server", lambda *args, **kwargs: server)
 
-    def reply_server(db_path, socket_path, senders, contexts):
-        seen.update(contexts)
+    def reply_server(db_path, socket_path, senders, contexts, writer=None):
+        seen.update(contexts, writer=writer)
         return server
 
     def interrupt(_):
@@ -246,4 +246,4 @@ def test_run_composes_linear_context(database, monkeypatch):
         Event=threading.Event, Lock=threading.Lock, Thread=lambda **kwargs: SimpleNamespace(start=lambda: None)))
     monkeypatch.setattr(serve, "time", SimpleNamespace(sleep=interrupt))
     serve.run(path, "/unused-synthetic.sock", "127.0.0.1", 0)
-    assert seen == {"tana": "tana", "attio": "attio", "linear": "linear"}
+    assert seen == {"tana": "tana", "attio": "attio", "linear": "linear", "writer": None}  # no Google sign-in

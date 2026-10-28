@@ -361,7 +361,8 @@ def _ics_time(value: str, params: dict) -> datetime | date | None:
 
 
 def invite(ics: str) -> dict | None:
-    """The first VEVENT of an iCalendar part: summary, start, end, organizer, guests, location, method."""
+    """The first VEVENT of an iCalendar part: summary, start, end, organizer, guests, location, method, and the
+    uid and recurrence_id that Respond finds the Event by (FR-13e)."""
     lines = re.sub(r"\r?\n[ \t]", "", ics).splitlines()
     ev, method, inside = {"guests": 0}, "", False
     for ln in lines:
@@ -379,6 +380,10 @@ def invite(ics: str) -> dict | None:
             ev[key.lower()] = value.replace("\\,", ",").replace("\\;", ";").replace("\\n", " ").strip()
         elif inside and key in ("DTSTART", "DTEND"):
             ev[key.lower()] = _ics_time(value.strip(), params)
+        elif inside and key == "UID":
+            ev["uid"] = value.strip()
+        elif inside and key == "RECURRENCE-ID":
+            ev["recurrence_id"] = _ics_time(value.strip(), params)
         elif inside and key == "ORGANIZER":
             ev["organizer"] = params.get("CN", "").strip('"') or value.removeprefix("mailto:")
         elif inside and key == "ATTENDEE":

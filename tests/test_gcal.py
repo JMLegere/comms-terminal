@@ -133,21 +133,22 @@ def test_a_lost_or_failed_write_is_unknown_and_sent_once(tmp_path, failure):
 
 def test_a_failed_read_is_unavailable_because_nothing_changed(tmp_path):
     google = Google({LIST: TimeoutError("timed out")})
-    assert client(google, tmp_path).respond("uid-1@google.com", None, "accept")["outcome"] == "unavailable"
+    out = client(google, tmp_path).respond("uid-1@google.com", None, "accept")
+    assert out["outcome"] == "unavailable" and "broken" not in out  # a blip, not a lost sign-in
     assert google.sent("PATCH") == []
 
 
 def test_a_revoked_sign_in_is_unavailable_and_reads_nothing(tmp_path):
     google = Google(token=(400, {"error": "invalid_grant"}))
     out = client(google, tmp_path).respond("uid-1@google.com", None, "accept")
-    assert out["outcome"] == "unavailable" and "sign-in" in out["error"]
+    assert out["outcome"] == "unavailable" and "sign-in" in out["error"] and out["broken"] is True
     assert [r["method"] for r in google.requests] == ["POST"]
 
 
 def test_a_rejected_access_token_refreshes_once(tmp_path):
     google = Google({LIST: (401, {"error": {"message": "Invalid Credentials"}})})
     out = client(google, tmp_path).respond("uid-1@google.com", None, "accept")
-    assert out["outcome"] == "unavailable"
+    assert out["outcome"] == "unavailable" and out["broken"] is True
     assert [r["method"] for r in google.requests] == ["POST", "GET", "POST", "GET"]
 
 

@@ -844,13 +844,15 @@ def test_unit_and_source_allowlist_keep_gate_credential_and_restart_contracts():
         "email-hook-secret", "resend-api-key", "attio-token", "fastmail-oauth",
         "quo-webhook-secret", "quo-api-key", "slack-signing-secret", "slack-user-token",
     )
-    assert runtime.OPTIONAL_CREDENTIALS == ("tana-oauth", "linear-token", "resend-webhook-secret", "google-calendar-ics")
+    assert runtime.OPTIONAL_CREDENTIALS == ("tana-oauth", "linear-token", "resend-webhook-secret", "google-calendar-ics",
+                                            "google-calendar-oauth")
     assert admitted == {
         **{name: "/etc/credstore.encrypted/comms-terminal." + name for name in runtime.CREDENTIALS},
         "tana-oauth": "comms-terminal.independent-tana-oauth",
         "linear-token": "comms-terminal.linear-token",
         "resend-webhook-secret": "comms-terminal.resend-webhook-secret",
         "google-calendar-ics": "comms-terminal.google-calendar-ics",
+        "google-calendar-oauth": "comms-terminal.google-calendar-oauth",
     }
     ignore = (ROOT / ".dockerignore").read_text().splitlines()
     assert "**" in ignore

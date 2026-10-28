@@ -1,10 +1,10 @@
 """The service: public hooks (/hooks/email, /hooks/slack, /hooks/quo, /hooks/resend), the local reply socket (POST /reply;
-/call, /sync and /raw for Comms Terminal's laptop copy, remote.py), wake(),
+/respond for invite Responses; /call, /sync and /raw for Comms Terminal's laptop copy, remote.py), wake(),
 and a health check of every Connection each 30 minutes.
 
 Credentials come from systemd's $CREDENTIALS_DIRECTORY (LoadCredentialEncrypted=):
 email-hook-secret, slack-signing-secret, slack-user-token, resend-api-key, fastmail-oauth, quo-webhook-secret,
-quo-api-key, tana-oauth, attio-token, linear-token, resend-webhook-secret, google-calendar-ics.
+quo-api-key, tana-oauth, attio-token, linear-token, resend-webhook-secret, google-calendar-ics, google-calendar-oauth.
 """
 
 import base64
@@ -22,7 +22,7 @@ from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from . import attio, calendar, clock, email, fastmail, files, inbox, linear, mcp, meetings, platforms, quo, slack, tana
+from . import attio, calendar, clock, email, fastmail, files, gcal, inbox, linear, mcp, meetings, platforms, quo, slack, tana
 
 
 def credential(name: str) -> bytes | None:
@@ -42,6 +42,13 @@ def tana_context(db) -> tana.Context | None:
     cred = credential("tana-oauth")
     state = Path(db.execute("PRAGMA database_list").fetchone()[2] or ".").parent / "tana-oauth.json"
     return tana.Context(tana.Client.load(cred, state)) if cred else None
+
+
+def gcal_client(db) -> gcal.Client | None:
+    """The Google Calendar Writer (FR-13e), or None without the `google-calendar-oauth` credential (NFR-IR-4)."""
+    cred = credential("google-calendar-oauth")
+    state = Path(db.execute("PRAGMA database_list").fetchone()[2] or ".").parent / "google-calendar-oauth.json"
+    return gcal.Client.load(cred, state) if cred else None
 
 
 def attio_context(db) -> tana.Context | None:
@@ -145,6 +152,41 @@ class Senders:
                 return None
             self.made[connection["id"]] = sender
         return self.made[connection["id"]]
+
+
+RESPOND_STATUS = {"confirmed": 200, "refused": 400, "unknown": 502, "unavailable": 503}
+WRITES_BROKEN = "Google Calendar writes broken: "
+
+
+def handle_respond(db, body: bytes, client: gcal.Client | None) -> tuple[int, dict]:
+    """POST /respond: {"thread_id", "answer": accept|maybe|decline} -> (status, {outcome, error?, status?}) (FR-13e).
+    Sets Jeremy's own response through Google Calendar, once; a confirmed one adds a Meeting Activity and leaves
+    Status as it is. A refused sign-in marks the Google Calendar Connection broken; a later answer clears it."""
+    try:
+        req = json.loads(body)
+        if not (isinstance(req, dict) and set(req) == {"thread_id", "answer"} and type(req["thread_id"]) is int
+                and 0 < req["thread_id"] <= 2**63 - 1 and req["answer"] in gcal.STATUS):
+            raise ValueError
+    except (ValueError, TypeError):
+        return 400, {"outcome": "refused", "error": "Expected a Thread and an answer: accept, maybe or decline"}
+    try:
+        target = meetings.invite_target(db, req["thread_id"])
+    except KeyError:
+        return 404, {"outcome": "refused", "error": "No such Thread"}
+    if target is None:
+        return 400, {"outcome": "refused", "error": "This Thread holds no invitation."}
+    if client is None:
+        return 503, {"outcome": "unavailable", "error": "Google Calendar writes are not connected"}
+    uid, rid = target
+    out = client.respond(uid, rid, req["answer"])
+    if (c := meetings._connection(db)) is not None:  # writes health (FR-IR-10), apart from the feed's
+        if out.get("broken"):
+            inbox.set_connection_error(db, c["id"], WRITES_BROKEN + out["error"])
+        elif out["outcome"] in ("confirmed", "refused") and (c["last_error"] or "").startswith(WRITES_BROKEN):
+            inbox.set_connection_error(db, c["id"], None)
+    if out["outcome"] == "confirmed":
+        meetings.respond_recorded(db, uid, out["status"], rid)
+    return RESPOND_STATUS[out["outcome"]], out
 
 
 def handle_reply(db, body: bytes, senders: Senders) -> tuple[int, dict]:
@@ -476,8 +518,10 @@ class UnixHTTPServer(socketserver.ThreadingUnixStreamServer):
     daemon_threads = True
 
 
-def reply_server(db_path: str, socket_path: str, senders: Senders, contexts: dict | None = None) -> UnixHTTPServer:
-    """The local socket: POST /reply, POST /send-draft, POST /slack-conversations, and POST /<source> for each Context source in `contexts` ({"tana": …})."""
+def reply_server(db_path: str, socket_path: str, senders: Senders, contexts: dict | None = None,
+                 writer: gcal.Client | None = None) -> UnixHTTPServer:
+    """The local socket: POST /reply, POST /send-draft, POST /slack-conversations, POST /respond (through `writer`),
+    and POST /<source> for each Context source in `contexts` ({"tana": …})."""
     # Reactions are a provider operation, not a remote /call ledger write.
     contexts = contexts or {}
     def reply(headers, body):
@@ -508,6 +552,14 @@ def reply_server(db_path: str, socket_path: str, senders: Senders, contexts: dic
         db = inbox.connect(db_path)
         try:
             status, out = handle_slack_reactions(db, body, senders)
+        finally:
+            db.close()
+        return status, "application/json", json.dumps(out).encode()
+
+    def respond(headers, body):
+        db = inbox.connect(db_path)
+        try:
+            status, out = handle_respond(db, body, writer)
         finally:
             db.close()
         return status, "application/json", json.dumps(out).encode()
@@ -545,7 +597,7 @@ def reply_server(db_path: str, socket_path: str, senders: Senders, contexts: dic
     try:
         return UnixHTTPServer(socket_path, _handler({"/reply": reply, "/send-draft": send_draft,
                                                          "/slack-conversations": slack_conversations, "/attio-people": attio_people, "/tana": context_route("tana"), "/attio": context_route("attio"), "/linear": linear_route,
-                                                         "/slack-reactions": slack_reactions,
+                                                         "/slack-reactions": slack_reactions, "/respond": respond,
                                                          "/call": json_route(lambda b: remote.handle_call(db_path, b)),
                                                          "/sync": json_route(lambda b: remote.handle_sync(db_path, changes, b)),
                                                          "/raw": json_route(lambda b: remote.handle_raw(db_path, b))}))
@@ -922,11 +974,12 @@ def run(db_path: str, socket_path: str, host: str, port: int, files_host: str | 
     fm = fastmail_client(db)
     senders = Senders({"fastmail": fm} if fm is not None else {})
     contexts = {"tana": tana_context(db), "attio": attio_context(db), "linear": linear_context(db)}
+    writer = gcal_client(db)
     if credential(calendar.CREDENTIAL):
         meetings.connect(db)  # go-live: only Events first seen from now become Meeting Threads
     db.close()
     stop, kick = threading.Event(), threading.Event()
-    servers = [hooks_server(db_path, host, port, kick=kick), reply_server(db_path, socket_path, senders, contexts)]
+    servers = [hooks_server(db_path, host, port, kick=kick), reply_server(db_path, socket_path, senders, contexts, writer=writer)]
     if files_host:  # LAN address only (NFR-A2); without it, chips keep their Platform links
         servers.append(files_server(db_path, files_host, files_port))
     threads = [threading.Thread(target=s.serve_forever, daemon=True) for s in servers]

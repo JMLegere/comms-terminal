@@ -205,7 +205,7 @@ Status key in brackets:
 
 ### Organization actions
 
-- **FR-OA** [C]: Threads do the work and an Organization only reads them (ADR 0007). A Person belongs to the Organizations of their company email domains, plus Jeremy's own additions and less his removals (Membership: `o` on a Person, `p` on an Organization). An Organization's roll-up is the earliest of Todo, Snoozed, and Done over the Threads its People wrote in or were addressed in, with an unfinished Enrollment counting as Snoozed; in an open or paying Stage and Done, it is Unattended, and Today, the Pipeline board, and the Organization page show it. A Snooze always has a date. Google Calendar is a Platform read through its feed, written to only by Jeremy's Responses (FR-13e): each Event with someone outside Agent Maple, first seen after go-live, is one Thread in Todo, and each held, cancelled, or declined occurrence is a Meeting Activity that puts it back in Todo. Detail: `.agents/prd/2026-10-24-organization-actions.md` (FR-OA-1..16); design: `docs/design/console.md` § Today, § Pipeline, § Meetings.
+- **FR-OA** [C]: Threads do the work and an Organization only reads them (ADR 0007). A Person belongs to the Organizations of their company email domains, plus Jeremy's own additions and less his removals (Membership: `o` on a Person, `p` on an Organization). An Organization's roll-up is the earliest of Todo, Snoozed, and Done over the Threads its People wrote in or were addressed in, with an unfinished Enrollment counting as Snoozed; in an open or paying Stage and Done, it is Unattended, and Today, the Pipeline board, and the Organization page show it. A Snooze always has a date. Google Calendar is a Platform read through its feed, written to only by Jeremy's Responses (FR-13e): each Event with someone besides Jeremy, inside or outside Agent Maple (decision #142), first seen after go-live, is one Thread in Todo, and each held, cancelled, or declined occurrence is a Meeting Activity that puts it back in Todo. Responding to an Event booked before go-live starts its Thread. Detail: `.agents/prd/2026-10-24-organization-actions.md` (FR-OA-1..16); design: `docs/design/console.md` § Today, § Pipeline, § Meetings.
 
 ### Non-functional
 
@@ -1024,7 +1024,12 @@ All entries are dated 2026-10-10; exact times are unproven unless noted. Full de
 - **141**
   - Request / decision: Jeremy Responds to invites from the console (FR-13e, ADR 0009): Accept, Maybe, or Decline from the Meeting Thread or the invitation email Thread, through the Google Calendar API, with one sign-in held by the service (full calendar access). Reads stay on the secret iCal feed. Keys: `i`, then `y`/`m`/`n`. A Meeting Thread's Response covers the series; Status is unchanged; agents never respond. Supersedes #108's "RSVP stays in Gmail" and ADR 0005's statement that the console never writes to the calendar. Considered: open the Event in Google, the agents' own Google connection, Google's per-invitee response links (undocumented; missing for organizers outside Google, about a quarter of invites), and an emailed iMIP reply (Jeremy's own calendar would stay Unanswered).
   - Source: Jeremy's discovery (2026-10-27, `.agents/discovery/2026-10-27-invite-actions.md`), "ok yes, E", and the PRD gap-closing answers: "One key, then pick", "i, for invite", "The whole series", "Status unchanged", "agents can't respond to invites.", "Keep full access + runbook", "Accept the risk" (Outlook organizers untested); PRD approved 2026-10-27, "Phase 0–1 only".
-  - Status: Approved; Phase 1 (contract: this entry, FR-13e, GLOSSARY, ADR 0009, runbook, console design, `@wip` scenarios) in progress 2026-10-27. Phases 2–6 not authorized.
+  - Status: Approved; amended by #142. Built on branch `jeremy/invite-responses`: Phase 1 (contract: this entry, FR-13e, GLOSSARY, ADR 0009, runbook, console design, scenarios) 2026-10-27; Phase 2 (Google Calendar Writer, sign-in script) 2026-10-27; Phase 3 (service route `/respond`) 2026-10-28. Phases 4 (console) and 6 (release) not authorized.
+
+- **142**
+  - Request / decision: Every Event with someone besides Jeremy is a Meeting Thread, internal ones included, under the same rules as outside ones: booked, held, cancelled, and declined put the Thread in Todo. A Response to an Event with no Thread yet (booked before go-live) starts its Thread, in Todo like a booking, with the Response as its first Activity. So every recorded Response lands on a Meeting Thread, never on an email Thread, whose history feeds reply headers and quoting. Events with no one besides Jeremy (focus blocks) stay off Threads. Amends #140 and ADR 0007 ("an attendee outside agentmaple.com") and FR-IR-6.
+  - Source: Jeremy, 2026-10-28, choosing between recording only on existing Meeting Threads, never recording, and a Thread for every Event: "option 3 makes the most sense to me"; then "Same as outside" (internal Threads enter Todo like outside ones) and "Create on answer (Recommended)".
+  - Status: Built on branch `jeremy/invite-responses` with Phase 3 of the invite responses PRD; not released.
 
 ## 8. Work log
 
@@ -1171,6 +1176,12 @@ All entries are dated 2026-10-10; exact times are unproven unless noted. Full de
   - Activity: Invite responses Phase 1 (contract first, decision #141): FR-13e, the FR-15 and FR-OA notes, decision #141, traceability, GLOSSARY Respond, ADR 0009, runbook §3h, console design, and `@wip` scenarios in `features/calendar.feature`
   - Result: in progress on branch `jeremy/invite-responses`; no code or credential changes
   - Evidence: `.agents/prd/2026-10-27-invite-responses.md`
+  - Basis: Source-observed
+- **2026-10-28T11:50:19+00:00**
+  - Actor: Agent
+  - Activity: Invite responses Phases 2 and 3: the Google Calendar Writer (`gcal.py`), the sign-in script, and the service route `/respond` with its Thread-to-Event resolver, Meeting Activity, and writes health; AS-IR-1–6 pass
+  - Result: on branch `jeremy/invite-responses`, not pushed; the console key (Phase 4) is not built, so nothing calls the route yet
+  - Evidence: `src/comms_terminal/gcal.py`, `src/comms_terminal/serve.py`, `src/comms_terminal/meetings.py`, `tests/test_invite_responses.py`, `features/calendar.feature`
   - Basis: Source-observed
 
 ## 9. Sources and coverage check

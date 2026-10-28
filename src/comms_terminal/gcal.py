@@ -5,7 +5,8 @@ The sign-in is the `google-calendar-oauth` credential, {client_id, client_secret
 Workspace app (`scripts/oauth_google.py`). A refresh token Google rotates is kept in `state` (0600, beside the
 database) and preferred from then on, as mcp.McpClient does. `respond` returns an outcome, never a token:
 confirmed (Google took it), refused (nothing changed), unknown (the write may or may not have landed; never
-retried), or unavailable (no sign-in, or Google could not be read, so nothing changed).
+retried), or unavailable (no sign-in, or Google could not be read, so nothing changed). An unavailable outcome
+whose sign-in Google refused also carries "broken": True, for the writes health (FR-IR-10).
 """
 
 import json
@@ -27,6 +28,10 @@ USER_AGENT = "comms-terminal/0.1 (+https://github.com/JMLegere/comms-terminal)"
 
 class GcalError(Exception):
     """Google could not be reached or read, or the sign-in is gone: nothing changed."""
+
+
+class SignInError(GcalError):
+    """Google refused the sign-in (expired or revoked): writes stay broken until Jeremy signs in again."""
 
 
 class _Unknown(Exception):
@@ -74,7 +79,7 @@ class Client:
         except ValueError:
             tok = {}
         if st != 200 or "access_token" not in tok:  # error code only: Google's description can quote the token
-            raise GcalError(f"Google Calendar sign-in expired or revoked (HTTP {st} {tok.get('error', '')})".strip())
+            raise SignInError(f"Google Calendar sign-in expired or revoked (HTTP {st} {tok.get('error', '')})".strip())
         self.access = tok["access_token"]
         self.expires = clock.now() + timedelta(seconds=int(tok.get("expires_in", 3600)) - 120)
         new = tok.get("refresh_token")
@@ -106,7 +111,7 @@ class Client:
                 self.access = None
                 continue
             if st == 401:
-                raise GcalError("Google Calendar sign-in expired or revoked (HTTP 401)")
+                raise SignInError("Google Calendar sign-in expired or revoked (HTTP 401)")
             if st >= 500:
                 if method == "GET":
                     raise GcalError(f"Google Calendar failed (HTTP {st})")
@@ -128,7 +133,8 @@ class Client:
             try:
                 return self._respond(uid, recurrence_id, STATUS[answer])
             except GcalError as e:
-                return {"outcome": "unavailable", "error": str(e)}
+                out = {"outcome": "unavailable", "error": str(e)}
+                return out | {"broken": True} if isinstance(e, SignInError) else out
             except _Unknown:
                 return {"outcome": "unknown", "error": "Google Calendar did not confirm the response."}
 

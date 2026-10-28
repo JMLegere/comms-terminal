@@ -39,6 +39,7 @@ LoadCredentialEncrypted=tana-oauth:comms-terminal.independent-tana-oauth
 LoadCredentialEncrypted=linear-token:comms-terminal.linear-token
 LoadCredentialEncrypted=resend-webhook-secret:comms-terminal.resend-webhook-secret
 LoadCredentialEncrypted=google-calendar-ics:comms-terminal.google-calendar-ics
+LoadCredentialEncrypted=google-calendar-oauth:comms-terminal.google-calendar-oauth
 
 NoNewPrivileges=yes
 ProtectSystem=strict

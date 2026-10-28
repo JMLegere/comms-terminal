@@ -196,7 +196,7 @@ def test_run_adds_the_file_server_for_a_files_host(tmp_path, monkeypatch):
     for name in ("attio", "tana", "linear"):
         monkeypatch.setattr(serve, f"{name}_context", lambda db: None)
     monkeypatch.setattr(serve, "hooks_server", lambda *args, **kwargs: server)
-    monkeypatch.setattr(serve, "reply_server", lambda *args: server)
+    monkeypatch.setattr(serve, "reply_server", lambda *args, **kwargs: server)
     monkeypatch.setattr(serve, "files_server", lambda *args: started.append(args) or server)
     monkeypatch.setattr(serve, "credential", lambda name: None)
     monkeypatch.setattr(serve, "threading", SimpleNamespace(

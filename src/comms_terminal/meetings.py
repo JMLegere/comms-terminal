@@ -2,21 +2,24 @@
 
 A Meeting is synchronous comms, recorded as an Activity on a Thread the way a Phone call is: a MESSAGE whose
 `data.meeting` says what happened. Google Calendar is a read-only Platform with one Connection; its creation
-time is go-live. Each Event UID with an attendee outside Agent Maple, first seen after go-live, is a Channel of
+time is go-live. Each Event UID with someone besides Jeremy, first seen after go-live, is a Channel of
 kind meeting holding one Thread, so a repeating series is one Thread. Every Meeting Activity puts the Thread in
 Todo: booked (a new Thread), held (an occurrence's end time passed), cancelled (it became a Deleted Event), and
-declined (an outside attendee said no). A reschedule only moves the Event on the Calendar.
+declined (another attendee said no). A reschedule only moves the Event on the Calendar. Jeremy's own
+Response (FR-13e) is a Meeting Activity from him that leaves Status as it is; answering an Event with no Thread yet
+(booked before go-live) starts its Thread. Internal Events are Meeting Threads too (decision #142).
 
 Nothing here runs a loop: `synced` runs after a calendar read that changed something, `held` in the wake pass.
 """
 
 import json
 import re
-from datetime import datetime, timedelta
+import secrets
+from datetime import date, datetime, timedelta, timezone
 
 import icalendar
 
-from . import calendar as cal, clock, inbox
+from . import calendar as cal, clock, files, inbox, render
 
 EXTERNAL = "google-calendar"  # the Connection's external_id
 NOT_PEOPLE = ("calendar.google.com",)  # rooms and group calendars: resource.calendar.google.com, …
@@ -37,15 +40,14 @@ def _connection(db):
     return db.execute("SELECT * FROM connections WHERE platform = 'gcal'").fetchone()
 
 
-def _outside(o: dict, mine: set[str]) -> list[dict]:
-    """The organizer and attendees outside Agent Maple, organizer first: {email, name, state}."""
-    own = {d for m in mine if "@" in m and (d := m.rsplit("@", 1)[1]) not in inbox.FREE_MAIL}  # Agent Maple's
+def _others(o: dict, mine: set[str]) -> list[dict]:
+    """The organizer and attendees besides Jeremy, rooms and group calendars left out, organizer first:
+    {email, name, state}."""
     people = ([{**o["organizer"], "state": "ACCEPTED"}] if o["organizer"] else []) + o["attendees"]
     out, seen = [], set()
     for p in people:
         domain = p["email"].rsplit("@", 1)[-1]
-        if "@" in p["email"] and p["email"] not in seen | mine and domain not in own \
-                and not any(domain.endswith(n) for n in NOT_PEOPLE):
+        if "@" in p["email"] and p["email"] not in seen | mine and not any(domain.endswith(n) for n in NOT_PEOPLE):
             seen.add(p["email"])
             out.append(p)
     return out
@@ -76,7 +78,7 @@ def _record(db, c, o: dict, what: str, people: list[dict], rid: str, at: datetim
     names = ", ".join(p["name"] or p["email"] for p in people)
     content = "\n".join([f"{WHAT[what]} · {o['title']}", f"{meeting['where']} · {start:%a %b %-d %H:%M}–{end:%H:%M}"]
                         + ([f"Join: {o['join_url']}"] if o["join_url"] else []) + [f"With: {names}"])
-    others = [p for p in people if p is not sender]  # every outside attendee is a Participant (FR-OA-15)
+    others = [p for p in people if p is not sender]  # every other attendee is a Participant (FR-OA-15)
     return inbox.ingest(db, inbox.Incoming(
         c["id"], o["uid"], "meeting", "MESSAGE", f"gcal:{o['uid']}:{rid}:{what}{key}",
         inbox.Identity("email", sender["email"], sender["name"] or None), at, content, title=o["title"],
@@ -96,8 +98,8 @@ def _threads(db, c) -> dict[str, dict]:
 
 
 def synced(db, now: datetime | None = None) -> int:
-    """After a calendar read that changed something: book each new Event with someone outside Agent Maple, and
-    record cancellations and outside attendees' declines. Returns the Activities recorded."""
+    """After a calendar read that changed something: book each new Event with someone besides Jeremy, and
+    record cancellations and other attendees' declines. Returns the Activities recorded."""
     c = _connection(db)
     if c is None:
         return 0
@@ -110,7 +112,7 @@ def synced(db, now: datetime | None = None) -> int:
         if uid in known:
             continue
         o = _parse(ics, mine)
-        if people := _outside(o, mine):
+        if people := _others(o, mine):
             n += _record(db, c, o, "booked", people, "", now) is not None
             known[uid] = {"created_at": clock.iso(now)}
     # Cancelled and declined (FR-OA-14): only what changed after the Thread began
@@ -122,11 +124,11 @@ def synced(db, now: datetime | None = None) -> int:
                     known[uid]["created_at"]) and \
                     (r["recurrence_id"] == "" or not series_gone):
                 o = _parse(r["ics"], mine)
-                if people := _outside(o, mine):
+                if people := _others(o, mine):
                     n += _record(db, c, o, "cancelled", people, r["recurrence_id"], now) is not None
             elif not r["deleted_at"]:
                 o = _parse(r["ics"], mine)
-                people = _outside(o, mine)
+                people = _others(o, mine)
                 for p in people:
                     if p["state"] == "DECLINED" and booked.get(p["email"]) != "DECLINED":
                         n += _record(db, c, o, "declined", people, r["recurrence_id"], now, sender=p,
@@ -164,6 +166,67 @@ def held(db, now: datetime | None = None) -> int:
         if t is None or o["all_day"] or o["state"] == "DECLINED":
             continue
         end = clock.local(o["end"])
-        if datetime.fromisoformat(t["created_at"]) < end <= local and (people := _outside(o, mine)):
+        if datetime.fromisoformat(t["created_at"]) < end <= local and (people := _others(o, mine)):
             n += _record(db, c, o, "held", people, cal._rid(o["start"]), end) is not None
     return n
+
+
+ANSWERED = {"accepted": "Accepted", "tentative": "Maybe", "declined": "Declined"}  # Google responseStatus -> words
+
+
+def invite_target(db, thread_id: int) -> tuple[str, str | None] | None:
+    """The Event a Thread Responds to (FR-IR-2, FR-IR-5): (UID, None) for a Meeting Thread, so the whole series;
+    for an email Thread, the UID and occurrence in its newest stored calendar part, the occurrence as Google's
+    instance suffix (UTC `YYYYMMDDTHHMMSSZ`, or `YYYYMMDD` all day). None when the Thread holds no invitation.
+    Raises KeyError for an unknown Thread."""
+    t = inbox.get_thread(db, thread_id)
+    ch = db.execute("SELECT ch.kind, ch.native_id, c.platform FROM channels ch"
+                    " JOIN connections c ON c.id = ch.connection_id WHERE ch.id = ?", (t.channel_id,)).fetchone()
+    if ch["platform"] == "gcal" and ch["kind"] == "meeting":
+        return ch["native_id"], None
+    raw = files.raw_dir(db)
+    for (sha,) in db.execute(
+            "SELECT json_extract(data, '$.raw') FROM thread_activities WHERE thread_id = ? AND kind = 'MESSAGE'"
+            " AND json_extract(data, '$.raw') IS NOT NULL ORDER BY occurred_at DESC, id DESC", (t.id,)):
+        if raw is None or not re.fullmatch(r"[0-9a-f]{64}", str(sha)):
+            continue
+        body = render.load(str(raw / f"{sha}.eml"))
+        ev = body.invite if body else None
+        if ev and ev.get("uid"):
+            rid = ev.get("recurrence_id")
+            if isinstance(rid, datetime):
+                rid = rid.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            elif isinstance(rid, date):
+                rid = rid.strftime("%Y%m%d")
+            return ev["uid"], rid
+    return None
+
+
+def respond_recorded(db, uid: str, status: str, rid: str | None = None) -> int | None:
+    """A confirmed Response (FR-IR-6): one Meeting Activity from Jeremy, "Accepted · Pints", on the UID's Meeting
+    Thread; Status stays as it is (FR-IR-7). An Event with no Thread yet (booked before go-live) starts one, in
+    Todo like a booking. None without the Calendar Connection or the Event in the feed."""
+    c = _connection(db)
+    if c is None:
+        return None
+    native_id = f"gcal:{uid}:{rid or ''}:responded:{secrets.token_hex(4)}"
+    meeting = {"what": "responded", "answer": status, "uid": uid, "rid": rid or ""}
+    if (t := _threads(db, c).get(uid)) is not None:  # inserted directly: ingest would move a Meeting to Todo
+        content = f"{ANSWERED[status]} · {inbox.get_thread(db, t['id']).title}"
+        with db:
+            return db.execute(
+                "INSERT INTO activities (thread_id, kind, occurred_at, native_id, content, data)"
+                " VALUES (?, 'MESSAGE', ?, ?, ?, ?)",
+                (t["id"], clock.iso(clock.now()), native_id, content, json.dumps({"meeting": meeting}))).lastrowid
+    r = db.execute("SELECT ics FROM events WHERE uid = ? AND recurrence_id = '' AND deleted_at IS NULL",
+                   (uid,)).fetchone()
+    if r is None:
+        return None
+    mine = cal.me(db)
+    o = _parse(r["ics"], mine)
+    people = _others(o, mine)
+    inbox.ingest(db, inbox.Incoming(
+        c["id"], uid, "meeting", "MESSAGE", native_id, None, clock.now(), f"{ANSWERED[status]} · {o['title']}",
+        title=o["title"], data={"meeting": meeting, "to": [p["email"] for p in people]}, channel_name=o["title"],
+        synchronous="meeting", participants=tuple(inbox.Identity("email", p["email"], p["name"] or None) for p in people)))
+    return db.execute("SELECT id FROM activities WHERE native_id = ?", (native_id,)).fetchone()[0]

@@ -4,9 +4,10 @@ Feature: Calendar
   by its Channel's Event UID, or of an invitation email Thread by the UID in the message's stored calendar part,
   and asks the Google Calendar Writer (gcal.Client) to set Jeremy's own response; Google tells the organizer.
   A confirmed Response adds a Meeting Activity from Jeremy (meetings.respond_recorded) and leaves Status unchanged.
-  The Google Calendar Writer here is a fake that records each request; nothing reaches Google.
+  Google here is a fake that records each request; nothing reaches Google. Scenarios without @wip run against
+  serve.handle_respond; the picker (AS-IR-7) waits for the console.
 
-  @wip @AS-IR-1 @FR-13e @FR-IR-1 @FR-IR-4 @FR-IR-6 @FR-IR-7
+  @AS-IR-1 @FR-13e @FR-IR-1 @FR-IR-4 @FR-IR-6 @FR-IR-7
   Scenario: Jeremy accepts an invite from its Meeting Thread
     Given a Meeting Thread for the Event "Pints" organized by "brendan.wood@snaptrade.com" with Jeremy's Invite state "Unanswered"
     And the Thread has Status "TODO" and Status Detail "CREATED"
@@ -16,7 +17,7 @@ Feature: Calendar
     And the Thread has a Meeting Activity from Jeremy saying "Accepted · Pints"
     And the Thread has Status "TODO" and Status Detail "CREATED"
 
-  @wip @AS-IR-2 @FR-13e @FR-IR-2 @FR-IR-4
+  @AS-IR-2 @FR-13e @FR-IR-2 @FR-IR-4
   Scenario: Jeremy declines an invite from its invitation email Thread
     Given an invitation email Thread whose stored message carries a calendar part for the Event "NBIF review" organized by "laila.theriault@nbif.ca"
     And a Meeting Thread for the same Event
@@ -25,30 +26,30 @@ Feature: Calendar
     And the outcome is "confirmed"
     And the Meeting Thread has a Meeting Activity from Jeremy saying "Declined · NBIF review"
 
-  @wip @AS-IR-3 @FR-13e @FR-IR-5
+  @AS-IR-3 @FR-13e @FR-IR-5
   Scenario: A Response on a repeating series answers the whole series
     Given a Meeting Thread for the weekly Event "Serenity touch-in"
     When Jeremy Responds "Maybe" on that Thread
     Then the Google Calendar Writer sets Jeremy's response to "tentative" for the series, not one occurrence
 
-  @wip @AS-IR-4 @FR-13e @FR-IR-8
+  @AS-IR-4 @FR-13e @FR-IR-8
   Scenario: Jeremy cannot Respond to an Event he organized
     Given a Meeting Thread for an Event organized by Jeremy
     When Jeremy Responds "Accept" on that Thread
     Then the outcome is "refused" with the reason "You organized this Event."
-    And the Google Calendar Writer received no request
+    And Google Calendar received no write
     And the Thread has no new Activity
 
-  @wip @AS-IR-5 @FR-13e @FR-IR-9
+  @AS-IR-5 @FR-13e @FR-IR-9
   Scenario: A Response whose outcome is unknown is recorded nowhere and never retried
     Given a Meeting Thread for the Event "Pints" organized by "brendan.wood@snaptrade.com"
     And the Google Calendar Writer times out
     When Jeremy Responds "Accept" on that Thread
     Then the outcome is "unknown"
-    And the Google Calendar Writer received exactly one request
+    And Google Calendar received exactly one write
     And the Thread has no new Activity
 
-  @wip @AS-IR-6 @FR-13e @FR-IR-10
+  @AS-IR-6 @FR-13e @FR-IR-10
   Scenario: A revoked sign-in makes Responses unavailable
     Given a Meeting Thread for the Event "Pints" organized by "brendan.wood@snaptrade.com"
     And Google refuses the refresh token

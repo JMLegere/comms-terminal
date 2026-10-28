@@ -100,8 +100,9 @@ def test_meetings_book_hold_cancel_decline_and_reschedule(db, clock):
     clock[0] = datetime(2026, 10, 20, 14, tzinfo=UTC)
     events = [OLD, DEMO, WEEKLY.format(bob="ACCEPTED"), DECLINED, INTERNAL]
     cal.sync(db, feed(*events), "2026-10-20T14:00:00+00:00")
-    assert meetings.synced(db) == 3 and meetings.synced(db) == 0  # once each
-    assert thread(db, "old") is None and thread(db, "internal") is None  # before go-live; no one outside
+    assert meetings.synced(db) == 4 and meetings.synced(db) == 0  # once each
+    assert thread(db, "old") is None  # before go-live
+    assert thread(db, "internal").status_detail == "CREATED"  # an internal Event is a Meeting Thread too (#142)
     demo, weekly, declined = thread(db, "demo"), thread(db, "weekly"), thread(db, "declined")
     assert [t.status_detail for t in (demo, weekly, declined)] == ["CREATED"] * 3  # new Threads are Todo
     assert demo.title == "STMEC demo"
@@ -129,7 +130,7 @@ def test_meetings_book_hold_cancel_decline_and_reschedule(db, clock):
     assert meetings.synced(db) == 0 and inbox.get_thread(db, demo.id).status_detail == "WAITING_FOR_DURATION"
 
     # Held: each ended occurrence once
-    assert meetings.held(db, datetime(2026, 10, 22, 15, 31, tzinfo=UTC)) == 2  # the demo and Acme's 10-21
+    assert meetings.held(db, datetime(2026, 10, 22, 15, 31, tzinfo=UTC)) == 3  # the demo, Acme's 10-21, the standup
     assert meetings.held(db, datetime(2026, 10, 22, 15, 32, tzinfo=UTC)) == 0
     t = inbox.get_thread(db, demo.id)
     assert (t.status, t.status_detail) == ("TODO", "NEW_REPLY")
