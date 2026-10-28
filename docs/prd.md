@@ -1024,7 +1024,7 @@ All entries are dated 2026-10-10; exact times are unproven unless noted. Full de
 - **141**
   - Request / decision: Jeremy Responds to invites from the console (FR-13e, ADR 0009): Accept, Maybe, or Decline from the Meeting Thread or the invitation email Thread, through the Google Calendar API, with one sign-in held by the service (full calendar access). Reads stay on the secret iCal feed. Keys: `i`, then `y`/`m`/`n`. A Meeting Thread's Response covers the series; Status is unchanged; agents never respond. Supersedes #108's "RSVP stays in Gmail" and ADR 0005's statement that the console never writes to the calendar. Considered: open the Event in Google, the agents' own Google connection, Google's per-invitee response links (undocumented; missing for organizers outside Google, about a quarter of invites), and an emailed iMIP reply (Jeremy's own calendar would stay Unanswered).
   - Source: Jeremy's discovery (2026-10-27, `.agents/discovery/2026-10-27-invite-actions.md`), "ok yes, E", and the PRD gap-closing answers: "One key, then pick", "i, for invite", "The whole series", "Status unchanged", "agents can't respond to invites.", "Keep full access + runbook", "Accept the risk" (Outlook organizers untested); PRD approved 2026-10-27, "Phase 0–1 only".
-  - Status: Approved; amended by #142. Built on branch `jeremy/invite-responses`: Phase 1 (contract: this entry, FR-13e, GLOSSARY, ADR 0009, runbook, console design, scenarios) 2026-10-27; Phase 2 (Google Calendar Writer, sign-in script) 2026-10-27; Phase 3 (service route `/respond`) 2026-10-28. Phases 4 (console) and 6 (release) not authorized.
+  - Status: Approved; amended by #142. Built on branch `jeremy/invite-responses`: Phase 1 (contract: this entry, FR-13e, GLOSSARY, ADR 0009, runbook, console design, scenarios) 2026-10-27; Phase 2 (Google Calendar Writer, sign-in script) 2026-10-27; Phase 3 (service route `/respond`) 2026-10-28; Phase 4 (console `i`) 2026-10-28. Phase 6 (release) not authorized.
 
 - **142**
   - Request / decision: Every Event with someone besides Jeremy is a Meeting Thread, internal ones included, under the same rules as outside ones: booked, held, cancelled, and declined put the Thread in Todo. A Response to an Event with no Thread yet (booked before go-live) starts its Thread, in Todo like a booking, with the Response as its first Activity. So every recorded Response lands on a Meeting Thread, never on an email Thread, whose history feeds reply headers and quoting. Events with no one besides Jeremy (focus blocks) stay off Threads. Amends #140 and ADR 0007 ("an attendee outside agentmaple.com") and FR-IR-6.
@@ -1180,7 +1180,7 @@ All entries are dated 2026-10-10; exact times are unproven unless noted. Full de
 - **2026-10-28T11:50:19+00:00**
   - Actor: Agent
   - Activity: Invite responses Phases 2 and 3: the Google Calendar Writer (`gcal.py`), the sign-in script, and the service route `/respond` with its Thread-to-Event resolver, Meeting Activity, and writes health; AS-IR-1–6 pass
-  - Result: on branch `jeremy/invite-responses`, not pushed; the console key (Phase 4) is not built, so nothing calls the route yet
+  - Result: on branch `jeremy/invite-responses`, not pushed. Phase 4 (2026-10-28): the console's `i` key posts to the route; AS-IR-1–7 pass
   - Evidence: `src/comms_terminal/gcal.py`, `src/comms_terminal/serve.py`, `src/comms_terminal/meetings.py`, `tests/test_invite_responses.py`, `features/calendar.feature`
   - Basis: Source-observed
 

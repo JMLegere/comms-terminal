@@ -4,8 +4,8 @@ Feature: Calendar
   by its Channel's Event UID, or of an invitation email Thread by the UID in the message's stored calendar part,
   and asks the Google Calendar Writer (gcal.Client) to set Jeremy's own response; Google tells the organizer.
   A confirmed Response adds a Meeting Activity from Jeremy (meetings.respond_recorded) and leaves Status unchanged.
-  Google here is a fake that records each request; nothing reaches Google. Scenarios without @wip run against
-  serve.handle_respond; the picker (AS-IR-7) waits for the console.
+  Google here is a fake that records each request; nothing reaches Google. The scenarios run against
+  serve.handle_respond; the picker (AS-IR-7) runs the console itself.
 
   @AS-IR-1 @FR-13e @FR-IR-1 @FR-IR-4 @FR-IR-6 @FR-IR-7
   Scenario: Jeremy accepts an invite from its Meeting Thread
@@ -58,7 +58,7 @@ Feature: Calendar
     And Google Calendar writes health is broken
     And the Thread has no new Activity
 
-  @wip @AS-IR-7 @FR-13e @FR-IR-1
+  @AS-IR-7 @FR-13e @FR-IR-1
   Scenario: Escape after opening the Response picker changes nothing
     Given a Meeting Thread for the Event "Pints" organized by "brendan.wood@snaptrade.com"
     When Jeremy opens the Response picker on that Thread and presses Escape

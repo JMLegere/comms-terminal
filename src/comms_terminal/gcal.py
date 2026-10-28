@@ -24,6 +24,7 @@ TOKEN = "https://oauth2.googleapis.com/token"
 API = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
 STATUS = {"accept": "accepted", "maybe": "tentative", "decline": "declined"}  # Respond answer -> responseStatus
 USER_AGENT = "comms-terminal/0.1 (+https://github.com/JMLegere/comms-terminal)"
+WRITES_BROKEN = "Google Calendar writes broken: "  # the Calendar Connection's last_error after a refused sign-in
 
 
 class GcalError(Exception):

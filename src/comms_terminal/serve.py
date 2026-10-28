@@ -155,7 +155,6 @@ class Senders:
 
 
 RESPOND_STATUS = {"confirmed": 200, "refused": 400, "unknown": 502, "unavailable": 503}
-WRITES_BROKEN = "Google Calendar writes broken: "
 
 
 def handle_respond(db, body: bytes, client: gcal.Client | None) -> tuple[int, dict]:
@@ -181,8 +180,8 @@ def handle_respond(db, body: bytes, client: gcal.Client | None) -> tuple[int, di
     out = client.respond(uid, rid, req["answer"])
     if (c := meetings._connection(db)) is not None:  # writes health (FR-IR-10), apart from the feed's
         if out.get("broken"):
-            inbox.set_connection_error(db, c["id"], WRITES_BROKEN + out["error"])
-        elif out["outcome"] in ("confirmed", "refused") and (c["last_error"] or "").startswith(WRITES_BROKEN):
+            inbox.set_connection_error(db, c["id"], gcal.WRITES_BROKEN + out["error"])
+        elif out["outcome"] in ("confirmed", "refused") and (c["last_error"] or "").startswith(gcal.WRITES_BROKEN):
             inbox.set_connection_error(db, c["id"], None)
     if out["outcome"] == "confirmed":
         meetings.respond_recorded(db, uid, out["status"], rid)

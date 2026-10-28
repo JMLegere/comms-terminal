@@ -98,7 +98,7 @@ def test_a_later_answer_clears_broken_writes(ctx):
     ctx.google.token = (400, {"error": "invalid_grant", "error_description": "Token rt-1 has been revoked"})
     assert respond(ctx)[0] == 503
     problem = health.problem(gcal_connection(ctx))
-    assert problem.startswith(serve.WRITES_BROKEN) and "rt-1" not in problem
+    assert problem.startswith(gcal.WRITES_BROKEN) and "rt-1" not in problem
     ctx.google.token = (200, {"access_token": "at-2", "expires_in": 3600})
     assert respond(ctx, "maybe")[0] == 200
     assert health.problem(gcal_connection(ctx)) is None

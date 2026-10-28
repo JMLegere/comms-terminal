@@ -146,7 +146,7 @@ def main(argv=None) -> None:
             os.environ["COLORTERM"] = "truecolor"
         import textual_image.widget  # noqa: F401 - asks the terminal about Kitty graphics before Textual owns it
         from .tui import (CONTEXT_SOURCES, FILE_SERVER, Console, socket_context, socket_reply, socket_send_draft,
-                          socket_slack_conversations, socket_slack_reactions)
+                          socket_respond, socket_slack_conversations, socket_slack_reactions)
         link = remote = syncer = None
         if a.remote:
             link, remote, syncer = start_remote(a.remote, a.db)
@@ -154,7 +154,7 @@ def main(argv=None) -> None:
         app = Console(a.db, socket_reply(a.socket), {k: socket_context(a.socket, k) for k in CONTEXT_SOURCES},
                       socket_send_draft(a.socket), socket_slack_conversations(a.socket),
                       (a.files_host or FILE_SERVER[0], a.files_port or FILE_SERVER[1]), remote, syncer,
-                      reactions=socket_slack_reactions(a.socket))
+                      reactions=socket_slack_reactions(a.socket), respond=socket_respond(a.socket))
         try:
             app.run()
         finally:

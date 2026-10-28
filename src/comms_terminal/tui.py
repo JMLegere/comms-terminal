@@ -42,7 +42,7 @@ from textual.widgets import DataTable, DirectoryTree, Input, OptionList, Static,
 from textual.widgets.option_list import Option
 from textual.worker import WorkerCancelled, get_current_worker
 
-from . import calendar as cal, clock, files, inbox, pipeline, render, sequences
+from . import calendar as cal, clock, files, gcal, inbox, pipeline, render, sequences
 from .health import problem
 from .icons import ICON
 from .platforms import FORMATS, PLATFORMS
@@ -417,6 +417,19 @@ def socket_slack_reactions(socket_path):
     return fetch
 
 
+def socket_respond(socket_path):
+    """Jeremy's invite Response (FR-13e) over the Unix socket or SSH command; never queued or retried."""
+    def respond(payload):
+        try:
+            status, body = _post(socket_path, "/respond", payload)
+        except ReplyError as e:
+            return {"outcome": "unavailable" if e.status == 503 else "unknown", "error": "Service unavailable."}
+        if isinstance(body, dict) and body.get("outcome") in ("confirmed", "refused", "unknown", "unavailable"):
+            return body
+        return {"outcome": "refused" if status in (400, 404) else "unknown", "error": "Service unavailable."}
+    return respond
+
+
 def socket_reply(socket_path):
     """Reply function that calls POST /reply on the service's local socket; a lost response means the outcome
     is unknown (504)."""
@@ -609,6 +622,7 @@ HELP = [  # (group, [(keys, what it does)]) — the full key map; Gmail-style wh
                 ("p", "open the person"), ("o", "open in Gmail, Fastmail, or Slack"), ("z", "undo the last change"),
                 ("v", "React: j/k or arrows select an open Slack message; 1/2/3 choose; esc exits"),
                 ("f5", "refresh reaction snapshots for the current Thread or selected Case card"),
+                ("i", "Respond to an invite: y yes · m maybe · n no; esc cancels (Google tells the organizer)"),
                 ("y", "copy the thread, its people, and Attio/Tana context as Markdown for an agent (file paths too)"),
                 ("f", "forward the newest message as a new email draft, its files attached"),
                 ("ctrl+o", "in a reply: attach a file on Workbox, or upload one from Mani (not SMS or Fastmail)"),
@@ -707,6 +721,11 @@ class ThreadActions:
 
     def action_react(self):
         self.app.enter_react()
+
+    def action_respond(self):
+        tid = self.current_thread_id()
+        if tid is not None:
+            self.app.enter_respond(tid)
 
     def action_refresh_reactions(self):
         self.app.schedule_reaction_snapshot(self.current_thread_id(), force=True)
@@ -1114,8 +1133,11 @@ THREAD_KEYS = [  # Thread actions, Gmail-style (decision #93); shared by the Thr
     Binding("m", "ignore", "ignore"), Binding("l", "case", "case"), Binding("s", "status", "status"),
     Binding("p", "person", show=False), Binding("o", "link", show=False), Binding("y", "copy", "copy for agent"),
     Binding("f", "forward", show=False), Binding("x", "ignore", show=False),  # x drops: Ignore, as m does
-    Binding("v", "react", "react"), Binding("f5", "refresh_reactions", "refresh"),
+    Binding("v", "react", "react"), Binding("f5", "refresh_reactions", "refresh"), Binding("i", "respond", "respond"),
 ]
+
+RESPOND_KEYS = {"y": "accept", "m": "maybe", "n": "decline"}  # the key after i (FR-IR-1)
+ANSWER_WORDS = {"accept": "Accepted", "maybe": "Maybe", "decline": "Declined"}
 
 
 PREVIEW_GAP = 0.08  # seconds: moves closer together than this (key repeat) skip the rows passed
@@ -2217,7 +2239,7 @@ def message_widgets(v, st: dict | None = None, raw=None, *, reactions=None, sele
             return finish()
         body = message_body(m, raw, slack)
         if body.invite:
-            parts.append(MessageText(f"[{dim}]{ICON['calendar']} invitation[/]\n" + render.invite_card(body.invite),
+            parts.append(MessageText(f"[{dim}]{ICON['calendar']} invitation · [b]i[/] respond[/]\n" + render.invite_card(body.invite),
                                      classes="mbody"))
         if body.text:
             parts += body_parts(body.text, m, "mbody")
@@ -2350,6 +2372,8 @@ def thread_head(v) -> str:
         p = PLATFORMS[plat]
         what = f"open in {p.title}" if p.takes_replies else "join the meeting"  # gcal: the Meeting's join link
         head += f"\n[#928374]{ICON[p.icon]} [link='{render.target(link)}']{what}[/link] {ICON['open']} (o)[/]"
+    if v["channel"]["kind"] == "meeting":  # the bar has no room for it; the invitation card carries its own
+        head += f"\n[#928374]{ICON['calendar']} [b]i[/] respond[/]"
     return head
 
 
@@ -4335,7 +4359,7 @@ class ConnectionPage(Page):
 
 
 KEY_GROUP = {  # bottom bar order: move · reply · triage · organize · general
-    "j": 0, "escape": 0, "u": 0, "r": 1, "a": 1, "ctrl+enter": 1, "ctrl+o": 1, "e": 2, "g": 2, "b": 2, "m": 2,
+    "j": 0, "escape": 0, "u": 0, "r": 1, "a": 1, "i": 1, "ctrl+enter": 1, "ctrl+o": 1, "e": 2, "g": 2, "b": 2, "m": 2,
     "l": 3, "s": 3, "z": 4, "question_mark": 4, "q": 4,
 }
 
@@ -4414,6 +4438,13 @@ class StatusLine(Static):
 
     def refresh_line(self):
         app, main, b = self.app, self.app.main, PALETTE
+        if app.respond_thread is not None:
+            line = (f"[b {b['bg0']} on {b['grey2']}] RESPOND [/] [b {b['blue']}]y[/] yes · [b {b['blue']}]m[/] maybe · "
+                    f"[b {b['blue']}]n[/] no · [b {b['blue']}]esc[/] cancel")
+            if line != getattr(self, "shown", None):
+                self.shown = line
+                self.update(line)
+            return
         if app.react_mode:
             line = f"[b {b['bg0']} on {b['grey2']}] REACT [/] [b {b['blue']}]j/k[/] message · [b {b['blue']}]esc[/] exit"
             if line != getattr(self, "shown", None):
@@ -4443,7 +4474,8 @@ class StatusLine(Static):
         for c in inbox.connections(app.db):
             # Icon only while healthy; name broken or unsupported Connections in full.
             parts.append(f"[{b['grey1']}]{conn_icon(c)}[/] [{b['green']}]{ICON['ok']}[/]" if health_ok(c) else
-                         f"[b {b['bg0']} on {b['red']}] {ICON['broken']} {escape(conn_name(c))} "
+                         f"[b {b['bg0']} on {b['red']}] {ICON['broken']} {escape(conn_name(c))}"
+                         f"{' writes' if (c['last_error'] or '').startswith(gcal.WRITES_BROKEN) else ''} "
                          f"{'broken' if c['platform'] in PLATFORMS else 'unavailable'} [/]")
         for key, st in app.source_state.items():  # Context sources, shown apart from Connections (FR-13a, FR-13b)
             title, icon = CONTEXT_SOURCES[key][:2]
@@ -6817,7 +6849,7 @@ class Console(App):
     CONSOLE_UPDATE_PROTOCOL = 1
 
     def __init__(self, db_path: str, reply=None, sources=None, send_draft=None, slack_conversations=None,
-                 files=FILE_SERVER, remote=None, syncer=None, *, reactions=None):
+                 files=FILE_SERVER, remote=None, syncer=None, *, reactions=None, respond=None):
         super().__init__()
         self.remote, self.syncer = remote, syncer  # Comms Terminal's laptop copy (remote.py, ADR 0004)
         self.db_path, self.send_reply, self.view, self.cursor = db_path, reply, 0, {}
@@ -6836,6 +6868,7 @@ class Console(App):
         self.undo = None  # (message, restore) for the last change
         self.msg_states = {}  # thread id -> which messages, quotes, and recipient lines are open (#107)
         self.reactions, self.reaction_states = reactions, {}
+        self.respond, self.respond_thread = respond, None  # invite Responses (FR-13e); the Thread awaiting y/m/n
         self.react_mode, self.react_target, self.react_revision = False, None, None
         self.last_opened_message = {}
         self._reaction_reads, self._reaction_read_active = [], None
@@ -6891,7 +6924,7 @@ class Console(App):
                 event.stop()
                 event.prevent_default()
                 return
-        if isinstance(event, events.Key) and self._reaction_key(event.key, event.time):
+        if isinstance(event, events.Key) and (self._respond_key(event.key) or self._reaction_key(event.key, event.time)):
             event.stop()
             event.prevent_default()
             return
@@ -7197,6 +7230,46 @@ class Console(App):
         widgets = [w for w in container.query(".mrow.open") if getattr(w, "reaction_key", (None, None))[1] in eligible]
         visible = [w for w in widgets if w.region.overlaps(scroller.scrollable_content_region)]
         return widgets, visible
+
+    def enter_respond(self, thread_id):
+        """`i`: on a Meeting Thread or a Thread holding an invitation, the next key answers (FR-IR-1)."""
+        v = inbox.thread_view(self.db, thread_id)
+        if v["where"] != "Meeting" and not any(message_body(m, self.raw).invite for m in v["messages"]
+                                                if not m["deleted"]):
+            self.notify("Nothing to respond to: not a Meeting Thread or an invitation.")
+        elif self.respond is None or getattr(self, "outdated", False) or (self.remote is not None and not self.remote.online):
+            self.notify("Not answered · Responses unavailable: service offline or update required.", severity="error")
+        else:
+            self.respond_thread = thread_id
+            self.main.query_one(StatusLine).refresh_line()
+
+    def _respond_key(self, key) -> bool:
+        """The key after `i`: y, m or n answers once, in the background (NFR-IR-3); anything else cancels."""
+        if self.respond_thread is None:
+            return False
+        tid, self.respond_thread = self.respond_thread, None
+        if (answer := RESPOND_KEYS.get(key)) is None:
+            self.notify("Not answered.")
+        else:
+            self.notify(f"Answering {ANSWER_WORDS[answer].lower()}…")
+            self._respond_call(tid, answer)
+        self.main.query_one(StatusLine).refresh_line()
+        return True
+
+    @work(thread=True)
+    def _respond_call(self, thread_id, answer):
+        self.call_from_thread(self._respond_done, answer, self.respond({"thread_id": thread_id, "answer": answer}))
+
+    def _respond_done(self, answer, result):
+        """The outcome is shown exactly (FR-IR-9); the Invite state itself comes from the next feed read."""
+        outcome = result.get("outcome") if isinstance(result, dict) else None
+        if outcome == "confirmed":
+            self.notify(f"{ANSWER_WORDS[answer]} · Google told the organizer.")
+        elif outcome in ("refused", "unavailable"):
+            self.notify(f"Not answered · {result.get('error') or 'Google Calendar unavailable'}", severity="error")
+        else:
+            self.notify("Outcome unknown · check the Event in Google Calendar before answering again.", severity="error")
+        self.main.query_one(StatusLine).refresh_line()
 
     def enter_react(self):
         if self.screen is not self.main or isinstance(self.focused, (Input, TextArea)):

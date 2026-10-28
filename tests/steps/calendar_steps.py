@@ -3,7 +3,7 @@
 Respond goes through serve.handle_respond with a real gcal.Client whose HTTP is a fake Google: Events by iCalUID,
 each Calendar request recorded. Meeting Threads come from a feed read after go-live, as in the service. Builds on
 the inbox steps' `ctx` (its Gmail Connection is Jeremy's address), so their Status and Activity checks apply.
-AS-IR-7 (the console picker) stays @wip until the invite responses PRD's Phase 4.
+AS-IR-7 drives the real console (Textual's test driver) on a copy of the database.
 """
 
 import json
@@ -16,14 +16,9 @@ from pytest_bdd import given, parsers, then, when
 
 from comms_terminal import calendar as cal, clock, files, gcal, health, inbox, meetings, serve
 
-PENDING = "FR-13e console not built yet: invite responses PRD Phase 4 (.agents/prd/2026-10-27-invite-responses.md)"
 ME = "jeremy@agentmaple.com"
 CRED = {"client_id": "cid.apps.example", "client_secret": "s3cret", "refresh_token": "rt-1"}
 ANSWER = {"Accept": "accept", "Maybe": "maybe", "Decline": "decline"}
-
-
-def pending():
-    raise NotImplementedError(PENDING)
 
 
 class Google:
@@ -186,8 +181,32 @@ def respond(ctx, answer):
 
 
 @when("Jeremy opens the Response picker on that Thread and presses Escape")
-def picker_escape():
-    pending()
+def picker_escape(ctx, tmp_path):
+    """The real console on a copy of the database, with a recording service in place of the socket."""
+    import asyncio
+    import contextlib
+    import sqlite3
+
+    from comms_terminal.tui import Console
+
+    path = str(tmp_path / "console.db")
+    with contextlib.closing(sqlite3.connect(path)) as copy:
+        ctx.db.backup(copy)
+    ctx.before = ctx.db.execute("SELECT count(*) FROM activities WHERE thread_id = ?", (ctx.thread.id,)).fetchone()[0]
+    ctx.respond_calls = []
+    app = Console(path, respond=lambda payload: ctx.respond_calls.append(payload) or {"outcome": "confirmed"})
+
+    async def go():
+        async with app.run_test(size=(200, 50)) as pilot:
+            await pilot.pause()
+            app.main.open_thread(ctx.thread.id)
+            await pilot.pause(0.2)
+            await pilot.press("i", "escape")
+            await pilot.pause(0.2)
+    asyncio.run(go())
+    with contextlib.closing(sqlite3.connect(path)) as copy:  # the console's copy is the one it could change
+        ctx.copy_activities = copy.execute("SELECT count(*) FROM activities WHERE thread_id = ?",
+                                           (ctx.thread.id,)).fetchone()[0]
 
 
 @then(parsers.parse('the Google Calendar Writer sets Jeremy\'s response to "{status}" for the whole Event and notifies every guest'))
@@ -230,8 +249,8 @@ def meeting_thread_activity(ctx, text):
 
 
 @then("the Google Calendar Writer received no request")
-def no_request():
-    pending()
+def no_request(ctx):
+    assert ctx.respond_calls == [] and ctx.google.requests == [] and ctx.copy_activities == ctx.before
 
 
 @then("Google Calendar received no write")
@@ -247,4 +266,4 @@ def one_write(ctx):
 @then("Google Calendar writes health is broken")
 def writes_broken(ctx):
     c = ctx.db.execute("SELECT * FROM connections WHERE platform = 'gcal'").fetchone()
-    assert health.problem(c).startswith(serve.WRITES_BROKEN)
+    assert health.problem(c).startswith(gcal.WRITES_BROKEN)
