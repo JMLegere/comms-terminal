@@ -3,6 +3,8 @@
 from datetime import datetime, timezone
 from email.message import EmailMessage
 
+import pytest
+
 from comms_terminal import email as em, files, inbox, render
 
 
@@ -40,6 +42,18 @@ def test_hidden_text_tracking_pixels_and_decorative_links_are_dropped():
             '<img src="chart.png" alt="Q3 chart">')
     text = shown(render.from_raw(html_mail(html)))
     assert text == "Hello there\n[image: Q3 chart]"
+
+
+@pytest.mark.parametrize("html", [
+    pytest.param('<div style="font-size:0"><span style="font-size:16px">Message text</span></div>',
+                 id="zero-wrapper-positive-child"),
+    pytest.param('<div style="font-size:0">Message text</div>', id="zero-only"),
+    pytest.param('<div style="font-size:0.9px">Message text</div>', id="positive-fractional"),
+    pytest.param('<div style="display:none;font-size:0">Hidden text</div><p>Message text</p>',
+                 id="display-none-control"),
+])
+def test_font_size_never_hides_message_text(html):
+    assert shown(render.from_raw(html_mail(html))) == "Message text"
 
 
 def test_inline_cid_images_leave_a_marker_where_they_sit_and_remote_ones_their_alt():

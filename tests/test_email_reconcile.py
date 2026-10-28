@@ -4,6 +4,7 @@ import json
 import sqlite3
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+from email.message import EmailMessage
 
 import pytest
 
@@ -128,6 +129,30 @@ def test_unsafe_or_unbracketed_identifiers_are_not_reference_evidence(db, mid):
     second = inbox.ingest(db, incoming("<child@test>", [mid]))
     assert first.id != second.id
     assert inbox.reconcile_email_threads(db, apply=True)["merged"] == 0
+
+
+def test_html_only_font_size_layout_preserves_content(db):
+    message = EmailMessage()
+    message["From"], message["To"], message["Subject"] = "ana@acme.test", SELF, "Layout"
+    message["Message-ID"], message["Date"] = "<layout@test>", "Mon, 12 Oct 2026 10:00:00 +0000"
+    message.set_content(
+        '<div style="font-size:0"><p style="font-size:16px">Readable layout marker</p></div>',
+        subtype="html",
+    )
+    parsed = email.parse(message.as_bytes(), db.execute("SELECT * FROM connections WHERE id = 1").fetchone())
+    assert parsed is not None
+    assert "Readable layout marker" in parsed.content
+
+
+def test_email_parse_prefers_plain_part_over_html(db):
+    message = EmailMessage()
+    message["From"], message["To"], message["Subject"] = "ana@acme.test", SELF, "Alternatives"
+    message["Message-ID"], message["Date"] = "<alternatives@test>", "Mon, 12 Oct 2026 10:00:00 +0000"
+    message.set_content("Plain body wins")
+    message.add_alternative("<p>HTML alternative</p>", subtype="html")
+    parsed = email.parse(message.as_bytes(), db.execute("SELECT * FROM connections WHERE id = 1").fetchone())
+    assert parsed is not None
+    assert parsed.content.strip() == "Plain body wins"
 
 
 @pytest.mark.parametrize("header", ["References", "In-Reply-To"])

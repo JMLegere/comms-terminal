@@ -189,7 +189,7 @@ BLOCK = {"p", "div", "br", "tr", "li", "h1", "h2", "h3", "h4", "h5", "h6", "tabl
          "hr", "section", "article", "header", "footer", "center", "pre", "dl", "dt", "dd"}
 SKIP = {"head", "style", "script", "title", "template", "noscript"}
 VOID = {"br", "img", "hr", "meta", "link", "input", "col", "area", "base", "wbr", "source"}
-HIDDEN_STYLE = ("display:none", "max-height:0", "font-size:0", "opacity:0", "visibility:hidden", "mso-hide:all")
+HIDDEN_STYLE = ("display:none", "max-height:0", "opacity:0", "visibility:hidden", "mso-hide:all")
 TRIM_CLASS = re.compile(r"gmail_quote|gmail_signature|yahoo_quoted|moz-cite-prefix|OutlookMessageHeader")
 TRIM_ID = re.compile(r"divRplyFwdMsg|appendonsend|^Signature")
 WS = re.compile(r"[ \t\r\n ​‌͏ 　﻿]+")
