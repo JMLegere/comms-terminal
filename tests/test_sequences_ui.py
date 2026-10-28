@@ -502,3 +502,52 @@ def test_enroll_into_a_new_sole_proprietorship(tmp_path):
     assert seen["choices"][-1] == "sole"
     org = db.execute("SELECT o.domain FROM enrollments e JOIN organizations o ON o.id = e.organization_id").fetchone()[0]
     assert org == inbox.sole_key(ana)
+
+
+def test_a_save_conflict_on_a_task_draft_reloads_from_the_list_and_from_escape(tmp_path):
+    """Another writer saved the Task's Draft first: ctrl+r from the Tasks list, or escape in the editor, offers the
+    reload instead of leaving Jeremy stuck on a Draft that can never save."""
+    path, _ = seeded(tmp_path)
+    db = inbox.connect(path)
+    s = sq.create_sequence(db, "Email first")
+    sq.save_step(db, sq.add_step(db, s, "email"), subject="Hello {first_name}", body="Hi {first_name}", needs_edit=0)
+    ana = next(p["id"] for p in inbox.people(db) if p["name"] == "Ana Ruiz")
+    sq.enroll(db, ana, s)
+    seen = {}
+
+    async def conflict(app, pilot, view):
+        stored = inbox.get_draft(db, view.draft_id)
+        newer = inbox.save_draft(db, {k: stored[k] for k in ("connection_id", "kind", "sender", "to", "cc", "subject")}
+                                 | {"body": "newer stored words"}, draft_id=view.draft_id,
+                                 expected_revision=stored["revision"])
+        view.query_one(TextArea).text = "unsaved local words"
+        assert not view.save()
+        await pilot.pause()
+        return newer
+
+    async def scenario(app, pilot):
+        app.main.go("tasks")
+        await pilot.pause()
+        view = app.main.draft_view
+        newer = await conflict(app, pilot, view)
+        app.main.current.query_one(DataTable).focus()
+        await pilot.press("ctrl+r")
+        await pilot.pause()
+        seen["list_pick"] = isinstance(app.screen, Pick)
+        choose(app, "reload")
+        await pilot.press("enter")
+        await pilot.pause()
+        seen["list_reloaded"] = (view.query_one(TextArea).text, view.save_error, app.main.save_draft())
+        newer = await conflict(app, pilot, view)
+        view.query_one(TextArea).focus()
+        await pilot.press("escape")
+        await pilot.pause()
+        seen["escape_pick"] = isinstance(app.screen, Pick)
+        choose(app, "reload")
+        await pilot.press("enter")
+        await pilot.pause()
+        seen["escape_reloaded"] = (view.query_one(TextArea).text, view.save_error)
+
+    run(Console(path), [scenario], size=(187, 40))
+    assert seen["list_pick"] and seen["list_reloaded"] == ("newer stored words", False, True)
+    assert seen["escape_pick"] and seen["escape_reloaded"] == ("newer stored words", False)

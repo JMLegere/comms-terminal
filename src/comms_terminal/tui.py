@@ -3094,6 +3094,8 @@ class DraftView(Composer, Horizontal):
     def action_close(self):
         if self.save():
             self.app.main.focus_list()
+        elif self.check_action("reload", ()):  # a conflict never saves: offer the reload instead of a dead end
+            self.action_reload()
 
 
     def action_reload(self):
@@ -5123,11 +5125,18 @@ class TasksPage(Page):
                 Binding("e", "done", "done · next"), Binding("x", "skip", "skip · next"),
                 Binding("n", "new_thread", show=False), Binding("slash", "filter", "filter", key_display="/"),
                 Binding("p", "person", "person"), Binding("y", "copy", "copy for agent"),
-                Binding("1", "pick(1)", "first path", show=False), Binding("2", "pick(0)", "second path", show=False)]
+                Binding("1", "pick(1)", "first path", show=False), Binding("2", "pick(0)", "second path", show=False),
+                Binding("ctrl+r", "reload", show=False)]
 
     def __init__(self):
         super().__init__()
         self.items, self.filter = [], None  # filter: a kind, or ("sequence", id)
+
+    def action_reload(self):
+        """A save conflict holds the list on its Draft (show_selected saves first): reload from here too."""
+        view = self.app.main.draft_view
+        if view and view.check_action("reload", ()):
+            view.action_reload()
 
     def compose(self):
         yield ClickTable(id="table", cursor_type="row", show_header=False)
