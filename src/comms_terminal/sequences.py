@@ -35,6 +35,7 @@ CONDITIONS = ("end_reason", "has_channel", "stage", "jeremy_picks")  # FR-SEQ-29
 CHANNELS = ("email", "phone")  # ponytail: Identities hold no LinkedIn profile, so has_channel cannot check one
 SECTIONS = ("start", "body", "completion")
 FINISHING_REASONS = ("COMPLETED", "GOAL_MET", "NOT_RIGHT_NOW", "LOST")  # these run the path's On completion
+NO_ORG = "no Organization: set the one this Enrollment is for"  # an Action waiting for one; it retries each run
 END_REASONS = FINISHING_REASONS + ("CANCELED", "UNSUBSCRIBED")  # these two end at once, with no On completion
 REASON_LABEL = {"COMPLETED": "Completed", "GOAL_MET": "Goal met", "NOT_RIGHT_NOW": "Not Right Now", "LOST": "Lost",
                 "CANCELED": "Canceled", "UNSUBSCRIBED": "Unsubscribed"}
@@ -814,13 +815,14 @@ def _next_task(db, e, now: datetime, due: datetime | None = None) -> int | None:
 
 def _auto_tasks(db, now: datetime) -> int:
     """Carry out the Actions and Ifs whose time has come (FR-SEQ-27, FR-SEQ-29). An Action that cannot run waits
-    for Jeremy (flag); an If asking Jeremy waits for his pick."""
+    for Jeremy (flag); one waiting for an Organization is tried again each run. An If asking Jeremy waits for his
+    pick."""
     done = 0
     for t in db.execute(
             "SELECT t.id, t.due_at, t.enrollment_id, s.id AS step_id FROM tasks t"
             " JOIN sequence_steps s ON s.id = t.step_id JOIN enrollments e ON e.id = t.enrollment_id"
-            " WHERE t.state = 'DUE' AND e.state IN ('ACTIVE', 'FINISHING') AND t.flag IS NULL"
-            " AND (s.kind = 'action' OR (s.kind = 'if' AND s.condition != 'jeremy_picks'))").fetchall():
+            " WHERE t.state = 'DUE' AND e.state IN ('ACTIVE', 'FINISHING') AND (t.flag IS NULL OR t.flag = ?)"
+            " AND (s.kind = 'action' OR (s.kind = 'if' AND s.condition != 'jeremy_picks'))", (NO_ORG,)).fetchall():
         if datetime.fromisoformat(t["due_at"]) > now:
             continue
         st = dict(db.execute("SELECT * FROM sequence_steps WHERE id = ?", (t["step_id"],)).fetchone())
@@ -829,7 +831,7 @@ def _auto_tasks(db, now: datetime) -> int:
             db.execute("UPDATE tasks SET choice = ? WHERE id = ?", (int(check(db, st, e)), t["id"]))
             _close(db, t["id"], "DONE", now)
         elif flag := _run_action(db, t["id"], st, e, now):
-            db.execute("UPDATE tasks SET flag = ? WHERE id = ?", (flag, t["id"]))
+            db.execute("UPDATE tasks SET flag = ? WHERE id = ? AND flag IS NOT ?", (flag, t["id"], flag))
             continue
         done += 1
     return done
@@ -850,10 +852,15 @@ def check(db, st: dict, e: dict) -> bool:
 
 
 def _run_action(db, task_id: int, st: dict, e: dict, now: datetime) -> str | None:
-    """Carry out one Action and close its Task; returns why it waits for Jeremy instead."""
+    """Carry out one Action and close its Task; returns why it waits for Jeremy instead. An Enrollment that names
+    no Organization takes the Person's only one, as Enroll does (FR-SEQ-36), once they have it."""
     org, kind = e["organization_id"], st["action_kind"]
+    if org is None and (org := default_organization(db, e["person_id"])) is not None:
+        db.execute("UPDATE enrollments SET organization_id = ? WHERE id = ?", (org, e["id"]))
+        db.execute("UPDATE tasks SET flag = NULL WHERE id = ?", (task_id,))
+        e["organization_id"] = org
     if kind in ("set_stage", "set_value", "end_for_others") and org is None:
-        return "no Organization: set the one this Enrollment is for"
+        return NO_ORG
     try:
         if kind == "set_stage":
             pipeline_mod.set_stage(db, org, st["pipeline"], st["stage"])

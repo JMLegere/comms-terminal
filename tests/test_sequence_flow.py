@@ -220,6 +220,19 @@ def test_an_action_needing_an_organization_waits_when_there_is_none(db):
     assert (t["kind"], t["flag"]) == ("action", "no Organization: set the one this Enrollment is for")
 
 
+def test_a_waiting_action_runs_once_the_person_has_one_organization(db):
+    s = sq.create_sequence(db, "Bench")
+    action(db, s, "set_stage", section="start", pipeline="TALENT", stage="Explore")
+    touch(db, s, "call")
+    evan = person(db, "evan@gmail.com", "Evan Boerchers")
+    eid = sq.enroll(db, evan, s, MONDAY)
+    sole = inbox.create_sole_proprietorship(db, evan)  # after the Enrollment, as the console's enroll dialog does
+    sq.materialize(db, MONDAY)
+    assert db.execute("SELECT organization_id FROM enrollments WHERE id = ?", (eid,)).fetchone()[0] == sole
+    assert stage(db, sole, "TALENT") == "Explore"
+    assert due_kinds(db, MONDAY + DAY) == [("Evan Boerchers", "call")]
+
+
 def test_ifs_check_a_channel_and_a_stage(db):
     s = sq.create_sequence(db, "Route")
     phone = if_step(db, s, "has_channel", operand="phone")
