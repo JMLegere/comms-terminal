@@ -96,7 +96,7 @@ uv run pytest -m wip                                     # scenarios not built y
 
 | Path | What |
 |---|---|
-| `src/comms_terminal/` | The app (`src/comms_terminal/AGENTS.md`) |
+| `src/comms_terminal/` | The app (`src/AGENTS.md`) |
 | `features/` | Gherkin acceptance scenarios (`features/AGENTS.md`) |
 | `tests/` | pytest, BDD steps in `tests/steps/` |
 | `deploy/` | Oracle container runtime, updater, systemd units, laptop launcher, Email Worker (`deploy/AGENTS.md`) |

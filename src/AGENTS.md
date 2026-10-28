@@ -1,6 +1,6 @@
-# comms_terminal
+# src/comms_terminal
 
-The app: domain modules, Platform adapters, Context sources, the service, and the console. `docs/design/api-and-database.md` describes the interface and schema; `docs/design/console.md` the console.
+The app in `comms_terminal/`: domain modules, Platform adapters, Context sources, the service, and the console. `docs/design/api-and-database.md` describes the interface and schema; `docs/design/console.md` the console.
 
 ## Modules
 
