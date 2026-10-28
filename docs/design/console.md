@@ -105,7 +105,7 @@ The side rail stays visible on every screen (Thread, Person, Cases, Channels); `
 │                                                      │ Case                     │
 │                                                      │ —                        │
 ├──────────────────────────────────────────────────────┴──────────────────────────┤
-│ To: ana@acme.com   Cc: ops@acme.com        (ctrl+s send · esc cancel)            │
+│ To: ana@acme.com   Cc: ops@acme.com        (ctrl+enter send · esc keep)            │
 │ ▌                                                                                │
 └──────────────────────────────────────────────────────────────────────────────────┘
  esc back  r reply  e done  z pause  s status  i ignore  c case  o link  p person
@@ -161,7 +161,7 @@ A successful read proves current membership, not which request caused it. If Rea
 
 - `r` opens the box under the timeline; the conversation stays visible.
 - Email: `To` and `Cc` are prefilled reply-all (FR-3b) and editable with `tab` into a one-line field. Slack: no recipient line; the box shows the channel or DM.
-- `ctrl+enter` sends (#100; `ctrl+s` still works where a terminal cannot report `ctrl+enter`); `esc` closes the box and keeps the text as the Thread's Reply Draft, which survives a restart and is listed on the Drafts page with a "reply" label; `enter` there opens the Thread's reply box (FR-SEQ-11).
+- `ctrl+enter` sends (#100); `ctrl+s` saves the reply without sending, and typed text also saves 2 seconds after the last keystroke (Drafts too), so it reaches the service without `esc`; `esc` closes the box and keeps the text as the Thread's Reply Draft, which survives a restart and is listed on the Drafts page with a "reply" label; `enter` there opens the Thread's reply box (FR-SEQ-11).
 - Attachments (#134), email and Slack only (SMS and Fastmail have no attach): `ctrl+o` opens the attach menu, "File on Workbox…" (a file tree from `~`) or "Upload from Mani" (a link to a 1-hour upload page, opened with Ctrl+Shift+click). Pasting an image path, which is what Herdr's Ctrl+V sends, stages the image. Staged files list under the message; `delete` removes the highlighted one. They are kept with the Thread across restarts, sent with the reply, and cleared once it is sent. Email refuses to send over 25 MB in total (#135).
 - Drafts take the same attach menu, paste, and file list.
 - While sending: the box shows `sending…`. On success the app returns to the queue with a toast `Sent → Waiting for them` (back to Todo when they reply, or after 4 days to follow up, #116). On failure the box stays open with the text and shows the error in red.

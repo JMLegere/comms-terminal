@@ -625,6 +625,7 @@ HELP = [  # (group, [(keys, what it does)]) — the full key map; Gmail-style wh
                 ("i", "Respond to an invite: y yes · m maybe · n no; esc cancels (Google tells the organizer)"),
                 ("y", "copy the thread, its people, and Attio/Tana context as Markdown for an agent (file paths too)"),
                 ("f", "forward the newest message as a new email draft, its files attached"),
+                ("ctrl+s", "in a reply: save it now (it also saves 2 seconds after you stop typing); ctrl+enter sends"),
                 ("ctrl+o", "in a reply: attach a file on Workbox, or upload one from Mani (not SMS or Fastmail)"),
                 ("paste", "in a reply: pasting an image's path (Herdr's ctrl+v) attaches the image"),
                 ("delete", "in the reply's file list: remove the highlighted file"),
@@ -1142,6 +1143,7 @@ ANSWER_WORDS = {"accept": "Accepted", "maybe": "Maybe", "decline": "Declined"}
 
 
 PREVIEW_GAP = 0.08  # seconds: moves closer together than this (key repeat) skip the rows passed
+AUTOSAVE_GAP = 2.0  # seconds after the last keystroke before a reply or Draft saves to the store
 
 
 class ThreadsPage(Page, ThreadActions):
@@ -1688,6 +1690,16 @@ class Composer:
     def check_action(self, action, parameters):
         return action != "attach" or self.attach_owner() is not None
 
+    def schedule_autosave(self):
+        """Save typed text AUTOSAVE_GAP seconds after the last change; each change restarts the wait."""
+        self.cancel_autosave()
+        self._autosave_timer = self.set_timer(AUTOSAVE_GAP, self.autosave)
+
+    def cancel_autosave(self):
+        timer = getattr(self, "_autosave_timer", None)
+        if timer is not None:
+            timer.stop()
+
     def action_attach(self):
         attach(self, self.attach_owner())
 
@@ -1733,7 +1745,7 @@ class ReplyBox(Composer, Vertical):
     refill them. Slack: the destination (the channel or DM, in thread) is shown the same way, read-only.
     """
     BINDINGS = [Binding("ctrl+enter", "send", "send", key_display="ctrl+enter"),
-                Binding("ctrl+s", "send", show=False), Binding("escape", "close", "keep draft"),
+                Binding("ctrl+s", "save", show=False), Binding("escape", "close", "keep draft"),
                 Binding("ctrl+o", "attach", "attach")]
 
     def __init__(self, thread_id):
@@ -1891,6 +1903,18 @@ class ReplyBox(Composer, Vertical):
         if self.has_class("open") and self.query(TextArea):
             self.app.drafts[self.draft_key] = self.query_one(TextArea).text
 
+    def on_text_area_changed(self, event):
+        self.schedule_autosave()
+
+    def autosave(self):
+        if self.is_attached:
+            self.keep_draft()
+
+    def action_save(self):
+        self.cancel_autosave()
+        self.keep_draft()
+        self.hint("Saved.")
+
     def on_unmount(self):
         self.keep_draft()
 
@@ -1902,6 +1926,7 @@ class ReplyBox(Composer, Vertical):
         self.app.main.focus_list()
 
     def action_send(self):
+        self.cancel_autosave()  # a pending autosave must not bring back a reply that went out
         text = self.query_one(TextArea).text.strip()
         if not text:
             self.hint("Nothing to send.", error=True)
@@ -2965,10 +2990,16 @@ class DraftView(Composer, Horizontal):
         self.paint()
         if event.input.has_class("toinput"):
             self.refresh_history()
+        self.schedule_autosave()
 
     def on_text_area_changed(self, event):
         event.stop()
         self.paint()
+        self.schedule_autosave()
+
+    def autosave(self):
+        if self.is_attached and self.dirty:
+            self.save(refresh=False)
 
     def refresh_data(self, draft):
         """A storage refresh may update a clean editor, never replace current unsaved words."""
@@ -3101,6 +3132,7 @@ class DraftView(Composer, Horizontal):
         return ("draft", self.draft_id) if attachable(c and c["platform"]) and not self.draft.get("sending_at") else None
 
     def action_send(self):
+        self.cancel_autosave()
         if self.app.send_draft is None:
             self.app.notify(SENDING_UNAVAILABLE)
             return

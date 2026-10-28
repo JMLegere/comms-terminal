@@ -5,8 +5,14 @@ from textual.widgets import Input, TextArea
 
 from test_console import run, seeded
 from test_drafts_ui import choose, type_address
-from comms_terminal import inbox
+from comms_terminal import inbox, tui
 from comms_terminal.tui import Console, DraftConnection, ReplyBox
+
+
+@pytest.fixture(autouse=True)
+def no_autosave(monkeypatch):
+    """These tests check that completion keys neither save nor send; autosave timing is tested in test_autosave."""
+    monkeypatch.setattr(tui, "AUTOSAVE_GAP", 3600)
 
 
 EMAIL, PHONE = "lcarr@example.test", "+12025550123"
