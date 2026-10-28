@@ -2,12 +2,13 @@
 
 A Meeting is synchronous comms, recorded as an Activity on a Thread the way a Phone call is: a MESSAGE whose
 `data.meeting` says what happened. Google Calendar is a read-only Platform with one Connection; its creation
-time is go-live. Each Event UID with someone besides Jeremy, first seen after go-live, is a Channel of
+time is go-live. Each Event UID first seen after go-live is a Channel of
 kind meeting holding one Thread, so a repeating series is one Thread. Every Meeting Activity puts the Thread in
 Todo: booked (a new Thread), held (an occurrence's end time passed), cancelled (it became a Deleted Event), and
 declined (another attendee said no). A reschedule only moves the Event on the Calendar. Jeremy's own
 Response (FR-13e) is a Meeting Activity from him that leaves Status as it is; answering an Event with no Thread yet
-(booked before go-live) starts its Thread. Internal Events are Meeting Threads too (decision #142).
+(booked before go-live) starts its Thread. Every Event is a Meeting Thread, internal ones and Jeremy's own
+blocks with no guests included: one rule, no exceptions (decision #142).
 
 Nothing here runs a loop: `synced` runs after a calendar read that changed something, `held` in the wake pass.
 """
@@ -69,19 +70,20 @@ WHAT = {"booked": "Booked", "held": "Held", "cancelled": "Cancelled", "declined"
 
 def _record(db, c, o: dict, what: str, people: list[dict], rid: str, at: datetime, sender: dict | None = None,
             key: str = "") -> inbox.Thread | None:
-    """One Meeting Activity on the UID's Thread; None when it is already recorded (the native id repeats)."""
-    sender = sender or people[0]
+    """One Meeting Activity on the UID's Thread; None when it is already recorded (the native id repeats). With
+    no one besides Jeremy, it is from Jeremy."""
+    sender = sender or (people[0] if people else None)
     start, end = clock.local(o["start"]), clock.local(o["end"])
     meeting = {"what": what, "where": where(o), "start": start.isoformat(), "end": end.isoformat(),
                "join": o["join_url"], "uid": o["uid"], "rid": rid,
                "attendees": [{"email": a["email"], "name": a["name"], "state": a["state"]} for a in o["attendees"]]}
     names = ", ".join(p["name"] or p["email"] for p in people)
     content = "\n".join([f"{WHAT[what]} · {o['title']}", f"{meeting['where']} · {start:%a %b %-d %H:%M}–{end:%H:%M}"]
-                        + ([f"Join: {o['join_url']}"] if o["join_url"] else []) + [f"With: {names}"])
+                        + ([f"Join: {o['join_url']}"] if o["join_url"] else []) + ([f"With: {names}"] if names else []))
     others = [p for p in people if p is not sender]  # every other attendee is a Participant (FR-OA-15)
     return inbox.ingest(db, inbox.Incoming(
         c["id"], o["uid"], "meeting", "MESSAGE", f"gcal:{o['uid']}:{rid}:{what}{key}",
-        inbox.Identity("email", sender["email"], sender["name"] or None), at, content, title=o["title"],
+        inbox.Identity("email", sender["email"], sender["name"] or None) if sender else None, at, content, title=o["title"],
         data={"meeting": meeting, "to": [p["email"] for p in others]}, channel_name=o["title"],
         synchronous="meeting", participants=tuple(inbox.Identity("email", p["email"], p["name"] or None) for p in others)))
 
@@ -98,8 +100,8 @@ def _threads(db, c) -> dict[str, dict]:
 
 
 def synced(db, now: datetime | None = None) -> int:
-    """After a calendar read that changed something: book each new Event with someone besides Jeremy, and
-    record cancellations and other attendees' declines. Returns the Activities recorded."""
+    """After a calendar read that changed something: book each new Event, and record cancellations and other
+    attendees' declines. Returns the Activities recorded."""
     c = _connection(db)
     if c is None:
         return 0
@@ -112,9 +114,8 @@ def synced(db, now: datetime | None = None) -> int:
         if uid in known:
             continue
         o = _parse(ics, mine)
-        if people := _others(o, mine):
-            n += _record(db, c, o, "booked", people, "", now) is not None
-            known[uid] = {"created_at": clock.iso(now)}
+        n += _record(db, c, o, "booked", _others(o, mine), "", now) is not None
+        known[uid] = {"created_at": clock.iso(now)}
     # Cancelled and declined (FR-OA-14): only what changed after the Thread began
     for uid, rows in _rows(db, known).items():
         booked = _booked_states(db, c, uid)
@@ -124,8 +125,7 @@ def synced(db, now: datetime | None = None) -> int:
                     known[uid]["created_at"]) and \
                     (r["recurrence_id"] == "" or not series_gone):
                 o = _parse(r["ics"], mine)
-                if people := _others(o, mine):
-                    n += _record(db, c, o, "cancelled", people, r["recurrence_id"], now) is not None
+                n += _record(db, c, o, "cancelled", _others(o, mine), r["recurrence_id"], now) is not None
             elif not r["deleted_at"]:
                 o = _parse(r["ics"], mine)
                 people = _others(o, mine)
@@ -166,8 +166,8 @@ def held(db, now: datetime | None = None) -> int:
         if t is None or o["all_day"] or o["state"] == "DECLINED":
             continue
         end = clock.local(o["end"])
-        if datetime.fromisoformat(t["created_at"]) < end <= local and (people := _others(o, mine)):
-            n += _record(db, c, o, "held", people, cal._rid(o["start"]), end) is not None
+        if datetime.fromisoformat(t["created_at"]) < end <= local:
+            n += _record(db, c, o, "held", _others(o, mine), cal._rid(o["start"]), end) is not None
     return n
 
 

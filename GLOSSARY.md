@@ -347,11 +347,11 @@ Any entry with a date or a time on Jeremy's work calendar. Every Event is a Meet
 _Avoid_: Appointment, Calendar entry
 
 **Meeting**:
-One synchronous conversation booked as an Event with attendees besides Jeremy, held on Google Meet, Zoom, Microsoft Teams, by phone, or in person. The Meeting is an Activity on a Thread: the Thread of its Event, or of its repeating series. Internal Meetings count the same as Meetings with someone outside agentmaple.com. A new such Thread starts in Todo, and the Thread goes to Todo when the Meeting ends or is cancelled or declined. Jeremy's own Response is an Activity too, and leaves Status as it is. Tana adds its summary and linked documents, which never change the Thread's Status. Only Meetings booked after Meetings became Threads join Threads, unless Jeremy Responds to one, which starts its Thread.
+One synchronous conversation booked as an Event with attendees besides Jeremy, held on Google Meet, Zoom, Microsoft Teams, by phone, or in person. The Meeting is an Activity on a Thread: the Thread of its Event, or of its repeating series. Internal Meetings count the same as Meetings with someone outside agentmaple.com, and a Block has a Thread the same way: every Event does. A new such Thread starts in Todo, and the Thread goes to Todo when the Meeting ends or is cancelled or declined. Jeremy's own Response is an Activity too, and leaves Status as it is. Tana adds its summary and linked documents, which never change the Thread's Status. Only Meetings booked after Meetings became Threads join Threads, unless Jeremy Responds to one, which starts its Thread.
 _Avoid_: Call (for a meeting), Appointment
 
 **Block**:
-A timed Event with no attendees besides Jeremy, such as focus time, lunch, or a reminder to himself.
+A timed Event with no attendees besides Jeremy, such as focus time, lunch, or a reminder to himself. Like a Meeting, it has a Thread that goes to Todo when it ends.
 _Avoid_: Focus time, Hold
 
 **All-day Event**:

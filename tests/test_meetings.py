@@ -212,3 +212,25 @@ def test_the_service_refuses_a_reply_on_a_meeting_thread(db, clock):
     status, body = serve.handle_reply(db, f'{{"thread_id": {thread(db, "demo").id}, "text": "hi"}}'.encode(),
                                       serve.Senders())
     assert (status, body["error"]) == (400, inbox.NO_REPLY)
+
+
+SOLO = """UID:solo
+SUMMARY:Focus block
+DTSTART:20261021T170000Z
+DTEND:20261021T180000Z
+ORGANIZER:mailto:jeremy@agentmaple.com"""
+
+
+def test_an_event_with_no_one_besides_jeremy_is_a_meeting_thread_too(db, clock):
+    """One rule, no exceptions (decision #142): Jeremy's own blocks book, hold, and cancel like any Event."""
+    meetings.connect(db)
+    clock[0] = datetime(2026, 10, 20, 14, tzinfo=UTC)
+    cal.sync(db, feed(SOLO), "2026-10-20T14:00:00+00:00")
+    assert meetings.synced(db) == 1
+    t = thread(db, "solo")
+    assert (t.title, t.status_detail) == ("Focus block", "CREATED")
+    first = inbox.thread_view(db, t.id)["messages"][0]
+    assert first["content"].startswith("Booked · Focus block") and "With:" not in first["content"]
+    assert meetings.held(db, datetime(2026, 10, 21, 18, 1, tzinfo=UTC)) == 1
+    cal.sync(db, feed(), "2026-10-21T19:00:00+00:00")
+    assert meetings.synced(db) == 1 and meeting_activities(db, "solo")[-1] == ":cancelled"
