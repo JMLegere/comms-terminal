@@ -72,6 +72,27 @@ Multi-step Sequences, one Enrollment per Person, Due Tasks on a Tasks page. Choo
 
 `y` copies a Thread or Draft as Markdown for a terminal agent. The CLI prints the same: `comms-terminal threads`, `comms-terminal thread ID`, `comms-terminal drafts`.
 
+## Your day
+
+The console opens on **Today** (`1`): Todo Threads grouped by Case, Due Tasks, Drafts, Paused Enrollments, and Unattended Organizations. Work it top to bottom until it says All clear.
+
+1. **Start with the Calendar.** The bottom bar shows the meeting now and next; the rail's Calendar shows the week. Press `i` on an invite, then `y`, `m`, or `n`, to answer it.
+2. **Triage the Todo Threads.** For each one, pick one move:
+   - Reply: `r` (sender) or `a` (all), write, `ctrl+enter`. The Thread waits for them and comes back when they reply, or in 4 days to follow up.
+   - Done: `e`. Snooze until a time: `g`. Working on it: `s`, then Investigating.
+   - Noise: `m` ignores the Thread; `b` blocks the sender.
+   - Part of a bigger goal: `l` adds it to a Case.
+   - Wrong move: `z` undoes it.
+3. **Work the Due Tasks.** An email Task comes with its Draft. Rewrite any marked `edit me`, then send it. Mark other Tasks done with `e`, skip with `x`, and answer a Step's question with `1` or `2`.
+4. **Clear the Drafts.** Read each one, edit, and send it, or delete it with `x`.
+5. **Settle Paused Enrollments.** Someone replied, so the Sequence waits for you: `r` resumes it, `f` finishes it (Goal met, Not Right Now, Lost, …).
+6. **Bring back Unattended Organizations.** Open one, then enroll a Person in a Sequence (`s` on their page) or set the Organization's Stage (`s`).
+7. **After each meeting**, its Thread returns to Todo. Write the follow-up there.
+
+Hand work to an agent. Press `y` on a Thread or Draft to copy it as Markdown, or let the agent read it with `comms-terminal thread ID`. The agent writes Drafts through the CLI and never sends. Drafts it prepares appear on Today and Drafts (`6`). If one was open while the agent changed it, `ctrl+r` reloads it. Review it, then send.
+
+Once a week, open each Pipeline in the rail. Do its **This week** actions, and set Stages (`s`) and Values (`v`) on the board.
+
 ## Keys
 
 | Key | Action | Key | Action |
@@ -148,6 +169,7 @@ A signed GitHub webhook triggers the updater on the production host. It builds a
 
 | Doc | For |
 |---|---|
+| [`AGENTS.md`](AGENTS.md) | Concepts and rules for coding and terminal agents |
 | [`docs/prd.md`](docs/prd.md) | Requirements and decisions |
 | [`docs/adr/`](docs/adr) | Architecture decisions |
 | [`docs/design/`](docs/design) | Console, API, and database design |

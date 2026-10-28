@@ -14,3 +14,5 @@ Cucumber-style Gherkin, run by pytest-bdd (`tests/test_features.py` binds every 
 - `uv run pytest --generate-missing --feature features/<file>.feature` prints step skeletons.
 - Put step definitions in `tests/steps/` and register each module in `tests/conftest.py` via `pytest_plugins`.
 - When a PRD acceptance scenario changes, change its feature scenario in the same commit.
+
+See /AGENTS.md for project-wide rules.
