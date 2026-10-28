@@ -134,7 +134,7 @@ Status key in brackets:
     - *Needs first response*: a new Thread Jeremy has not replied to.
     - *Needs next response*: the other side replied after Jeremy.
     - *Investigating*: set manually.
-    - *Draft ready*: the Thread has a reply Draft ready to send (FR-6f).
+    - *Reply Draft*: the Thread has a Reply Draft ready to send (FR-6f).
   - **Snoozed**:
     - *Waiting for them*: Plain's "Waiting for customer".
     - *Paused for later*: until a date. A Snooze always has one (FR-OA-10); `Snooze` with no date is refused.
@@ -146,7 +146,7 @@ Status key in brackets:
 - **FR-6c** [PL + D]: Eligible activity from the other side moves a Snoozed or Done Thread to Todo / Needs next response. This includes messages, and [C] edits and deletions; Plain: "When any activity happens in a thread, it will move back to Todo." [D] Blocked ordinary activity on existing Threads is excluded by FR-7a (decision #138).
 - **FR-6d** [PL + D]: A snooze ends at its time, or on the other side's next eligible activity (FR-7a), and the Thread returns to Todo.
 - **FR-6e** [PL]: An Ignored Thread does not move Status on new activity until Jeremy un-ignores it.
-- **FR-6f** [D]: A Todo Thread whose reply Draft has text, is not Needs edit, and is not sending shows as Draft ready, listed last in Todo (Jeremy, 2026-10-28). It is derived when the queue is read and never stored, so the Thread's stored Status detail, its transitions, and the `s` menu stay as they are.
+- **FR-6f** [D]: A Todo Thread whose Reply Draft has text, is not Needs edit, and is not sending shows as Reply Draft, listed last in Todo (Jeremy, 2026-10-28; first named Draft ready). It is derived when the queue is read and never stored, so the Thread's stored Status detail, its transitions, and the `s` menu stay as they are.
 
 ### Ignore and Block
 

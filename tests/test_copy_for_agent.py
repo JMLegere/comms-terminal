@@ -49,7 +49,7 @@ def test_y_copies_the_draft_as_edited(tmp_path):
 
     run(app, [go])
     text = seen["out"][0]
-    assert text.startswith("# Draft: Pricing\n") and "- To: ana@acme.com" in text and "\nHi Ana\n" in text
+    assert text.startswith("# New Thread Draft: Pricing\n") and "- To: ana@acme.com" in text and "\nHi Ana\n" in text
     assert "## Captured history with these recipients" in text  # the seed has Threads with ana@acme.com
 
 

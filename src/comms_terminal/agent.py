@@ -124,8 +124,8 @@ def run(a, db):
             print(thread(db, a.id, a.socket), end="")
         elif a.cmd == "drafts":
             for d in inbox.list_drafts(db):
-                reply = f" reply · Thread {d['thread_id']}" if d["thread_id"] else ""  # sent from the Thread's reply box
-                print(f"{d['id']}\t{d['kind']}{reply}\t{d['to'] or '-'}\t{d['subject'] or ''}")
+                kind = f"Reply Draft · Thread {d['thread_id']}" if d["thread_id"] else "New Thread Draft"
+                print(f"{d['id']}\t{d['kind']} {kind}\t{d['to'] or '-'}\t{d['subject'] or ''}")
             print("\nConnections (draft new --connection ID):")
             for c in inbox.connections(db):
                 print(f"{c['id']}\t{connection_label(c)}")

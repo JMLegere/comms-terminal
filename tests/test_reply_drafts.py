@@ -111,7 +111,7 @@ def test_reply_text_survives_a_console_restart_and_shows_on_the_drafts_page(seed
         seen["open"] = (box.has_class("open"), box.draft_key, box.query_one(TextArea).text)
 
     run(Console(path), [reopen], size=(187, 40))
-    assert "reply[/] · Re: Pricing" in seen["row"]
+    assert "Reply Draft · [/]Re: Pr" in seen["row"]
     assert "Hi Ana, Tuesday works." in seen["pane"] and "enter opens the Thread" in seen["pane"]
     assert seen["open"] == (True, ids["ana"], "Hi Ana, Tuesday works.")
 
@@ -123,7 +123,7 @@ def test_agent_drafts_list_labels_reply_drafts(seeded, capsys):
     db = inbox.connect(path)
     d = inbox.save_reply_draft(db, ids["ana"], "Hi Ana,")
     agent.run(SimpleNamespace(cmd="drafts"), db)
-    assert f"{d['id']}\temail reply · Thread {ids['ana']}\t" in capsys.readouterr().out
+    assert f"{d['id']}\temail Reply Draft · Thread {ids['ana']}\t" in capsys.readouterr().out
 
 
 def test_a_file_staged_on_a_reply_draft_goes_out_with_the_reply(seeded):

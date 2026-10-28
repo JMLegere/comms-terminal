@@ -2559,9 +2559,9 @@ def case_threads(db, case_id: int) -> list[Thread]:
 
 # --- console read models (docs/design/console.md) ---------------------------
 
-DRAFT_READY = "DRAFT_READY"  # shown, never stored: a Todo Thread whose reply Draft is ready to send (FR-6f)
+REPLY_DRAFT = "REPLY_DRAFT"  # shown, never stored: a Todo Thread whose Reply Draft is ready to send (FR-6f)
 VIEWS = {
-    "Todo": ("CREATED", "NEW_REPLY", "IN_PROGRESS", DRAFT_READY),
+    "Todo": ("CREATED", "NEW_REPLY", "IN_PROGRESS", REPLY_DRAFT),
     "Snoozed": ("WAITING_FOR_CUSTOMER", "WAITING_FOR_DURATION", "WAITING_INDEFINITELY"),
     "Done": ("DONE_MANUALLY_SET",),
     "Ignored": ("IGNORED",),
@@ -2579,7 +2579,7 @@ DETAIL_LABEL = {  # Status detail -> how Jeremy reads it (GLOSSARY)
     "CREATED": "Needs first response",
     "NEW_REPLY": "Needs next response",
     "IN_PROGRESS": "Investigating",
-    DRAFT_READY: "Draft ready",
+    REPLY_DRAFT: "Reply Draft",
     "WAITING_FOR_CUSTOMER": "Waiting for them",
     "WAITING_FOR_DURATION": "Paused for later",
     "WAITING_INDEFINITELY": "Paused for later",
@@ -2702,7 +2702,7 @@ def queue(db, view: str) -> list[dict]:
     out = []
     for r in rows:
         label, identity = _sender(db, r["first_identity"]) if r["first_identity"] else ("You", None)
-        detail = DRAFT_READY if r["ready"] and r["status"] == "TODO" else r["status_detail"]
+        detail = REPLY_DRAFT if r["ready"] and r["status"] == "TODO" else r["status_detail"]
         out.append({"id": r["id"], "title": r["title"], "status": r["status"], "detail": detail,
                     "case_id": r["case_id"], "until": r["follow_up_at"] or r["snoozed_until"], "who": label, "where": _where(r, identity), "last_at": r["last_at"],
                     "waiting_since": r["last_in"] or r["last_at"], "drafted": bool(r["drafted"])})

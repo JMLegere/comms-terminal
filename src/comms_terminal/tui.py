@@ -48,7 +48,7 @@ from .icons import ICON
 from .platforms import FORMATS, PLATFORMS
 
 DETAIL_COLOR = {  # Status detail -> color; the label is inbox.DETAIL_LABEL, the glyph icons.ICON
-    "CREATED": "#45707a", "NEW_REPLY": "#b47109", "IN_PROGRESS": "#945e80", "DRAFT_READY": "#4c7a5d",
+    "CREATED": "#45707a", "NEW_REPLY": "#b47109", "IN_PROGRESS": "#945e80", "REPLY_DRAFT": "#4c7a5d",
     "WAITING_FOR_CUSTOMER": "#928374", "WAITING_FOR_DURATION": "#928374", "WAITING_INDEFINITELY": "#928374",
     "DONE_MANUALLY_SET": "#6c782e", "IGNORED": "#a89984",
 }
@@ -795,7 +795,7 @@ class ThreadActions:
         current = inbox.get_thread(self.app.db, tid).status_detail
         opts = [(d, f"[{GLYPH[d][1]}]{GLYPH[d][0]}[/] {GLYPH[d][2]}")
                 for d in sorted(inbox.VIEWS["Todo"], key=lambda d: d != "IN_PROGRESS")
-                if d not in (current, inbox.DRAFT_READY)]  # Draft ready is shown, never set
+                if d not in (current, inbox.REPLY_DRAFT)]  # Reply Draft is shown, never set
         if current == "IGNORED":
             opts.append(("UNIGNORE", f"{ICON['TODO']} Un-ignore"))
 
@@ -2734,7 +2734,8 @@ def connection_label(connection) -> str:
 def draft_text(values, connection_label, history, raw=None, ref=None, staged=()) -> str:
     """A Draft as Markdown: its envelope, body, and staged files, then each captured-history Thread in full.
     `ref` is the saved Draft's (id, revision), which the `comms-terminal draft` command needs to change it."""
-    lines = [f"# Draft: {values['subject'] or 'no subject'}", ""]
+    kind = "Reply Draft" if values.get("thread_id") else "New Thread Draft"
+    lines = [f"# {kind}: {values['subject'] or 'no subject'}", ""]
     if ref:
         lines.append(f"- Draft: {ref[0]} · revision {ref[1]} · change it with "
                      f"`comms-terminal draft {ref[0]} --revision {ref[1]} --body -` (also --to, --cc, --subject)")
@@ -3291,8 +3292,9 @@ class DraftsPage(Page):
         else:
             state = "saved"
         status = f"[{'#c14a4a' if state == 'failed' else '#b47109' if state == 'edit me' else '#928374'}]{state:7}[/]"
-        shown = cut(("reply · " if draft["thread_id"] else "") + title, room)
-        shown = f"[#45707a]{shown[:5]}[/]{escape(shown[5:])}" if draft["thread_id"] else escape(shown)
+        kind = "Reply Draft · " if draft["thread_id"] else ""  # a New Thread Draft keeps the room for its subject
+        shown = cut(kind + title, room)
+        shown = f"[#45707a]{escape(shown[:len(kind)])}[/]{escape(shown[len(kind):])}" if kind else escape(shown)
         return (status, shown) if len(self.columns) == 2 else (
             f"[#928374]{ICON[draft['kind']]}[/]",
             f"[b]{escape(cut(inbox.recipient_names(self.app.db, draft['to'], draft['kind']) or 'No recipient', 18))}[/]", shown, status)
@@ -3348,7 +3350,7 @@ class DraftsPage(Page):
         pane.remove_children()
         if selected and selected["thread_id"]:  # a reply Draft is edited and sent in its Thread's reply box
             title = inbox.get_thread(self.app.db, selected["thread_id"]).title
-            pane.mount(Static(f"[#45707a]{ICON['reply']} reply[/] · [b]{escape(title)}[/]\n\n{escape(selected['body'])}\n\n"
+            pane.mount(Static(f"[#45707a]{ICON['reply']} Reply Draft[/] · [b]{escape(title)}[/]\n\n{escape(selected['body'])}\n\n"
                               "[#928374]enter opens the Thread's reply box to edit and send it · x deletes it[/]",
                               classes="threadempty"))
             return

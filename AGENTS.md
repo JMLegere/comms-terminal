@@ -29,9 +29,9 @@ Platform ─▶ Connection ─▶ Channel ─▶ Thread ◀── Activity (mess
 ```
 
 - **Thread** is the unit of work. Email threads by headers; Slack and SMS group by quiet time (24 hours Slack, 7 days SMS). Every calendar Event is a Meeting Thread or Block Thread too.
-- **Status** is Todo, Snoozed or Done, each with a **Status detail**: Needs first response, Needs next response, Investigating, Draft ready; Waiting for them, Paused for later; Done, Ignored. A send moves a Thread to Waiting for them; their reply, or 4 days with no reply, brings it back to Todo. Snoozes always end at a date. **Draft ready** is shown, never stored: a Todo Thread whose reply Draft is ready to send lists last in Todo, so a reply Draft an agent writes moves its Thread there.
+- **Status** is Todo, Snoozed or Done, each with a **Status detail**: Needs first response, Needs next response, Investigating, Reply Draft; Waiting for them, Paused for later; Done, Ignored. A send moves a Thread to Waiting for them; their reply, or 4 days with no reply, brings it back to Todo. Snoozes always end at a date. **Reply Draft** is shown, never stored: a Todo Thread whose Reply Draft is ready to send lists last in Todo, so a Reply Draft an agent writes moves its Thread there.
 - **Ignored** is Done for noise. **Blocked** flags an Identity so its new Threads start Ignored.
-- **Draft** is an unsent message with its own Connection and recipients. A reply Draft belongs to one Thread. A Draft carries a **Draft revision**; **Needs edit** stops it sending until its text changes; **Send outcome unknown** locks it until Jeremy resolves it.
+- **Draft** is an unsent message with its own Connection and recipients. A **Reply Draft** belongs to one Thread and sends from its reply box; every other Draft is a **New Thread Draft**. A Draft carries a **Draft revision**; **Needs edit** stops it sending until its text changes; **Send outcome unknown** locks it until Jeremy resolves it.
 - **Case** groups Threads that serve one goal across Platforms. Jeremy never sets a Case's Status.
 - **Person** is a set of Identities. **Organization** holds People through Memberships that follow company email domains; Jeremy's own changes win. A person acting on their own account gets a **Sole proprietorship**.
 - **Sequence** is ordered Steps (touches Jeremy does, Actions the console does, Ifs that choose a path) with On start and On completion. An **Enrollment** runs one Person through it for one Organization: Active, Paused, Finishing or Finished. Any inbound message from the Person pauses it. Each Step becomes a **Task** for that Enrollment; an email Task makes a Draft and is done when the Draft is sent.
@@ -50,8 +50,8 @@ Jeremy works in the console; agents read and prepare work through the CLI. On Wo
 | Drafts, then the Connections a new Draft can use | `comms-terminal drafts` |
 | One Draft | `comms-terminal draft ID` |
 | Change a Draft | `comms-terminal draft ID --revision N --body -` (also `--to`, `--cc`, `--subject`, `--needs-edit`) |
-| Start a reply Draft | `comms-terminal draft new --thread ID --body -` |
-| Start a Draft for a new Thread | `comms-terminal draft new --connection ID --to … --subject … --body -` |
+| Start a Reply Draft | `comms-terminal draft new --thread ID --body -` |
+| Start a New Thread Draft | `comms-terminal draft new --connection ID --to … --subject … --body -` |
 | Due Tasks with their Person and Draft | `comms-terminal tasks` |
 | Enroll a Person | `comms-terminal enroll PERSON SEQUENCE [--start DATE\|DAYS] [--org DOMAIN\|sole] [--to EMAIL]` |
 | Enrollments | `comms-terminal enrollment list [PERSON]`, `resume ID`, `start ID DATE`, `finish ID REASON` |

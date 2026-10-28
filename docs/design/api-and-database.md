@@ -220,7 +220,7 @@ Stored values are Plain's enum names. The console shows the product label.
   - `CREATED`: Needs first response
   - `NEW_REPLY`: Needs next response
   - `IN_PROGRESS`: Investigating
-  - `DRAFT_READY`: Draft ready. Shown by `inbox.queue`, never stored: a Todo Thread with a reply Draft that has text, is not Needs edit, and is not sending (FR-6f).
+  - `REPLY_DRAFT`: Reply Draft. Shown by `inbox.queue`, never stored: a Todo Thread with a Reply Draft that has text, is not Needs edit, and is not sending (FR-6f).
 - `SNOOZED`
   - `WAITING_FOR_CUSTOMER`: Waiting for them
   - `WAITING_FOR_DURATION`: Paused for later (until a time)

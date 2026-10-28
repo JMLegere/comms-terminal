@@ -13,7 +13,15 @@ A retired Thread ID that resolves to the surviving Thread after exact-reference 
 _Avoid_: Deleted thread, Duplicate activity
 
 **Draft**:
-An unsent email, SMS, or Slack composition with its own Connection, recipients, subject and body; it sends as the Connection's own address, number, or Slack user. A Slack Draft has no subject and goes to one existing Slack Channel (a channel, DM, or group DM Jeremy is in) instead of recipients. A reply Draft belongs to one Thread, at most one per Thread, and sends as a reply in it. A Draft is neither a Thread nor an Activity. Sending it removes it and records the message: an email Draft starts a new Thread unless it is a reply Draft; an SMS or Slack Draft joins its Channel's Thread by the ordinary Thread rules, starting a new one only when the Channel has been quiet long enough.
+An unsent email, SMS, or Slack composition with its own Connection, recipients, subject and body; it sends as the Connection's own address, number, or Slack user. A Slack Draft has no subject and goes to one existing Slack Channel (a channel, DM, or group DM Jeremy is in) instead of recipients. A Draft is a Reply Draft or a New Thread Draft. A Draft is neither a Thread nor an Activity. Sending it removes it and records the message: an email Draft starts a new Thread unless it is a Reply Draft; an SMS or Slack Draft joins its Channel's Thread by the ordinary Thread rules, starting a new one only when the Channel has been quiet long enough.
+
+**Reply Draft**:
+A Draft that belongs to one Thread, at most one per Thread, and sends as a reply in it from the Thread's reply box. A Todo Thread with a ready Reply Draft shows the Status detail Reply Draft.
+_Avoid_: Reply box text, Response draft
+
+**New Thread Draft**:
+A Draft that belongs to no Thread: an email to new recipients, or an SMS or Slack message to a Channel. Sending an email one starts a new Thread; an SMS or Slack one joins its Channel's Thread by the ordinary Thread rules.
+_Avoid_: Compose, Outbound draft, Standalone draft
 
 **Send outcome unknown**:
 A send that was started but never confirmed or refused, so the message may or may not have gone out. A Draft stays locked until Jeremy marks it sent, which removes it without making a Thread, or explicitly sends it again. A reply has no lock: nothing is recorded, its text and staged files stay, and Jeremy checks the Thread before sending again.
@@ -85,12 +93,12 @@ Where a Thread stands, as in Plain: Todo, Snoozed, or Done. Every Thread also ha
 _Avoid_: State
 
 **Status detail**:
-The reason within a Status, as in Plain: Needs first response, Needs next response, Investigating, or Draft ready (Todo); Waiting for them or Paused for later (Snoozed, always until a date: a follow-up date or a wake time; never indefinite); Done or Ignored (Done).
+The reason within a Status, as in Plain: Needs first response, Needs next response, Investigating, or Reply Draft (Todo); Waiting for them or Paused for later (Snoozed, always until a date: a follow-up date or a wake time; never indefinite); Done or Ignored (Done).
 _Avoid_: Substatus, Reason
 
-**Draft ready**:
-The last Todo Status detail: a Todo Thread whose reply Draft has text, is not Needs edit, and is not sending. It is shown, never stored: the Thread keeps its own Status detail underneath, and returns to it when the Draft is deleted or marked Needs edit. Sending the Draft moves the Thread to Waiting for them as any reply does. Jeremy never sets it.
-_Avoid_: Drafted, Ready to send, Pending
+**Reply Draft** (Status detail):
+The last Todo Status detail: a Todo Thread whose Reply Draft has text, is not Needs edit, and is not sending. It is shown, never stored: the Thread keeps its own Status detail underneath, and returns to it when the Draft is deleted or marked Needs edit. Sending the Draft moves the Thread to Waiting for them as any reply does. Jeremy never sets it.
+_Avoid_: Draft ready, Drafted, Ready to send, Pending
 
 **Ignored**:
 A Done Status for noise that does not move when new messages arrive, until Jeremy un-ignores it.

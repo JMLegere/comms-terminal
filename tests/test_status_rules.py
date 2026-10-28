@@ -48,8 +48,8 @@ def test_one_rollup_for_cases_and_organizations():
     assert set(inbox.DETAIL_LABEL) == set(inbox.VIEWS["All"])  # every Status detail has a label
 
 
-def test_a_ready_reply_draft_shows_its_todo_thread_as_draft_ready(tmp_path):  # FR-6f
-    """Draft ready is shown, never stored: text, not Needs edit, on a Todo Thread; last in Todo."""
+def test_a_ready_reply_draft_shows_its_todo_thread_as_reply_draft(tmp_path):  # FR-6f
+    """Reply Draft is shown, never stored: text, not Needs edit, on a Todo Thread; last in Todo."""
     from test_console import seeded
     from comms_terminal import inbox
     db = inbox.connect(seeded(tmp_path)[0])
@@ -58,11 +58,11 @@ def test_a_ready_reply_draft_shows_its_todo_thread_as_draft_ready(tmp_path):  # 
     stored = todo["detail"]
     assert inbox.save_reply_draft(db, todo["id"], "  ") is None and shown(todo["id"]) == stored  # no text: no Draft
     draft = inbox.save_reply_draft(db, todo["id"], "Thanks, Tuesday works.")
-    assert shown(todo["id"]) == inbox.DRAFT_READY
+    assert shown(todo["id"]) == inbox.REPLY_DRAFT
     assert inbox.get_thread(db, todo["id"]).status_detail == stored  # the stored Status detail is unchanged
-    assert inbox.VIEWS["Todo"][-1] == inbox.DRAFT_READY and inbox.DETAIL_LABEL[inbox.DRAFT_READY] == "Draft ready"
+    assert inbox.VIEWS["Todo"][-1] == inbox.REPLY_DRAFT and inbox.DETAIL_LABEL[inbox.REPLY_DRAFT] == "Reply Draft"
     inbox.mark_needs_edit(db, draft["id"])
     assert shown(todo["id"]) == stored  # Needs edit: not ready to send
     snoozed = inbox.queue(db, "Snoozed")[0]
     inbox.save_reply_draft(db, snoozed["id"], "Following up.")
-    assert shown(snoozed["id"]) == snoozed["detail"]  # only Todo Threads show Draft ready
+    assert shown(snoozed["id"]) == snoozed["detail"]  # only Todo Threads show Reply Draft
