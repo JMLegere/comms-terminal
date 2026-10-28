@@ -2829,7 +2829,7 @@ class DraftView(Composer, Horizontal):
                 Binding("ctrl+s", "save", "save draft"),
                 Binding("escape", "close", "save / close"),
                 Binding("ctrl+enter", "send", "send", key_display="ctrl+enter"),
-                Binding("ctrl+r", "reload", show=False), Binding("ctrl+o", "attach", "attach")]
+                Binding("ctrl+o", "attach", "attach")]
 
     def __init__(self, draft):
         super().__init__(classes="draftview")
@@ -2931,8 +2931,7 @@ class DraftView(Composer, Horizontal):
         notice = self.query_one(".savenotice")
         notice.update(escape(SEND_UNKNOWN if locked and not self.notice else self.notice or scheduled_note(self.draft)))
         notice.set_class(self.save_error or locked or bool(not self.notice and self.draft.get("send_error")), "error")
-        self.hint("Save conflict · edits kept" if self.save_error and self.notice.startswith("Save conflict") else
-                  "Not sent · edits kept" if self.save_error and self.notice.startswith("Not sent") else
+        self.hint("Not sent · edits kept" if self.save_error and self.notice.startswith("Not sent") else
                   "Save failed · edits kept" if self.save_error else
                   "Locked · send outcome unknown" if locked else
                   DRAFT_HINT if self.attach_owner() else DRAFT_HINT.replace(" · ctrl+o attach", ""),
@@ -3068,9 +3067,7 @@ class DraftView(Composer, Horizontal):
             return True
         try:
             draft = inbox.save_draft(self.app.db, self.values(), draft_id=self.draft_id,
-                                     expected_revision=self.draft["revision"])
-        except inbox.DraftConflict:
-            self.notice = "Save conflict · edits kept; ctrl+r reloads saved draft."
+                                     expected_revision=self.draft["revision"], overwrite=True)  # latest save wins
         except Exception:
             self.notice = "Save failed · edits kept; retry ctrl+s."
         else:
@@ -3096,37 +3093,7 @@ class DraftView(Composer, Horizontal):
     def action_close(self):
         if self.save():
             self.app.main.focus_list()
-        elif self.check_action("reload", ()):  # a conflict never saves: offer the reload instead of a dead end
-            self.action_reload()
 
-
-    def action_reload(self):
-        def chosen(choice):
-            if choice != "reload" or not self.is_attached:
-                return
-            try:
-                draft = inbox.get_draft(self.app.db, self.draft_id)
-            except (KeyError, ValueError, sqlite3.Error):
-                self.app.notify("Saved draft unavailable · edits kept.", severity="error")
-                return
-            self.draft, self.connection_id, self.kind = draft, draft["connection_id"], draft["kind"]
-            self.from_address = draft["sender"]
-            for name in ("to", "cc", "subject"):
-                self.query_one(f".{name}input", Input).value = draft[name] or ""
-            self.query_one(TextArea).text = draft["body"]
-            for field in self.query(AddressInput):
-                field.refresh_suggestion()
-            self.notice, self.save_error = "", False
-            self.refresh_history(force=True)
-            self.app.main.current.refresh_data()
-        self.app.push_screen(Pick("Reload saved draft", [("keep", "Keep edits"),
-                                                       ("reload", "Discard edits · reload saved draft")],
-                                  "Reload replaces current unsaved fields with the saved revision."), chosen)
-
-    def check_action(self, action, parameters):
-        if action == "reload":
-            return self.save_error and self.notice.startswith("Save conflict")
-        return super().check_action(action, parameters)
 
     def attach_owner(self):
         """This Draft (FR-A8); None for SMS and Fastmail (FR-A16) or while its send outcome is unknown."""
@@ -3227,8 +3194,7 @@ class DraftsPage(Page):
     BINDINGS = [Binding("j", "down", "move", key_display="j/k"), Binding("k", "up", show=False),
                 Binding("n", "new", "new draft"), Binding("x", "delete", "delete draft"),
                 Binding("y", "copy", "copy for agent"),
-                Binding("ctrl+s", "save", "save draft"), Binding("ctrl+enter", "send", show=False),
-                Binding("ctrl+r", "reload", show=False)]
+                Binding("ctrl+s", "save", "save draft"), Binding("ctrl+enter", "send", show=False)]
 
     def __init__(self, include=None):
         super().__init__()
@@ -3390,11 +3356,6 @@ class DraftsPage(Page):
         view = self.app.main.draft_view
         if view:
             view.action_send()
-
-    def action_reload(self):
-        view = self.app.main.draft_view
-        if view and view.check_action("reload", ()):
-            view.action_reload()
 
     def action_copy(self):
         """The shown Draft as its editor holds it now, saved or not."""
@@ -5128,18 +5089,11 @@ class TasksPage(Page):
                 Binding("e", "done", "done · next"), Binding("x", "skip", "skip · next"),
                 Binding("n", "new_thread", show=False), Binding("slash", "filter", "filter", key_display="/"),
                 Binding("p", "person", "person"), Binding("y", "copy", "copy for agent"),
-                Binding("1", "pick(1)", "first path", show=False), Binding("2", "pick(0)", "second path", show=False),
-                Binding("ctrl+r", "reload", show=False)]
+                Binding("1", "pick(1)", "first path", show=False), Binding("2", "pick(0)", "second path", show=False)]
 
     def __init__(self):
         super().__init__()
         self.items, self.filter = [], None  # filter: a kind, or ("sequence", id)
-
-    def action_reload(self):
-        """A save conflict holds the list on its Draft (show_selected saves first): reload from here too."""
-        view = self.app.main.draft_view
-        if view and view.check_action("reload", ()):
-            view.action_reload()
 
     def compose(self):
         yield ClickTable(id="table", cursor_type="row", show_header=False)

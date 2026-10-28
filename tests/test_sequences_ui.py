@@ -504,9 +504,11 @@ def test_enroll_into_a_new_sole_proprietorship(tmp_path):
     assert org == inbox.sole_key(ana)
 
 
-def test_a_save_conflict_on_a_task_draft_reloads_from_the_list_and_from_escape(tmp_path):
-    """Another writer saved the Task's Draft first: ctrl+r from the Tasks list, or escape in the editor, offers the
-    reload instead of leaving Jeremy stuck on a Draft that can never save."""
+
+@pytest.mark.parametrize("leave", ["ctrl+s", "escape"])
+def test_the_latest_edit_to_a_task_draft_wins_over_a_newer_stored_copy(tmp_path, leave):
+    """Another writer saved the Task's Draft while Jeremy typed: his save keeps his words, with no conflict
+    to clear, and the Tasks list lets him move on."""
     path, _ = seeded(tmp_path)
     db = inbox.connect(path)
     s = sq.create_sequence(db, "Email first")
@@ -515,39 +517,22 @@ def test_a_save_conflict_on_a_task_draft_reloads_from_the_list_and_from_escape(t
     sq.enroll(db, ana, s)
     seen = {}
 
-    async def conflict(app, pilot, view):
-        stored = inbox.get_draft(db, view.draft_id)
-        newer = inbox.save_draft(db, {k: stored[k] for k in ("connection_id", "kind", "sender", "to", "cc", "subject")}
-                                 | {"body": "newer stored words"}, draft_id=view.draft_id,
-                                 expected_revision=stored["revision"])
-        view.query_one(TextArea).text = "unsaved local words"
-        assert not view.save()
-        await pilot.pause()
-        return newer
-
     async def scenario(app, pilot):
         app.main.go("tasks")
         await pilot.pause()
         view = app.main.draft_view
-        newer = await conflict(app, pilot, view)
-        app.main.current.query_one(DataTable).focus()
-        await pilot.press("ctrl+r")
+        area = view.query_one(TextArea)
+        area.focus()
+        area.text = "Jeremy's latest words"
         await pilot.pause()
-        seen["list_pick"] = isinstance(app.screen, Pick)
-        choose(app, "reload")
-        await pilot.press("enter")
+        stored = inbox.get_draft(db, view.draft_id)
+        inbox.save_draft(db, {k: stored[k] for k in ("connection_id", "kind", "sender", "to", "cc", "subject")}
+                         | {"body": "an agent's edit"}, draft_id=view.draft_id, expected_revision=stored["revision"])
+        await pilot.press(leave)
         await pilot.pause()
-        seen["list_reloaded"] = (view.query_one(TextArea).text, view.save_error, app.main.save_draft())
-        newer = await conflict(app, pilot, view)
-        view.query_one(TextArea).focus()
-        await pilot.press("escape")
-        await pilot.pause()
-        seen["escape_pick"] = isinstance(app.screen, Pick)
-        choose(app, "reload")
-        await pilot.press("enter")
-        await pilot.pause()
-        seen["escape_reloaded"] = (view.query_one(TextArea).text, view.save_error)
+        seen["stored"] = inbox.get_draft(db, view.draft_id)["body"]
+        seen["error"] = view.save_error
+        seen["can_leave"] = app.main.save_draft()
 
     run(Console(path), [scenario], size=(187, 40))
-    assert seen["list_pick"] and seen["list_reloaded"] == ("newer stored words", False, True)
-    assert seen["escape_pick"] and seen["escape_reloaded"] == ("newer stored words", False)
+    assert seen == {"stored": "Jeremy's latest words", "error": False, "can_leave": True}

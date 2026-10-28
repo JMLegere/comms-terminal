@@ -1,7 +1,7 @@
 Feature: Composition
   Draft is unsent work, not a Thread or an Activity. Draft revision is the saved version.
   Save Draft (inbox.save_draft), Get Draft (inbox.get_draft), and List Drafts (inbox.list_drafts)
-  persist and resume the complete edited fields. Draft Conflict (inbox.DraftConflict) rejects a stale save.
+  persist and resume the complete edited fields. Draft Conflict (inbox.DraftConflict) rejects a stale save from the CLI or an agent; the console's editor saves with overwrite, so the most recent save wins.
   Connection maps to connection_id, Message format to kind, Sender to sender, To to to,
   Cc to cc, Subject to subject, and Body to body. "none" means no Connection or no SMS Subject;
   every other field remains the exact edited string.

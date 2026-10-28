@@ -269,23 +269,12 @@ def test_failed_stale_save_and_history_failure_preserve_editor_and_selection(tmp
         await pilot.pause()
         assert view.values() == original
         area.focus()
-        await pilot.press("ctrl+s")
+        await pilot.press("ctrl+s")  # the most recent save wins over the newer stored copy
         await pilot.pause()
-        assert "Save conflict" in str(view.query_one(".savenotice").render())
-        assert view.values() == original and inbox.get_draft(app.db, view.draft_id) == newer
-        app.main.go("drafts")
-        await pilot.pause()
-        assert app.main.page is page and app.main.draft_view is view and view.values() == original
-        await pilot.press("ctrl+r")
-        await pilot.pause()
-        await choose(app, pilot, "keep")
-        assert view.values() == original and view.save_error
-        await pilot.press("ctrl+r")
-        await pilot.pause()
-        await choose(app, pilot, "reload")
+        stored = inbox.get_draft(app.db, view.draft_id)
+        assert {k: stored[k] for k in DRAFT_FIELDS} == original and stored["revision"] == newer["revision"] + 1
         assert not view.dirty and not view.save_error
-        assert view.values() == {k: newer[k] for k in DRAFT_FIELDS}
-        assert inbox.get_draft(app.db, view.draft_id) == newer
+        assert "Save conflict" not in str(view.query_one(".savenotice").render())
 
     run(Console(path), [scenario])
 

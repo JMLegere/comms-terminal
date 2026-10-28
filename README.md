@@ -89,7 +89,7 @@ The console opens on **Today** (`1`): Todo Threads grouped by Case, Due Tasks, D
 6. **Bring back Unattended Organizations.** Open one, then enroll a Person in a Sequence (`s` on their page) or set the Organization's Stage (`s`).
 7. **After each meeting**, its Thread returns to Todo. Write the follow-up there.
 
-Hand work to an agent. Press `y` on a Thread or Draft to copy it as Markdown, or let the agent read it with `comms-terminal thread ID`. The agent writes Drafts through the CLI and never sends. Drafts it prepares appear on Today and Drafts (`6`). If one was open while the agent changed it, `ctrl+r` reloads it. Review it, then send.
+Hand work to an agent. Press `y` on a Thread or Draft to copy it as Markdown, or let the agent read it with `comms-terminal thread ID`. The agent writes Drafts through the CLI and never sends. Drafts it prepares appear on Today and Drafts (`6`). An open Draft with no unsaved typing shows the agent's change; if you were typing, your save is the most recent and wins. Review it, then send.
 
 Once a week, open each Pipeline in the rail. Do its **This week** actions, and set Stages (`s`) and Values (`v`) on the board.
 

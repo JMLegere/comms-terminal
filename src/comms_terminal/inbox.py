@@ -834,10 +834,12 @@ def get_thread(db, thread_id: int) -> Thread:
 
 @writer("write")
 def save_draft(db, values: dict, *, draft_id: int | None = None,
-               expected_revision: int | None = None, thread_id: int | None = None, task_id: int | None = None) -> dict:
+               expected_revision: int | None = None, thread_id: int | None = None, task_id: int | None = None,
+               overwrite: bool = False) -> dict:
     """Persist the complete edited envelope, including incomplete text; never send or create work.
     `thread_id` makes a new Draft that Thread's reply Draft (save_reply_draft) and `task_id` an email Task's
-    Draft (sequences); an edit keeps both."""
+    Draft (sequences); an edit keeps both. `overwrite`: the most recent save wins over a newer stored revision
+    (the console's editor) instead of raising DraftConflict (agents and the CLI)."""
     if not isinstance(values, dict) or set(values) != {
             "connection_id", "kind", "sender", "to", "cc", "subject", "body"}:
         raise ValueError("draft values must contain exactly connection_id, kind, sender, to, cc, subject, body")
@@ -877,8 +879,8 @@ def save_draft(db, values: dict, *, draft_id: int | None = None,
                 'UPDATE composition_drafts SET connection_id = ?, kind = ?, sender = ?, "to" = ?,'
                 " cc = ?, subject = ?, body = ?, revision = revision + 1, updated_at = ?,"
                 " needs_edit = CASE WHEN subject IS ? AND body = ? THEN needs_edit ELSE 0 END"  # a changed text clears it
-                " WHERE id = ? AND revision = ?",
-                (*envelope, at, values["subject"], values["body"], draft_id, expected_revision)).rowcount
+                " WHERE id = ? AND (? OR revision = ?)",
+                (*envelope, at, values["subject"], values["body"], draft_id, bool(overwrite), expected_revision)).rowcount
             if not saved:
                 get_draft(db, draft_id)  # a missing row is distinct from a stale writer
                 raise DraftConflict("Draft changed since this revision; reload before saving.")
