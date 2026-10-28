@@ -14,7 +14,7 @@ from comms_terminal.tui import Console, ThreadsPage
 
 EXPECTED = {
     "Todo": (("CREATED", "Needs first response"), ("NEW_REPLY", "Needs next response"),
-             ("IN_PROGRESS", "Investigating")),
+             ("IN_PROGRESS", "Investigating"), ("DRAFT_READY", "Draft ready")),
     "Snoozed": (("WAITING_FOR_CUSTOMER", "Waiting for them"), ("WAITING_INDEFINITELY", "Paused for later")),
     "Done": (("DONE_MANUALLY_SET", "Done"),),
     "Ignored": (("IGNORED", "Ignored"),),

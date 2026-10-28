@@ -51,6 +51,7 @@ ICON = {
     "CREATED": "\U000f0674",               # md-creation (Needs first response)
     "NEW_REPLY": "\U000f173e",             # md-message_reply_text_outline (Needs next response)
     "IN_PROGRESS": "\U000f0349",           # md-magnify (Investigating)
+    "DRAFT_READY": "\U000f048a",           # md-send (Draft ready)
     "WAITING_FOR_CUSTOMER": "\U000f051f",  # md-timer_sand (Waiting for them)
     "WAITING_FOR_DURATION": "\U000f03e6",  # md-pause_circle_outline (Paused for later)
     "WAITING_INDEFINITELY": "\U000f03e6",  # md-pause_circle_outline (Paused for later)

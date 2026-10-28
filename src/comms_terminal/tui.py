@@ -48,9 +48,9 @@ from .icons import ICON
 from .platforms import FORMATS, PLATFORMS
 
 DETAIL_COLOR = {  # Status detail -> color; the label is inbox.DETAIL_LABEL, the glyph icons.ICON
-    "CREATED": "#45707a", "NEW_REPLY": "#b47109", "IN_PROGRESS": "#945e80", "WAITING_FOR_CUSTOMER": "#928374",
-    "WAITING_FOR_DURATION": "#928374", "WAITING_INDEFINITELY": "#928374", "DONE_MANUALLY_SET": "#6c782e",
-    "IGNORED": "#a89984",
+    "CREATED": "#45707a", "NEW_REPLY": "#b47109", "IN_PROGRESS": "#945e80", "DRAFT_READY": "#4c7a5d",
+    "WAITING_FOR_CUSTOMER": "#928374", "WAITING_FOR_DURATION": "#928374", "WAITING_INDEFINITELY": "#928374",
+    "DONE_MANUALLY_SET": "#6c782e", "IGNORED": "#a89984",
 }
 GLYPH = {d: (ICON[d], color, inbox.DETAIL_LABEL[d]) for d, color in DETAIL_COLOR.items()}
 VIEW_NAMES = list(inbox.VIEWS)  # Todo, Snoozed, Done, Ignored, All
@@ -794,7 +794,8 @@ class ThreadActions:
             return
         current = inbox.get_thread(self.app.db, tid).status_detail
         opts = [(d, f"[{GLYPH[d][1]}]{GLYPH[d][0]}[/] {GLYPH[d][2]}")
-                for d in sorted(inbox.VIEWS["Todo"], key=lambda d: d != "IN_PROGRESS") if d != current]
+                for d in sorted(inbox.VIEWS["Todo"], key=lambda d: d != "IN_PROGRESS")
+                if d not in (current, inbox.DRAFT_READY)]  # Draft ready is shown, never set
         if current == "IGNORED":
             opts.append(("UNIGNORE", f"{ICON['TODO']} Un-ignore"))
 

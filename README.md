@@ -42,7 +42,7 @@ uv run comms-terminal --db /tmp/demo.db
 
 ### 01 · One queue for every channel
 
-Gmail, Fastmail, Slack DMs and mentions, and Quo SMS become Threads. Statuses follow Plain: Needs first response, Needs next response, Investigating, Snoozed, Done. Nothing drops silently: each Connection shows its sync health in the rail.
+Gmail, Fastmail, Slack DMs and mentions, and Quo SMS become Threads. Statuses follow Plain: Needs first response, Needs next response, Investigating, Draft ready, Snoozed, Done. Nothing drops silently: each Connection shows its sync health in the rail.
 
 ### 02 · Reply in place
 
@@ -84,7 +84,7 @@ The console opens on **Today** (`1`): Todo Threads grouped by Case, Due Tasks, D
    - Part of a bigger goal: `l` adds it to a Case.
    - Wrong move: `z` undoes it.
 3. **Work the Due Tasks.** An email Task comes with its Draft. Rewrite any marked `edit me`, then send it. Mark other Tasks done with `e`, skip with `x`, and answer a Step's question with `1` or `2`.
-4. **Clear the Drafts.** Read each one, edit, and send it, or delete it with `x`.
+4. **Send what is Draft ready.** Todo ends with the Threads whose reply Draft is written, often by an agent. Read each, edit, and send it with `ctrl+enter`. Then clear the other Drafts the same way, or delete one with `x`.
 5. **Settle Paused Enrollments.** Someone replied, so the Sequence waits for you: `r` resumes it, `f` finishes it (Goal met, Not Right Now, Lost, …).
 6. **Bring back Unattended Organizations.** Open one, then enroll a Person in a Sequence (`s` on their page) or set the Organization's Stage (`s`).
 7. **After each meeting**, its Thread returns to Todo. Write the follow-up there.

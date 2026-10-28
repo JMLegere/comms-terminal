@@ -36,7 +36,7 @@ Workbox
 - **Panel titles**: bg0 text on an accent block: inbox red, main blue, thread green.
 - **Focus highlight**: the focused pane's border turns blue. The focused rail's keyboard highlight uses bg4 and bold text; the selected main row and the rail's current-section `▌` marker stay unchanged when focus moves.
 - **Bottom bar** (#94, #97): one line, flat like the reference vim/tmux bars: a grey2 mode block (with `› PAGE` when deeper than the rail section), then the page's keys grouped move · reply · triage · organize · general (key bold blue, description grey2, clickable), then Todo, Snoozed, and each Connection as thin text segments separated by `/`; a red block only when a Connection is broken. The last segment is the installed version, `YYYY-MM-DD-HHMM-commit` (the commit's time in local time and its short SHA), baked in when the package is built; a source run shows none. Keys drop from the busiest group when the terminal is narrow.
-- **Status detail colours**: Needs first response blue, Needs next response yellow, Investigating purple, waiting and paused grey, Done green, Ignored dim. Icons come from the icon mapper; colour never carries meaning alone.
+- **Status detail colours**: Needs first response blue, Needs next response yellow, Investigating purple, Draft ready aqua, waiting and paused grey, Done green, Ignored dim. Icons come from the icon mapper; colour never carries meaning alone.
 
 ## 3. Screens
 
@@ -168,7 +168,7 @@ A successful read proves current membership, not which request caused it. If Rea
 
 ### Status, Case, and Person pickers
 
-- `s`: a small menu of Todo details (Needs first response, Needs next response, Investigating) and `Unignore` when the Thread is Ignored.
+- `s`: a small menu of Todo details (Needs first response, Needs next response, Investigating) and `Unignore` when the Thread is Ignored. Draft ready is not offered: it shows by itself while the Thread's reply Draft is ready (FR-6f).
 - `g` (snooze): a menu of `1 hour`, `tomorrow 9:00`, `next Monday 9:00`, or a typed time. No indefinite option (#96); a snoozed Thread also returns when they write.
 - `c`: a filterable list of Cases, `new case…`, and `remove from case`.
 - `b` (block sender, #138): blocks the Identity that wrote, or unblocks it when it is already blocked. With one sender it acts at once and also Ignores the Thread; with several it offers a menu, latest sender first, and blocks only. `z` undoes both.

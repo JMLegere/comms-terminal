@@ -29,7 +29,7 @@ Platform ─▶ Connection ─▶ Channel ─▶ Thread ◀── Activity (mess
 ```
 
 - **Thread** is the unit of work. Email threads by headers; Slack and SMS group by quiet time (24 hours Slack, 7 days SMS). Every calendar Event is a Meeting Thread or Block Thread too.
-- **Status** is Todo, Snoozed or Done, each with a **Status detail**: Needs first response, Needs next response, Investigating; Waiting for them, Paused for later; Done, Ignored. A send moves a Thread to Waiting for them; their reply, or 4 days with no reply, brings it back to Todo. Snoozes always end at a date.
+- **Status** is Todo, Snoozed or Done, each with a **Status detail**: Needs first response, Needs next response, Investigating, Draft ready; Waiting for them, Paused for later; Done, Ignored. A send moves a Thread to Waiting for them; their reply, or 4 days with no reply, brings it back to Todo. Snoozes always end at a date. **Draft ready** is shown, never stored: a Todo Thread whose reply Draft is ready to send lists last in Todo, so a reply Draft an agent writes moves its Thread there.
 - **Ignored** is Done for noise. **Blocked** flags an Identity so its new Threads start Ignored.
 - **Draft** is an unsent message with its own Connection and recipients. A reply Draft belongs to one Thread. A Draft carries a **Draft revision**; **Needs edit** stops it sending until its text changes; **Send outcome unknown** locks it until Jeremy resolves it.
 - **Case** groups Threads that serve one goal across Platforms. Jeremy never sets a Case's Status.

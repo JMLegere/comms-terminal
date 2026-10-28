@@ -2559,8 +2559,9 @@ def case_threads(db, case_id: int) -> list[Thread]:
 
 # --- console read models (docs/design/console.md) ---------------------------
 
+DRAFT_READY = "DRAFT_READY"  # shown, never stored: a Todo Thread whose reply Draft is ready to send (FR-6f)
 VIEWS = {
-    "Todo": ("CREATED", "NEW_REPLY", "IN_PROGRESS"),
+    "Todo": ("CREATED", "NEW_REPLY", "IN_PROGRESS", DRAFT_READY),
     "Snoozed": ("WAITING_FOR_CUSTOMER", "WAITING_FOR_DURATION", "WAITING_INDEFINITELY"),
     "Done": ("DONE_MANUALLY_SET",),
     "Ignored": ("IGNORED",),
@@ -2578,6 +2579,7 @@ DETAIL_LABEL = {  # Status detail -> how Jeremy reads it (GLOSSARY)
     "CREATED": "Needs first response",
     "NEW_REPLY": "Needs next response",
     "IN_PROGRESS": "Investigating",
+    DRAFT_READY: "Draft ready",
     "WAITING_FOR_CUSTOMER": "Waiting for them",
     "WAITING_FOR_DURATION": "Paused for later",
     "WAITING_INDEFINITELY": "Paused for later",
@@ -2691,13 +2693,17 @@ def queue(db, view: str) -> list[dict]:
         " (SELECT identity_id FROM thread_activities a WHERE a.thread_id = t.id AND a.identity_id IS NOT NULL"
         "   ORDER BY occurred_at, id LIMIT 1) AS first_identity,"
         " EXISTS (SELECT 1 FROM composition_drafts d JOIN threads m ON m.id = d.thread_id"
-        "   WHERE m.id = t.id OR m.merged_into = t.id) AS drafted"
+        "   WHERE m.id = t.id OR m.merged_into = t.id) AS drafted,"
+        " EXISTS (SELECT 1 FROM composition_drafts d JOIN threads m ON m.id = d.thread_id"
+        "   WHERE (m.id = t.id OR m.merged_into = t.id) AND trim(d.body) != '' AND NOT d.needs_edit"
+        "   AND d.sending_at IS NULL) AS ready"
         f" FROM threads t JOIN channels ch ON ch.id = t.channel_id JOIN connections c ON c.id = ch.connection_id"
         f" WHERE t.merged_into IS NULL AND t.status_detail IN ({','.join('?' * len(details))})", details).fetchall()
     out = []
     for r in rows:
         label, identity = _sender(db, r["first_identity"]) if r["first_identity"] else ("You", None)
-        out.append({"id": r["id"], "title": r["title"], "status": r["status"], "detail": r["status_detail"],
+        detail = DRAFT_READY if r["ready"] and r["status"] == "TODO" else r["status_detail"]
+        out.append({"id": r["id"], "title": r["title"], "status": r["status"], "detail": detail,
                     "case_id": r["case_id"], "until": r["follow_up_at"] or r["snoozed_until"], "who": label, "where": _where(r, identity), "last_at": r["last_at"],
                     "waiting_since": r["last_in"] or r["last_at"], "drafted": bool(r["drafted"])})
     if view == "Todo":

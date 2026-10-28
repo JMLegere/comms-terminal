@@ -21,7 +21,7 @@ Status: MVP confirmed 2026-10-10; revised 2026-10-12 to follow Plain's status mo
   - Console replies post from Jeremy's Slack profile: in a channel always inside a Slack reply-thread (the Thread's own, or under its latest top-level message); in a DM top-level unless the Thread is made of replies.
   - Deviation: DMs and group DMs also sync, through events on Jeremy's behalf, because they carry most of Jeremy's Slack comms.
 - **Status** (Plain): a Status and a Status detail.
-  - Todo: Needs first response, Needs next response, Investigating.
+  - Todo: Needs first response, Needs next response, Investigating, Draft ready (shown when a reply Draft is ready; never stored).
   - Snoozed: Waiting for them, Paused for later.
   - Done: Done, Ignored.
   - Jeremy's reply moves a Thread to Waiting for them. Deviation (#116): with no reply in 4 days it returns to Todo (Needs next response) to follow up; there is no key to wait without replying.

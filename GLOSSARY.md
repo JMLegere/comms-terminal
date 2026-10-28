@@ -85,8 +85,12 @@ Where a Thread stands, as in Plain: Todo, Snoozed, or Done. Every Thread also ha
 _Avoid_: State
 
 **Status detail**:
-The reason within a Status, as in Plain: Needs first response, Needs next response, or Investigating (Todo); Waiting for them or Paused for later (Snoozed, always until a date: a follow-up date or a wake time; never indefinite); Done or Ignored (Done).
+The reason within a Status, as in Plain: Needs first response, Needs next response, Investigating, or Draft ready (Todo); Waiting for them or Paused for later (Snoozed, always until a date: a follow-up date or a wake time; never indefinite); Done or Ignored (Done).
 _Avoid_: Substatus, Reason
+
+**Draft ready**:
+The last Todo Status detail: a Todo Thread whose reply Draft has text, is not Needs edit, and is not sending. It is shown, never stored: the Thread keeps its own Status detail underneath, and returns to it when the Draft is deleted or marked Needs edit. Sending the Draft moves the Thread to Waiting for them as any reply does. Jeremy never sets it.
+_Avoid_: Drafted, Ready to send, Pending
 
 **Ignored**:
 A Done Status for noise that does not move when new messages arrive, until Jeremy un-ignores it.
