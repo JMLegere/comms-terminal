@@ -137,7 +137,7 @@ def _calendars(db):
         for r in db.execute("SELECT uid, recurrence_id, ics, deleted_at FROM events"):
             ev = icalendar.Event.from_ical(r["ics"])
             (gone if r["deleted_at"] else live).add_component(ev)
-            if r["recurrence_id"] == "" and "RRULE" in ev:
+            if r["recurrence_id"] == "" and ("RRULE" in ev or "RDATE" in ev):
                 series.add(r["uid"])
         deleted = {(r["uid"], r["recurrence_id"]): r["deleted_at"]
                    for r in db.execute("SELECT uid, recurrence_id, deleted_at FROM events WHERE deleted_at IS NOT NULL")}
@@ -194,6 +194,34 @@ def expand(db, start: date, end: date, deleted: bool = True) -> list[dict]:
     if not deleted:
         out = [e for e in out if not e["deleted_at"]]
     return sorted(out, key=lambda e: (not e["all_day"], clock.local(e["start"])))
+
+
+def current(db, event: dict) -> dict | None:
+    """Reload an open Event: standalone by UID, recurring by its stable RECURRENCE-ID, across day moves.
+    A missing or ambiguous occurrence returns None rather than another occurrence of the same series."""
+    uid = event["uid"]
+    rid = event["id"][len(uid) + 1:]
+    rows = {r["recurrence_id"]: r for r in db.execute(
+        "SELECT recurrence_id, ics, deleted_at FROM events WHERE uid = ?", (uid,))}
+    candidates = [rows[key] for key in (rid, "") if key in rows]
+    for row in sorted(candidates, key=lambda row: bool(row["deleted_at"])):  # live overrides/master before tombstones
+        stored = icalendar.Event.from_ical(row["ics"])
+        if row["recurrence_id"] == "" and ("RRULE" in stored or "RDATE" in stored):
+            if not rid:
+                return None
+            original = datetime.strptime(rid, "%Y%m%d" if len(rid) == 8 else "%Y%m%dT%H%M%SZ")
+            day = original.date() if len(rid) == 8 else clock.local(original.replace(tzinfo=timezone.utc)).date()
+            target = event["id"]
+        elif row["recurrence_id"] == "" and event["repeats"]:
+            continue  # the series occurrence no longer resolves to that recurrence
+        else:
+            day = clock.local(stored["DTSTART"].dt).date()
+            target = f"{uid}|{row['recurrence_id'] or _rid(stored['DTSTART'].dt)}"
+        matches = [e for e in expand(db, day, day + timedelta(days=1)) if e["id"] == target
+                   and bool(e["deleted_at"]) == bool(row["deleted_at"])]
+        if matches:
+            return matches[0] if len(matches) == 1 else None
+    return None
 
 
 def now_and_next(db, now: datetime | None = None) -> tuple[dict | None, dict | None]:

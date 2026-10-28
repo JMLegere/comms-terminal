@@ -1,11 +1,12 @@
 Feature: Calendar
   Jeremy Responds to invites from the console (FR-13e, ADR 0009; requirements FR-IR-1–11 in
   .agents/prd/2026-10-27-invite-responses.md). Respond (serve.handle_respond) finds the Event of a Meeting Thread
-  by its Channel's Event UID, or of an invitation email Thread by the UID in the message's stored calendar part,
-  and asks the Google Calendar Writer (gcal.Client) to set Jeremy's own response; Google tells the organizer.
+  by its Channel's Event UID, or of an invitation email Thread by the UID in the message's stored calendar part.
+  The Event page supplies its stored Event UID directly. The Google Calendar Writer (gcal.Client) sets
+  Jeremy's own response; Google tells the organizer.
   A confirmed Response adds a Meeting Activity from Jeremy (meetings.respond_recorded) and leaves Status unchanged.
   Google here is a fake that records each request; nothing reaches Google. The scenarios run against
-  serve.handle_respond; the picker (AS-IR-7) runs the console itself.
+  serve.handle_respond; the pickers (AS-IR-7, AS-IR-8) run the console itself.
 
   @AS-IR-1 @FR-13e @FR-IR-1 @FR-IR-4 @FR-IR-6 @FR-IR-7
   Scenario: Jeremy accepts an invite from its Meeting Thread
@@ -64,3 +65,21 @@ Feature: Calendar
     When Jeremy opens the Response picker on that Thread and presses Escape
     Then the Google Calendar Writer received no request
     And the Thread has no new Activity
+
+  @AS-IR-8 @FR-13e @FR-IR-1 @FR-IR-5 @FR-IR-7 @FR-IR-11 @NFR-IR-3
+  Scenario Outline: Jeremy answers a repeating Event from its Calendar Event page
+    Given a Meeting Thread for the weekly Event "Serenity touch-in"
+    And the Thread has Status "TODO" and Status Detail "CREATED"
+    When Jeremy Responds "<answer>" from that Event page in Calendar
+    Then the Event Response picker says "whole series"
+    And the Google Calendar Writer sets Jeremy's response to "<state>" for the series, not one occurrence
+    And the outcome is "confirmed"
+    And the Thread has a Meeting Activity from Jeremy saying "<activity> · Serenity touch-in"
+    And the Thread has Status "TODO" and Status Detail "CREATED"
+    And the Event page still shows Invite state "Unanswered" from the feed
+
+    Examples:
+      | answer  | state     | activity |
+      | Accept  | accepted  | Accepted |
+      | Maybe   | tentative | Maybe    |
+      | Decline | declined  | Declined |

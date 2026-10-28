@@ -4436,8 +4436,9 @@ class StatusLine(Static):
 
     def refresh_line(self):
         app, main, b = self.app, self.app.main, PALETTE
-        if app.respond_thread is not None:
-            line = (f"[b {b['bg0']} on {b['grey2']}] RESPOND [/] [b {b['blue']}]y[/] yes · [b {b['blue']}]m[/] maybe · "
+        if app.respond_target is not None:
+            scope = " · whole series" if app.respond_whole_series else ""
+            line = (f"[b {b['bg0']} on {b['grey2']}] RESPOND{scope} [/] [b {b['blue']}]y[/] yes · [b {b['blue']}]m[/] maybe · "
                     f"[b {b['blue']}]n[/] no · [b {b['blue']}]esc[/] cancel")
             if line != getattr(self, "shown", None):
                 self.shown = line
@@ -4749,6 +4750,9 @@ class CasePage(Page, ThreadActions):
         before = self.current_thread_id()
         self.sel = max(0, min(i, len(self.views) - 1))
         if self.current_thread_id() != before:
+            if self.app.respond_target is not None:
+                self.app.respond_target, self.app.respond_whole_series = None, False
+                self.app.main.query_one(StatusLine).refresh_line()
             self.app.reaction_owner_changed(self.current_thread_id())
             self.app.schedule_reaction_snapshot(self.current_thread_id())
         self.paint()
@@ -6429,7 +6433,7 @@ class CalendarPage(Page):
 class EventPage(Page):
     """One Event: when, where, the join link, who comes with their answers (linked to People, Threads, Cases,
     Organizations), the description, and the Context sources' view of its people beside it."""
-    BINDINGS = [Binding("escape", "back", "back"), Binding("o", "join", "join link"),
+    BINDINGS = [Binding("escape", "back", "back"), Binding("o", "join", "join link"), Binding("i", "respond", "respond"),
                 Binding("j", "scroll(1)", "scroll", key_display="j/k"), Binding("k", "scroll(-1)", show=False)]
     SIDE = f"{ICON['tana']} context"
     RAIL = "calendar"
@@ -6437,6 +6441,7 @@ class EventPage(Page):
     def __init__(self, event: dict):
         super().__init__()
         self.event, self.TITLE = event, f"{ICON['calendar']} event"
+        self.event_available = True
 
     def compose(self):
         with TextScroll(id="eventscroll"):
@@ -6450,13 +6455,30 @@ class EventPage(Page):
 
     def refresh_data(self):
         db, e, b = self.app.db, self.event, PALETTE
+        fresh = cal.current(db, e)
+        if fresh is not None:
+            self.event = {**fresh, "kind": "event", "type": fresh["kind"], "at": clock.local(fresh["start"])}
+        self.event_available = fresh is not None and not fresh["deleted_at"]
+        reason = "This Event is deleted." if fresh and fresh["deleted_at"] else "This Event is unavailable."
+        if self.app.respond_target == {"event_uid": e["uid"]} and (
+                not self.event_available or self.event != e):
+            self.app.respond_target, self.app.respond_whole_series = None, False
+            self.app.notify("Not answered · " + ("This Event changed; review it before answering."
+                            if self.event_available else reason), severity="warning")
+            self.app.main.query_one(StatusLine).refresh_line()
+        if not self.event_available:
+            self.query_one("#eventbody").update(f"[b {b['blue']}]{escape(self.event['title'])}[/]\n"
+                                               f"[{b['grey1']}]Event unavailable · {reason}[/]")
+            self.app.main.show_side("", tana=([], []))
+            return
+        e = self.event
         start, end = clock.local(e["start"]), clock.local(e["end"])
         when = (f"{start:%a %b %-d} · all day" if e["all_day"] else f"{start:%a %b %-d} · {start:%H:%M}–{end:%H:%M}")
         state = {"ACCEPTED": "Accepted", "TENTATIVE": "Tentative", "NEEDS-ACTION": "Unanswered",
                  "DECLINED": "Declined"}.get(e["state"], e["state"].title())
-        out = [f"[b {b['blue']}]{escape(e['title'])}[/]  [{b['grey1']}][{state}][/]"
-               + (f"  [b {b['bg0']} on {b['red']}] deleted {e['deleted_at'][:10]} [/]" if e["deleted_at"] else ""),
-               f"{when}" + (" · repeats" if e["repeats"] else "")]
+        out = [f"[b {b['blue']}]{escape(e['title'])}[/]  [{b['grey1']}]\\[{state}][/]",
+               f"{when}" + (" · repeats" if e["repeats"] else ""),
+               f"[{b['grey1']}]{ICON['calendar']} [b]i[/] respond[/]"]
         if e["location"]:
             out.append(escape(e["location"]))
         if e["join_url"]:
@@ -6498,7 +6520,19 @@ class EventPage(Page):
         return (f"[@click=app.open_person({r[0]})][underline]{label}[/][/]"
                 + (f" [{PALETTE['grey1']}]{escape(extra)}[/]" if extra else ""))
 
+    def action_respond(self):
+        self.refresh_data()
+        if not self.event_available:
+            reason = "This Event is deleted." if self.event["deleted_at"] else "This Event is unavailable."
+            self.app.notify(f"Not answered · {reason}", severity="error")
+            return
+        self.app.enter_respond(event=self.event)
+
     def action_join(self):
+        self.refresh_data()
+        if not self.event_available:
+            self.app.notify("No current Event details available.")
+            return
         url = self.event["join_url"]
         self.app.notify(f"[link='{render.target(url)}']{escape(url)}[/link]" if url else "No join link for this Event.")
 
@@ -6695,6 +6729,9 @@ class MainScreen(Screen):
         tv = self.thread_view
         if thread_id is not None:
             thread_id = inbox.get_thread(self.app.db, thread_id).id
+        if self.app.respond_target is not None and self.app.respond_target != {"thread_id": thread_id}:
+            self.app.respond_target, self.app.respond_whole_series = None, False
+            self.query_one(StatusLine).refresh_line()
         self.app.reaction_owner_changed(thread_id)
         if thread_id is not None and tv is not None and inbox.get_thread(self.app.db, tv.thread_id).id == thread_id:
             self.showing = thread_id
@@ -6726,6 +6763,7 @@ class MainScreen(Screen):
             self.current.focus_first()
 
     def _show(self):
+        self.app.respond_target, self.app.respond_whole_series = None, False
         self.app.leave_react(repaint=False)
         self.app.reaction_owner_changed()
         main, pane = self.query_one("#main"), self.query_one("#thread")
@@ -6868,7 +6906,8 @@ class Console(App):
         self.undo = None  # (message, restore) for the last change
         self.msg_states = {}  # thread id -> which messages, quotes, and recipient lines are open (#107)
         self.reactions, self.reaction_states = reactions, {}
-        self.respond, self.respond_thread = respond, None  # invite Responses (FR-13e); the Thread awaiting y/m/n
+        self.respond, self.respond_target = respond, None  # invite Responses (FR-13e); the target awaiting y/m/n
+        self.respond_whole_series = False
         self.react_mode, self.react_target, self.react_revision = False, None, None
         self.last_opened_message = {}
         self._reaction_reads, self._reaction_read_active = [], None
@@ -7231,34 +7270,53 @@ class Console(App):
         visible = [w for w in widgets if w.region.overlaps(scroller.scrollable_content_region)]
         return widgets, visible
 
-    def enter_respond(self, thread_id):
-        """`i`: on a Meeting Thread or a Thread holding an invitation, the next key answers (FR-IR-1)."""
-        v = inbox.thread_view(self.db, thread_id)
-        if v["where"] != "Meeting" and not any(message_body(m, self.raw).invite for m in v["messages"]
-                                                if not m["deleted"]):
-            self.notify("Nothing to respond to: not a Meeting Thread or an invitation.")
-        elif self.respond is None or getattr(self, "outdated", False) or (self.remote is not None and not self.remote.online):
+    def enter_respond(self, thread_id=None, *, event=None):
+        """`i`: an Event page, Meeting Thread or invitation shares the same next-key picker (FR-IR-1)."""
+        if event is not None:
+            if event["deleted_at"]:
+                self.notify("Not answered · This Event is deleted.", severity="error")
+                return
+            target = {"event_uid": event["uid"]}
+        else:
+            v = inbox.thread_view(self.db, thread_id)
+            if v["where"] != "Meeting" and not any(message_body(m, self.raw).invite for m in v["messages"]
+                                                    if not m["deleted"]):
+                self.notify("Nothing to respond to: not a Meeting Thread or an invitation.")
+                return
+            target = {"thread_id": thread_id}
+        if self.respond is None or getattr(self, "outdated", False) or (self.remote is not None and not self.remote.online):
             self.notify("Not answered · Responses unavailable: service offline or update required.", severity="error")
         else:
-            self.respond_thread = thread_id
+            self.respond_target, self.respond_whole_series = target, bool(event and event["repeats"])
             self.main.query_one(StatusLine).refresh_line()
 
     def _respond_key(self, key) -> bool:
         """The key after `i`: y, m or n answers once, in the background (NFR-IR-3); anything else cancels."""
-        if self.respond_thread is None:
+        if self.respond_target is None:
             return False
-        tid, self.respond_thread = self.respond_thread, None
+        if key in RESPOND_KEYS and "event_uid" in self.respond_target:
+            if isinstance(self.main.page, EventPage):
+                self.main.page.refresh_data()
+            else:
+                self.respond_target, self.respond_whole_series = None, False
+                self.notify("Not answered.")
+            if self.respond_target is None:
+                self.main.query_one(StatusLine).refresh_line()
+                return True
+        target, self.respond_target, self.respond_whole_series = self.respond_target, None, False
         if (answer := RESPOND_KEYS.get(key)) is None:
             self.notify("Not answered.")
+        elif self.respond is None or getattr(self, "outdated", False) or (self.remote is not None and not self.remote.online):
+            self.notify("Not answered · Responses unavailable: service offline or update required.", severity="error")
         else:
             self.notify(f"Answering {ANSWER_WORDS[answer].lower()}…")
-            self._respond_call(tid, answer)
+            self._respond_call(target, answer)
         self.main.query_one(StatusLine).refresh_line()
         return True
 
     @work(thread=True)
-    def _respond_call(self, thread_id, answer):
-        self.call_from_thread(self._respond_done, answer, self.respond({"thread_id": thread_id, "answer": answer}))
+    def _respond_call(self, target, answer):
+        self.call_from_thread(self._respond_done, answer, self.respond(target | {"answer": answer}))
 
     def _respond_done(self, answer, result):
         """The outcome is shown exactly (FR-IR-9); the Invite state itself comes from the next feed read."""

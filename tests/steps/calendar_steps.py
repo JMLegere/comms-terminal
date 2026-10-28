@@ -8,7 +8,7 @@ AS-IR-7 drives the real console (Textual's test driver) on a copy of the databas
 
 import json
 import urllib.parse
-from datetime import timedelta
+from datetime import date, timedelta
 from email.message import EmailMessage
 
 import pytest
@@ -267,3 +267,72 @@ def one_write(ctx):
 def writes_broken(ctx):
     c = ctx.db.execute("SELECT * FROM connections WHERE platform = 'gcal'").fetchone()
     assert health.problem(c).startswith(gcal.WRITES_BROKEN)
+
+
+async def open_event_page(app, pilot, uid, day=date(2026, 11, 5)):
+    """Open a synthetic feed Event through Calendar's day pane and Enter."""
+    from comms_terminal.tui import DayList, EventPage
+
+    app.main.go("calendar")
+    await pilot.pause(0.2)
+    day_list = app.main.query_one(DayList)
+    day_list.show(day, cal.items(app.db, day, day + timedelta(days=1)))
+    day_list.highlighted = 1 + next(n for n, item in enumerate(day_list.items) if item.get("uid") == uid)
+    day_list.focus()
+    await pilot.press("enter")
+    await pilot.pause(0.2)
+    assert isinstance(app.main.page, EventPage)
+
+
+@when(parsers.parse('Jeremy Responds "{answer}" from that Event page in Calendar'))
+def respond_from_event_page(ctx, tmp_path, answer):
+    import asyncio
+    import contextlib
+    import sqlite3
+    import threading
+
+    from comms_terminal.tui import Console, StatusLine
+
+    uid = ctx.db.execute("SELECT native_id FROM channels WHERE id = ?", (ctx.thread.channel_id,)).fetchone()[0]
+    path = str(tmp_path / "event-console.db")
+    with contextlib.closing(sqlite3.connect(path)) as copy:
+        ctx.db.backup(copy)
+    ctx.respond_calls = []
+    done = threading.Event()
+
+    def respond(payload):
+        ctx.respond_calls.append(payload)
+        with contextlib.closing(inbox.connect(path)) as db:
+            ctx.status, ctx.out = serve.handle_respond(db, json.dumps(payload).encode(),
+                                                      gcal.Client(dict(CRED), None, http=ctx.google))
+        done.set()
+        return ctx.out
+
+    app = Console(path, respond=respond)
+
+    async def go():
+        async with app.run_test(size=(200, 50)) as pilot:
+            await pilot.pause()
+            await open_event_page(app, pilot, uid)
+            await pilot.press("i")
+            ctx.event_picker = app.main.query_one(StatusLine).shown
+            await pilot.press({"Accept": "y", "Maybe": "m", "Decline": "n"}[answer])
+            assert await asyncio.to_thread(done.wait, 3)
+            await pilot.pause(0.2)
+            ctx.event_state = app.main.page.event["state"]
+            ctx.event_body = str(app.main.page.query_one("#eventbody").render())
+    asyncio.run(go())
+    assert ctx.respond_calls == [{"event_uid": uid, "answer": ANSWER[answer]}]
+    with contextlib.closing(sqlite3.connect(path)) as copy:
+        copy.backup(ctx.db)
+
+
+@then(parsers.parse('the Event Response picker says "{scope}"'))
+def event_picker_scope(ctx, scope):
+    assert scope in ctx.event_picker
+
+
+@then(parsers.parse('the Event page still shows Invite state "{state}" from the feed'))
+def event_feed_state(ctx, state):
+    assert ctx.event_state == {"Unanswered": "NEEDS-ACTION"}[state]
+    assert state in ctx.event_body

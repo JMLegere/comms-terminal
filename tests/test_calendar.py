@@ -135,3 +135,57 @@ def test_items_place_scheduled_drafts_beside_events(db):
                   '2026-10-20T13:00:00+00:00')""")
     got = [(i["kind"], i["title"], i["at"].astimezone(HFX).hour) for i in cal.items(db, date(2026, 10, 20), date(2026, 10, 21))]
     assert got == [("draft", "Proposal", 10), ("event", "Dinner with mom", 18)]
+
+
+def test_current_follows_a_standalone_event_to_its_new_day(db):
+    cal.sync(db, feed(INVITE), "2026-10-20T15:00:00+00:00")
+    (opened,) = cal.expand(db, date(2026, 10, 21), date(2026, 10, 22))
+    moved = INVITE.replace("20261021T", "20261103T").replace("NEEDS-ACTION", "ACCEPTED")
+    cal.sync(db, feed(moved), "2026-10-20T15:01:00+00:00")
+    current = cal.current(db, opened)
+    assert current["uid"] == opened["uid"] and current["state"] == "ACCEPTED"
+    assert current["start"] == datetime(2026, 11, 3, 17, tzinfo=ZoneInfo("UTC"))
+
+
+def test_current_follows_the_same_moved_recurring_exception(db):
+    cal.sync(db, feed(STANDUP), "2026-10-20T15:00:00+00:00")
+    (opened,) = cal.expand(db, date(2026, 10, 21), date(2026, 10, 22))
+    moved = """UID:standup
+SUMMARY:Moved standup
+RECURRENCE-ID;TZID=America/Halifax:20261021T100000
+DTSTART;TZID=America/Halifax:20261104T160000
+DTEND;TZID=America/Halifax:20261104T163000
+ORGANIZER:mailto:logan@agentmaple.com
+ATTENDEE;PARTSTAT=ACCEPTED:mailto:jeremy@agentmaple.com"""
+    cal.sync(db, feed(STANDUP, moved), "2026-10-20T15:01:00+00:00")
+    current = cal.current(db, opened)
+    assert current["id"] == opened["id"] and current["title"] == "Moved standup"
+    assert current["start"] == datetime(2026, 11, 4, 16, tzinfo=HFX)
+    assert len(cal.expand(db, date(2026, 11, 4), date(2026, 11, 5))) == 2
+    cal.sync(db, feed(STANDUP), "2026-10-20T15:02:00+00:00")
+    restored = cal.current(db, current)  # the open moved occurrence returns to its original slot
+    assert restored["id"] == opened["id"] and not restored["deleted_at"]
+    assert restored["start"] == opened["start"]
+    (reopened,) = cal.expand(db, date(2026, 10, 21), date(2026, 10, 22))
+    assert cal.current(db, reopened) == restored
+    cal.sync(db, feed(STANDUP + "\nEXDATE;TZID=America/Halifax:20261021T100000"), "2026-10-20T15:03:00+00:00")
+    assert cal.current(db, restored)["deleted_at"]  # the retained tombstone remains the fallback
+
+
+def test_current_never_substitutes_another_recurrence(db):
+    cal.sync(db, feed(STANDUP), "2026-10-20T15:00:00+00:00")
+    (opened,) = cal.expand(db, date(2026, 10, 21), date(2026, 10, 22))
+    shifted = STANDUP.replace("T100000", "T110000").replace("T103000", "T113000")
+    cal.sync(db, feed(shifted), "2026-10-20T15:01:00+00:00")
+    assert cal.current(db, opened) is None
+    with db:
+        db.execute("DELETE FROM events")
+    assert cal.current(db, opened) is None
+
+
+def test_rdate_events_disclose_repeating_scope(db):
+    rdate = STANDUP.replace("RRULE:FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR",
+                            "RDATE;TZID=America/Halifax:20261021T100000,20261104T100000")
+    cal.sync(db, feed(rdate))
+    occurrences = cal.expand(db, date(2026, 10, 19), date(2026, 11, 5))
+    assert len(occurrences) == 3 and all(e["repeats"] for e in occurrences)

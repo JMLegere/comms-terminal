@@ -158,22 +158,32 @@ RESPOND_STATUS = {"confirmed": 200, "refused": 400, "unknown": 502, "unavailable
 
 
 def handle_respond(db, body: bytes, client: gcal.Client | None) -> tuple[int, dict]:
-    """POST /respond: {"thread_id", "answer": accept|maybe|decline} -> (status, {outcome, error?, status?}) (FR-13e).
+    """POST /respond: exactly {thread_id, answer} or {event_uid, answer}; accept|maybe|decline (FR-13e).
+    Event UID targets cover the whole Event or series, as Meeting Threads do.
     Sets Jeremy's own response through Google Calendar, once; a confirmed one adds a Meeting Activity and leaves
     Status as it is. A refused sign-in marks the Google Calendar Connection broken; a later answer clears it."""
     try:
         req = json.loads(body)
-        if not (isinstance(req, dict) and set(req) == {"thread_id", "answer"} and type(req["thread_id"]) is int
-                and 0 < req["thread_id"] <= 2**63 - 1 and req["answer"] in gcal.STATUS):
+        if not (isinstance(req, dict) and isinstance(req.get("answer"), str) and req["answer"] in gcal.STATUS
+                and ((set(req) == {"thread_id", "answer"} and type(req["thread_id"]) is int
+                      and 0 < req["thread_id"] <= 2**63 - 1)
+                     or (set(req) == {"event_uid", "answer"} and isinstance(req["event_uid"], str)
+                         and req["event_uid"]))):
             raise ValueError
     except (ValueError, TypeError):
-        return 400, {"outcome": "refused", "error": "Expected a Thread and an answer: accept, maybe or decline"}
-    try:
-        target = meetings.invite_target(db, req["thread_id"])
-    except KeyError:
-        return 404, {"outcome": "refused", "error": "No such Thread"}
-    if target is None:
-        return 400, {"outcome": "refused", "error": "This Thread holds no invitation."}
+        return 400, {"outcome": "refused", "error": "Expected a Thread or Event and an answer: accept, maybe or decline"}
+    if "event_uid" in req:
+        if db.execute("SELECT 1 FROM events WHERE uid = ? AND recurrence_id = '' AND deleted_at IS NULL",
+                      (req["event_uid"],)).fetchone() is None:
+            return 404, {"outcome": "refused", "error": "No such Event"}
+        target = req["event_uid"], None
+    else:
+        try:
+            target = meetings.invite_target(db, req["thread_id"])
+        except KeyError:
+            return 404, {"outcome": "refused", "error": "No such Thread"}
+        if target is None:
+            return 400, {"outcome": "refused", "error": "This Thread holds no invitation."}
     if client is None:
         return 503, {"outcome": "unavailable", "error": "Google Calendar writes are not connected"}
     uid, rid = target
