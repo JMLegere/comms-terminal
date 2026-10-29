@@ -674,11 +674,11 @@ def assert_native_workspace(app, spec):
     ids = [option.id for option in options if option.id is not None]
     assert [option.id for option in options[:18]] == ["today", None, None, "view:0", "view:1", "view:2", "view:3", "drafts", None, None,
                                                      "cases:0", "cases:1", "cases:2", "cases:3", None, None, "tasks", "sequences"], \
-        "Today first, then threads with Drafts replacing All after Ignored, then Cases, then outreach (Tasks, Sequences)"
+        "Today first, then threads with Drafts replacing All after Ignored, then Cases, then playbook (Tasks, Sequences)"
     assert options[1].disabled and not options[1].prompt
     assert options[2].disabled and Text.from_markup(options[2].prompt).plain.endswith("threads")
     assert options[8].disabled and not options[8].prompt and Text.from_markup(options[9].prompt).plain.endswith("cases")
-    assert options[14].disabled and not options[14].prompt and Text.from_markup(options[15].prompt).plain.endswith("outreach")
+    assert options[14].disabled and not options[14].prompt and Text.from_markup(options[15].prompt).plain.endswith("playbook")
     assert "compose" not in ids and "view:4" not in ids and ids.count("drafts") == 1 and len(ids) == len(set(ids))
     assert not any(re.search(r"\bAll\b", Text.from_markup(option.prompt).plain) for option in options[3:8]), "Mock rail must not retain All navigation"
     draft = rail.get_option("drafts")

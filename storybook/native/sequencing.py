@@ -192,12 +192,12 @@ def seed(db_path):
 
 
 class SequencingRail(tui.Rail):
-    """The real rail, plus the proposed `outreach` section after Drafts."""
+    """The real rail, plus the proposed `playbook` section after Drafts."""
 
     def add_options(self, new_options):
         options, section = [], self.app.main.section
-        # The console now has its own outreach rows; the mocks show synthetic counts in their place.
-        real = [o for o in new_options if isinstance(o, Option) and (o.id in ("tasks", "sequences") or "outreach" in str(o.prompt))]
+        # The console now has its own playbook rows; the mocks show synthetic counts in their place.
+        real = [o for o in new_options if isinstance(o, Option) and (o.id in ("tasks", "sequences") or "playbook" in str(o.prompt))]
         drop = {id(o) for o in real} | {id(new_options[new_options.index(real[0]) - 1])} if real else set()
         new_options = [o for o in new_options if id(o) not in drop]
         for option in new_options:
@@ -209,7 +209,7 @@ class SequencingRail(tui.Rail):
                     mark = "[#45707a]▌[/]" if on else " "
                     return Option(f"{mark}[#654735]{ICON[icon]}[/] {name}{' ' * max(1, 16 - len(label))}[#928374]{count:>3}[/]", id=oid)
                 due = self.app.capture_spec.get("due_count", 0)
-                options += [Option("", disabled=True), Option(f"[#928374]{ICON['sequence']} outreach[/]", disabled=True),
+                options += [Option("", disabled=True), Option(f"[#928374]{ICON['sequence']} playbook[/]", disabled=True),
                             item("tasks", "tasks", "Tasks", due or ""), item("sequences", "sequence", "Sequences", sum(1 for q in SEQUENCES if not q[8]))]
         return super().add_options(options)
 

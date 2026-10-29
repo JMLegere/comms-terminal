@@ -248,9 +248,9 @@ for filename in sys.argv[2:]:
             assert all(row[0] == row[-1] == '│' for row in rail_rows[1:-1]), f'{filename}: native outer rail side borders changed'
         drafts = [(i, m.start()) for i, row in enumerate(rail_rows) for m in re.finditer(r'\bdrafts\b', row, re.I)]
         cases = [(i, m.start()) for i, row in enumerate(rail_rows) for m in re.finditer(r'\bcases\b', row, re.I)]
-        outreach = [i for i, row in enumerate(rail_rows) if re.search(r'\boutreach\b', row)]
-        assert len(outreach) == 1 and drafts and drafts[0][0] < outreach[0] < cases[0][0], f'{filename}: outreach section must sit after Drafts, before Cases'
-        assert re.search(r'\bTasks\b', rail_rows[outreach[0] + 1]) and re.search(r'\bSequences\b', rail_rows[outreach[0] + 2]), f'{filename}: Tasks/Sequences rail rows missing'
+        playbook = [i for i, row in enumerate(rail_rows) if re.search(r'\bplaybook\b', row)]
+        assert len(playbook) == 1 and drafts and drafts[0][0] < playbook[0] < cases[0][0], f'{filename}: playbook section must sit after Drafts, before Cases'
+        assert re.search(r'\bTasks\b', rail_rows[playbook[0] + 1]) and re.search(r'\bSequences\b', rail_rows[playbook[0] + 2]), f'{filename}: Tasks/Sequences rail rows missing'
         page = capture['id'].split('--')[0].removeprefix('sequencing-')
         title = {'tasks': r'\btasks\b', 'sequences': r'\bsequences?\b', 'people': r'\bpe(?:ople|rson)\b'}[page]
         assert re.search(title, ''.join(rows[0]), re.I), f'{filename}: page title missing'

@@ -789,7 +789,7 @@ class Rail(OptionList):
             icon_name, color = VIEW_ICON[name]
             opts.append(item(f"cases:{i}", icon_name, name, case_counts[name], color))
         due = len(sequences.tasks_due(db))
-        opts += [gap, header("sequence", "outreach"), item("tasks", "tasks", "Tasks", due or ""),
+        opts += [gap, header("sequence", "playbook"), item("tasks", "tasks", "Tasks", due or ""),
                  item("sequences", "sequence", "Sequences", sum(1 for q in sequences.sequences(db) if not q["archived_at"]))]
         opts += [gap, header("pipeline", "pipeline")] + [
             item(f"pipeline:{p.lower()}", p.lower(), pipeline.NAMES[p], rail_share(db, p)) for p in pipeline.PIPELINES]
