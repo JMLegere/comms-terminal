@@ -18,7 +18,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from statistics import median
 from zoneinfo import ZoneInfo
 
-from . import clock, inbox
+from . import calendar as cal, clock, inbox
 from .writers import writer
 
 LOCAL = ZoneInfo("America/Halifax")  # Jeremy's days (main.LOCAL_TZ)
@@ -257,7 +257,8 @@ def attention(db) -> dict:
     as Todo (it waits for Jeremy); an Enrollment that names no Organization counts for each of its Person's. Done
     with no Threads. wakes: the earliest time a Snoozed one comes
     back (None for Todo, Done, or a Snooze with no date). last: the latest message in those Threads.
-    unattended: in an open or paying Stage, and Done. stages: {pipeline: Stage}."""
+    unattended: in an open or paying Stage, Done, and with none of its People on an upcoming Event (FR-OA-5).
+    stages: {pipeline: Stage}."""
     held = {}
     for (o, p), st in _state(_entries(db)).items():
         if st["stage"]:
@@ -275,6 +276,7 @@ def attention(db) -> dict:
             "SELECT e.person_id, e.organization_id, e.state, (SELECT min(due_at) FROM tasks t WHERE t.enrollment_id = e.id"
             " AND t.state = 'DUE') FROM enrollments e WHERE e.state != 'FINISHED'"):
         (by_org.setdefault(org, []) if org is not None else by_person.setdefault(pid, [])).append((state, due))
+    meeting = _meeting_people(db)
     out = {}
     for o, domain in db.execute("SELECT id, domain FROM organizations"):
         if o not in held:
@@ -292,8 +294,23 @@ def attention(db) -> dict:
         live = any(st in OPEN[p] + PAYING[p] for p, st in held[o].items())
         out[o] = {"rollup": rollup, "wakes": min(wakes) if rollup == "Snoozed" and wakes else None,
                   "last": datetime.fromisoformat(max(last, key=datetime.fromisoformat)) if last else None,
-                  "unattended": live and rollup == "Done", "stages": held[o]}
+                  "unattended": live and rollup == "Done" and not pids & meeting, "stages": held[o]}
     return out
+
+
+def _meeting_people(db) -> set[int]:
+    """People on an Event that has not ended, within a year, as organizer or a guest who has not declined; Events
+    Jeremy declined and Deleted Events do not count. Read from the calendar, so Events booked before go-live count."""
+    now = clock.local()
+    emails = set()
+    for e in cal.expand(db, now.date() - timedelta(days=1), now.date() + timedelta(days=366), deleted=False):
+        if e["state"] != "DECLINED" and clock.local(e["end"]) > now:
+            emails |= {a["email"] for a in e["attendees"] if a["state"] != "DECLINED"}
+            emails |= {e["organizer"]["email"]} if e["organizer"] else set()
+    if not emails:
+        return set()
+    return {r[0] for r in db.execute(f"SELECT person_id FROM identities WHERE kind = 'email' AND person_id IS NOT NULL"
+                                     f" AND value IN ({','.join('?' * len(emails))})", list(emails))}
 
 
 def unattended(db) -> list[dict]:
