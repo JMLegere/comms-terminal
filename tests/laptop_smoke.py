@@ -46,7 +46,7 @@ inbox.ingest(db, inbox.Incoming(2, "D0ANA", "im", "MESSAGE", "D0ANA:1", inbox.Id
 server = serve.reply_server(path, str(work / "s.sock"), serve.Senders(made={}))
 threading.Thread(target=server.serve_forever, daemon=True).start()
 
-rem, caps = remote.Remote(LocalLink(str(work / "s.sock")), tui._post), {}
+rem, caps = remote.Remote(LocalLink(str(work / "s.sock")), remote.post), {}
 remote.install(tui, rem, caps)
 copy = str(work / "laptop" / "inbox.db")
 syncer = remote.Syncer(rem, copy, caps)

@@ -1,10 +1,12 @@
 """Sequences as Markdown for agents (FR-SEQ-44): render, parse, apply with a dry run, and the round trip."""
 
+import sqlite3
+
 import pytest
 
-from comms_terminal import sequence_md as md, sequences as sq
+from comms_terminal import inbox, sequence_md as md, sequences as sq
 from test_sequence_flow import close_seq  # noqa: F401 (fixture)
-from test_sequences import clock, db  # noqa: F401 (fixtures)
+from test_sequences import MONDAY, clock, db, person  # noqa: F401 (fixtures)
 
 PROPOSAL = """# Proposal
 ## On start
@@ -163,3 +165,166 @@ def test_show_keeps_an_on_completion_after_steps_that_end_in_an_if(db):  # noqa:
     assert "## On completion\n- action (gap 0): set_stage Talent Lost" in shown and md.apply(db, shown) == []
     rows = sq.outline(sq.sequence_steps(db, sid))
     assert ("completion", None, None) in [r["path"] for r in rows if r["step"] is None]  # the console shows it too
+
+
+@pytest.mark.parametrize("existing", [False, True])
+def test_apply_rolls_back_a_late_real_save_failure(db, tmp_path, monkeypatch, existing):  # noqa: F811
+    text = "# Atomic\n## Steps\n- call (gap 0)\n  > First\n- call (gap 1)\n  > Second\n"
+    if existing:
+        md.apply(db, text.replace("First", "Old first").replace("Second", "Old second"))
+    path = tmp_path / "atomic.db"
+    target = inbox.connect(str(path))
+    db.backup(target)
+    before = list(target.iterdump())
+    save, calls = sq.save_step, []
+
+    def fail_later(db, *args, **fields):
+        if db is target:
+            calls.append(args[0])
+            if len(calls) == 2:
+                raise RuntimeError("late persistence failure")
+        return save(db, *args, **fields)
+
+    monkeypatch.setattr(sq, "save_step", fail_later)
+    with pytest.raises(RuntimeError, match="late persistence failure"):
+        md.apply(target, text)
+    assert len(calls) == 2 and not target.in_transaction
+    assert list(target.iterdump()) == before
+    target.rollback()
+    target.close()
+    reopened = inbox.connect(str(path))
+    try:
+        assert list(reopened.iterdump()) == before
+    finally:
+        reopened.close()
+
+
+def test_apply_rolls_back_live_drafts_tasks_and_pipeline_actions(db, monkeypatch):  # noqa: F811
+    text = ("# Live\n## Steps\n- email (gap 0): Hello\n  > First\n"
+            "## On completion\n- action (gap 0): set_stage Revenue Commit\n"
+            "- email (gap 0): Thanks\n  > Original completion\n")
+    md.apply(db, text)
+    sid = db.execute("SELECT id FROM sequences WHERE name = 'Live'").fetchone()[0]
+    dana = person(db, "dana@harbourline.example", "Dana Roy")
+    sq.enroll(db, dana, sid, MONDAY)
+    before = list(db.iterdump())
+    replacement = text.replace("- email (gap 0): Hello\n  > First\n", "").replace("Commit", "Lost").replace(
+        "Original completion", "Changed completion")
+    save, calls = sq.save_step, []
+
+    def fail_later(target, *args, **fields):
+        if target is db:
+            calls.append(args[0])
+            if len(calls) == 2:
+                assert target.execute("SELECT stage FROM pipeline_log").fetchone()[0] == "Commit"
+                assert target.execute("SELECT body FROM composition_drafts").fetchone()[0] == "Original completion"
+                raise RuntimeError("late persistence failure")
+        return save(target, *args, **fields)
+
+    monkeypatch.setattr(sq, "save_step", fail_later)
+    with pytest.raises(RuntimeError, match="late persistence failure"):
+        md.apply(db, replacement)
+    assert len(calls) == 2 and not db.in_transaction
+    assert list(db.iterdump()) == before
+    monkeypatch.setattr(sq, "save_step", save)
+    md.apply(db, replacement)
+    task, = sq.tasks_due(db, MONDAY)
+    assert task["kind"] == "email" and task["body"] == "Changed completion"
+    assert db.execute("SELECT body FROM composition_drafts WHERE task_id = ?", (task["id"],)).fetchone()[0] == "Original completion"
+    assert db.execute("SELECT stage FROM pipeline_log").fetchone()[0] == "Commit"
+    assert db.execute("SELECT state FROM enrollments").fetchone()[0] == "FINISHING"
+
+
+def test_apply_validates_actual_persisted_steps_not_a_trial(db, monkeypatch):  # noqa: F811
+    save = sq.save_step
+
+    def altered_save(target, step_id, **fields):
+        result = save(target, step_id, **fields)
+        if target is db:
+            target.execute("UPDATE sequence_steps SET body = '{unknown}' WHERE id = ?", (step_id,))
+        return result
+
+    monkeypatch.setattr(sq, "save_step", altered_save)
+    before = list(db.iterdump())
+    with pytest.raises(md.Invalid, match="not a fill-in"):
+        md.apply(db, "# Exact operation\n## Steps\n- call (gap 0)\n  > Valid\n")
+    assert list(db.iterdump()) == before
+
+
+@pytest.mark.parametrize("outcome", ["success", "failure", "dry_run"])
+def test_apply_preserves_caller_transaction_and_its_pending_state(db, tmp_path, monkeypatch, outcome):  # noqa: F811
+    path = tmp_path / "caller.db"
+    target = inbox.connect(str(path))
+    db.backup(target)
+    committed = list(target.iterdump())
+    target.execute("UPDATE connections SET label = 'Pending caller edit' WHERE id = 1")
+    target.execute("INSERT INTO sequences (name, created_at, updated_at) VALUES ('Pending target', ?, ?)",
+                   (MONDAY.isoformat(), MONDAY.isoformat()))
+    pending = list(target.iterdump())
+    count = target.total_changes
+    text = "# Caller\n## Steps\n- action (gap 0): enroll Pending target\n"
+    if outcome == "failure":
+        save = sq.save_step
+
+        def fail_after_save(*args, **fields):
+            save(*args, **fields)
+            raise RuntimeError("late persistence failure")
+
+        monkeypatch.setattr(sq, "save_step", fail_after_save)
+        with pytest.raises(RuntimeError, match="late persistence failure"):
+            md.apply(target, text)
+    else:
+        assert md.apply(target, text, dry_run=outcome == "dry_run")
+        if outcome == "dry_run":
+            assert target.total_changes == count
+    assert target.in_transaction
+    assert target.execute("SELECT label FROM connections WHERE id = 1").fetchone()[0] == "Pending caller edit"
+    if outcome != "success":
+        assert list(target.iterdump()) == pending
+    observer = inbox.connect(str(path))
+    try:
+        assert list(observer.iterdump()) == committed
+    finally:
+        observer.close()
+    target.rollback()
+    assert list(target.iterdump()) == committed
+    target.close()
+
+
+def test_apply_live_edit_keeps_step_task_draft_and_reply_ids(db):  # noqa: F811
+    text = ("# Stable\n## Steps\n- email (gap 0): Hello\n  > Original\n"
+            "- email (gap 1, reply 1): Re: Hello\n  > Follow up\n")
+    md.apply(db, text)
+    sid = db.execute("SELECT id FROM sequences WHERE name = 'Stable'").fetchone()[0]
+    dana = person(db, "dana@harbourline.example", "Dana Roy")
+    sq.enroll(db, dana, sid, MONDAY)
+    step_ids = [st["id"] for st in sq.sequence_steps(db, sid)]
+    tasks = [tuple(r) for r in db.execute("SELECT * FROM tasks ORDER BY id")]
+    drafts = [tuple(r) for r in db.execute("SELECT * FROM composition_drafts ORDER BY id")]
+    changed = text.replace("Original", "New template").replace("Follow up", "New follow up")
+    before, count = list(db.iterdump()), db.total_changes
+    preview = md.apply(db, changed, dry_run=True)
+    assert list(db.iterdump()) == before and db.total_changes == count and not db.in_transaction
+    assert md.apply(db, changed) == preview
+    steps = sq.sequence_steps(db, sid)
+    assert [st["id"] for st in steps] == step_ids
+    assert steps[1]["reply_to_step_id"] == step_ids[0] and steps[0]["body"] == "New template"
+    assert [tuple(r) for r in db.execute("SELECT * FROM tasks ORDER BY id")] == tasks
+    assert [tuple(r) for r in db.execute("SELECT * FROM composition_drafts ORDER BY id")] == drafts
+
+
+def test_apply_rolls_back_a_commit_failure(db, monkeypatch):  # noqa: F811
+    save = sq.save_step
+
+    def defer_failure(target, step_id, **fields):
+        result = save(target, step_id, **fields)
+        target.execute("PRAGMA defer_foreign_keys = ON")
+        target.execute("UPDATE sequences SET connection_id = -1 WHERE id ="
+                       " (SELECT sequence_id FROM sequence_steps WHERE id = ?)", (step_id,))
+        return result
+
+    monkeypatch.setattr(sq, "save_step", defer_failure)
+    before = list(db.iterdump())
+    with pytest.raises(sqlite3.IntegrityError, match="FOREIGN KEY"):
+        md.apply(db, "# Commit failure\n## Steps\n- call (gap 0)\n  > Valid\n")
+    assert not db.in_transaction and list(db.iterdump()) == before

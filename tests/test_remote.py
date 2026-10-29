@@ -61,7 +61,7 @@ def laptop(service, tmp_path, monkeypatch):
         monkeypatch.setattr(tui, name, getattr(tui, name))
     monkeypatch.setattr(files, "file_url", files.file_url)
     link = LocalLink(sock)
-    rem, caps = remote.Remote(link, tui._post), {}
+    rem, caps = remote.Remote(link, remote.post), {}
     remote.install(tui, rem, caps)
     copy = str(tmp_path / "laptop" / "inbox.db")
     (tmp_path / "laptop").mkdir()
@@ -263,7 +263,7 @@ def test_a_large_answer_arrives_whole_through_the_relay(service, laptop, monkeyp
     for i in range(40):  # about 8 MB of raw messages: far beyond the socket buffers
         files.store_raw(sdb, b"Subject: big\r\n\r\n" + os.urandom(100_000).hex().encode() + str(i).encode())
     names = sorted(p.name for p in files.raw_dir(sdb).iterdir())
-    status, body = tui._post(rem.link.command(), "/raw", {"names": names}, 60)
+    status, body = remote.post(rem.link.command(), "/raw", {"names": names}, 60)
     assert status == 200 and len(body["raw"]) >= 20  # one batch of about RAW_BATCH
     syncer.fetch_raw(names)
     assert sorted(p.name for p in (Path(syncer.db_path).parent / "raw").iterdir()) == names

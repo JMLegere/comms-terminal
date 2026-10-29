@@ -49,6 +49,7 @@ def post(path, route, body):
         connection.close()
 
 
+@pytest.mark.parametrize("source", ["tana", "attio", "linear"])
 @pytest.mark.parametrize("body", [
     b"not json", b"\xff", b"null", b"[]", b'"text"', b"12",
     b'{"emails":null}', b'{"domains":null}',
@@ -56,11 +57,17 @@ def post(path, route, body):
     b'{"emails":[null]}', b'{"emails":[1]}', b'{"domains":[true]}',
     b'{"emails":[[]]}', b'{"domains":[{}]}',
 ])
-def test_malformed_keys_are_400_without_fetching(database, body):
+def test_malformed_keys_are_400_without_fetching(database, body, source):
     _, db = database
     context = Context()
-    assert serve.handle_linear(db, body, context)[0] == 400
-    assert serve.handle_linear(db, body, None)[0] == 400
+
+    def handle(context):
+        return (serve.handle_linear(db, body, context) if source == "linear"
+                else serve.handle_context(body, context, source.title()))
+
+    expected = (400, {"error": "expected emails and domains arrays of strings"})
+    assert handle(context) == expected
+    assert handle(None) == expected
     assert context.calls == []
 
 
@@ -76,6 +83,15 @@ def test_optional_keys_empty_and_unconnected(database):
     assert context.calls[-1] == (["ana@acme.com"], [], [], [])
     assert serve.handle_linear(db, b'{"domains":[" ACME.COM "]}', context)[0] == 200
     assert context.calls[-1] == ([], ["acme.com"], [], [])
+
+
+@pytest.mark.parametrize("source", ["Tana", "Attio"])
+def test_context_keys_are_normalized_before_fetching(source):
+    calls = []
+    context = SimpleNamespace(get=lambda emails, domains: calls.append((emails, domains)) or {"records": []})
+    body = b'{"emails":[" ANA@ACME.COM ","ana@acme.com",""],"domains":[" ACME.COM ","acme.com"," "]}'
+    assert serve.handle_context(body, context, source) == (200, {"records": []})
+    assert calls == [(["ana@acme.com"], ["acme.com"])]
 
 
 def test_local_names_are_globally_unique_and_selected_by_exact_keys(database):

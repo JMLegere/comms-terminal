@@ -72,6 +72,8 @@ Multi-step Sequences, one Enrollment per Person, Due Tasks on a Tasks page. Choo
 
 `y` copies a Thread or Draft as Markdown for a terminal agent. The CLI prints the same: `comms-terminal threads`, `comms-terminal thread ID`, `comms-terminal drafts`.
 
+`--remote SSH_ARGS` is console-only and cannot be combined with a CLI command. On Workbox, use the installed `comms-terminal` wrapper for agent commands; it runs them on Oracle, not against the laptop copy.
+
 ## Your day
 
 The console opens on **Today** (`1`): Todo Threads grouped by Case, Due Tasks, Drafts, Paused Enrollments, and Unattended Organizations. Work it top to bottom until it says All clear.
@@ -121,6 +123,7 @@ Slack · Quo · Resend webhooks ───────────────┼
 |---|---|
 | `src/comms_terminal/inbox.py` | Thread ledger: ingest, status, Cases, People. Schema in `schema.sql` |
 | `src/comms_terminal/tui.py` | Console |
+| `src/comms_terminal/remote.py` | Private-socket/SSH client, remote writes, and laptop copy |
 | `src/comms_terminal/serve.py` | Hooks server, reply socket, wake timer |
 | `src/comms_terminal/{email,fastmail,slack,quo}.py` | Channels |
 | `src/comms_terminal/{attio,tana,linear,calendar}.py` | Context sources |

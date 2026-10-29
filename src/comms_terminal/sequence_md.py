@@ -30,12 +30,11 @@ reports what it changed (or would change, on a dry run). The shape mirrors the c
 `>` lines are a Step's text (email body, call script, LinkedIn or Action note); `>>` lines a call's voicemail. An
 email's `reply N` names the Nth email in the file, and `ready` marks an email whose Drafts can send unchanged (without it,
 they start as Needs edit). Apply keeps a Step where the same kind sits at the same place, so
-Enrollments already on it carry on; it tries the change on a copy first and refuses a Sequence with problems.
+Enrollments already on it carry on; the domain validates and commits the whole replacement together.
 """
 
 import re
 
-from . import inbox
 from . import pipeline as pipeline_mod
 from . import sequences as sq
 
@@ -238,98 +237,10 @@ def _fields(n, kind, attrs, rest) -> dict:
 
 # --- apply --------------------------------------------------------------------
 
-FIELDS = ("gap_days", "at_time", "subject", "body", "voicemail", "linkedin_move", "action_kind", "condition",
-          "pipeline", "stage", "value", "operand", "true_label", "false_label", "enroll_sequence_id",
-          "reply_to_step_id", "needs_edit")
-
-
 def apply(db, text: str, dry_run: bool = False) -> list[str]:
-    """Make the Sequence named in `text` match it (creating it if new); returns one line per change. It runs first
-    on an in-memory copy, so a Sequence that does not validate is refused with its problems and nothing is written;
-    a dry run stops there."""
+    """Parse Markdown and delegate complete replacement (or its read-only preview) to the Sequence domain."""
     plan = parse(text)
-    trial = inbox.connect()
-    db.backup(trial)
     try:
-        changes = _apply(trial, plan)
-    finally:
-        trial.close()
-    return changes if dry_run else _apply(db, plan)
-
-
-def _apply(db, plan) -> list[str]:
-    row = db.execute("SELECT id FROM sequences WHERE name = ? ORDER BY archived_at IS NOT NULL, id", (plan["name"],)).fetchone()
-    names = {r["name"].lower(): r["id"] for r in db.execute("SELECT id, name FROM sequences ORDER BY archived_at IS NOT NULL DESC, id DESC")}
-    changes = [] if row else [f"+ Sequence {plan['name']}"]
-    sid = row[0] if row else sq.create_sequence(db, plan["name"])
-    names[plan["name"].lower()] = sid
-    if db.execute("SELECT description FROM sequences WHERE id = ?", (sid,)).fetchone()[0] != plan["description"]:
-        sq.describe_sequence(db, sid, plan["description"])
-        changes.append(f"~ Use when: {plan['description'] or '(none)'}")
-    emails, pending = [], []  # email step ids in file order; (step id, email number) reply links
-    for path in (("start", None, None), ("body", None, None), ("completion", None, None)):
-        _sync(db, sid, path, plan[path[0]], changes, names, emails, pending)
-    for step_id, n in pending:
-        if not 1 <= n <= len(emails):
-            raise Invalid(f"reply {n}: the file has {len(emails)} emails")
-        if db.execute("SELECT reply_to_step_id FROM sequence_steps WHERE id = ?", (step_id,)).fetchone()[0] != emails[n - 1]:
-            sq.save_step(db, step_id, reply_to_step_id=emails[n - 1])
-            changes.append(f"~ email: reply {n}")
-    problems = sq.validate(db, sid)
-    if problems:
-        by_id = {st["id"]: st for st in sq.sequence_steps(db, sid)}
-        raise Invalid("; ".join(f"Step {by_id[i]['position']} ({by_id[i]['kind']}): {m}" for i, m in problems))
-    return changes
-
-
-def _sync(db, sid, path, wanted, changes, names, emails, pending):
-    have = sq.on_path(sq.sequence_steps(db, sid), path)
-    where = {"start": "On start", "body": "Steps", "completion": "On completion"}[path[0]]
-    for i, w in enumerate(wanted):
-        fields = {k: w[k] for k in FIELDS if k in w}
-        if w["kind"] == "action" and w["action_kind"] == "enroll":
-            target = names.get((w["enroll"] or "").lower())
-            if target is None:
-                raise Invalid(f"line {w['line']}: no Sequence named {w['enroll']!r}")
-            fields["enroll_sequence_id"] = target
-        old = have[i] if i < len(have) and have[i]["kind"] == w["kind"] else None
-        if old is not None and old["kind"] == "if" and old["condition"] != w["condition"]:
-            old = None
-        if old is None:
-            if i < len(have):
-                sq.delete_step(db, have[i]["id"])
-                changes.append(f"- {where}: {have[i]['kind']} (was Step {have[i]['position']})")
-                have = sq.on_path(sq.sequence_steps(db, sid), path)
-            after = None
-            if i > 0:
-                after = sq.on_path(sq.sequence_steps(db, sid), path)[i - 1]["position"]
-            step_id = sq.add_step(db, sid, w["kind"], after, section=path[0], parent_step_id=path[1], branch=path[2],
-                                  action_kind=w["action_kind"] or "enroll", condition=w["condition"] or "jeremy_picks",
-                                  front=i == 0)
-            sq.save_step(db, step_id, **{k: v for k, v in fields.items() if k != "reply_to_step_id"})
-            changes.append(f"+ {where}: {w['kind']} line {w['line']}")
-        else:
-            step_id = old["id"]
-            diff = {k: v for k, v in fields.items() if k != "reply_to_step_id" and (old.get(k) or None) != (v or None)}
-            if diff:
-                sq.save_step(db, step_id, **diff)
-                changes.append(f"~ {where}: {w['kind']} line {w['line']}: {', '.join(sorted(diff))}")
-        have = sq.on_path(sq.sequence_steps(db, sid), path)
-        if w["kind"] == "email":
-            emails.append(step_id)
-            current = db.execute("SELECT reply_to_step_id FROM sequence_steps WHERE id = ?", (step_id,)).fetchone()[0]
-            if w["reply"]:
-                pending.append((step_id, w["reply"]))
-            elif current:
-                sq.save_step(db, step_id, reply_to_step_id=None)
-                changes.append(f"~ {where}: email line {w['line']}: reply_to_step_id")
-        if w["kind"] == "if":
-            for key, branch in (("yes", 1), ("no", 0)):
-                child = (path[0], step_id, branch)
-                _sync(db, sid, child, w[key], changes, names, emails, pending)
-                if path[0] == "body":
-                    _sync(db, sid, sq.completion_of(child), w[f"{key}_done"], changes, names, emails, pending)
-    have = sq.on_path(sq.sequence_steps(db, sid), path)
-    for extra in have[len(wanted):][::-1]:
-        sq.delete_step(db, extra["id"])
-        changes.append(f"- {where}: {extra['kind']} (was Step {extra['position']})")
+        return sq.replace_sequence(db, plan, dry_run=dry_run)
+    except sq.Refused as e:
+        raise Invalid(str(e)) from e

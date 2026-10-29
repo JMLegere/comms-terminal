@@ -1,5 +1,6 @@
 """y copies the shown Thread or Draft as Markdown for a terminal agent."""
 
+import pytest
 from test_console import page, run, seeded
 from comms_terminal import inbox
 from comms_terminal.tui import Console, agent_text
@@ -83,6 +84,25 @@ def test_agent_commands_read_threads_and_change_drafts_by_revision(tmp_path, cap
     with pytest.raises(SystemExit, match="changed since"):  # a stale revision never overwrites newer words
         cli("draft", str(d["id"]), "--revision", "1", "--body", "stale")
     assert inbox.get_draft(db, d["id"])["revision"] == 2
+
+
+@pytest.mark.parametrize("remote", ["unused-host", ""])
+@pytest.mark.parametrize("command", [
+    ["threads"], ["draft", "new"], ["init"], ["serve"], ["attio-import"],
+])
+def test_remote_mode_refuses_local_commands_before_opening_database(tmp_path, capsys, monkeypatch, command, remote):
+    from comms_terminal.main import main
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError("remote-console command reached the local database")
+
+    monkeypatch.setattr(inbox, "connect", unexpected)
+    path = tmp_path / "untouched" / "replica.db"
+    with pytest.raises(SystemExit) as error:
+        main(["--db", str(path), "--remote", remote, *command])
+    assert error.value.code == 2
+    assert "--remote is only valid for the console" in capsys.readouterr().err
+    assert not path.parent.exists()
 
 
 def test_link_targets_cannot_break_or_inject_markup():

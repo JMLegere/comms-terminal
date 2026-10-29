@@ -15,8 +15,9 @@ from test_console import run, seeded
 from test_pane_arrows import check_editor_arrows
 from test_reconcile_console import bridge_console, seed_console
 from comms_terminal import files, inbox, serve
-from comms_terminal.tui import (DRAFT_FIELDS, Console, DraftConnection, DraftSendError, DraftsPage,
-                                 Pick, ReplyBox, ReplyError, ThreadsPage, VIEW_NAMES)
+from comms_terminal.remote import DraftSendError, ReplyError
+from comms_terminal.tui import (DRAFT_FIELDS, Console, DraftConnection, DraftsPage,
+                                 Pick, ReplyBox, ThreadsPage, VIEW_NAMES)
 
 
 async def choose(app, pilot, oid):

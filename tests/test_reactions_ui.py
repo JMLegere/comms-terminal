@@ -15,7 +15,7 @@ from textual import events
 from textual.widgets import TextArea
 
 from test_console import run
-from comms_terminal import inbox, tui
+from comms_terminal import inbox, remote, tui
 from comms_terminal.tui import CasePage, Console, OrganizationPage, PipelinePage, ReactionLine
 
 
@@ -786,7 +786,6 @@ def test_offline_and_build_gates_prevent_source_dispatch_without_remote_queue(tm
 
 
 def test_remote_writer_proxies_keep_reaction_reads_adds_and_removes_on_private_transport(tmp_path, monkeypatch):
-    from comms_terminal import remote
 
     app, ids, fake = make_reaction_app(tmp_path)
     route, seen = ["ssh", "synthetic", "relay"], []
@@ -805,10 +804,10 @@ def test_remote_writer_proxies_keep_reaction_reads_adds_and_removes_on_private_t
             for name in ("inbox", "sequences", "pipeline", "files"):
                 patch.setattr(tui, name, getattr(tui, name))
             patch.setattr(remote.files, "file_url", remote.files.file_url)
-            patch.setattr(tui, "_post", post)
+            patch.setattr(remote, "post", post)
             rem = SimpleNamespace(online=True, problem="", call=forbidden, queue=forbidden)
             remote.install(tui, rem, {})
-            app.remote, app.reactions = rem, tui.socket_slack_reactions(route)
+            app.remote, app.reactions = rem, remote.socket_slack_reactions(route)
             try:
                 target = await prepare_reaction_state(app, pilot)
                 await pilot.press("1")
@@ -834,14 +833,14 @@ def test_remote_writer_proxies_keep_reaction_reads_adds_and_removes_on_private_t
 def test_socket_reactions_uses_existing_transport_and_preserves_typed_outcomes(monkeypatch, transport):
     payload = dict(op="add", thread_id=1, message_id=2, connection_id=3, name="+1", expected_revision=2)
     seen = []
-    monkeypatch.setattr(tui, "_post", lambda socket, path, body: seen.append((socket, path, body)) or
+    monkeypatch.setattr(remote, "post", lambda socket, path, body: seen.append((socket, path, body)) or
                         (504, dict(outcome="unknown", error="Response lost")))
-    assert tui.socket_slack_reactions(transport)(payload)["outcome"] == "unknown"
+    assert remote.socket_slack_reactions(transport)(payload)["outcome"] == "unknown"
     assert seen == [(transport, "/slack-reactions", payload)]
-    monkeypatch.setattr(tui, "_post", lambda *a: (200, {"mine": True}))
-    assert tui.socket_slack_reactions(transport)(payload)["outcome"] == "unknown"
-    monkeypatch.setattr(tui, "_post", lambda *a: (404, {"error": "Missing route"}))
-    assert tui.socket_slack_reactions(transport)(payload)["outcome"] == "unavailable"
+    monkeypatch.setattr(remote, "post", lambda *a: (200, {"mine": True}))
+    assert remote.socket_slack_reactions(transport)(payload)["outcome"] == "unknown"
+    monkeypatch.setattr(remote, "post", lambda *a: (404, {"error": "Missing route"}))
+    assert remote.socket_slack_reactions(transport)(payload)["outcome"] == "unavailable"
 
 
 def test_passive_custom_chip_escapes_markup_and_own_edges_have_no_blue_fill(tmp_path):

@@ -10,7 +10,7 @@ import pytest
 from steps.calendar_steps import CRED, event, google, invitation, jeremy_activities, meeting_thread_for, writer_status
 
 from comms_terminal import calendar as cal, clock, gcal, health, inbox, main, meetings, serve
-from comms_terminal.tui import _post
+from comms_terminal.remote import post as _post
 
 
 def respond(ctx, answer="accept", client=..., *, event_uid=None):

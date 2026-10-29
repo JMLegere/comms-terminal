@@ -13,10 +13,12 @@ a write locally at once and send it in order, and `Syncer` keeps the copy curren
 import base64
 import dataclasses
 import gzip
+import http.client
 import json
 import logging
 import os
 import queue
+import socket
 import sqlite3
 import subprocess
 import threading
@@ -30,6 +32,162 @@ LOG = logging.getLogger("comms_terminal.remote")
 
 CALLS = writers.WRITERS  # name -> how the console runs it (writers.KINDS); each writer declares its own
 MODULES = {"inbox": inbox, "sequences": sequences, "pipeline": pipeline, "files": files}
+
+
+class ReplyError(Exception):
+    """A service call that did not succeed. `status`: the service's HTTP status, 503 when the service was not
+    reachable (nothing sent), 504 when the response was lost (a send may have gone out)."""
+
+    def __init__(self, message, status=None):
+        super().__init__(message)
+        self.status = status
+
+
+class _UnixConnection(http.client.HTTPConnection):
+    def __init__(self, path):
+        super().__init__("localhost", timeout=30)
+        self.unix_path = path
+
+    def connect(self):
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.sock.settimeout(self.timeout)
+        self.sock.connect(self.unix_path)
+
+
+class _CommandConnection(http.client.HTTPConnection):
+    """HTTP over a command's stdin/stdout: Comms Terminal's SSH relay to the service socket (remote.Link)."""
+
+    def __init__(self, command):
+        super().__init__("localhost", timeout=30)
+        self.command, self.proc = command, None
+
+    def connect(self):
+        mine, theirs = socket.socketpair()
+        try:
+            self.proc = subprocess.Popen(self.command, stdin=theirs, stdout=theirs, stderr=subprocess.DEVNULL,
+                                         start_new_session=True)
+        finally:
+            theirs.close()
+        mine.settimeout(self.timeout)
+        self.sock = mine
+
+    def reap(self):
+        """After the body is read (http.client closes an HTTP/1.0 connection before that, so close() must not
+        wait on the relay still writing it)."""
+        if self.proc is not None:
+            try:
+                self.proc.wait(5)
+            except Exception:  # noqa: BLE001 - never leave a relay running
+                self.proc.kill()
+                self.proc.wait()
+            self.proc = None
+
+
+def post(socket_path, path, payload, timeout=30) -> tuple[int, dict]:
+    """POST JSON to the service: `socket_path` is its Unix socket, or a relay command (a list) to run."""
+    conn = _CommandConnection(socket_path) if isinstance(socket_path, list) else _UnixConnection(socket_path)
+    conn.timeout = timeout
+    try:
+        conn.connect()
+    except OSError as e:
+        raise ReplyError(f"service not reachable: {e}", 503) from e
+    try:
+        conn.request("POST", path, json.dumps(payload), {"Content-Type": "application/json"})
+        r = conn.getresponse()
+        raw = r.read()
+    except (OSError, http.client.HTTPException) as e:  # the request may have reached the service
+        raise ReplyError(f"no response from the service: {e}", 504) from e
+    finally:
+        conn.close()
+        if isinstance(conn, _CommandConnection):
+            conn.reap()
+    try:
+        return r.status, json.loads(raw or b"{}")
+    except ValueError:  # an error page, not JSON (an older service has no such route)
+        return r.status, {"error": f"HTTP {r.status}"}
+
+
+class DraftSendError(ReplyError):
+    pass
+
+
+def socket_send_draft(socket_path):
+    """Send function that calls POST /send-draft; a lost response means the outcome is unknown (504)."""
+    def send(draft_id, revision, again=False):
+        try:
+            status, body = post(socket_path, "/send-draft", {"draft_id": draft_id, "revision": revision,
+                                                           "again": again}, timeout=90)
+        except ReplyError as e:
+            raise DraftSendError(str(e), e.status) from e
+        if status != 200:
+            raise DraftSendError(body.get("error", f"HTTP {status}"), status)
+        return body
+    return send
+
+
+def socket_slack_conversations(socket_path):
+    """Jeremy's Slack conversations, [{id, kind, label}], from POST /slack-conversations (Slack Draft picker)."""
+    def fetch(connection_id):
+        status, body = post(socket_path, "/slack-conversations", {"connection_id": connection_id}, timeout=120)
+        if status != 200:
+            raise ReplyError(body.get("error", f"HTTP {status}"))
+        return body["conversations"]
+    return fetch
+
+
+def socket_slack_reactions(socket_path):
+    """One private source request, over the existing Unix socket or SSH command; never queued or retried."""
+    def fetch(payload):
+        changing = payload["op"] != "read"
+        try:
+            status, body = post(socket_path, "/slack-reactions", payload)
+        except ReplyError as e:
+            outcome = "unknown" if changing and e.status != 503 else "unavailable"
+            return {"outcome": outcome, "error": "Reaction service unavailable."}
+        if isinstance(body, dict) and body.get("outcome") in (
+                "ready", "confirmed", "unavailable", "refused", "unknown", "review_required"):
+            return body
+        outcome = ("review_required" if status == 409 else "refused" if status == 400 else
+                   "unknown" if changing and status != 404 else "unavailable")
+        return {"outcome": outcome, "error": "Reaction service unavailable."}
+    return fetch
+
+
+def socket_respond(socket_path):
+    """Jeremy's invite Response (FR-13e) over the Unix socket or SSH command; never queued or retried."""
+    def respond(payload):
+        try:
+            status, body = post(socket_path, "/respond", payload)
+        except ReplyError as e:
+            return {"outcome": "unavailable" if e.status == 503 else "unknown", "error": "Service unavailable."}
+        if isinstance(body, dict) and body.get("outcome") in ("confirmed", "refused", "unknown", "unavailable"):
+            return body
+        return {"outcome": "refused" if status in (400, 404) else "unknown", "error": "Service unavailable."}
+    return respond
+
+
+def socket_reply(socket_path):
+    """Reply function that calls POST /reply on the service's local socket; a lost response means the outcome
+    is unknown (504)."""
+    def reply(thread_id, text, to, cc):
+        status, body = post(socket_path, "/reply", {"thread_id": thread_id, "text": text, "to": to, "cc": cc})
+        if status != 200:
+            raise ReplyError(body.get("error", f"HTTP {status}"), status)
+        return body
+    return reply
+
+
+def socket_context(socket_path, source):
+    """A Context source's answer (FR-13a, FR-13b) from POST /<source> on the service's local socket; None when
+    that source is not connected."""
+    def fetch(emails, domains):
+        status, body = post(socket_path, f"/{source}", {"emails": emails, "domains": domains}, timeout=120)
+        if status in (404, 503):  # not connected, or a service from before this source (404)
+            return None
+        if status != 200:
+            raise ReplyError(body.get("error", f"HTTP {status}"))
+        return body
+    return fetch
 
 
 def creates(name: str, db, args, kwargs) -> bool:
@@ -306,7 +464,7 @@ class Link:
         Path(self.control).unlink(missing_ok=True)
 
     def command(self) -> list[str]:
-        """One request's relay: what tui._post runs in place of connecting to a local socket."""
+        """One request's relay: what post runs in place of connecting to a local socket."""
         return ["ssh", "-S", self.control, "-o", "ControlMaster=no", "-T", *self.ssh_args, RELAY_COMMAND]
 
 

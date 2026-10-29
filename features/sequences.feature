@@ -6,6 +6,7 @@ Feature: Sequences
   Send Draft (inbox.send_draft) sends a Task's Draft; Finish (sequences.finish) ends an Enrollment.
   Today (inbox.today) lists Todo Threads, Due Tasks, and the Drafts not shown through them; Save Draft
   (inbox.save_draft) and Save Reply Draft (inbox.save_reply_draft) keep Drafts; Act (inbox.act) snoozes.
+  Apply Sequence (sequence_md.apply) replaces a complete Sequence from Markdown, atomically with its Tasks and Drafts.
   Kind maps to a Step's kind, Gap to gap_days, Subject and Body to its text. Times are Jeremy's (Halifax);
   "Monday" is 2026-10-19 at 10:00 and "November 2" is 2026-11-02 at 10:00.
 
@@ -77,4 +78,11 @@ Feature: Sequences
     Then Due Tasks on November 2 are:
       | Person   | Kind  | Group     | Day |
       | Dana Roy | email | due today | 1   |
+    And the email Task's Draft has Subject "Pilot with Harbourline" and Body "Hi Dana"
+
+  @AS-SEQ-14 @FR-SEQ-44 @NFR-SEQ-1
+  Scenario: A later persistence failure leaves a live Sequence unchanged
+    Given "Dana Roy" is enrolled in "Secret Sequence" on Monday
+    When Apply Sequence replaces "Secret Sequence" and a later Step save fails
+    Then the Sequence, Steps, Enrollment, Tasks and Drafts are unchanged
     And the email Task's Draft has Subject "Pilot with Harbourline" and Body "Hi Dana"

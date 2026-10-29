@@ -13,7 +13,8 @@ import pytest
 from steps.calendar_steps import event, meeting_thread_for, open_event_page
 
 from comms_terminal import calendar as cal, clock, gcal, inbox
-from comms_terminal.tui import Console, StatusLine, socket_respond, thread_head
+from comms_terminal.remote import socket_respond
+from comms_terminal.tui import Console, StatusLine, thread_head
 
 
 def meeting(tmp_path, title="Pints", *, weekly=False):

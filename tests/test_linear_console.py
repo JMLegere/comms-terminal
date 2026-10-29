@@ -6,10 +6,11 @@ import pytest
 from rich.text import Text
 
 from test_console import page, run, seeded
-from comms_terminal import inbox, linear, serve, tui
+from comms_terminal import inbox, linear, remote, serve, tui
 from comms_terminal.icons import ICON
+from comms_terminal.remote import ReplyError, socket_context
 from comms_terminal.tui import (CONTEXT_SOURCES, CasePage, Console, ContextSection, OrganizationPage,
-                                 PersonPage, ReplyError, ThreadsPage, agent_text, linear_markup, socket_context)
+                                 PersonPage, ThreadsPage, agent_text, linear_markup)
 
 
 URL = "https://linear.app/example/issue/DEV-123/pricing"
@@ -126,7 +127,7 @@ def test_linear_socket_fetch_preserves_emails_domains_contract(monkeypatch, stat
         calls.append((socket_path, path, payload, timeout))
         return status, body
 
-    monkeypatch.setattr(tui, "_post", post)
+    monkeypatch.setattr(remote, "post", post)
     fetch = socket_context("/synthetic/inbox.sock", "linear")
     if status == 502:
         with pytest.raises(ReplyError, match="Linear unavailable"):

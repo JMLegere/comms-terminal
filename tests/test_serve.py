@@ -16,7 +16,7 @@ import pytest
 from comms_terminal import inbox, serve
 import pytest
 
-from comms_terminal.tui import ReplyError, _post, socket_reply
+from comms_terminal.remote import ReplyError, post as _post, socket_reply
 
 
 class Sender:

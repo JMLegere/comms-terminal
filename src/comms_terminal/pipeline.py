@@ -53,11 +53,6 @@ class Refused(ValueError):
 
 
 
-def _tx(db):
-    if not db.in_transaction:
-        db.execute("BEGIN IMMEDIATE")
-
-
 def parse_pipeline(text: str) -> str:
     p = text.strip().upper()
     if p not in PIPELINES:
@@ -111,8 +106,7 @@ def _effective(at) -> str:
 
 
 def _append(db, org_id, pipeline, kind, at=None, stage=None, value=None, undoes=None) -> int:
-    with db:
-        _tx(db)
+    with inbox._write_snapshot(db):
         return db.execute(
             "INSERT INTO pipeline_log (organization_id, pipeline, kind, stage, value, undoes, effective_at,"
             " recorded_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",

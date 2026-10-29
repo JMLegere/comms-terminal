@@ -9,8 +9,9 @@ from datetime import date, timedelta
 
 from . import calendar, clock, files, inbox, pipeline, sequence_md, sequences
 from .platforms import PLATFORMS
-from .tui import (CONTEXT_SOURCES, DRAFT_FIELDS, ReplyError, connection_label, draft_history, draft_text,
-                  socket_context, staged_files, task_markdown, thread_addresses, thread_text)
+from .remote import ReplyError, socket_context
+from .tui import (CONTEXT_SOURCES, DRAFT_FIELDS, connection_label, draft_history, draft_text,
+                  staged_files, task_markdown, thread_addresses, thread_text)
 
 
 def add_parsers(sub):
@@ -227,11 +228,7 @@ def draft(db, ref, changes, revision, connection_id, thread_id=None, needs_edit=
 
 def enroll(db, person: str, sequence: str, start: str | None = None, org: str | None = None,
            to: str | None = None) -> str:
-    rows = db.execute("SELECT p.id FROM persons p WHERE CAST(p.id AS TEXT) = ? OR lower(p.display_name) = lower(?)"
-                      " UNION SELECT person_id FROM identities WHERE lower(value) = lower(?) AND person_id IS NOT NULL",
-                      (person, person, person)).fetchall()
-    if len(rows) != 1:
-        raise ValueError(f"{'no' if not rows else 'more than one'} Person matches {person!r}")
+    person_id = find_person(db, person)
     match = [q for q in sequences.sequences(db) if str(q["id"]) == sequence or q["name"].lower() == sequence.lower()]
     if len(match) != 1:
         raise ValueError(f"no Sequence matches {sequence!r}")
@@ -241,7 +238,7 @@ def enroll(db, person: str, sequence: str, start: str | None = None, org: str | 
         raise ValueError(f"--start {start!r} is neither YYYY-MM-DD nor a number of days")
     org_id = None
     if org == "sole":
-        org_id = inbox.create_sole_proprietorship(db, rows[0][0])
+        org_id = inbox.create_sole_proprietorship(db, person_id)
     elif org:
         org_id = pipeline.find_org(db, org)["id"]
     identity_id = None
@@ -249,11 +246,11 @@ def enroll(db, person: str, sequence: str, start: str | None = None, org: str | 
         if "@" not in to:
             raise ValueError(f"--to {to!r} is not an email address")
         try:
-            inbox.add_identity(db, rows[0][0], "email", to)
+            inbox.add_identity(db, person_id, "email", to)
         except inbox.IdentityTaken:
             raise ValueError(f"{to} belongs to another Person") from None
         identity_id = db.execute("SELECT id FROM identities WHERE kind = 'email' AND value = ?", (to.lower(),)).fetchone()[0]
-    eid = sequences.enroll(db, rows[0][0], match[0]["id"], now, start=day, organization_id=org_id, identity_id=identity_id)
+    eid = sequences.enroll(db, person_id, match[0]["id"], now, start=day, organization_id=org_id, identity_id=identity_id)
     sent = f", sending to {to.lower()}" if to else ""
     return f"Enrolled in {match[0]['name']}{sent}: the first Task is due {sequences.first_due(db, eid, now)}."
 

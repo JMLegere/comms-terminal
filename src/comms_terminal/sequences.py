@@ -47,7 +47,7 @@ STEP_FIELDS = ("kind", "gap_days", "at_time", "subject", "body", "voicemail", "l
 
 
 class Refused(ValueError):
-    """An Enrollment change the rules do not allow; the message says why."""
+    """A Sequence or Enrollment change the rules do not allow; the message says why."""
 
 
 
@@ -74,7 +74,7 @@ def create_sequence(db, name: str, connection_id: int | None = None) -> int:
         mail = email_connections(db)
         connection_id = mail[0]["id"] if len(mail) == 1 else None
     at = clock.iso(clock.now())
-    with db:
+    with inbox._write_snapshot(db):
         return db.execute("INSERT INTO sequences (name, connection_id, created_at, updated_at) VALUES (?, ?, ?, ?)",
                           (name.strip(), connection_id, at, at)).lastrowid
 
@@ -90,7 +90,7 @@ def rename_sequence(db, sequence_id: int, name: str) -> None:
 @writer("write")
 def describe_sequence(db, sequence_id: int, description: str) -> None:
     """Its one-line "use when", shown in the Sequence list and the enroll picker."""
-    with db:
+    with inbox._write_snapshot(db):
         db.execute("UPDATE sequences SET description = ?, updated_at = ? WHERE id = ?",
                    (" ".join(description.split()), clock.iso(clock.now()), sequence_id))
 
@@ -104,6 +104,107 @@ def set_connection(db, sequence_id: int, connection_id: int) -> None:
                    (connection_id, clock.iso(clock.now()), sequence_id))
         db.execute("UPDATE tasks SET flag = NULL WHERE flag = 'Sequence has no Connection' AND state = 'DUE'"
                    " AND enrollment_id IN (SELECT id FROM enrollments WHERE sequence_id = ?)", (sequence_id,))
+
+
+@writer("create")
+def replace_sequence(db, plan: dict, dry_run: bool = False) -> list[str]:
+    """Reconcile a complete Sequence tree, resolve its links, and validate the exact stored result atomically.
+    `plan` has name, description, start/body/completion lists; Steps use STEP_FIELDS, source `line`, an `enroll`
+    name, a `reply` email number, and an If's yes/no and yes_done/no_done lists. Kept Steps retain their IDs and
+    Due Tasks retain their Drafts. Caller transactions keep ownership; dry runs write only an isolated copy."""
+    if dry_run:
+        trial = inbox.connect()
+        try:
+            if db.in_transaction:
+                # backup waits on this connection's pending writes; a dump includes them, including on WAL.
+                trial.execute("PRAGMA foreign_keys = OFF")
+                trial.executescript("\n".join(db.iterdump()))
+                trial.execute("PRAGMA foreign_keys = ON")
+            else:
+                db.backup(trial)
+            return replace_sequence(trial, plan)
+        finally:
+            trial.close()
+    with inbox._write_snapshot(db):
+        return _replace_sequence(db, plan)
+
+
+def _replace_sequence(db, plan) -> list[str]:
+    row = db.execute("SELECT id FROM sequences WHERE name = ? ORDER BY archived_at IS NOT NULL, id", (plan["name"],)).fetchone()
+    names = {r["name"].lower(): r["id"] for r in db.execute("SELECT id, name FROM sequences ORDER BY archived_at IS NOT NULL DESC, id DESC")}
+    changes = [] if row else [f"+ Sequence {plan['name']}"]
+    sid = row[0] if row else create_sequence(db, plan["name"])
+    names[plan["name"].lower()] = sid
+    if db.execute("SELECT description FROM sequences WHERE id = ?", (sid,)).fetchone()[0] != plan["description"]:
+        describe_sequence(db, sid, plan["description"])
+        changes.append(f"~ Use when: {plan['description'] or '(none)'}")
+    emails, pending = [], []  # email Step IDs in document order; (Step ID, email number) reply links
+    for path in (("start", None, None), ("body", None, None), ("completion", None, None)):
+        _sync_steps(db, sid, path, plan[path[0]], changes, names, emails, pending)
+    for step_id, n in pending:
+        if not 1 <= n <= len(emails):
+            raise Refused(f"reply {n}: the file has {len(emails)} emails")
+        if db.execute("SELECT reply_to_step_id FROM sequence_steps WHERE id = ?", (step_id,)).fetchone()[0] != emails[n - 1]:
+            save_step(db, step_id, reply_to_step_id=emails[n - 1])
+            changes.append(f"~ email: reply {n}")
+    problems = validate(db, sid)
+    if problems:
+        by_id = {st["id"]: st for st in sequence_steps(db, sid)}
+        raise Refused("; ".join(f"Step {by_id[i]['position']} ({by_id[i]['kind']}): {m}" for i, m in problems))
+    return changes
+
+
+def _sync_steps(db, sid, path, wanted, changes, names, emails, pending):
+    have = on_path(sequence_steps(db, sid), path)
+    where = {"start": "On start", "body": "Steps", "completion": "On completion"}[path[0]]
+    for i, w in enumerate(wanted):
+        fields = {k: w[k] for k in STEP_FIELDS[1:] if k in w}
+        if w["kind"] == "action" and w["action_kind"] == "enroll":
+            target = names.get((w["enroll"] or "").lower())
+            if target is None:
+                raise Refused(f"line {w['line']}: no Sequence named {w['enroll']!r}")
+            fields["enroll_sequence_id"] = target
+        old = have[i] if i < len(have) and have[i]["kind"] == w["kind"] else None
+        if old is not None and old["kind"] == "if" and old["condition"] != w["condition"]:
+            old = None
+        if old is None:
+            if i < len(have):
+                delete_step(db, have[i]["id"])
+                changes.append(f"- {where}: {have[i]['kind']} (was Step {have[i]['position']})")
+                have = on_path(sequence_steps(db, sid), path)
+            after = None
+            if i > 0:
+                after = on_path(sequence_steps(db, sid), path)[i - 1]["position"]
+            step_id = add_step(db, sid, w["kind"], after, section=path[0], parent_step_id=path[1], branch=path[2],
+                               action_kind=w["action_kind"] or "enroll", condition=w["condition"] or "jeremy_picks",
+                               front=i == 0)
+            save_step(db, step_id, **{k: v for k, v in fields.items() if k != "reply_to_step_id"})
+            changes.append(f"+ {where}: {w['kind']} line {w['line']}")
+        else:
+            step_id = old["id"]
+            diff = {k: v for k, v in fields.items() if k != "reply_to_step_id" and (old.get(k) or None) != (v or None)}
+            if diff:
+                save_step(db, step_id, **diff)
+                changes.append(f"~ {where}: {w['kind']} line {w['line']}: {', '.join(sorted(diff))}")
+        have = on_path(sequence_steps(db, sid), path)
+        if w["kind"] == "email":
+            emails.append(step_id)
+            current = db.execute("SELECT reply_to_step_id FROM sequence_steps WHERE id = ?", (step_id,)).fetchone()[0]
+            if w["reply"]:
+                pending.append((step_id, w["reply"]))
+            elif current:
+                save_step(db, step_id, reply_to_step_id=None)
+                changes.append(f"~ {where}: email line {w['line']}: reply_to_step_id")
+        if w["kind"] == "if":
+            for key, branch in (("yes", 1), ("no", 0)):
+                child = (path[0], step_id, branch)
+                _sync_steps(db, sid, child, w[key], changes, names, emails, pending)
+                if path[0] == "body":
+                    _sync_steps(db, sid, completion_of(child), w[f"{key}_done"], changes, names, emails, pending)
+    have = on_path(sequence_steps(db, sid), path)
+    for extra in have[len(wanted):][::-1]:
+        delete_step(db, extra["id"])
+        changes.append(f"- {where}: {extra['kind']} (was Step {extra['position']})")
 
 
 def sequence_steps(db, sequence_id: int) -> list[dict]:
@@ -297,8 +398,7 @@ def add_step(db, sequence_id: int, kind: str, after: int | None = None, *, secti
         raise ValueError(f"Step kind must be one of {', '.join(KINDS)}")
     if section not in SECTIONS:
         raise ValueError(f"A section is one of {', '.join(SECTIONS)}.")
-    with db:
-        _tx(db)
+    with inbox._write_snapshot(db):
         steps = sequence_steps(db, sequence_id)
         if after is not None:
             anchor = next((st for st in steps if st["position"] == after), None)
@@ -357,8 +457,7 @@ def save_step(db, step_id: int, **fields) -> dict:
     fields = {k: (v or None) if k in ("at_time", "linkedin_move", "reply_to_step_id", "enroll_sequence_id", "pipeline",
                                        "stage") else v
               for k, v in fields.items()}
-    with db:
-        _tx(db)
+    with inbox._write_snapshot(db):
         row = db.execute("SELECT sequence_id FROM sequence_steps WHERE id = ?", (step_id,)).fetchone()
         if row is None:
             raise KeyError(f"step {step_id}")
@@ -395,8 +494,7 @@ def delete_step(db, step_id: int, now: datetime | None = None) -> tuple[int, dic
     deletes its paths and their On completions too. Returns how many Enrollments moved on, and what restore_step
     needs."""
     now = now or clock.now()
-    with db:
-        _tx(db)
+    with inbox._write_snapshot(db):
         st = dict(db.execute("SELECT * FROM sequence_steps WHERE id = ?", (step_id,)).fetchone())
         gone = [st] + (_below(sequence_steps(db, st["sequence_id"]), step_id) if st["kind"] == "if" else [])
         ids = [g["id"] for g in gone]
@@ -728,8 +826,7 @@ def materialize(db, now: datetime | None = None) -> int:
     runs every minute from wake. Returns how many Tasks or Drafts it made."""
     now = now or clock.now()
     made = 0
-    with db:
-        _tx(db)
+    with inbox._write_snapshot(db):
         moved = 1
         while moved:  # an Action or If done, or an Enrollment it made, gets its next Task in the same run
             moved = 0

@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 from pytest_bdd import given, parsers, then, when
 
-from comms_terminal import clock, inbox, sequences
+from comms_terminal import clock, inbox, sequence_md, sequences
 
 ME = "jeremy@agentmaple.example"
 DAYS = {"Monday": datetime(2026, 10, 19, 13, 0, tzinfo=timezone.utc)}
@@ -176,3 +176,28 @@ def today_lists(outreach, day, threads, tasks, datatable):
     t = inbox.today(outreach.db, DAYS[day])
     assert (len(t["threads"]), len(t["tasks"])) == (int(threads), int(tasks))
     assert sorted(d["body"] for d in t["drafts"]) == sorted(row[0] for row in datatable[1:])
+
+
+@when(parsers.parse('Apply Sequence replaces "{name}" and a later Step save fails'))
+def apply_fails_later(outreach, name, monkeypatch):
+    outreach.before_apply = list(outreach.db.iterdump())
+    save, calls = sequences.save_step, []
+
+    def fail_later(db, *args, **fields):
+        if db is outreach.db:
+            calls.append(args[0])
+            if len(calls) == 2:
+                raise RuntimeError("late persistence failure")
+        return save(db, *args, **fields)
+
+    monkeypatch.setattr(sequences, "save_step", fail_later)
+    text = f"# {name}\n## Steps\n- letter (gap 0)\n  > New letter\n- call (gap 1)\n  > New script\n"
+    with pytest.raises(RuntimeError, match="late persistence failure"):
+        sequence_md.apply(outreach.db, text)
+    assert len(calls) == 2
+
+
+@then("the Sequence, Steps, Enrollment, Tasks and Drafts are unchanged")
+def apply_unchanged(outreach):
+    assert not outreach.db.in_transaction
+    assert list(outreach.db.iterdump()) == outreach.before_apply

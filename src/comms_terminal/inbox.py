@@ -859,9 +859,7 @@ def save_draft(db, values: dict, *, draft_id: int | None = None,
             type(draft_id) is not int or draft_id <= 0
             or type(expected_revision) is not int or expected_revision <= 0):
         raise ValueError("existing draft requires positive integer draft_id and expected_revision")
-    with db:
-        if not db.in_transaction:
-            db.execute("BEGIN IMMEDIATE")
+    with _write_snapshot(db):
         if connection_id is not None:
             c = db.execute("SELECT platform FROM connections WHERE id = ?", (connection_id,)).fetchone()
             platform = platforms.PLATFORMS.get(c["platform"]) if c else None
@@ -901,9 +899,7 @@ def save_reply_draft(db, thread_id: int, body: str, task_id: int | None = None) 
     """The reply Draft kept under one Thread id (the one its reply box opened on, so an alias keeps its own):
     text replaces it, empty text deletes it. The envelope comes from the Thread as the reply box shows it; the
     box still sends its own To and Cc. ponytail: last writer wins here; revisions guard the agent's edits."""
-    with db:
-        if not db.in_transaction:
-            db.execute("BEGIN IMMEDIATE")
+    with _write_snapshot(db):
         row = db.execute('SELECT id, revision, task_id, send_at, "to", cc FROM composition_drafts WHERE thread_id = ?',
                          (thread_id,)).fetchone()
         if not body.strip():

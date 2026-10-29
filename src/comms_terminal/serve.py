@@ -82,22 +82,25 @@ def _linear_names(db, emails: list[str], domains: list[str]) -> tuple[list[str],
             [name for domain, name in organizations if domain in domains and eligible(name)])
 
 
+def _context_keys(body: bytes) -> tuple[list[str], list[str]]:
+    """The exact email/domain keys shared by every read-only Context route."""
+    req = json.loads(body)
+    if not isinstance(req, dict):
+        raise ValueError
+    values = [req.get(key, []) for key in ("emails", "domains")]
+    if any(not isinstance(items, list) or any(not isinstance(item, str) for item in items) for items in values):
+        raise ValueError
+    return tuple(sorted({item.strip().casefold() for item in items if item.strip()}) for items in values)
+
+
 def handle_linear(db, body: bytes, context) -> tuple[int, dict]:
     """POST /linear: email/domain arrays only; unique local names are resolved afresh, without writes."""
     try:
-        req = json.loads(body)
-        if not isinstance(req, dict):
-            raise ValueError
-        emails, domains = req.get("emails", []), req.get("domains", [])
-        if any(not isinstance(values, list) or any(not isinstance(v, str) for v in values)
-               for values in (emails, domains)):
-            raise ValueError
+        emails, domains = _context_keys(body)
     except (ValueError, TypeError):
         return 400, {"error": "expected emails and domains arrays of strings"}
     if context is None:
         return 503, {"error": "Linear is not connected"}
-    emails = sorted({value.strip().casefold() for value in emails if value.strip()})
-    domains = sorted({value.strip().casefold() for value in domains if value.strip()})
     if not emails and not domains:
         return 200, {"issues": []}
     try:
@@ -112,16 +115,15 @@ def handle_linear(db, body: bytes, context) -> tuple[int, dict]:
 def handle_context(body: bytes, context: tana.Context | None, name: str = "Tana") -> tuple[int, dict]:
     """POST /tana and /attio: {"emails", "domains"} -> (status, that Context source's answer or {"error"})
     (FR-13a, FR-13b)."""
+    try:
+        emails, domains = _context_keys(body)
+    except (ValueError, TypeError):
+        return 400, {"error": "expected emails and domains arrays of strings"}
     if context is None:
         return 503, {"error": f"{name} is not connected"}
     try:
-        req = json.loads(body)
-        emails = [str(e) for e in req.get("emails") or []]
         # Attio refuses a Sole proprietorship's key as a domain filter, failing the whole answer
-        domains = [str(d) for d in req.get("domains") or [] if not inbox.is_sole_key(str(d))]
-    except (ValueError, TypeError, AttributeError):
-        return 400, {"error": "expected emails and domains"}
-    try:
+        domains = [d for d in domains if not inbox.is_sole_key(d)]
         return 200, context.get(emails, domains)
     except (mcp.McpError, attio.AttioError, OSError, ValueError, KeyError, IndexError) as e:
         error = str(e) or type(e).__name__

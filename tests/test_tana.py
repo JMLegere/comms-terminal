@@ -101,7 +101,7 @@ def test_section_markup():
 
 def test_console_treats_a_service_without_tana_as_not_connected(tmp_path):
     import threading
-    from comms_terminal.tui import socket_context
+    from comms_terminal.remote import socket_context
     sock = str(tmp_path / "s.sock")
     old = serve.UnixHTTPServer(sock, serve._handler({}))  # a service from before /tana: HTML 404
     threading.Thread(target=old.serve_forever, daemon=True).start()

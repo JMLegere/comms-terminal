@@ -70,6 +70,8 @@ def main(argv=None) -> None:
     agent.add_parsers(sub)
     agent_commands = set(sub.choices) - before
     a = p.parse_args(argv)
+    if a.remote is not None and a.cmd is not None:
+        p.error("--remote is only valid for the console (without a command)")
     Path(a.db).parent.mkdir(parents=True, exist_ok=True)
 
     if a.cmd in agent_commands:
@@ -115,8 +117,8 @@ def main(argv=None) -> None:
         # The service holds the Attio token; it reads Attio, this writes the database.
         import json
         from . import inbox
-        from .tui import _post
-        status, body = _post(a.socket, "/attio-people", {"days": a.days}, timeout=600)
+        from .remote import post
+        status, body = post(a.socket, "/attio-people", {"days": a.days}, timeout=600)
         if status != 200:
             raise SystemExit(f"Attio: {body.get('error', status)}")
         db = inbox.connect(a.db)
@@ -145,8 +147,9 @@ def main(argv=None) -> None:
         if not os.environ.get("COLORTERM") and any(t in os.environ.get("TERM", "") for t in TRUECOLOR_TERMS):
             os.environ["COLORTERM"] = "truecolor"
         import textual_image.widget  # noqa: F401 - asks the terminal about Kitty graphics before Textual owns it
-        from .tui import (CONTEXT_SOURCES, FILE_SERVER, Console, socket_context, socket_reply, socket_send_draft,
-                          socket_respond, socket_slack_conversations, socket_slack_reactions)
+        from .remote import (socket_context, socket_reply, socket_send_draft, socket_respond,
+                             socket_slack_conversations, socket_slack_reactions)
+        from .tui import CONTEXT_SOURCES, FILE_SERVER, Console
         link = remote = syncer = None
         if a.remote:
             link, remote, syncer = start_remote(a.remote, a.db)
@@ -169,11 +172,11 @@ def start_remote(ssh_args: str, db_path: str):
     the first run wait for a first copy of the database."""
     import shlex
     from . import inbox, remote, tui
-    from .tui import ReplyError
+    from .remote import ReplyError
     Path(db_path).parent.chmod(0o700)
     control = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / f"comms-terminal-{os.getpid()}.ssh"
     link = remote.Link(shlex.split(ssh_args), str(control))
-    rem, caps = remote.Remote(link, tui._post), {}
+    rem, caps = remote.Remote(link, remote.post), {}
     remote.install(tui, rem, caps)
     syncer = remote.Syncer(rem, db_path, caps, Path(db_path).parent / "service-build")
     link.start()

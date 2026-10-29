@@ -30,7 +30,7 @@ from pathlib import Path
 from comms_terminal import inbox, serve, slack
 from comms_terminal.email import EmailSender
 from comms_terminal.slack import SlackSender
-from comms_terminal.tui import socket_reply
+from comms_terminal.remote import socket_reply
 
 MAILBOX, TEAM, ME = "jeremy@agentmaple.com", "T0AGENTMAPLE", "U0JEREMY"
 SLACK_USERS = {"U0LOGAN": ("Logan Carr", "logan@agentmaple.com")}

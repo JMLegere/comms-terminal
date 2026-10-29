@@ -1,6 +1,7 @@
 """Which email address an Enrollment sends to (Jeremy, 2026-10-27): chosen at enroll; by default the one at its
 Organization, else the one added last. A chained Enrollment keeps it."""
 
+import pytest
 from test_sequences import MONDAY, clock, db, draft_of, person  # noqa: F401 (fixtures)
 from textual.widgets import DataTable
 
@@ -48,6 +49,24 @@ def test_cli_to_adds_the_address_and_a_chained_enrollment_keeps_it(db):
         raise AssertionError("took a --to that is no address")
     except ValueError as x:
         assert "not an email address" in str(x)
+
+@pytest.mark.parametrize("reference", ["id", "name", "identity"])
+def test_cli_enrollment_uses_the_same_person_matching_rules(db, reference):
+    ready(db)
+    dana = person(db, "dana@harbourline.example", "Dana Roy")
+    value = {"id": str(dana), "name": "DANA ROY", "identity": "DANA@HARBOURLINE.EXAMPLE"}[reference]
+    agent.enroll(db, value, "Revenue 1 Open")
+    assert db.execute("SELECT person_id FROM enrollments").fetchone()[0] == agent.find_person(db, value) == dana
+
+
+def test_cli_enrollment_refuses_an_ambiguous_person_without_writing(db):
+    ready(db)
+    person(db, "dana@harbourline.example", "Dana Roy")
+    person(db, "dana@another.example", "Dana Roy")
+    with pytest.raises(ValueError, match="more than one Person matches"):
+        agent.enroll(db, "Dana Roy", "Revenue 1 Open")
+    assert db.execute("SELECT count(*) FROM enrollments").fetchone()[0] == 0
+
 
 
 def test_the_enroll_dialog_asks_which_address(tmp_path):
