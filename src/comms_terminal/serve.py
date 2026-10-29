@@ -10,6 +10,7 @@ quo-api-key, tana-oauth, attio-token, linear-token, resend-webhook-secret, googl
 import base64
 import importlib
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -102,7 +103,9 @@ def handle_linear(db, body: bytes, context) -> tuple[int, dict]:
     try:
         person_names, organization_names = _linear_names(db, emails, domains)
         return 200, context.get(emails, domains, person_names, organization_names)
-    except (linear.LinearError, OSError, ValueError, KeyError, IndexError, TypeError):
+    except (linear.LinearError, OSError, ValueError, KeyError, IndexError, TypeError) as e:
+        logging.getLogger("comms_terminal.context").info("Linear context failed: %s",
+                                                         str(e) if isinstance(e, linear.LinearError) else type(e).__name__)
         return 502, {"error": "Linear context could not be loaded"}
 
 
@@ -113,13 +116,17 @@ def handle_context(body: bytes, context: tana.Context | None, name: str = "Tana"
         return 503, {"error": f"{name} is not connected"}
     try:
         req = json.loads(body)
-        emails, domains = [str(e) for e in req.get("emails") or []], [str(d) for d in req.get("domains") or []]
+        emails = [str(e) for e in req.get("emails") or []]
+        # Attio refuses a Sole proprietorship's key as a domain filter, failing the whole answer
+        domains = [str(d) for d in req.get("domains") or [] if not inbox.is_sole_key(str(d))]
     except (ValueError, TypeError, AttributeError):
         return 400, {"error": "expected emails and domains"}
     try:
         return 200, context.get(emails, domains)
     except (mcp.McpError, attio.AttioError, OSError, ValueError, KeyError, IndexError) as e:
-        return 502, {"error": str(e) or type(e).__name__}
+        error = str(e) or type(e).__name__
+        logging.getLogger("comms_terminal.context").info("%s context failed: %s", name, error)
+        return 502, {"error": error}
 
 
 def handle_attio_people(body: bytes, context: tana.Context | None) -> tuple[int, dict]:

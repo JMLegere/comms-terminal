@@ -2527,6 +2527,11 @@ def sole_key(person_id: int) -> str:
     return f"person-{person_id}.sole"
 
 
+def is_sole_key(domain: str) -> bool:
+    """A Sole proprietorship's key, which no Context source knows as a domain."""
+    return domain.startswith("person-") and domain.endswith(".sole")
+
+
 @writer("write")
 def set_case_description(db, case_id: int, description: str) -> None:
     with db:

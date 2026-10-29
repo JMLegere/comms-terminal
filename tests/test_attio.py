@@ -1,5 +1,7 @@
 """Attio, a read-only Context source (FR-13b): matching, fields, open tasks, and the section."""
 
+import json
+
 from comms_terminal import attio, serve
 
 ME = "m1"
@@ -92,3 +94,26 @@ def test_section_survives_a_quote_in_a_field_url():
     markup = attio_markup(ctx, width=80)
     Content.from_markup(markup)  # raised MarkupError when the quote ended the link value
     assert f"[link='{url.replace(chr(39), '%27')}']" in markup
+
+
+def test_sole_proprietorship_keys_never_reach_a_context_source(caplog):
+    # Attio answers 400 to a domain filter like `person-7.sole`, which failed the whole section
+    from comms_terminal import inbox
+
+    class Recorder:
+        def get(self, emails, domains):
+            self.asked = (emails, domains)
+            return {"people": [], "companies": [], "tasks": []}
+
+    source = Recorder()
+    body = json.dumps({"emails": ["a@b.ca"], "domains": ["nbif.ca", inbox.sole_key(7)]}).encode()
+    assert serve.handle_context(body, source, "Attio")[0] == 200
+    assert source.asked == (["a@b.ca"], ["nbif.ca"])
+
+    class Broken:
+        def get(self, emails, domains):
+            raise attio.AttioError("Attio 400 on /objects/companies/records/query")
+
+    with caplog.at_level("INFO"):
+        assert serve.handle_context(body, Broken(), "Attio")[0] == 502
+    assert "Attio context failed: Attio 400 on /objects/companies/records/query" in caplog.text
