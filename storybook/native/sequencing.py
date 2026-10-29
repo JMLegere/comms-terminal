@@ -305,10 +305,10 @@ class TaskPane(tui.ThreadView, inherit_bindings=False):
         self.paint_status()
         tui.load_context(self, [email], [domain] if domain else [])
 
-    def refresh_data(self):
+    def refresh_data(self, opened=False):
         self.paint_status()
 
-    def paint_status(self):
+    def paint_status(self, details=True):
         if len(self.query(".thead, .detailtext")) != 2:
             return
         kind = SEQUENCE[self.number - 1][0]
@@ -443,10 +443,10 @@ class StepEditor(tui.ThreadView, inherit_bindings=False):
             widget.cursor_blink = False
         self.paint_status()
 
-    def refresh_data(self):
+    def refresh_data(self, opened=False):
         self.paint_status()
 
-    def paint_status(self):
+    def paint_status(self, details=True):
         if len(self.query(".thead, .detailtext")) != 2:
             return
         kind = SEQUENCE[self.number - 1][0]

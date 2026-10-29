@@ -90,7 +90,7 @@ def test_the_enroll_dialog_asks_which_address(tmp_path):
             await pilot.pause()
         assert isinstance(app.screen, Pick)
         seen["choices"] = [o for o, _ in app.screen.options]
-        choose(app, next(o for o, label in app.screen.options if "ruiz.example" in str(label)))
+        await choose(app, pilot, next(o for o, label in app.screen.options if "ruiz.example" in str(label)))
         await pilot.press("enter")
         await pilot.pause()
         await pilot.press("enter")  # Start today

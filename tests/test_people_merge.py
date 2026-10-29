@@ -179,6 +179,10 @@ def test_people_list_groups_by_first_letter_and_folds(tmp_path):
         items = [item for item, _ in page.items]
         letters = [i["letter"] for i in items if "letter" in i]
         assert letters == sorted(letters, key=lambda k: (k == "#", k)) and "letter" in items[0]
+        for _ in range(20):  # the cursor steps past the first letter after a refresh
+            if "id" in page.selected():
+                break
+            await pilot.pause()
         assert "id" in page.selected()  # the cursor starts on the first Person
         people = sum("id" in i for i in items)
         table = page.query_one(DataTable)
