@@ -94,14 +94,38 @@ def make_reaction_app(tmp_path, *, mode="ready", message_count=3):
 
 
 async def settle(app, pilot):
+    def pending():
+        return (getattr(app.main.page, "_preview_timer", None) is not None
+                or app._reaction_timer is not None
+                or app._reaction_read_active is not None or bool(app._reaction_reads))
+
     await pilot.pause(tui.PREVIEW_GAP * 2 + 0.02)
     for _ in range(30):
         await pilot.pause(0.02)
-        if app._reaction_read_active is None and not app._reaction_reads:
+        if not pending():
             await app.workers.wait_for_complete()
             await pilot.pause()
-            return
+            if not pending():
+                return
     raise AssertionError("Synthetic reaction reads did not settle")
+
+
+def test_settle_waits_for_debounced_snapshot(tmp_path):
+    app, ids, fake = make_reaction_app(tmp_path)
+    set_timer = app.set_timer
+
+    def delayed(interval, *args, **kwargs):
+        return set_timer(0.4 if interval == tui.PREVIEW_GAP else interval, *args, **kwargs)
+
+    async def scenario(app, pilot):
+        await settle(app, pilot)
+        fake.calls.clear()
+        app.set_timer = delayed
+        app.schedule_reaction_snapshot(ids["thread"], force=True)
+        await settle(app, pilot)
+        assert len(fake.calls) == 3
+
+    run(app, [scenario], size=(187, 50))
 
 
 def read_result(job, groups=()):
