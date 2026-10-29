@@ -867,13 +867,35 @@ def test_socket_reactions_uses_existing_transport_and_preserves_typed_outcomes(m
     assert remote.socket_slack_reactions(transport)(payload)["outcome"] == "unavailable"
 
 
-def test_passive_custom_chip_escapes_markup_and_own_edges_have_no_blue_fill(tmp_path):
+@pytest.mark.parametrize("delayed_render", [False, True])
+def test_passive_custom_chip_escapes_markup_and_own_edges_have_no_blue_fill(tmp_path, monkeypatch, delayed_render):
     app, ids, fake = make_reaction_app(tmp_path)
-    fake.groups[ids["messages"][1]] = [dict(name="[red]custom[/red]", count=7, mine=True)]
+    groups = [dict(name="[red]custom[/red]", count=7, mine=True)]
+    fake.groups[ids["messages"][1]] = [] if delayed_render else groups
 
     async def scenario(app, pilot):
         await settle(app, pilot)
-        chip = message_row(app, ids["keys"][1]).query_one(".reaction-chips")
+        if delayed_render:
+            show = tui.show_messages
+
+            def deferred(container, widgets, scroller=None):
+                container.set_timer(0.4, lambda: show(container, widgets, scroller))
+
+            monkeypatch.setattr(tui, "show_messages", deferred)
+            fake.groups[ids["messages"][1]] = groups
+            app.schedule_reaction_snapshot(ids["thread"], force=True)
+            await settle(app, pilot)
+        state = app.reaction_states[ids["keys"][1]]
+        assert state["totals"] == "ready" and state["groups"] == groups
+        for _ in range(30):
+            await pilot.pause(0.02)
+            chips = [chip for row in app.reaction_scope()[1].query(".mrow.open")
+                     if row.reaction_key == ids["keys"][1]
+                     for chip in row.query(".reaction-chips") if chip.is_mounted]
+            if chips:
+                break
+        assert chips, "Reaction chips did not mount"
+        chip = chips[0]
         text = Text.from_markup(str(chip.content))
         assert ":[red]custom[/red]: 7 ✓" in text.plain
         assert not any(str(span.style) == "red" for span in text.spans)
