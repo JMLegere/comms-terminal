@@ -136,7 +136,7 @@ A Person's place in an Organization. A Person can belong to several Organization
 _Avoid_: Affiliation, Employment
 
 **Unattended**:
-An Organization in a Pipeline, in an open or paying Stage, with no Todo or Snoozed Thread among its People and no Active Enrollment for it, so nothing will bring it back to Jeremy.
+An Organization in a Pipeline, in an open or paying Stage, with no Todo or Snoozed Thread among its People, no Active Enrollment for it, and none of its People on an upcoming Event, so nothing will bring it back to Jeremy. An Event counts until it ends, unless Jeremy or that Person declined it or it was deleted.
 _Avoid_: Stalled, Dropped, No next step
 
 ## Outreach
