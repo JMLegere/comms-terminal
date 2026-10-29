@@ -7076,8 +7076,13 @@ class Console(App):
 
     def _reaction_snapshot(self, page, thread_id, force):
         self._reaction_timer = None
+        if page is not self.main.page:
+            return
         scope = self.reaction_scope()
-        if page is not self.main.page or scope is None or scope[0]["thread"].id != thread_id:
+        if scope is None or scope[0]["thread"].id != thread_id:
+            pane = self.main.thread_view
+            if pane is not None and pane.thread_id == thread_id and not getattr(pane, "view", None):
+                self.schedule_reaction_snapshot(thread_id, force=force)  # the pane is still painting; read once it has
             return
         owner = (id(page), thread_id)
         if self._reaction_owner == owner and not force:

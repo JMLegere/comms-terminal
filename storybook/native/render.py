@@ -229,8 +229,8 @@ def recipient_threads(db, destination):
     return sorted((inbox.get_thread(db, row[0]) for row in ids), key=lambda t: t.id, reverse=True)
 
 
-def projected_person_threads(db, person_id):
-    threads = {t.id: t for t in ORIGINAL_PERSON_THREADS(db, person_id)}
+def projected_person_threads(db, person_id, every=None):
+    threads = {t.id: t for t in ORIGINAL_PERSON_THREADS(db, person_id, every)}
     for row in db.execute("SELECT DISTINCT r.thread_id FROM mock_recipients r JOIN identities i"
                           " ON i.kind = r.kind AND i.value = r.destination WHERE i.person_id = ?", (person_id,)):
         t = inbox.get_thread(db, row[0])
@@ -370,7 +370,11 @@ class ComposeCanvas(tui.ThreadView, inherit_bindings=False):
                          "\n\n" + head("person", "other threads") + "\n" + history +
                          "\n\n[#928374]External history unavailable[/]", classes="detailtext")
 
-    def refresh_data(self):
+    def paint_status(self, details=True):
+        # ThreadView repaints only its header on resize; the canvas header is all of refresh_data.
+        self.refresh_data()
+
+    def refresh_data(self, opened=False):
         # Match ThreadView's narrow metadata fallback; native Input rows may clip.
         if not self.query(".thead"):
             return
@@ -672,15 +676,15 @@ def assert_native_workspace(app, spec):
     assert rail.styles.background.hex.lower() == "#f5edca" and rail.region.right <= listing.region.x
     options = [rail.get_option_at_index(i) for i in range(rail.option_count)]
     ids = [option.id for option in options if option.id is not None]
-    assert [option.id for option in options[:18]] == ["today", None, None, "view:0", "view:1", "view:2", "view:3", "drafts", None, None,
-                                                     "cases:0", "cases:1", "cases:2", "cases:3", None, None, "tasks", "sequences"], \
-        "Today first, then threads with Drafts replacing All after Ignored, then Cases, then playbook (Tasks, Sequences)"
-    assert options[1].disabled and not options[1].prompt
-    assert options[2].disabled and Text.from_markup(options[2].prompt).plain.endswith("threads")
-    assert options[8].disabled and not options[8].prompt and Text.from_markup(options[9].prompt).plain.endswith("cases")
-    assert options[14].disabled and not options[14].prompt and Text.from_markup(options[15].prompt).plain.endswith("playbook")
+    assert [option.id for option in options[:19]] == ["today", "calendar", None, None, "view:0", "view:1", "view:2", "view:3", "drafts",
+                                                     None, None, "cases:0", "cases:1", "cases:2", "cases:3", None, None, "tasks", "sequences"], \
+        "Today and Calendar first, then threads with Drafts replacing All after Ignored, then Cases, then playbook (Tasks, Sequences)"
+    assert options[2].disabled and not options[2].prompt
+    assert options[3].disabled and Text.from_markup(options[3].prompt).plain.endswith("threads")
+    assert options[9].disabled and not options[9].prompt and Text.from_markup(options[10].prompt).plain.endswith("cases")
+    assert options[15].disabled and not options[15].prompt and Text.from_markup(options[16].prompt).plain.endswith("playbook")
     assert "compose" not in ids and "view:4" not in ids and ids.count("drafts") == 1 and len(ids) == len(set(ids))
-    assert not any(re.search(r"\bAll\b", Text.from_markup(option.prompt).plain) for option in options[3:8]), "Mock rail must not retain All navigation"
+    assert not any(re.search(r"\bAll\b", Text.from_markup(option.prompt).plain) for option in options[4:9]), "Mock rail must not retain All navigation"
     draft = rail.get_option("drafts")
     active = main.section == "drafts"
     # The product rail now shows the Drafts count (4e50c42), so the native row may end with one.
@@ -717,7 +721,7 @@ def assert_native_workspace(app, spec):
             if canvas.has_class("narrow"):
                 header = canvas.query_one(".thead").content
                 for value in (canvas.spec["values"]["sender"], canvas.spec["values"]["to"], canvas.spec["values"].get("cc", "")):
-                    assert not value or escape(value) in header, "Narrow header must retain exact reviewed addresses"
+                    assert not value or escape(value) in header, f"Narrow header must retain exact reviewed addresses: {value!r} not in {header!r}"
         else:
             assert not detail.query(ComposeCanvas) and main.showing is None
     if spec.get("accepted"):

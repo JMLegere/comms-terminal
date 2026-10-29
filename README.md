@@ -160,7 +160,7 @@ uv run pytest -m wip     # scenarios not built yet
 .venv/bin/watchfiles --filter python '.venv/bin/comms-terminal --db /tmp/demo.db' src/comms_terminal   # hot reload
 ```
 
-- Branch from `dev`. Pushes to `main` deploy.
+- Branch from `main`. Pushes to `main` deploy.
 - Use the terms in [`GLOSSARY.md`](GLOSSARY.md) exactly.
 - UI changes: check renders with Textual's test driver ([`docs/design/console.md`](docs/design/console.md)).
 

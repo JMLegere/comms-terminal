@@ -20,7 +20,11 @@ def weekday(monkeypatch):
     monkeypatch.setattr(clock, "now", lambda: datetime.now(timezone.utc) + shift)
 
 
-def choose(app, option_id):
+async def choose(app, pilot, option_id):
+    for _ in range(20):  # a just-pushed menu composes on a later tick
+        if app.screen.query(OptionList):
+            break
+        await pilot.pause()
     menu = app.screen.query_one(OptionList)
     menu.highlighted = menu.get_option_index(option_id)
 
@@ -53,7 +57,7 @@ def test_sequences_page_makes_a_sequence_edits_a_step_and_archives(tmp_path):
         await pilot.press("n")
         await pilot.pause()
         assert isinstance(app.screen, Pick)
-        choose(app, "call")
+        await choose(app, pilot, "call")
         await pilot.press("enter")
         await pilot.pause()
         editor = app.main.query_one(StepEditor)
@@ -189,7 +193,7 @@ def test_enroll_with_a_later_start_date(tmp_path):  # FR-SEQ-25
         for key in ("s", "enter", "enter"):  # the Sequence, then her Organization
             await pilot.press(key)
             await pilot.pause()
-        choose(app, "later")
+        await choose(app, pilot, "later")
         await pilot.press("enter")
         await pilot.pause()
         assert isinstance(app.screen, Ask)
@@ -224,16 +228,16 @@ def test_person_page_shows_both_enrollments_resumes_and_finishes(tmp_path):
         await pilot.press("r")
         await pilot.pause()
         assert isinstance(app.screen, Pick)  # two Paused Enrollments: which one?
-        choose(app, str(next(e["id"] for e in sq.enrollments(app.db, ana) if e["sequence"] == "Call first")))
+        await choose(app, pilot, str(next(e["id"] for e in sq.enrollments(app.db, ana) if e["sequence"] == "Call first")))
         await pilot.press("enter")
         await pilot.pause()
         seen["resumed"] = {e["sequence"]: e["state"] for e in sq.enrollments(app.db, ana)}
         await pilot.press("f")
         await pilot.pause()
-        choose(app, str(next(e["id"] for e in sq.enrollments(app.db, ana) if e["sequence"] == "Event follow-up")))
+        await choose(app, pilot, str(next(e["id"] for e in sq.enrollments(app.db, ana) if e["sequence"] == "Event follow-up")))
         await pilot.press("enter")
         await pilot.pause()
-        choose(app, "CANCELED")
+        await choose(app, pilot, "CANCELED")
         await pilot.press("enter")
         await pilot.pause()
         seen["finished"] = {e["sequence"]: (e["state"], e["reason"]) for e in sq.enrollments(app.db, ana)}
@@ -281,7 +285,7 @@ def test_tasks_filter_menu_and_copy_for_agent(tmp_path, monkeypatch):
         seen["all"] = sorted(t["kind"] for t in app.main.current.items if t)
         await pilot.press("slash")
         await pilot.pause()
-        choose(app, f"seq:{other}")
+        await choose(app, pilot, f"seq:{other}")
         await pilot.press("enter")
         await pilot.pause()
         seen["filtered"] = [t["sequence"] for t in app.main.current.items if t]
@@ -348,10 +352,10 @@ def test_sequence_step_names_its_sequence_and_a_waiting_task_enrolls_on_e(tmp_pa
         app.main.current.query_one("#steps").focus()
         await pilot.press("n")
         await pilot.pause()
-        choose(app, "action")
+        await choose(app, pilot, "action")
         await pilot.press("enter")
         await pilot.pause()
-        choose(app, "enroll")  # what the Action does
+        await choose(app, pilot, "enroll")  # what the Action does
         await pilot.press("enter")
         await pilot.pause()
         editor = app.main.query_one(StepEditor)
@@ -394,7 +398,7 @@ def test_f_changes_the_email_connection_a_sequence_sends_from(tmp_path):
         await pilot.press("f")
         await pilot.pause()
         assert isinstance(app.screen, Pick)
-        choose(app, str(new))
+        await choose(app, pilot, str(new))
         await pilot.press("enter")
         await pilot.pause()
         assert "jeremy@agentmaple.ai" in str(app.main.query_one("#thread").query(".threadempty").first().render())
@@ -420,10 +424,10 @@ def test_outline_adds_an_if_with_two_paths_and_tasks_answer_it_with_1_or_2(tmp_p
         page.query_one("#steps", DataTable).move_cursor(row=1)  # the Steps heading
         await pilot.press("n")
         await pilot.pause()
-        choose(app, "if")
+        await choose(app, pilot, "if")
         await pilot.press("enter")
         await pilot.pause()
-        choose(app, "jeremy_picks")
+        await choose(app, pilot, "jeremy_picks")
         await pilot.press("enter")
         await pilot.pause()
         (ask,) = sq.sequence_steps(app.db, s)
@@ -467,7 +471,7 @@ def test_today_lists_a_paused_enrollment_and_f_finishes_it_as_goal_met(tmp_path)
         seen["focus"] = today.paused.has_focus_within
         await pilot.press("f")
         await pilot.pause()
-        choose(app, "GOAL_MET")
+        await choose(app, pilot, "GOAL_MET")
         await pilot.press("enter")
         await pilot.pause()
 
@@ -492,7 +496,7 @@ def test_enroll_into_a_new_sole_proprietorship(tmp_path):
             await pilot.press(key)
             await pilot.pause()
         seen["choices"] = [o for o, _ in app.screen.options]
-        choose(app, "sole")
+        await choose(app, pilot, "sole")
         await pilot.press("enter")
         await pilot.pause()
         await pilot.press("enter")  # Start today
