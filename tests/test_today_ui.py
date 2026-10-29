@@ -130,6 +130,34 @@ def test_an_empty_today_says_all_clear_and_what_comes_next(tmp_path):
     assert seen["shown"] == [False, False, False, False, False]
 
 
+@pytest.mark.parametrize("kind", ["call", "email"])
+def test_a_refresh_keeps_the_cursor_on_a_later_task(tmp_path, kind):
+    """FR-T11: a rebuild keeps the selected Task. The rebuild's stale highlight of the group header must not step
+    the cursor back onto the first Task (2026-10-29: editing Evan's email Task jumped to Nic's call)."""
+    path, _ = seeded(tmp_path)
+    db = inbox.connect(path)
+    s = sq.create_sequence(db, "Touch")
+    sq.add_step(db, s, kind)
+    for p in inbox.people(db)[:2]:
+        sq.enroll(db, p["id"], s)
+    seen = {}
+
+    async def scenario(app, pilot):
+        today = app.main.current
+        today.enter(today.tasks, 1)
+        await pilot.pause()
+        today.tasks.query_one(DataTable).move_cursor(row=today.tasks.selectable_rows()[1])
+        await pilot.pause()
+        seen["before"] = (today.tasks.selected()["id"], app.main.showing)
+        app.main.refresh_all()  # the 2 s data-change check and the 60 s tick both run this
+        await pilot.pause()
+        await pilot.pause()
+        seen["after"] = (today.tasks.selected()["id"], app.main.showing)
+
+    run(Console(path), [scenario])
+    assert seen["after"] == seen["before"]
+
+
 def test_a_task_due_by_the_clock_alone_shows_within_a_minute(tmp_path, clock):
     path = with_work(tmp_path)
     seen = {}

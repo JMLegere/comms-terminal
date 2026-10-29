@@ -5067,6 +5067,8 @@ class TasksPage(Page):
     def on_data_table_row_highlighted(self, event):
         event.stop()
         row = event.cursor_row
+        if row != self.query_one(DataTable).cursor_row:  # stale: a rebuild's clear() highlights row 0 after its move_cursor (FR-T11)
+            return
         if 0 <= row < len(self.items) and self.items[row] is None:  # a group header: step onto its first Task
             prev = getattr(self, "last_row", 0)
             target = row + 1 if row >= prev or row == 0 else row - 1
