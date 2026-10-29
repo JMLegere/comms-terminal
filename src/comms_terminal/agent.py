@@ -1,24 +1,140 @@
 """Commands for a terminal agent: Threads, Drafts, and Due Tasks as Markdown, changes to a Draft, enrolling a
 Person in a Sequence, writing Sequences (whole, as Markdown, or Step by Step; FR-SEQ-44), Jeremy's calendar Events,
 Enrollments (list, resume, start on an agreed date, finish; Jeremy, 2026-10-26, superseding FR-SEQ-22), and Pipelines (show,
-Target, Stage and Value). Nothing here sends or completes a Task; Jeremy does that from the console."""
+Target, Stage and Value), plus every other change the console makes (COMMANDS). Nothing here sends or completes
+a Task; Jeremy does that from the console (CONSOLE_ONLY)."""
 
 import json
+import mimetypes
 import sys
 from datetime import date, timedelta
 
 from . import calendar, clock, files, inbox, pipeline, sequence_md, sequences
 from .platforms import PLATFORMS
 from .remote import ReplyError, socket_context
-from .tui import (CONTEXT_SOURCES, DRAFT_FIELDS, connection_label, draft_history, draft_text,
+from .tui import (CONTEXT_SOURCES, DRAFT_FIELDS, connection_label, draft_history, draft_text, parse_time,
                   staged_files, task_markdown, thread_addresses, thread_text)
+
+# Parity with the console (Jeremy, 2026-10-29): every writer (writers.WRITERS) is reachable from one command here,
+# or sits in CONSOLE_ONLY with its reason. tests/test_cli_parity.py fails when a new writer lands in neither.
+COMMANDS = {
+    "files.store_file": "draft --attach",
+    "inbox.act": "thread --status/--case",
+    "inbox.add_channel_rule": "channel-rule add",
+    "inbox.add_identity": "enroll --to",
+    "inbox.block": "person block",
+    "inbox.create_case": "case new",
+    "inbox.create_sole_proprietorship": "enroll --org sole",
+    "inbox.delete_channel_rule": "channel-rule delete",
+    "inbox.delete_draft": "draft --delete",
+    "inbox.mark_needs_edit": "draft --needs-edit",
+    "inbox.merge_persons": "person merge",
+    "inbox.remove_identity": "person unlink",
+    "inbox.rename_person": "person rename",
+    "inbox.save_draft": "draft",
+    "inbox.save_reply_draft": "draft new --thread",
+    "inbox.set_case_description": "case describe",
+    "inbox.set_membership": "person member",
+    "inbox.stage": "draft --attach",
+    "inbox.unstage": "draft --detach",
+    "pipeline.set_stage": "pipeline stage",
+    "pipeline.set_value": "pipeline value",
+    "sequences.add_step": "step add",
+    "sequences.archive_sequence": "sequence archive",
+    "sequences.create_sequence": "sequence new",
+    "sequences.delete_sequence": "sequence delete",
+    "sequences.delete_step": "step delete",
+    "sequences.describe_sequence": "sequence describe",
+    "sequences.enroll": "enroll",
+    "sequences.finish": "enrollment finish",
+    "sequences.move_step": "step move",
+    "sequences.rename_sequence": "sequence rename",
+    "sequences.replace_sequence": "sequence apply",
+    "sequences.reschedule": "enrollment start",
+    "sequences.resume": "enrollment resume",
+    "sequences.save_step": "step set",
+    "sequences.set_connection": "sequence sends-from",
+    "sequences.skip_task": "task skip",
+    "sequences.task_new_thread": "task new-thread",
+    "sequences.unenroll": "enrollment remove",
+}
+SENDS = "it sends: Jeremy sends Drafts himself (Jeremy, 2026-10-29)"
+JEREMYS_TASK = "Jeremy does his own Tasks and answers his own Ifs"
+UNDO = "the console's undo, which replays a snapshot only the console holds"
+CONSOLE_ONLY = {
+    "files.upload_url": "a browser upload page on the LAN; agents use draft --attach",
+    "inbox.restore": UNDO,
+    "inbox.restore_draft": UNDO,
+    "inbox.schedule_draft": SENDS,
+    "inbox.schedule_reply": SENDS,
+    "pipeline.undo": UNDO + "; set the Stage or Value again instead",
+    "sequences.complete_task": JEREMYS_TASK,
+    "sequences.pick": JEREMYS_TASK,
+    "sequences.restore_finish": UNDO,
+    "sequences.restore_sequence": UNDO,
+    "sequences.restore_step": UNDO,
+    "sequences.undelete_sequence": UNDO,
+    "sequences.undo_task": UNDO,
+}
+STATUSES = {"done": inbox.Done(), "wait": inbox.Wait(), "investigate": inbox.Investigate(),
+            "ignore": inbox.Ignore(), "unignore": inbox.Unignore(), "snooze": None, "todo": None}
+TODO_DETAILS = {"created": "CREATED", "new-reply": "NEW_REPLY", "in-progress": "IN_PROGRESS"}
+IDENTITY_KINDS = ("email", "slack_user", "phone")
 
 
 def add_parsers(sub):
     t = sub.add_parser("threads", help="list Threads in a Status view: id, status detail, who and where, title")
     t.add_argument("view", nargs="?", default="Todo", choices=list(inbox.VIEWS))
-    t = sub.add_parser("thread", help="one Thread as Markdown, with its Attio and Tana context")
+    t = sub.add_parser("thread", help="one Thread as Markdown, with its Attio and Tana context; --status or --case"
+                                      " changes it instead")
     t.add_argument("id", type=int)
+    t.add_argument("--status", choices=list(STATUSES), help="set its Status, as the console's keys do")
+    t.add_argument("--until", help="--status snooze: 14:30 or 2026-10-20 09:00")
+    t.add_argument("--detail", choices=list(TODO_DETAILS), default="in-progress", help="--status todo: which Todo")
+    t.add_argument("--case", help="a Case id, `none` to take it out of its Case, or `new:TITLE`")
+    c = sub.add_parser("case", help="Cases: new, describe")
+    cs = c.add_subparsers(dest="case_cmd", required=True)
+    x = cs.add_parser("new", help="a Case with no Threads yet; put Threads in with `thread ID --case`")
+    x.add_argument("title")
+    x = cs.add_parser("describe", help="set a Case's description")
+    x.add_argument("id", type=int)
+    x.add_argument("description", help="the text, or - to read it from stdin")
+    pe = sub.add_parser("person", help="People: rename, merge, member, unlink, block")
+    ps = pe.add_subparsers(dest="person_cmd", required=True)
+    x = ps.add_parser("rename", help="Jeremy's own name for a Person")
+    x.add_argument("person", help="a Person id, email address, or exact name")
+    x.add_argument("name")
+    x = ps.add_parser("merge", help="one Person from two: DROP's Identities, and so its Threads, move to KEEP")
+    x.add_argument("keep")
+    x.add_argument("drop")
+    x = ps.add_parser("member", help="add (yes) or remove (no) a Person at an Organization; auto lets the email"
+                                     " domain decide again")
+    x.add_argument("person")
+    x.add_argument("domain")
+    x.add_argument("member", choices=("yes", "no", "auto"))
+    x = ps.add_parser("unlink", help="take an Identity off its Person")
+    x.add_argument("kind", choices=IDENTITY_KINDS)
+    x.add_argument("value")
+    x = ps.add_parser("block", help="block a sender's Identity, or --unblock it")
+    x.add_argument("kind", choices=IDENTITY_KINDS)
+    x.add_argument("value")
+    x.add_argument("--unblock", action="store_true")
+    r = sub.add_parser("channel-rule", help="a Connection's channel rules: list, add, delete")
+    rs = r.add_subparsers(dest="rule_cmd", required=True)
+    x = rs.add_parser("list", help="one Connection's rules: id, kind, value")
+    x.add_argument("connection", type=int)
+    x = rs.add_parser("add", help="a rule on a Connection")
+    x.add_argument("connection", type=int)
+    x.add_argument("kind")
+    x.add_argument("value")
+    x = rs.add_parser("delete", help="a rule, by its id from `channel-rule list`")
+    x.add_argument("id", type=int)
+    k = sub.add_parser("task", help="one Task, by the Task id `tasks` prints: skip, new-thread")
+    ks = k.add_subparsers(dest="task_cmd", required=True)
+    x = ks.add_parser("skip", help="skip a Task; its unsent Draft goes")
+    x.add_argument("id", type=int)
+    x = ks.add_parser("new-thread", help="a reply Task whose target was skipped starts a new Thread instead")
+    x.add_argument("id", type=int)
     sub.add_parser("drafts", help="list Drafts, then the Connections a new Draft can use")
     d = sub.add_parser("draft", help="one Draft as Markdown; with --to/--cc/--subject/--body, change it first (never sends)")
     d.add_argument("id", help="a Draft id, or `new` (needs --connection for a new Thread, or --thread for a reply)")
@@ -30,6 +146,9 @@ def add_parsers(sub):
     d.add_argument("--body", help="the body, or - to read it from stdin")
     d.add_argument("--needs-edit", action="store_true",
                    help="mark it Needs edit, after any changes: it cannot send until its text is changed")
+    d.add_argument("--attach", metavar="NAME", help="attach a file named NAME, its bytes read from stdin")
+    d.add_argument("--detach", metavar="NAME", help="take the attached file NAME off it")
+    d.add_argument("--delete", action="store_true", help="delete it (an email Task's Draft: the Task is skipped)")
     sub.add_parser("tasks", help="Due Tasks as Markdown, each with its Person and Draft (Sequences)")
     e = sub.add_parser("enroll", help="enroll one Person in a Sequence; its first Task is due today, or from --start")
     e.add_argument("person", help="a Person id, email address, or exact name")
@@ -39,7 +158,7 @@ def add_parsers(sub):
                                  " proprietorship (default: their only Organization)")
     e.add_argument("--to", help="the email address its emails go to; a new one is added to the Person (default: the"
                                 " one at its Organization, else the one added last)")
-    q = sub.add_parser("sequence", help="Sequences: list, show or apply one as Markdown, new, rename, archive")
+    q = sub.add_parser("sequence", help="Sequences: list, show or apply one as Markdown, new, rename, describe, archive, delete")
     qs = q.add_subparsers(dest="sequence_cmd", required=True)
     qs.add_parser("list", help="every Sequence: id, name, Steps, Enrollments, use when")
     x = qs.add_parser("show", help="one Sequence as Markdown (the shape `apply` reads)")
@@ -57,7 +176,12 @@ def add_parsers(sub):
     x.add_argument("connection", type=int)
     x = qs.add_parser("archive", help="archive a Sequence; its live Enrollments carry on")
     x.add_argument("sequence")
-    en = sub.add_parser("enrollment", help="Enrollments: list, resume a Paused one, finish one with a reason")
+    x = qs.add_parser("describe", help="set a Sequence's one-line \"use when\"")
+    x.add_argument("sequence")
+    x.add_argument("description")
+    x = qs.add_parser("delete", help="delete a Sequence that never had an Enrollment")
+    x.add_argument("sequence")
+    en = sub.add_parser("enrollment", help="Enrollments: list, resume a Paused one, start on a date, finish one with a reason, remove")
     es = en.add_subparsers(dest="enrollment_cmd", required=True)
     x = es.add_parser("list", help="live Enrollments: id, Person, Sequence, state, how it is finishing")
     x.add_argument("person", nargs="?", help="only this Person (id, email address, or exact name)")
@@ -69,6 +193,8 @@ def add_parsers(sub):
     x = es.add_parser("finish", help="finish an Enrollment; Goal met, Not Right Now, and Lost run its On completion")
     x.add_argument("id", type=int)
     x.add_argument("reason", type=str.upper, choices=sequences.END_REASONS)
+    x = es.add_parser("remove", help="undo an enroll before any Task is done: it, its Tasks and their Drafts go")
+    x.add_argument("id", type=int)
     st = sub.add_parser("step", help="one Step of a Sequence, by its number: add, set, move, delete")
     ss = st.add_subparsers(dest="step_cmd", required=True)
     x = ss.add_parser("add", help="a new Step: after Step --after, else last on the path you name")
@@ -122,7 +248,16 @@ def run(a, db):
             for t in inbox.queue(db, a.view):
                 print(f"{t['id']}\t{t['detail']}\t{t['who']} · {t['where']}\t{t['title']}")
         elif a.cmd == "thread":
-            print(thread(db, a.id, a.socket), end="")
+            changes = a.status is not None or a.case is not None
+            print(thread_change(db, a) if changes else thread(db, a.id, a.socket), end="")
+        elif a.cmd == "case":
+            print(case_cmd(db, a), end="")
+        elif a.cmd == "person":
+            print(person_cmd(db, a), end="")
+        elif a.cmd == "channel-rule":
+            print(rule_cmd(db, a), end="")
+        elif a.cmd == "task":
+            print(task_cmd(db, a), end="")
         elif a.cmd == "drafts":
             for d in inbox.list_drafts(db):
                 kind = f"Reply Draft · Thread {d['thread_id']}" if d["thread_id"] else "New Thread Draft"
@@ -146,6 +281,8 @@ def run(a, db):
             print(events(db, a), end="")
         elif a.cmd == "pipeline":
             print(pipeline_cmd(db, a), end="")
+        elif a.delete or a.attach or a.detach:
+            print(draft_files(db, a), end="")
         else:
             changes = {k: getattr(a, k) for k in ("to", "cc", "subject", "body") if getattr(a, k) is not None}
             if changes.get("body") == "-":
@@ -154,6 +291,98 @@ def run(a, db):
                         getattr(a, "needs_edit", False)), end="")
     except (KeyError, ValueError, inbox.DraftConflict) as e:  # Refused and sequence_md.Invalid are ValueErrors
         raise SystemExit(f"comms-terminal {a.cmd}: {e.args[0] if e.args else e}") from e
+
+
+def thread_change(db, a) -> str:
+    if a.status == "snooze":
+        until = parse_time(a.until or "", clock.local())
+        if until is None:
+            raise ValueError("--status snooze needs --until, like 14:30 or 2026-10-20 09:00")
+        action = inbox.Snooze(until)
+    elif a.status == "todo":
+        action = inbox.MarkTodo(TODO_DETAILS[a.detail])
+    else:
+        action = STATUSES.get(a.status)
+    t = inbox.get_thread(db, a.id)
+    if a.case is not None:
+        if a.case.startswith("new:"):
+            t = inbox.act(db, a.id, inbox.SetCase(new_title=a.case[4:].strip()))
+        else:
+            t = inbox.act(db, a.id, inbox.SetCase(None if a.case == "none" else int(a.case)))
+    if action is not None:
+        t = inbox.act(db, a.id, action)
+    case = f", Case {t.case_id}" if t.case_id else ""
+    return f"{t.title}: {t.status.title()} · {t.status_detail}{case}\n"
+
+
+def case_cmd(db, a) -> str:
+    if a.case_cmd == "new":
+        return f"Case {inbox.create_case(db, a.title)}: {a.title}\n"
+    text = sys.stdin.read() if a.description == "-" else a.description
+    inbox.set_case_description(db, a.id, text)
+    return f"Case {a.id} described.\n"
+
+
+def person_cmd(db, a) -> str:
+    c = a.person_cmd
+    if c in ("unlink", "block"):
+        value = a.value.lower() if a.kind == "email" else a.value
+        if c == "block":
+            inbox.block(db, a.kind, value, not a.unblock)
+            return f"{'Unblocked' if a.unblock else 'Blocked'} {value}.\n"
+        row = db.execute("SELECT id FROM identities WHERE kind = ? AND value = ?", (a.kind, value)).fetchone()
+        if row is None:
+            raise ValueError(f"no {a.kind} Identity {value!r}")
+        inbox.remove_identity(db, row[0])
+        return f"Unlinked {value} from its Person.\n"
+    if c == "merge":
+        keep, drop = find_person(db, a.keep), find_person(db, a.drop)
+        inbox.merge_persons(db, keep, drop)
+        return f"Merged Person {drop} into Person {keep}.\n"
+    person_id = find_person(db, a.person)
+    if c == "rename":
+        inbox.rename_person(db, person_id, a.name)
+        return f"Person {person_id} is now {a.name.strip()}.\n"
+    inbox.set_membership(db, person_id, a.domain, {"yes": True, "no": False, "auto": None}[a.member])
+    return f"Person {person_id} at {a.domain}: {a.member}.\n"
+
+
+def rule_cmd(db, a) -> str:
+    if a.rule_cmd == "list":
+        return "".join(f"{r['id']}\t{r['kind']}\t{r['value']}\n"
+                       for r in inbox.channel_rules(db, a.connection)) or "No channel rules.\n"
+    if a.rule_cmd == "add":
+        inbox.add_channel_rule(db, a.connection, a.kind, a.value)
+        return f"Connection {a.connection}: {a.kind} {a.value}.\n"
+    inbox.delete_channel_rule(db, a.id)
+    return f"Deleted channel rule {a.id}.\n"
+
+
+def task_cmd(db, a) -> str:
+    if a.task_cmd == "skip":
+        sequences.skip_task(db, a.id)
+        return f"Skipped Task {a.id}.\n"
+    return f"Task {a.id} starts a new Thread: Draft {sequences.task_new_thread(db, a.id)}.\n"
+
+
+def draft_files(db, a) -> str:
+    d = inbox.get_draft(db, int(a.id))
+    if a.delete:
+        inbox.delete_draft(db, d["id"])
+        return f"Deleted Draft {d['id']}.\n"
+    if a.attach:
+        data = sys.stdin.buffer.read()
+        sha = files.store_file(db, data)
+        if sha is None:
+            raise ValueError("this host keeps no files")
+        inbox.stage(db, sha=sha, name=a.attach, size=len(data), draft_id=d["id"],
+                    type=mimetypes.guess_type(a.attach)[0] or "application/octet-stream")
+        return f"Attached {a.attach} to Draft {d['id']}.\n"
+    match = [s for s in inbox.staged(db, draft_id=d["id"]) if s["name"] == a.detach]
+    if not match:
+        raise ValueError(f"Draft {d['id']} has no attached {a.detach!r}")
+    inbox.unstage(db, match[0]["id"])
+    return f"Took {a.detach} off Draft {d['id']}.\n"
 
 
 def pipeline_cmd(db, a) -> str:
@@ -289,6 +518,9 @@ def enrollment_cmd(db, a) -> str:
             raise ValueError(f"{a.date!r} is neither YYYY-MM-DD nor a number of days")
         sequences.reschedule(db, a.id, day)
         return f"{e['name']} now starts {day:%a %b} {day.day}: its Due Task comes due that day.\n"
+    if c == "remove":
+        sequences.unenroll(db, a.id)
+        return f"Removed Enrollment {a.id} in {e['name']}, with its Tasks and Drafts.\n"
     sequences.finish(db, a.id, a.reason)
     runs = " Its On completion ran." if a.reason in sequences.FINISHING_REASONS else ""
     return f"Finished {e['name']}: {sequences.REASON_LABEL[a.reason]}.{runs}\n"
@@ -326,6 +558,12 @@ def sequence_cmd(db, a) -> str:
     if c == "rename":
         sequences.rename_sequence(db, q["id"], a.name)
         return f"Renamed {q['name']} to {a.name}.\n"
+    if c == "describe":
+        sequences.describe_sequence(db, q["id"], a.description)
+        return f"{q['name']}: use when {a.description}\n"
+    if c == "delete":
+        sequences.delete_sequence(db, q["id"])
+        return f"Deleted {q['name']}.\n"
     sequences.archive_sequence(db, q["id"], cancel_live=False)
     return f"Archived {q['name']}; its live Enrollments carry on.\n"
 
