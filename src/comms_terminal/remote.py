@@ -305,8 +305,9 @@ def handle_call(db_path: str, body: bytes) -> tuple[int, dict]:
             # ponytail: recorded after the writer's own commit, so a crash in between applies a resent write twice;
             # close it when writers run inside a caller-owned transaction.
             with db:
-                db.execute("INSERT OR IGNORE INTO applied_mutations (client_id, mutation_id, status, answer, applied_at)"
-                           " VALUES (?, ?, ?, ?, ?)", (client, mutation, status, json.dumps(answer), clock.iso(clock.now())))
+                db.execute("INSERT OR IGNORE INTO applied_mutations"
+                           " (client_id, mutation_id, status, answer, applied_at) VALUES (?, ?, ?, ?, ?)",
+                           (client, mutation, status, json.dumps(answer), clock.iso(clock.now())))
         return status, answer
     finally:
         db.close()

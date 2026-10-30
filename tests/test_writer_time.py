@@ -55,7 +55,8 @@ def violations():
             if not isinstance(call, ast.Call):
                 continue
             f = call.func
-            if isinstance(f, ast.Attribute) and f.attr == "now" and isinstance(f.value, ast.Name) and f.value.id == "clock":
+            if (isinstance(f, ast.Attribute) and f.attr == "now"
+                    and isinstance(f.value, ast.Name) and f.value.id == "clock"):
                 p = parents.get(call)
                 guarded = (isinstance(p, ast.BoolOp) and isinstance(p.op, ast.Or) and p.values[-1] is call
                            and isinstance(p.values[0], ast.Name) and p.values[0].id == "now")

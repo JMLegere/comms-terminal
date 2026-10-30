@@ -42,7 +42,10 @@ def test_the_queue_numbers_writes_and_both_sides_use_the_console_moment(service,
     rem, _, db, _ = laptop
     sent = []
     post = rem.post
-    monkeypatch.setattr(rem, "post", lambda cmd, path, payload, timeout: (sent.append(payload), post(cmd, path, payload, timeout))[1])
+    def recording(cmd, path, payload, timeout):
+        sent.append(payload)
+        return post(cmd, path, payload, timeout)
+    monkeypatch.setattr(rem, "post", recording)
     stamp = datetime(2026, 10, 30, 12, 0, tzinfo=timezone.utc)
     monkeypatch.setattr(remote.clock, "now", lambda: stamp)
 
