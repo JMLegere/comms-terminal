@@ -30,7 +30,7 @@ def with_work(tmp_path):
     sq.add_step(db, s, "call")
     sq.add_step(db, s, "call")
     sq.enroll(db, inbox.people(db)[0]["id"], s)
-    inbox.save_draft(db, {"connection_id": 1, "kind": "email", "sender": "me@x.io", "to": "ana@acme.com",
+    inbox.save_draft(db, {"connection_id": "1", "kind": "email", "sender": "me@x.io", "to": "ana@acme.com",
                           "cc": "", "subject": "Hello", "body": "new"})
     return path
 
@@ -211,7 +211,7 @@ def test_number_keys_open_today_then_the_rail_in_order(tmp_path):
 def test_drafts_group_failed_then_unsent_then_scheduled(tmp_path):
     path = with_work(tmp_path)
     db = inbox.connect(path)
-    new = lambda subject: inbox.save_draft(db, {"connection_id": 1, "kind": "email", "sender": "me@x.io",  # noqa: E731
+    new = lambda subject: inbox.save_draft(db, {"connection_id": "1", "kind": "email", "sender": "me@x.io",  # noqa: E731
                                                 "to": "ana@acme.com", "cc": "", "subject": subject, "body": "b"})["id"]
     later, sooner, failed = new("later"), new("sooner"), new("failed")
     inbox.schedule_draft(db, later, MONDAY + timedelta(days=7))

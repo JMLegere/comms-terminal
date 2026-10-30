@@ -51,8 +51,8 @@ def setup(connected_minutes_ago=60 * 24 * 40):
     db = inbox.connect()
     inbox.migrate(db)
     with db:
-        db.execute("INSERT INTO connections (platform, external_id, self_id, label, connected_at)"
-                   " VALUES ('fastmail', ?, ?, 'Fastmail', ?)", (ME, ME, (NOW - timedelta(minutes=connected_minutes_ago)).isoformat()))
+        db.execute("INSERT INTO connections (id, platform, external_id, self_id, label, connected_at)"
+                   " VALUES ((SELECT printf('%d', count(*) + 1) FROM connections), 'fastmail', ?, ?, 'Fastmail', ?)", (ME, ME, (NOW - timedelta(minutes=connected_minutes_ago)).isoformat()))
     return db, db.execute("SELECT * FROM connections").fetchone()
 
 

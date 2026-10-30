@@ -21,7 +21,7 @@ def test_reply_draft_saves_replaces_survives_a_restart_and_empty_text_deletes_it
     first = inbox.save_reply_draft(db, ids["ana"], "Hi Ana,")
     assert (first["thread_id"], first["kind"], first["subject"], first["revision"]) == (
         ids["ana"], "email", "Re: Pricing for 40 seats?", 1)
-    assert "ana@acme.com" in first["to"] and "ops@acme.com" in first["cc"] and first["connection_id"] == 1
+    assert "ana@acme.com" in first["to"] and "ops@acme.com" in first["cc"] and first["connection_id"] == "1"
     again = inbox.save_reply_draft(db, ids["ana"], "Hi Ana, yes.")
     assert (again["id"], again["revision"], again["body"]) == (first["id"], 2, "Hi Ana, yes.")
     db.close()
@@ -36,7 +36,7 @@ def test_slack_reply_draft_has_no_subject_and_names_the_conversation(seeded):
     path, ids = seeded
     db = inbox.connect(path)
     d = inbox.save_reply_draft(db, ids["logan"], "no blockers")
-    assert (d["kind"], d["subject"], d["cc"], d["connection_id"]) == ("slack", None, "", 2)
+    assert (d["kind"], d["subject"], d["cc"], d["connection_id"]) == ("slack", None, "", "2")
     assert d["to"] == inbox.thread_view(db, ids["logan"])["where"]
 
 
@@ -145,7 +145,7 @@ def test_version_18_moves_files_staged_on_a_reply_draft_to_its_thread(seeded):
     path, ids = seeded
     db = inbox.connect(path)
     reply = inbox.save_reply_draft(db, ids["ana"], "Hi Ana,")
-    new = inbox.save_draft(db, {"connection_id": 1, "kind": "email", "sender": "me@x.io", "to": "a@b.io",
+    new = inbox.save_draft(db, {"connection_id": "1", "kind": "email", "sender": "me@x.io", "to": "a@b.io",
                                 "cc": "", "subject": "New", "body": "x"})
     sha = pdf(db)
     with db:  # how a schema-17 inbox.stage stored them
@@ -153,11 +153,12 @@ def test_version_18_moves_files_staged_on_a_reply_draft_to_its_thread(seeded):
             db.execute("INSERT INTO staged_attachments (draft_id, sha, name, type, size, added_at)"
                        " VALUES (?, ?, 'pkg.pdf', 'application/pdf', ?, '2026-10-16T21:10:06+00:00')",
                        (draft_id, sha, len(PDF)))
-    from schema_history import downgrade
+    from schema_history import downgrade, renumbered
+    (ana,), (new_id,) = renumbered(db, "threads", ids["ana"]), renumbered(db, "composition_drafts", new["id"])
     downgrade(db, 17)
     inbox.migrate(db)
     rows = db.execute("SELECT draft_id, thread_id FROM staged_attachments ORDER BY id").fetchall()
-    assert [tuple(r) for r in rows] == [(None, ids["ana"]), (new["id"], None)]
+    assert [tuple(r) for r in rows] == [(None, ana), (new_id, None)]
 
 
 def test_console_says_to_restart_once_the_database_outgrows_its_code(seeded):
@@ -193,4 +194,4 @@ def test_agent_draft_new_with_a_thread_makes_its_reply_draft(seeded, capsys):
         agent.draft(db, "new", {"body": "again"}, None, None, ids["ana"])
     with pytest.raises(ValueError, match="needs --body"):
         agent.draft(db, "new", {}, None, None, ids["logan"])
-    assert "Reply to" not in agent.draft(db, "new", {}, None, 1)  # no Thread: a new Thread's Draft
+    assert "Reply to" not in agent.draft(db, "new", {}, None, "1")  # no Thread: a new Thread's Draft

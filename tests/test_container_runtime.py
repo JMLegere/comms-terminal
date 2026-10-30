@@ -858,7 +858,8 @@ def test_unit_and_source_allowlist_keep_gate_credential_and_restart_contracts():
     assert "**" in ignore
     assert {line for line in ignore if line.startswith("!")} == {
         "!pyproject.toml", "!uv.lock", "!README.md", "!src/", "!src/comms_terminal/",
-        "!src/comms_terminal/*.py", "!src/comms_terminal/schema.sql"}
+        "!src/comms_terminal/*.py", "!src/comms_terminal/schema.sql",
+        "!src/comms_terminal/migration_33.sql"}
     dockerfile = (ROOT / "Dockerfile").read_text()
     assert dockerfile.count("FROM python:3.12.12-slim-bookworm") == 2
     assert "COPY pyproject.toml uv.lock ./\n" in dockerfile  # Exact deployed source has no README requirement.

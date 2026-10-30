@@ -9,6 +9,7 @@ from email.message import EmailMessage
 import pytest
 
 from comms_terminal import clock, email, files, inbox
+from schema_history import legacy, unmigrated
 
 AT = datetime(2026, 10, 12, 10, tzinfo=timezone.utc)
 SELF = "me@example.test"
@@ -226,9 +227,9 @@ def test_cross_mailbox_duplicate_cannot_add_evidence_to_original_activity(db):
     one = inbox.ingest(db, incoming("<one@test>"))
     original = incoming("<copy@test>")
     two = inbox.ingest(db, original)
-    foreign = inbox.ingest(db, incoming("<foreign@test>", connection_id=2, channel=OTHER))
+    foreign = inbox.ingest(db, incoming("<foreign@test>", connection_id="2", channel=OTHER))
     before = activities(db)
-    assert inbox.ingest(db, replace(original, connection_id=2, channel=OTHER,
+    assert inbox.ingest(db, replace(original, connection_id="2", channel=OTHER,
                                     thread_ref=["<one@test>", "<foreign@test>"])) is None
     result = inbox.reconcile_email_threads(db, apply=True)
     assert (result["groups"], result["merged"], result["references_added"]) == ([], 0, 0)
@@ -629,7 +630,7 @@ def test_reply_prepares_coherent_history_before_wal_merge_and_releases_snapshot_
     assert sender.arguments == ("Prepared reply", ["ana@acme.test"], [])
     assert db.execute("SELECT thread_id FROM activities WHERE native_id = '<sent@test>'").fetchone()[0] == root.id
     assert [tuple(r) for r in db.execute("SELECT id, last_error FROM connections WHERE platform = 'gmail' ORDER BY id")] == [
-        (1, None), (2, "Other account error"),
+        ("1", None), ("2", "Other account error"),
     ]
     assert triage(db, child.id) == child_state
     assert message_ids(db, child.id) == ["<root@test>", "<child@test>", "<sent@test>"]
@@ -698,12 +699,12 @@ def test_schema3_migration_preserves_records_raw_and_append_only_guards(tmp_path
         physical, raw = activities(db), raw_bytes(db)
         inbox.migrate(db)
         assert db.execute("PRAGMA user_version").fetchone()[0] == inbox.SCHEMA_VERSION
-        assert activities(db) == physical and raw_bytes(db) == raw
-        assert [inbox.get_thread(db, tid).id for tid in (1, 2)] == [1, 2]
+        assert unmigrated(activities(db)) == physical and raw_bytes(db) == raw
+        assert [inbox.get_thread(db, legacy(tid)).id for tid in (1, 2)] == [legacy(1), legacy(2)]
         assert inbox.reconcile_email_threads(db, apply=True)["merged"] == 1
-        assert inbox.get_thread(db, 2).id == 1 and message_ids(db, 2) == ["<root@test>", "<child@test>"]
-        assert activities(db) == physical and raw_bytes(db) == raw
-        for sql in ("UPDATE activities SET thread_id = 2 WHERE id = 1", "DELETE FROM activities"):
+        assert inbox.get_thread(db, legacy(2)).id == legacy(1) and message_ids(db, legacy(2)) == ["<root@test>", "<child@test>"]
+        assert unmigrated(activities(db)) == physical and raw_bytes(db) == raw
+        for sql in (f"UPDATE activities SET thread_id = '{legacy(2)}' WHERE id = '{legacy(1)}'", "DELETE FROM activities"):
             with pytest.raises(sqlite3.DatabaseError, match="append-only"):
                 db.execute(sql)
         assert db.execute("PRAGMA foreign_key_check").fetchall() == []
@@ -727,7 +728,7 @@ def test_migrate_rejects_newer_schema_without_downgrading_or_mutating(db):
 
 def test_reconcile_rejects_unknown_and_non_mailbox_scope_without_mutation(db):
     root = inbox.ingest(db, incoming("<root@test>"))
-    slack = inbox.ingest(db, replace(incoming("C1:1"), connection_id=3, channel="C1", channel_kind="channel",
+    slack = inbox.ingest(db, replace(incoming("C1:1"), connection_id="3", channel="C1", channel_kind="channel",
                                    sender=inbox.Identity("slack_user", "UANA")))
     before = persisted(db)
     for channel_id in (999, slack.channel_id):
@@ -754,12 +755,13 @@ def test_takeout_late_parent_shared_ancestor_and_bridge_count_logical_threads(tm
         _mail("split-two", "Tue, 06 Oct 2026 00:00:00 +0000"),
         bridge,
     ], "Sent": []})
-    preview = import_takeout.run(archive, path, 1, SINCE, UNTIL)
+    preview = import_takeout.run(archive, path, "1", SINCE, UNTIL)
     db = inbox.connect(str(path))
     try:
         assert persisted(db) == before and raw_bytes(db) == {}
-        applied = import_takeout.run(archive, path, 1, SINCE, UNTIL, apply=True)
-        assert applied == preview
+        applied = import_takeout.run(archive, path, "1", SINCE, UNTIL, apply=True)
+        assert {k: v for k, v in applied.items() if k != "threads"} == {k: v for k, v in preview.items() if k != "threads"}
+        assert len(applied["threads"]) == len(preview["threads"])  # each run gives its new Threads fresh ids
         assert (applied["stored"], applied["duplicates"], applied["verified_todo"]) == (7, 0, 3)
         assert len(applied["threads"]) == 3
         assert {frozenset(message_ids(db, tid)) for tid in applied["threads"]} == {
@@ -769,7 +771,7 @@ def test_takeout_late_parent_shared_ancestor_and_bridge_count_logical_threads(tm
         }
         assert (inbox.view_counts(db)["Todo"], inbox.view_counts(db)["All"]) == (3, 3)
         physical, raw = activities(db), raw_bytes(db)
-        repeated = import_takeout.run(archive, path, 1, SINCE, UNTIL, apply=True)
+        repeated = import_takeout.run(archive, path, "1", SINCE, UNTIL, apply=True)
         assert (repeated["stored"], repeated["duplicates"], repeated["threads"], repeated["verified_todo"]) == (0, 7, [], 0)
         assert activities(db) == physical and raw_bytes(db) == raw
     finally:

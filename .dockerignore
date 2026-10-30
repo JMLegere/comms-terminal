@@ -7,3 +7,4 @@
 !src/comms_terminal/
 !src/comms_terminal/*.py
 !src/comms_terminal/schema.sql
+!src/comms_terminal/migration_33.sql

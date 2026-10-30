@@ -14,7 +14,7 @@ ANA = inbox.Identity("email", "ana@acme.com", "Ana")
 
 
 def mail(native_id, at, sender=ANA, refs=()):
-    return inbox.Incoming(1, "me@x.io", "mailbox", "MESSAGE", native_id, sender, at, "hi", thread_ref=list(refs))
+    return inbox.Incoming("1", "me@x.io", "mailbox", "MESSAGE", native_id, sender, at, "hi", thread_ref=list(refs))
 
 
 def entries(db, thread_id):
@@ -26,8 +26,8 @@ def test_status_and_case_changes_are_logged_with_their_cause(monkeypatch):
     db = inbox.connect()
     inbox.migrate(db)
     with db:
-        db.execute("INSERT INTO connections (platform, external_id, self_id, label, connected_at)"
-                   " VALUES ('gmail', 'me@x.io', 'me@x.io', 'Email', ?)", (NOW.isoformat(),))
+        db.execute("INSERT INTO connections (id, platform, external_id, self_id, label, connected_at)"
+                   " VALUES ((SELECT printf('%d', count(*) + 1) FROM connections), 'gmail', 'me@x.io', 'me@x.io', 'Email', ?)", (NOW.isoformat(),))
     minutes = iter(range(1, 1000))
     clock = lambda: NOW + timedelta(minutes=next(minutes))  # noqa: E731
     monkeypatch.setattr(comms_clock, "now", clock)
@@ -69,8 +69,8 @@ def test_case_feed_shows_threads_joining_and_leaving_and_description_edits(monke
     db = inbox.connect()
     inbox.migrate(db)
     with db:
-        db.execute("INSERT INTO connections (platform, external_id, self_id, label, connected_at)"
-                   " VALUES ('gmail', 'me@x.io', 'me@x.io', 'Email', ?)", (NOW.isoformat(),))
+        db.execute("INSERT INTO connections (id, platform, external_id, self_id, label, connected_at)"
+                   " VALUES ((SELECT printf('%d', count(*) + 1) FROM connections), 'gmail', 'me@x.io', 'me@x.io', 'Email', ?)", (NOW.isoformat(),))
     minutes = iter(range(1, 1000))
     monkeypatch.setattr(comms_clock, "now", lambda: NOW + timedelta(minutes=next(minutes)))
     a = inbox.ingest(db, mail("<a@acme.com>", NOW))
@@ -99,9 +99,9 @@ def slack_thread(monkeypatch):
     db = inbox.connect()
     inbox.migrate(db)
     with db:
-        db.execute("INSERT INTO connections (platform, external_id, self_id, label, connected_at)"
-                   " VALUES ('slack', 'T0TEST', 'U0SELF', 'Slack', ?)", (NOW.isoformat(),))
-    original = inbox.Incoming(1, "D0TEST", "im", "MESSAGE", "D0TEST:1",
+        db.execute("INSERT INTO connections (id, platform, external_id, self_id, label, connected_at)"
+                   " VALUES ((SELECT printf('%d', count(*) + 1) FROM connections), 'slack', 'T0TEST', 'U0SELF', 'Slack', ?)", (NOW.isoformat(),))
+    original = inbox.Incoming("1", "D0TEST", "im", "MESSAGE", "D0TEST:1",
                               inbox.Identity("slack_user", "U0BOT"), NOW - timedelta(minutes=2), "original")
     thread = inbox.ingest(db, original)
     yield db, original, thread
@@ -199,7 +199,7 @@ def test_blocked_phone_calls_keep_existing_creation_and_reopen_rules(slack_threa
         db.execute("INSERT INTO connections (id, platform, external_id, self_id, label, connected_at)"
                    " VALUES (2, 'quo', '+15555550000', '+15555550000', 'Phone', ?)", (NOW.isoformat(),))
     inbox.block(db, "phone", "+15555550101")
-    call = inbox.Incoming(2, "+15555550101", "im", "MESSAGE", "call-1",
+    call = inbox.Incoming("2", "+15555550101", "im", "MESSAGE", "call-1",
                           inbox.Identity("phone", "+15555550101"), NOW - timedelta(minutes=2), "Missed call",
                           data={"peer": "+15555550101", "call": {"direction": "incoming", "outcome": "missed", "length": 0}}, synchronous="call")
     thread = inbox.ingest(db, call)

@@ -24,8 +24,8 @@ def db(monkeypatch):
 
 def org(db, domain, name=None):
     with db:
-        return db.execute("INSERT INTO organizations (domain, name, created_at) VALUES (?, ?, ?)",
-                          (domain, name or domain.split(".")[0].title(), NOW.isoformat())).lastrowid
+        return db.execute("INSERT INTO organizations (domain, name, created_at) VALUES (?, ?, ?) RETURNING id",
+                          (domain, name or domain.split(".")[0].title(), NOW.isoformat())).fetchone()[0]
 
 
 def walk(db, o, *steps, value=None):

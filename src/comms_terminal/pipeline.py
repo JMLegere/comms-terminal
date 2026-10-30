@@ -109,8 +109,8 @@ def _append(db, org_id, pipeline, kind, at=None, stage=None, value=None, undoes=
     with inbox._write_snapshot(db):
         return db.execute(
             "INSERT INTO pipeline_log (organization_id, pipeline, kind, stage, value, undoes, effective_at,"
-            " recorded_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (org_id, pipeline, kind, stage, value, undoes, _effective(at), clock.iso(clock.now()))).lastrowid
+            " recorded_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+            (org_id, pipeline, kind, stage, value, undoes, _effective(at), clock.iso(clock.now()))).fetchone()[0]
 
 
 @writer("create")

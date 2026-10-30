@@ -384,9 +384,9 @@ def test_f_changes_the_email_connection_a_sequence_sends_from(tmp_path):
     path, _ = seeded(tmp_path)
     db = inbox.connect(path)
     with db:
-        new = db.execute("INSERT INTO connections (platform, external_id, self_id, label, connected_at, inbound)"
-                         " VALUES ('gmail', 'jeremy@agentmaple.ai', 'jeremy@agentmaple.ai', 'Email',"
-                         " '2026-10-20T00:00:00+00:00', 'jeremy.agentmaple.ai@inbox.agentmaple.com')").lastrowid
+        new = db.execute("INSERT INTO connections (id, platform, external_id, self_id, label, connected_at, inbound)"
+                         " VALUES ((SELECT printf('%d', count(*) + 1) FROM connections), 'gmail', 'jeremy@agentmaple.ai', 'jeremy@agentmaple.ai', 'Email',"
+                         " '2026-10-20T00:00:00+00:00', 'jeremy.agentmaple.ai@inbox.agentmaple.com') RETURNING id").fetchone()[0]
     s = sq.create_sequence(db, "Secret", connection_id=sq.email_connections(db)[0]["id"])
 
     async def scenario(app, pilot):

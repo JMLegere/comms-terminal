@@ -267,7 +267,7 @@ def ident(result):
     if isinstance(result, tuple):
         return tuple(ident(x) for x in result)
     if isinstance(result, inbox.Thread):
-        return result.id
+        return result.id, result.case_id  # SetCase(new_title=...) makes the Case
     return result
 
 
@@ -371,7 +371,8 @@ def change_set(db, since: int) -> list[dict] | None:
     for tbl, row_id in db.execute("SELECT tbl, row_id FROM changes WHERE seq > ? GROUP BY tbl, row_id"
                                   " ORDER BY max(seq)", (since,)).fetchall():
         if tbl in tables:  # a table a later migration dropped has nothing left to send
-            row = db.execute(f"SELECT rowid AS rowid, * FROM {tbl} WHERE rowid = ?", (row_id,)).fetchone()
+            key = "id" if any(c[1] == "id" for c in db.execute(f'PRAGMA table_info("{tbl}")')) else "rowid"
+            row = db.execute(f"SELECT rowid AS rowid, * FROM {tbl} WHERE {key} = ?", (row_id,)).fetchone()
             out.append({"tbl": tbl, "row_id": row_id, "row": dict(row) if row else None})
     return out
 

@@ -15,8 +15,8 @@ def db():
 
 def person(db, name, *identities):
     with db:
-        pid = db.execute("INSERT INTO persons (display_name, created_at) VALUES (?, '2026-10-01T00:00:00+00:00')",
-                         (name,)).lastrowid
+        pid = db.execute("INSERT INTO persons (display_name, created_at) VALUES (?, '2026-10-01T00:00:00+00:00') RETURNING id",
+                         (name,)).fetchone()[0]
     for kind, value in identities:
         inbox.add_identity(db, pid, kind, value)
     return pid

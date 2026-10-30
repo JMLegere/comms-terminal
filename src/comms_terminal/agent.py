@@ -87,7 +87,7 @@ def add_parsers(sub):
     t.add_argument("view", nargs="?", default="Todo", choices=list(inbox.VIEWS))
     t = sub.add_parser("thread", help="one Thread as Markdown, with its Attio and Tana context; --status or --case"
                                       " changes it instead")
-    t.add_argument("id", type=int)
+    t.add_argument("id")
     t.add_argument("--status", choices=list(STATUSES), help="set its Status, as the console's keys do")
     t.add_argument("--until", help="--status snooze: 14:30 or 2026-10-20 09:00")
     t.add_argument("--detail", choices=list(TODO_DETAILS), default="in-progress", help="--status todo: which Todo")
@@ -97,7 +97,7 @@ def add_parsers(sub):
     x = cs.add_parser("new", help="a Case with no Threads yet; put Threads in with `thread ID --case`")
     x.add_argument("title")
     x = cs.add_parser("describe", help="set a Case's description")
-    x.add_argument("id", type=int)
+    x.add_argument("id")
     x.add_argument("description", help="the text, or - to read it from stdin")
     pe = sub.add_parser("person", help="People: rename, merge, member, unlink, block")
     ps = pe.add_subparsers(dest="person_cmd", required=True)
@@ -122,25 +122,25 @@ def add_parsers(sub):
     r = sub.add_parser("channel-rule", help="a Connection's channel rules: list, add, delete")
     rs = r.add_subparsers(dest="rule_cmd", required=True)
     x = rs.add_parser("list", help="one Connection's rules: id, kind, value")
-    x.add_argument("connection", type=int)
+    x.add_argument("connection")
     x = rs.add_parser("add", help="a rule on a Connection")
-    x.add_argument("connection", type=int)
+    x.add_argument("connection")
     x.add_argument("kind")
     x.add_argument("value")
     x = rs.add_parser("delete", help="a rule, by its id from `channel-rule list`")
-    x.add_argument("id", type=int)
+    x.add_argument("id")
     k = sub.add_parser("task", help="one Task, by the Task id `tasks` prints: skip, new-thread")
     ks = k.add_subparsers(dest="task_cmd", required=True)
     x = ks.add_parser("skip", help="skip a Task; its unsent Draft goes")
-    x.add_argument("id", type=int)
+    x.add_argument("id")
     x = ks.add_parser("new-thread", help="a reply Task whose target was skipped starts a new Thread instead")
-    x.add_argument("id", type=int)
+    x.add_argument("id")
     sub.add_parser("drafts", help="list Drafts, then the Connections a new Draft can use")
     d = sub.add_parser("draft", help="one Draft as Markdown; with --to/--cc/--subject/--body, change it first (never sends)")
     d.add_argument("id", help="a Draft id, or `new` (needs --connection for a new Thread, or --thread for a reply)")
     d.add_argument("--revision", type=int, help="the revision you read; required to change an existing Draft")
-    d.add_argument("--connection", type=int, help="new Draft: the Connection id it sends from")
-    d.add_argument("--thread", type=int, help="new Draft: the Thread it replies to; its reply box sends it")
+    d.add_argument("--connection", help="new Draft: the Connection id it sends from")
+    d.add_argument("--thread", help="new Draft: the Thread it replies to; its reply box sends it")
     for field in ("to", "cc", "subject"):
         d.add_argument(f"--{field}")
     d.add_argument("--body", help="the body, or - to read it from stdin")
@@ -173,7 +173,7 @@ def add_parsers(sub):
     x.add_argument("name")
     x = qs.add_parser("sends-from", help="the email Connection a Sequence's email Tasks send from (ids: `drafts`)")
     x.add_argument("sequence")
-    x.add_argument("connection", type=int)
+    x.add_argument("connection")
     x = qs.add_parser("archive", help="archive a Sequence; its live Enrollments carry on")
     x.add_argument("sequence")
     x = qs.add_parser("describe", help="set a Sequence's one-line \"use when\"")
@@ -186,15 +186,15 @@ def add_parsers(sub):
     x = es.add_parser("list", help="live Enrollments: id, Person, Sequence, state, how it is finishing")
     x.add_argument("person", nargs="?", help="only this Person (id, email address, or exact name)")
     x = es.add_parser("resume", help="resume a Paused Enrollment; its next Task is due now")
-    x.add_argument("id", type=int)
+    x.add_argument("id")
     x = es.add_parser("start", help="put a running Enrollment on the agreed date: its Due Task comes due that day")
-    x.add_argument("id", type=int)
+    x.add_argument("id")
     x.add_argument("date", help="YYYY-MM-DD, or a number of days from today")
     x = es.add_parser("finish", help="finish an Enrollment; Goal met, Not Right Now, and Lost run its On completion")
-    x.add_argument("id", type=int)
+    x.add_argument("id")
     x.add_argument("reason", type=str.upper, choices=sequences.END_REASONS)
     x = es.add_parser("remove", help="undo an enroll before any Task is done: it, its Tasks and their Drafts go")
-    x.add_argument("id", type=int)
+    x.add_argument("id")
     st = sub.add_parser("step", help="one Step of a Sequence, by its number: add, set, move, delete")
     ss = st.add_subparsers(dest="step_cmd", required=True)
     x = ss.add_parser("add", help="a new Step: after Step --after, else last on the path you name")
@@ -308,7 +308,7 @@ def thread_change(db, a) -> str:
         if a.case.startswith("new:"):
             t = inbox.act(db, a.id, inbox.SetCase(new_title=a.case[4:].strip()))
         else:
-            t = inbox.act(db, a.id, inbox.SetCase(None if a.case == "none" else int(a.case)))
+            t = inbox.act(db, a.id, inbox.SetCase(None if a.case == "none" else a.case))
     if action is not None:
         t = inbox.act(db, a.id, action)
     case = f", Case {t.case_id}" if t.case_id else ""
@@ -366,7 +366,7 @@ def task_cmd(db, a) -> str:
 
 
 def draft_files(db, a) -> str:
-    d = inbox.get_draft(db, int(a.id))
+    d = inbox.get_draft(db, a.id)
     if a.delete:
         inbox.delete_draft(db, d["id"])
         return f"Deleted Draft {d['id']}.\n"
@@ -441,7 +441,7 @@ def draft(db, ref, changes, revision, connection_id, thread_id=None, needs_edit=
                       subject="" if kind == "email" else None, body="")
         d = inbox.save_draft(db, values | changes)
     else:
-        d = inbox.get_draft(db, int(ref))
+        d = inbox.get_draft(db, ref)
         if changes:
             if revision is None:
                 raise ValueError(f"pass --revision {d['revision']} (the revision you read) to change Draft {d['id']}")

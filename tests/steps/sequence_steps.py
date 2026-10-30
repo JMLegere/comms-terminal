@@ -25,7 +25,7 @@ def outreach(monkeypatch):
     inbox.migrate(db)
     with db:
         db.execute("INSERT INTO connections (id, platform, external_id, self_id, label, connected_at)"
-                   " VALUES (1, 'fastmail', ?, ?, 'Fastmail', ?)", (ME, ME, DAYS["Monday"].isoformat()))
+                   " VALUES ('1', 'fastmail', ?, ?, 'Fastmail', ?)", (ME, ME, DAYS["Monday"].isoformat()))
     ctx = SimpleNamespace(db=db, now=DAYS["Monday"], sequences={}, people={}, enrollment=None, error=None)
     monkeypatch.setattr(clock, "now", lambda: ctx.now)
     yield ctx
@@ -46,7 +46,7 @@ def sequence_with_steps(outreach, name, datatable):
 
 @given(parsers.parse('a Person "{name}" with email "{address}" at Organization "{org}"'))
 def person_at(outreach, name, address, org):
-    inbox.ingest(outreach.db, inbox.Incoming(1, ME, "mailbox", "MESSAGE", f"<old-{address}>",
+    inbox.ingest(outreach.db, inbox.Incoming("1", ME, "mailbox", "MESSAGE", f"<old-{address}>",
                                              inbox.Identity("email", address, name),
                                              DAYS["Monday"] - timedelta(days=30), "hello", title="Hello"))
     with outreach.db:
@@ -111,7 +111,7 @@ def send_refused(outreach, text):
 def ingest_reply(outreach, address, day):
     outreach.now = DAYS[day] + timedelta(hours=1)
     name = next(n for n, pid in outreach.people.items())
-    inbox.ingest(outreach.db, inbox.Incoming(1, ME, "mailbox", "MESSAGE", "<reply@example.test>",
+    inbox.ingest(outreach.db, inbox.Incoming("1", ME, "mailbox", "MESSAGE", "<reply@example.test>",
                                              inbox.Identity("email", address, name), outreach.now, "Interested",
                                              title="Re: Pilot"))
 
@@ -161,7 +161,7 @@ def reply_draft(outreach, body, title):
 
 @given(parsers.parse('Save Draft keeps a new email Draft with Body "{body}"'))
 def new_draft(outreach, body):
-    inbox.save_draft(outreach.db, {"connection_id": 1, "kind": "email", "sender": ME, "to": "ana@acme.example",
+    inbox.save_draft(outreach.db, {"connection_id": "1", "kind": "email", "sender": ME, "to": "ana@acme.example",
                                    "cc": "", "subject": "", "body": body})
 
 

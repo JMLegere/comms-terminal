@@ -36,7 +36,7 @@ def setup(tmp_path):
     with db:
         db.execute("INSERT INTO connections (id, platform, external_id, self_id, label, connected_at)"
                    " VALUES (2, 'slack', 'T0', 'U0JEREMY', 'Slack', '2026-10-12T00:00:00+00:00')")
-    t = inbox.ingest(db, inbox.Incoming(2, "D0ANA", "im", "MESSAGE", "D0ANA:1", inbox.Identity("slack_user", "U0ANA"),
+    t = inbox.ingest(db, inbox.Incoming("2", "D0ANA", "im", "MESSAGE", "D0ANA:1", inbox.Identity("slack_user", "U0ANA"),
                                         datetime.now(timezone.utc), "hi", data={"channel": "D0ANA"}))
     return path, t.id
 
@@ -47,7 +47,7 @@ def test_handle_reply_statuses(tmp_path):
     assert serve.handle_reply(db, b"{}", serve.Senders())[0] == 400
     assert serve.handle_reply(db, json.dumps({"thread_id": 999, "text": "x"}).encode(), serve.Senders())[0] == 404
     status, body = serve.handle_reply(db, json.dumps({"thread_id": tid, "text": "x"}).encode(),
-                                      serve.Senders(made={2: Sender(True)}))
+                                      serve.Senders(made={"2": Sender(True)}))
     assert status == 502 and "invalid_auth" in body["error"]
     assert db.execute("SELECT last_error FROM connections WHERE id = 2").fetchone()[0] == "slack send failed: invalid_auth"
 
@@ -61,11 +61,11 @@ def test_reply_timeout_is_unknown_records_nothing_and_a_sent_reply_clears_last_e
             raise TimeoutError("read timed out")
 
     body = json.dumps({"thread_id": tid, "text": "x"}).encode()
-    status, out = serve.handle_reply(db, body, serve.Senders(made={2: Lost()}))
+    status, out = serve.handle_reply(db, body, serve.Senders(made={"2": Lost()}))
     assert status == 504 and "outcome unknown" in out["error"]
     assert db.execute("SELECT count(*) FROM activities").fetchone()[0] == 1  # only the inbound message
     assert db.execute("SELECT last_error FROM connections WHERE id = 2").fetchone()[0].startswith("Send outcome unknown")
-    assert serve.handle_reply(db, body, serve.Senders(made={2: Sender()}))[0] == 200
+    assert serve.handle_reply(db, body, serve.Senders(made={"2": Sender()}))[0] == 200
     assert db.execute("SELECT last_error FROM connections WHERE id = 2").fetchone()[0] is None
 
 
@@ -88,7 +88,7 @@ def test_lost_response_is_504_and_an_unreachable_service_is_503(tmp_path):
 def test_reply_over_unix_socket(tmp_path):
     path, tid = setup(tmp_path)
     sock = str(tmp_path / "s.sock")
-    server = serve.reply_server(path, sock, serve.Senders(made={2: Sender()}))
+    server = serve.reply_server(path, sock, serve.Senders(made={"2": Sender()}))
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
         import os
@@ -124,12 +124,12 @@ def test_service_runs_with_email_only(tmp_path, monkeypatch):
     # A Connection added while the service runs gets its sender on first use, with no restart
     with db:
         db.execute("INSERT INTO connections (id, platform, external_id, self_id, label, connected_at)"
-                   " VALUES (1, 'gmail', 'me@x.io', 'me@x.io', 'Gmail', '2026-10-12T00:00:00+00:00')")
+                   " VALUES ('1', 'gmail', 'me@x.io', 'me@x.io', 'Gmail', '2026-10-12T00:00:00+00:00')")
         db.execute("INSERT INTO connections (id, platform, external_id, self_id, label, connected_at)"
-                   " VALUES (2, 'slack', 'T0', 'U0', 'Slack', '2026-10-12T00:00:00+00:00')")
+                   " VALUES ('2', 'slack', 'T0', 'U0', 'Slack', '2026-10-12T00:00:00+00:00')")
     senders, rows = _serve.Senders(), {r["id"]: r for r in db.execute("SELECT * FROM connections")}
-    assert type(senders.get(rows[1])).__name__ == "EmailSender" and senders.get(rows[1]).from_address == "me@x.io"
-    assert senders.get(rows[2]) is None  # no Slack token
+    assert type(senders.get(rows["1"])).__name__ == "EmailSender" and senders.get(rows["1"]).from_address == "me@x.io"
+    assert senders.get(rows["2"]) is None  # no Slack token
     server = _serve.hooks_server(db_path, "127.0.0.1", 0)
     _threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
@@ -201,8 +201,8 @@ def test_email_hook_logs_its_outcome_without_content(caplog):
     db = inbox.connect()
     inbox.migrate(db)
     with db:
-        cid = db.execute("INSERT INTO connections (platform, external_id, self_id, label, connected_at) VALUES"
-                         " ('gmail', 'me@x.io', 'me@x.io', 'Gmail', '2026-10-12T00:00:00+00:00')").lastrowid
+        cid = db.execute("INSERT INTO connections (id, platform, external_id, self_id, label, connected_at) VALUES"
+                         " ((SELECT printf('%d', count(*) + 1) FROM connections), 'gmail', 'me@x.io', 'me@x.io', 'Gmail', '2026-10-12T00:00:00+00:00') RETURNING id").fetchone()[0]
     now = datetime(2026, 10, 12, 10, tzinfo=timezone.utc)
 
     def post(raw):
@@ -229,8 +229,8 @@ def test_email_signature_failure_reason_shows_on_the_connection():
     db = inbox.connect()
     inbox.migrate(db)
     with db:
-        cid = db.execute("INSERT INTO connections (platform, external_id, self_id, label, connected_at) VALUES"
-                         " ('gmail', 'me@x.io', 'me@x.io', 'Gmail', '2026-10-12T00:00:00+00:00')").lastrowid
+        cid = db.execute("INSERT INTO connections (id, platform, external_id, self_id, label, connected_at) VALUES"
+                         " ((SELECT printf('%d', count(*) + 1) FROM connections), 'gmail', 'me@x.io', 'me@x.io', 'Gmail', '2026-10-12T00:00:00+00:00') RETURNING id").fetchone()[0]
     now = datetime(2026, 10, 12, 10, tzinfo=timezone.utc)
     raw = b"From: a@b.io\r\nTo: me@x.io\r\nSubject: hi\r\nMessage-ID: <m1@b.io>\r\n\r\nhello"
     ts = str(int(now.timestamp()))
@@ -367,7 +367,7 @@ def test_resend_config_optional_without_changing_other_hooks(tmp_path, monkeypat
     assert routes["/hooks/email"](headers, b"raw")[0] == 204
     assert routes["/hooks/slack"](HTTPMessage(), b"{}")[0] == 200
     assert routes["/hooks/quo"](HTTPMessage(), b"{}")[0] == 204
-    assert seen == [("email", 1), ("email", 2), ("slack", 3), ("quo", 4)]
+    assert seen == [("email", "1"), ("email", "2"), ("slack", "3"), ("quo", "4")]
 
 
 def test_resend_unreadable_config_does_not_break_listener(tmp_path, monkeypatch):
@@ -402,11 +402,11 @@ def test_resend_receipt_binds_to_the_gmail_connection_it_was_sent_from(tmp_path,
                                                       "from": "Jeremy <ME2@example.com>"}}).encode()
     assert routes["/hooks/resend"](receipt_headers(body), body)[0] == 204
     db = inbox.connect(path)
-    assert [r[0] for r in db.execute("SELECT connection_id FROM resend_receipts")] == [2]
+    assert [r[0] for r in db.execute("SELECT connection_id FROM resend_receipts")] == ["2"]
     db.close()
 
 
-@pytest.mark.parametrize("field,value", [("self_id", " "), ("external_id", " "), ("id", 0)])
+@pytest.mark.parametrize("field,value", [("self_id", " "), ("external_id", " "), ("id", "")])
 def test_resend_rejects_unusable_single_gmail_binding(tmp_path, monkeypatch, field, value):
     path = receipt_db(tmp_path)
     db = inbox.connect(path)
@@ -448,7 +448,7 @@ def test_resend_receipts_commit_before_kick_and_ack_retries_no_health_or_mail(tm
     db = inbox.connect(path)
     assert [tuple(r) for r in db.execute("SELECT * FROM connections ORDER BY id")] == before
     assert tuple(db.execute("SELECT connection_id, message_id FROM resend_receipts WHERE email_id = ?",
-                            (RESEND_ID,)).fetchone()) == (1, "<wire@delivery.example>")
+                            (RESEND_ID,)).fetchone()) == ("1", "<wire@delivery.example>")
     assert db.execute("SELECT count(*) FROM activities").fetchone()[0] == 0
     assert db.execute("SELECT count(*) FROM threads").fetchone()[0] == 0
     db.close()
@@ -579,7 +579,7 @@ def test_reply_unknown_and_pending_statuses(tmp_path, monkeypatch, error, status
     monkeypatch.setattr(inbox, "reply", fail)
     db = inbox.connect(path)
     result = serve.handle_reply(db, json.dumps({"thread_id": tid, "text": "retain me"}).encode(),
-                                serve.Senders(made={2: Sender()}))
+                                serve.Senders(made={"2": Sender()}))
     db.close()
     assert result == (status, {"error": str(error)})
 
@@ -593,8 +593,8 @@ def test_email_hook_files_mail_under_the_connection_its_forward_reached():
         for address, platform, inbound in [("a@x.io", "gmail", "a@inbox.agentmaple.com"),
                                            ("a@y.ai", "gmail", "a.y.ai@inbox.agentmaple.com"),
                                            ("f@fm.com", "fastmail", "fastmail@inbox.agentmaple.com")]:
-            db.execute("INSERT INTO connections (platform, external_id, self_id, label, connected_at, inbound)"
-                       " VALUES (?, ?, ?, 'Email', '2026-10-20T00:00:00+00:00', ?)", (platform, address, address, inbound))
+            db.execute("INSERT INTO connections (id, platform, external_id, self_id, label, connected_at, inbound)"
+                       " VALUES ((SELECT printf('%d', count(*) + 1) FROM connections), ?, ?, ?, 'Email', '2026-10-20T00:00:00+00:00', ?)", (platform, address, address, inbound))
     now = datetime(2026, 10, 20, 10, tzinfo=timezone.utc)
     ts = str(int(now.timestamp()))
 
@@ -636,7 +636,7 @@ def test_private_slack_reactions_socket_and_command_relay_preserve_reply_route(t
 
     path, tid = setup(tmp_path)
     db = inbox.connect(path)
-    t = inbox.ingest(db, inbox.Incoming(2, "D0ANA", "im", "MESSAGE", "D0ANA:100.2",
+    t = inbox.ingest(db, inbox.Incoming("2", "D0ANA", "im", "MESSAGE", "D0ANA:100.2",
                      inbox.Identity("slack_user", "U0ANA"), datetime.now(timezone.utc), "Captured reply",
                      data={"channel": "D0ANA", "ts": "100.2", "thread_ts": "100.1", "kind": "im"}))
     message = next(m for m in inbox.thread_view(db, t.id)["messages"] if m["native_id"] == "D0ANA:100.2")
@@ -655,10 +655,10 @@ def test_private_slack_reactions_socket_and_command_relay_preserve_reply_route(t
 
     sender = slack.SlackSender("fake", post=post, client=slack.SlackClient("fake", get=get))
     sock = str(tmp_path / "reactions.sock")
-    server = serve.reply_server(path, sock, serve.Senders(made={2: sender}))
+    server = serve.reply_server(path, sock, serve.Senders(made={"2": sender}))
     threading.Thread(target=server.serve_forever, daemon=True).start()
     route = [sys.executable, "-I", "-c", remote.RELAY.replace(repr(remote.SERVICE_SOCKET), repr(sock))] if relay else sock
-    request = {"op": "read", "thread_id": t.id, "message_id": message["id"], "connection_id": 2}
+    request = {"op": "read", "thread_id": t.id, "message_id": message["id"], "connection_id": "2"}
     before = tuple(db.iterdump())
     try:
         assert stat.S_IMODE(__import__("os").stat(sock).st_mode) == 0o600

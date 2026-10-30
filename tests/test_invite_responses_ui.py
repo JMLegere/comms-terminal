@@ -123,7 +123,7 @@ def test_refused_unknown_and_unavailable_outcomes_are_exact(tmp_path, on_event):
 
 def test_i_on_a_thread_with_no_invitation_opens_nothing(tmp_path):
     path, ctx = meeting(tmp_path)
-    t = inbox.ingest(ctx.db, inbox.Incoming(1, "jeremy@agentmaple.com", "mailbox", "MESSAGE", "<m1@test>",
+    t = inbox.ingest(ctx.db, inbox.Incoming("1", "jeremy@agentmaple.com", "mailbox", "MESSAGE", "<m1@test>",
                                             inbox.Identity("email", "sam@stmec.example"), clock.now(), "Hello",
                                             title="Hello"))
     service = Service()

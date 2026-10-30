@@ -688,7 +688,7 @@ class ThreadActions:
             elif choice == "none":
                 self._act(inbox.SetCase(), "Removed from its case.")
             elif choice:
-                self._act(inbox.SetCase(case_id=int(choice)), "Added to case.")
+                self._act(inbox.SetCase(case_id=choice), "Added to case.")
         self.app.push_screen(Pick("Case", opts), chosen)
 
     def action_copy(self):
@@ -1520,7 +1520,7 @@ class StagedList(OptionList):
 
     def action_unstage(self):
         if self.highlighted is not None:
-            inbox.unstage(self.app.db, int(self.get_option_at_index(self.highlighted).id))
+            inbox.unstage(self.app.db, self.get_option_at_index(self.highlighted).id)
             self.refresh_staged()
 
 
@@ -1683,7 +1683,7 @@ class ReplyBox(Composer, Vertical):
 
             def chosen(key):
                 if key is not None and self.is_attached:
-                    self._open_draft(inbox.thread_view(self.app.db, self.thread_id), mode, int(key))
+                    self._open_draft(inbox.thread_view(self.app.db, self.thread_id), mode, key)
 
             self.app.push_screen(Pick("Choose draft", options), chosen)
             return
@@ -2079,7 +2079,7 @@ def message_widgets(v, st: dict | None = None, raw=None, *, reactions=None, sele
         snippet = "message deleted" if m["deleted"] else message_body(m, raw, slack).snippet
         # Faded: older messages recede so the open ones read first (Jeremy, 2026-10-12).
         # The gutter badge says who; the row is just when and what (Jeremy, 2026-10-12).
-        line = f"[@click=app.msg_toggle({tid},{message_action_id(m['native_id'])})][#a89984]{when(m['at']):<5} {escape(snippet)}[/][/]"
+        line = f"[@click=app.msg_toggle({tid!r},{message_action_id(m['native_id'])})][#a89984]{when(m['at']):<5} {escape(snippet)}[/][/]"
         return gutter_row(badge(m["who"], faded=True), MessageText(line, classes="mline"), "faded")
 
     def card(i, m):
@@ -2097,10 +2097,10 @@ def message_widgets(v, st: dict | None = None, raw=None, *, reactions=None, sele
         age = clock.local() - datetime.fromisoformat(m["at"]).astimezone()
         meta = stamp(m["at"]) + (f" · {ago(m['at'])}" if age.days < 7 else "")
         meta += f"  {ICON['edited']} edited" if m["edited"] else ""
-        head = f"[@click=app.msg_toggle({tid},{message_action_id(m['native_id'])})][b #654735]{escape(m['who'])}[/][/]  [{dim}]{meta}[/]"
+        head = f"[@click=app.msg_toggle({tid!r},{message_action_id(m['native_id'])})][b #654735]{escape(m['who'])}[/][/]  [{dim}]{meta}[/]"
         rcpt = recipients(m, me, m["native_id"] in st["to"], m["at"]) if email else ""
         if rcpt:
-            head += f"\n[@click=app.msg_to({tid},{message_action_id(m['native_id'])})][{dim}]{rcpt}[/][/]"
+            head += f"\n[@click=app.msg_to({tid!r},{message_action_id(m['native_id'])})][{dim}]{rcpt}[/][/]"
         parts = [MessageText(head, classes="mhead")]
         if m["deleted"]:
             parts.append(MessageText(f"[i {dim}]{ICON['deleted']} message deleted[/]", classes="mbody"))
@@ -2112,7 +2112,7 @@ def message_widgets(v, st: dict | None = None, raw=None, *, reactions=None, sele
         if body.text:
             parts += body_parts(body.text, m, "mbody")
         if body.trimmed:
-            parts.append(MessageText(f"[@click=app.msg_trim({tid},{message_action_id(m['native_id'])})][{dim} on #ebdbb2] ••• [/][/]", classes="mtoggle"))
+            parts.append(MessageText(f"[@click=app.msg_trim({tid!r},{message_action_id(m['native_id'])})][{dim} on #ebdbb2] ••• [/][/]", classes="mtoggle"))
             if m["native_id"] in st["trim"]:
                 parts += body_parts(body.trimmed, m, "mtrim")
         parts += message_images(m, set(render.IMG.findall(body.text + "\n" + body.trimmed)))
@@ -2142,7 +2142,7 @@ def message_widgets(v, st: dict | None = None, raw=None, *, reactions=None, sele
             j += 1
         run = list(range(i, j))
         if len(run) >= 4 and not st["lines"]:
-            more = MessageText(f"[@click=app.msg_lines({tid})][{dim} on #f2e5bc] {len(run) - 2} older messages [/][/]",
+            more = MessageText(f"[@click=app.msg_lines({tid!r})][{dim} on #f2e5bc] {len(run) - 2} older messages [/][/]",
                                classes="mline")
             rows = [collapsed(run[0], msgs[run[0]]), gutter_row("", more, "faded"), collapsed(run[-1], msgs[run[-1]])]
         else:
@@ -2182,7 +2182,7 @@ def related_markup(db, v, limit: int = 6) -> list[str]:
     if not p:
         return []
     head = lambda icon, text: f"[#928374]{ICON[icon]} {text}[/]"  # noqa: E731
-    link = lambda o: f"{glyph(o.status_detail)} [@click=app.open_thread({o.id})][underline]{escape(o.title)}[/][/]"  # noqa: E731
+    link = lambda o: f"{glyph(o.status_detail)} [@click=app.open_thread({o.id!r})][underline]{escape(o.title)}[/][/]"  # noqa: E731
 
     def section(title_icon, title, threads, more_action):
         rows = [link(o) for o in threads[:limit]]
@@ -2193,7 +2193,7 @@ def related_markup(db, v, limit: int = 6) -> list[str]:
     seen = {t.id}
     mine = [o for o in reversed(p["threads"]) if o.id not in seen]
     seen |= {o.id for o in mine}
-    out = section("person", f"other threads with {escape(p['name'])}", mine, f"app.open_person({p['id']})")
+    out = section("person", f"other threads with {escape(p['name'])}", mine, f"app.open_person({p['id']!r})")
     for domain in p["organizations"]:
         theirs = [o for o in reversed(inbox.organization_view(db, domain)["threads"]) if o.id not in seen]
         seen |= {o.id for o in theirs}
@@ -2216,14 +2216,14 @@ def details_markup(v, db, related=None) -> str:
             ident = next((i for i in q["identities"] if i["kind"] == "email"), q["identities"][0] if q["identities"] else None)
             addr = f" [#928374]{escape(ident['value'])}[/]" if ident and ident["value"] != q["name"] else ""
             block = f"[#c14a4a]{ICON['blocked']}[/] " if any(i["blocked"] for i in q["identities"]) else ""
-            lines.append(f"{block}[@click=app.open_person({q['id']})][b underline]{escape(q['name'])}[/][/]{addr}")
+            lines.append(f"{block}[@click=app.open_person({q['id']!r})][b underline]{escape(q['name'])}[/][/]{addr}")
         lines += [f"[#928374]{ICON['email' if '@' in a else 'phone']} {escape(a)}[/]" for a in others]
         known = {o for q in people for o in q["organizations"]}
         orgs = [f"[@click=app.open_org('{o}')][underline]{escape(o)}[/][/]" if o in known else f"[#928374]{escape(o)}[/]"
                 for o in v.get("organizations") or sorted(known)]
         lines += ["", head("organization", "organizations" if len(orgs) > 1 else "organization"),
                   "\n".join(orgs) or "[#928374]none[/]"]
-    case = f"[@click=app.open_case({t.case_id})][underline]{escape(v['case'])}[/][/]" if t.case_id else (
+    case = f"[@click=app.open_case({t.case_id!r})][underline]{escape(v['case'])}[/][/]" if t.case_id else (
         "[#928374]none · [/][@click=app.thread('case')][underline]add to a case[/][/] [#928374](l)[/]")
     kind = v["channel"]["kind"]
     lines += ["", head("case", "case"), case, "", f"[#928374]{ICON.get(kind, ICON['channel'])} channel[/]", escape(v["where"])]
@@ -2887,7 +2887,7 @@ class DraftView(Composer, Horizontal):
         for view in self.history_views:
             t = view["thread"]
             widgets.append(Static(
-                f"[@click=app.open_thread({t.id})][b #45707a]{escape(t.title)}[/][/]  {status_markup(t)}",
+                f"[@click=app.open_thread({t.id!r})][b #45707a]{escape(t.title)}[/][/]  {status_markup(t)}",
                 classes="sectionhead"))
             widgets.append(Vertical(*message_widgets(view, self.app.message_state(t.id), self.app.raw), classes="msgs"))
         show_messages(self.query_one(".history"), widgets, self.query_one(".timeline"))
@@ -3568,14 +3568,14 @@ class OrganizationPage(ThreadListPage):
                 set_member(self.app, matches[0][0], matches[0][1], self.domain, True)
             else:
                 self.app.push_screen(Pick(f"Add to {self.domain}", [(str(i), n) for i, n in matches]),
-                                     lambda pid: pid and set_member(self.app, int(pid), dict(matches)[int(pid)],
+                                     lambda pid: pid and set_member(self.app, pid, dict(matches)[pid],
                                                                     self.domain, True))
 
         def picked(choice):
             if choice == "add":
                 self.app.push_screen(Ask(f"Add a Person to {self.domain}", "email address, phone number, or name"), found)
             elif choice:
-                set_member(self.app, int(choice), names[choice], self.domain, False)
+                set_member(self.app, choice, names[choice], self.domain, False)
         self.app.push_screen(Pick(f"People · {self.domain}", options), picked)
 
     def refresh_data(self):
@@ -3586,7 +3586,7 @@ class OrganizationPage(ThreadListPage):
         emails = [i["value"] for p in people for i in p["identities"] if i["kind"] == "email"]
         o = self.org()
         self.app.main.show_side((pipeline_section(self.app.db, o["id"]) + "\n\n" if o else "") + "\n\n".join(
-            f"[@click=app.open_person({p['id']})][b underline]{escape(p['name'])}[/][/]\n"
+            f"[@click=app.open_person({p['id']!r})][b underline]{escape(p['name'])}[/][/]\n"
             + "\n".join(f"[#928374]{ICON[IDENTITY_ICON[i['kind']]]} {escape(i['value'])}[/]"
                         for i in p["identities"])
             for p in people) or "[#928374]No people yet.[/]", tana=(emails, [self.domain]))
@@ -3992,7 +3992,7 @@ class PersonPage(Page):
             kind = ICON[IDENTITY_ICON[i["kind"]]]
             table.add_row(f"[#654735]{kind}[/]", escape(i["value"]),
                           f"[#c14a4a]{ICON['blocked']} blocked[/]" if i["blocked"] else "")
-        threads = "\n".join(f"[@click=app.open_thread({t.id})]{glyph(t.status_detail)} [underline]{escape(t.title)}[/][/]"
+        threads = "\n".join(f"[@click=app.open_thread({t.id!r})]{glyph(t.status_detail)} [underline]{escape(t.title)}[/][/]"
                             for t in p["threads"]) or "—"
         orgs = ", ".join(f"[@click=app.open_org('{o}')][underline]{escape(o)}[/][/]" for o in p["organizations"]) or "—"
         section = sequence_section(self.app.db, self.person_id)
@@ -4381,7 +4381,7 @@ class CaseCard(Vertical):
             msgs_box.remove_children()
             last = msgs[-1]["at"] if msgs else None
             body = (f"[#928374]{len(msgs)} message{'s' * (len(msgs) != 1)} · last {ago(last)} · "
-                    f"[/][@click=app.case_toggle({self.index})][#928374 underline]show[/][/]")
+                    f"[/][@click=app.case_toggle({self.index!r})][#928374 underline]show[/][/]")
         self.query_one(".cardbody").update(body)
         self.query_one(".cardbody").display = bool(body)
         box = self.query_one(ReplyBox)
@@ -4572,7 +4572,7 @@ class CasePage(Page, ThreadActions):
         where = sorted({v["where"] for v in self.views})
         return "\n".join([
             head("status", "status"), status or "[#928374]none[/]", "",
-            head("people", "people"), *[f"[@click=app.open_person({pid})][underline]{escape(n)}[/][/]"
+            head("people", "people"), *[f"[@click=app.open_person({pid!r})][underline]{escape(n)}[/][/]"
                                         for pid, n in people.items()], "",
             head("organizations", "organizations"),
             ", ".join(f"[@click=app.open_org('{o}')][underline]{escape(o)}[/][/]" for o in orgs) or "[#928374]none[/]", "",
@@ -4700,7 +4700,7 @@ def enroll_person(app, person_id: int, name: str):
             org = picked.get("org")
             if org == "sole":
                 org = inbox.create_sole_proprietorship(app.db, person_id)
-            eid = sequences.enroll(app.db, person_id, int(sid), start=start, organization_id=org,
+            eid = sequences.enroll(app.db, person_id, sid, start=start, organization_id=org,
                                    identity_id=picked.get("identity"))
         except sequences.Refused as e:
             app.notify(f"Not enrolled: {e}", severity="error")
@@ -4735,14 +4735,14 @@ def enroll_person(app, person_id: int, name: str):
         def address(identity):
             if identity is None:
                 return
-            picked["identity"] = int(identity)
+            picked["identity"] = identity
             start()
 
         def organization(org):
             if org is None:
                 return
-            picked["org"] = None if org == "none" else "sole" if org == "sole" else int(org)
-            addresses = sequences.address_choices(app.db, person_id, picked["org"] if isinstance(picked["org"], int) else None)
+            picked["org"] = None if org == "none" else "sole" if org == "sole" else org
+            addresses = sequences.address_choices(app.db, person_id, picked["org"] if picked["org"] not in (None, "sole") else None)
             if len(addresses) < 2:
                 return start()
             app.push_screen(Pick(f"Send to which address? · {name}", [(str(a["id"]), escape(a["value"])) for a in addresses],
@@ -4815,7 +4815,7 @@ def task_props(t: dict) -> str:
     return (f"{props_head('tasks', 'task')}\nDay {t['day']} · {KIND_LABEL[t['kind']]}\n[#928374]Step {t['position']} of {t['steps']}[/]\n\n"
             f"{props_head('sequence', 'enrollment')}\nActive · Day {t['day']}\n[#928374]{escape(t['sequence'])}[/]\n\n"
             f"{props_head('wait', 'next')}\n{nxt}\n\n"
-            f"{props_head('person', 'person')}\n[@click=app.open_person({t['person_id']})][b underline]{escape(t['person'])}[/][/]\n\n"
+            f"{props_head('person', 'person')}\n[@click=app.open_person({t['person_id']!r})][b underline]{escape(t['person'])}[/][/]\n\n"
             f"{props_head('organizations', 'organization')}\n{escape(t['organization']) if t['organization'] else '[#928374]none[/]'}")
 
 
@@ -5170,7 +5170,7 @@ class TasksPage(Page):
         def chosen(choice):
             if choice is None:
                 return
-            self.filter = None if choice == "all" else ("sequence", int(choice[4:])) if choice.startswith("seq:") else choice
+            self.filter = None if choice == "all" else ("sequence", choice[4:]) if choice.startswith("seq:") else choice
             self.refresh_data()
         self.app.push_screen(Pick("Filter Tasks", options), chosen)
 
@@ -5472,8 +5472,8 @@ class SequencesPage(Page):
             return
 
         def chosen(cid):
-            if cid and int(cid) != q["connection_id"]:
-                sequences.set_connection(self.app.db, q["id"], int(cid))
+            if cid and cid != q["connection_id"]:
+                sequences.set_connection(self.app.db, q["id"], cid)
                 self.after_change()
         self.app.push_screen(Pick(f"{q['name']} sends from", [(str(c["id"]), connection_label(c)) for c in mail]), chosen)
 
@@ -5701,8 +5701,9 @@ class StepEditor(Vertical):
         try:
             if type(v.get("gap_days", 0)) is not int:
                 raise ValueError("Gap is a whole number of business days, 0 or more.")
-            if isinstance(v.get("enroll_sequence_id"), str):
-                raise ValueError(f"No Sequence is named {v['enroll_sequence_id']}.")
+            if (sid := v.get("enroll_sequence_id")) is not None and not self.app.db.execute(
+                    "SELECT 1 FROM sequences WHERE id = ?", (sid,)).fetchone():  # values() keeps an unknown name
+                raise ValueError(f"No Sequence is named {sid}.")
             self.step = sequences.save_step(self.app.db, self.step_id, **v)
         except (ValueError, pipeline.Refused) as e:
             self.query(".replyhint").last().update(f"[#c14a4a]Not saved: {escape(str(e))}[/]")
@@ -6361,7 +6362,7 @@ class EventPage(Page):
         open_ = [t for t in p["threads"] if t.status in ("TODO", "SNOOZED")]
         extra = " · ".join(t for t in (f"{len(open_)} open Threads" if open_ else "",
                                        "Case: " + ", ".join(p["cases"]) if p["cases"] else "") if t)
-        return (f"[@click=app.open_person({r[0]})][underline]{label}[/][/]"
+        return (f"[@click=app.open_person({r[0]!r})][underline]{label}[/][/]"
                 + (f" [{PALETTE['grey1']}]{escape(extra)}[/]" if extra else ""))
 
     def action_respond(self):
@@ -6512,7 +6513,7 @@ class MainScreen(Screen):
         if target == "drafts":
             self.stack = [DraftsPage]
         elif target.startswith("conn:"):
-            cid = int(target.split(":")[1])
+            cid = target.split(":", 1)[1]
             self.stack = [lambda: ConnectionPage(cid)]
         elif target.startswith("view:"):
             self.app.view = int(target.split(":")[1])
@@ -6991,7 +6992,7 @@ class Console(App):
         if v["thread"].id != key[0] or v["channel"]["platform"] != "slack" or v["channel"]["connection_id"] != key[2]:
             return None
         m = next((m for m in v["messages"] if m["id"] == key[1] and not m["deleted"]), None)
-        if m is None or type(m.get("revision")) is not int:
+        if m is None or not inbox.is_id(m.get("revision")):
             return None
         return m, self._reaction_identity(v, m)
 
@@ -7330,7 +7331,7 @@ class Console(App):
         self.call_from_thread(self._reaction_read_done, job, result)
 
     def _reaction_echo(self, result, job):
-        return isinstance(result, dict) and all(type(result.get(field)) is int and result[field] == value
+        return isinstance(result, dict) and all(inbox.is_id(result.get(field)) and result[field] == value
                                                for field, value in zip(("thread_id", "message_id", "connection_id"),
                                                                        job["key"]))
 
@@ -7344,7 +7345,7 @@ class Console(App):
             target = self._reaction_target(job["key"])
             groups = result.get("groups") if isinstance(result, dict) else None
             valid = (self._reaction_echo(result, job) and result.get("outcome") == "ready"
-                     and type(result.get("revision")) is int and result["revision"] == job["revision"]
+                     and inbox.is_id(result.get("revision")) and result["revision"] == job["revision"]
                      and isinstance(groups, list) and all(
                          isinstance(g, dict) and isinstance(g.get("name"), str) and g["name"]
                          and type(g.get("count")) is int and g["count"] >= 0 and type(g.get("mine")) is bool
@@ -7353,7 +7354,7 @@ class Console(App):
             changed = (not unchanged or (isinstance(result, dict) and (
                 result.get("outcome") == "review_required" or
                 (self._reaction_echo(result, job) and result.get("outcome") == "ready"
-                 and type(result.get("revision")) is int and result["revision"] != job["revision"]))))
+                 and inbox.is_id(result.get("revision")) and result["revision"] != job["revision"]))))
             if valid and unchanged and (state["write_outcome"] != "unknown" or job["recovery"]):
                 state.update(groups=groups, own={g["name"]: g["mine"] for g in groups}, totals="ready",
                              ready=job["check"])
@@ -7424,7 +7425,7 @@ class Console(App):
         state["pending"] = False
         confirmed = (self._reaction_echo(result, job) and result.get("outcome") == "confirmed"
                      and result.get("op") == job["op"] and result.get("name") == job["name"]
-                     and type(result.get("revision")) is int and result["revision"] == job["revision"]
+                     and inbox.is_id(result.get("revision")) and result["revision"] == job["revision"]
                      and type(result.get("mine")) is bool and result["mine"] == (job["op"] == "add")
                      and type(result.get("changed")) is bool)
         if confirmed:
@@ -7437,7 +7438,7 @@ class Console(App):
         else:
             outcome = result.get("outcome") if isinstance(result, dict) else None
             if isinstance(result, dict) and any(
-                    field in result and (type(result[field]) is not int or result[field] != value)
+                    field in result and result[field] != value
                     for field, value in zip(("thread_id", "message_id", "connection_id"), job["key"])):
                 outcome = "unknown"
             if outcome not in ("refused", "unavailable", "review_required"):

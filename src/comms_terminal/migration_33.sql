@@ -1,0 +1,604 @@
+-- Migration 33 (ADR 0012): every id becomes a UUIDv7 text key and every foreign key follows. An existing row's
+-- id n, and every reference to it, becomes 00000000-0000-7000-8000-<n as 12 hex digits> (inbox.LEGACY_ID), so old
+-- rows keep their order and sort before every new id. Generated once from schema 33; frozen, so later schema
+-- changes belong in later migrations.
+PRAGMA legacy_alter_table = ON;
+DROP VIEW IF EXISTS "thread_activities";
+DROP INDEX IF EXISTS "connections_inbound";
+DROP INDEX IF EXISTS "threads_queue";
+DROP INDEX IF EXISTS "threads_case";
+DROP TRIGGER IF EXISTS "threads_alias_insert";
+DROP TRIGGER IF EXISTS "threads_alias_update";
+DROP INDEX IF EXISTS "identities_person";
+DROP INDEX IF EXISTS "activities_thread";
+DROP INDEX IF EXISTS "activities_identity";
+DROP INDEX IF EXISTS "email_refs_native";
+DROP INDEX IF EXISTS "audit_log_thread";
+DROP TRIGGER IF EXISTS "audit_log_no_delete";
+DROP TRIGGER IF EXISTS "audit_log_no_update";
+DROP INDEX IF EXISTS "case_log_case";
+DROP TRIGGER IF EXISTS "case_log_no_delete";
+DROP TRIGGER IF EXISTS "case_log_no_update";
+DROP TRIGGER IF EXISTS "activities_no_delete";
+DROP TRIGGER IF EXISTS "activities_no_update";
+DROP INDEX IF EXISTS "composition_drafts_thread";
+DROP INDEX IF EXISTS "composition_drafts_task";
+DROP INDEX IF EXISTS "attachments_sha";
+DROP INDEX IF EXISTS "attachments_pending";
+DROP INDEX IF EXISTS "enrollments_live";
+DROP INDEX IF EXISTS "tasks_due";
+DROP INDEX IF EXISTS "pipeline_log_org";
+DROP TRIGGER IF EXISTS "pipeline_log_no_delete";
+DROP TRIGGER IF EXISTS "pipeline_log_no_update";
+DROP INDEX IF EXISTS "changes_at";
+DROP TRIGGER IF EXISTS "changes_connections_insert";
+DROP TRIGGER IF EXISTS "changes_connections_update";
+DROP TRIGGER IF EXISTS "changes_connections_delete";
+DROP TRIGGER IF EXISTS "changes_channels_insert";
+DROP TRIGGER IF EXISTS "changes_channels_update";
+DROP TRIGGER IF EXISTS "changes_channels_delete";
+DROP TRIGGER IF EXISTS "changes_channel_rules_insert";
+DROP TRIGGER IF EXISTS "changes_channel_rules_update";
+DROP TRIGGER IF EXISTS "changes_channel_rules_delete";
+DROP TRIGGER IF EXISTS "changes_cases_insert";
+DROP TRIGGER IF EXISTS "changes_cases_update";
+DROP TRIGGER IF EXISTS "changes_cases_delete";
+DROP TRIGGER IF EXISTS "changes_threads_insert";
+DROP TRIGGER IF EXISTS "changes_threads_update";
+DROP TRIGGER IF EXISTS "changes_threads_delete";
+DROP TRIGGER IF EXISTS "changes_persons_insert";
+DROP TRIGGER IF EXISTS "changes_persons_update";
+DROP TRIGGER IF EXISTS "changes_persons_delete";
+DROP TRIGGER IF EXISTS "changes_identities_insert";
+DROP TRIGGER IF EXISTS "changes_identities_update";
+DROP TRIGGER IF EXISTS "changes_identities_delete";
+DROP TRIGGER IF EXISTS "changes_organizations_insert";
+DROP TRIGGER IF EXISTS "changes_organizations_update";
+DROP TRIGGER IF EXISTS "changes_organizations_delete";
+DROP TRIGGER IF EXISTS "changes_memberships_insert";
+DROP TRIGGER IF EXISTS "changes_memberships_update";
+DROP TRIGGER IF EXISTS "changes_memberships_delete";
+DROP TRIGGER IF EXISTS "changes_activities_insert";
+DROP TRIGGER IF EXISTS "changes_activities_update";
+DROP TRIGGER IF EXISTS "changes_activities_delete";
+DROP TRIGGER IF EXISTS "changes_email_refs_insert";
+DROP TRIGGER IF EXISTS "changes_email_refs_update";
+DROP TRIGGER IF EXISTS "changes_email_refs_delete";
+DROP TRIGGER IF EXISTS "changes_resend_receipts_insert";
+DROP TRIGGER IF EXISTS "changes_resend_receipts_update";
+DROP TRIGGER IF EXISTS "changes_resend_receipts_delete";
+DROP TRIGGER IF EXISTS "changes_audit_log_insert";
+DROP TRIGGER IF EXISTS "changes_audit_log_update";
+DROP TRIGGER IF EXISTS "changes_audit_log_delete";
+DROP TRIGGER IF EXISTS "changes_case_log_insert";
+DROP TRIGGER IF EXISTS "changes_case_log_update";
+DROP TRIGGER IF EXISTS "changes_case_log_delete";
+DROP TRIGGER IF EXISTS "changes_composition_drafts_insert";
+DROP TRIGGER IF EXISTS "changes_composition_drafts_update";
+DROP TRIGGER IF EXISTS "changes_composition_drafts_delete";
+DROP TRIGGER IF EXISTS "changes_attachments_insert";
+DROP TRIGGER IF EXISTS "changes_attachments_update";
+DROP TRIGGER IF EXISTS "changes_attachments_delete";
+DROP TRIGGER IF EXISTS "changes_staged_attachments_insert";
+DROP TRIGGER IF EXISTS "changes_staged_attachments_update";
+DROP TRIGGER IF EXISTS "changes_staged_attachments_delete";
+DROP TRIGGER IF EXISTS "changes_sequences_insert";
+DROP TRIGGER IF EXISTS "changes_sequences_update";
+DROP TRIGGER IF EXISTS "changes_sequences_delete";
+DROP TRIGGER IF EXISTS "changes_sequence_steps_insert";
+DROP TRIGGER IF EXISTS "changes_sequence_steps_update";
+DROP TRIGGER IF EXISTS "changes_sequence_steps_delete";
+DROP TRIGGER IF EXISTS "changes_enrollments_insert";
+DROP TRIGGER IF EXISTS "changes_enrollments_update";
+DROP TRIGGER IF EXISTS "changes_enrollments_delete";
+DROP TRIGGER IF EXISTS "changes_tasks_insert";
+DROP TRIGGER IF EXISTS "changes_tasks_update";
+DROP TRIGGER IF EXISTS "changes_tasks_delete";
+DROP TRIGGER IF EXISTS "changes_events_insert";
+DROP TRIGGER IF EXISTS "changes_events_update";
+DROP TRIGGER IF EXISTS "changes_events_delete";
+DROP TRIGGER IF EXISTS "changes_event_provider_insert";
+DROP TRIGGER IF EXISTS "changes_event_provider_update";
+DROP TRIGGER IF EXISTS "changes_event_provider_delete";
+DROP TRIGGER IF EXISTS "changes_pipeline_log_insert";
+DROP TRIGGER IF EXISTS "changes_pipeline_log_update";
+DROP TRIGGER IF EXISTS "changes_pipeline_log_delete";
+DROP TRIGGER IF EXISTS "changes_pipeline_targets_insert";
+DROP TRIGGER IF EXISTS "changes_pipeline_targets_update";
+DROP TRIGGER IF EXISTS "changes_pipeline_targets_delete";
+DROP TRIGGER IF EXISTS "changes_changes_insert";
+DROP TRIGGER IF EXISTS "changes_changes_update";
+DROP TRIGGER IF EXISTS "changes_changes_delete";
+ALTER TABLE "connections" RENAME TO "connections__old";
+ALTER TABLE "channels" RENAME TO "channels__old";
+ALTER TABLE "channel_rules" RENAME TO "channel_rules__old";
+ALTER TABLE "cases" RENAME TO "cases__old";
+ALTER TABLE "threads" RENAME TO "threads__old";
+ALTER TABLE "persons" RENAME TO "persons__old";
+ALTER TABLE "identities" RENAME TO "identities__old";
+ALTER TABLE "organizations" RENAME TO "organizations__old";
+ALTER TABLE "memberships" RENAME TO "memberships__old";
+ALTER TABLE "activities" RENAME TO "activities__old";
+ALTER TABLE "email_refs" RENAME TO "email_refs__old";
+ALTER TABLE "resend_receipts" RENAME TO "resend_receipts__old";
+ALTER TABLE "audit_log" RENAME TO "audit_log__old";
+ALTER TABLE "case_log" RENAME TO "case_log__old";
+ALTER TABLE "composition_drafts" RENAME TO "composition_drafts__old";
+ALTER TABLE "attachments" RENAME TO "attachments__old";
+ALTER TABLE "staged_attachments" RENAME TO "staged_attachments__old";
+ALTER TABLE "sequences" RENAME TO "sequences__old";
+ALTER TABLE "sequence_steps" RENAME TO "sequence_steps__old";
+ALTER TABLE "enrollments" RENAME TO "enrollments__old";
+ALTER TABLE "tasks" RENAME TO "tasks__old";
+ALTER TABLE "events" RENAME TO "events__old";
+ALTER TABLE "event_provider" RENAME TO "event_provider__old";
+ALTER TABLE "pipeline_log" RENAME TO "pipeline_log__old";
+ALTER TABLE "pipeline_targets" RENAME TO "pipeline_targets__old";
+DROP TABLE IF EXISTS changes;
+CREATE TABLE connections (
+  id                TEXT PRIMARY KEY NOT NULL DEFAULT (new_id()),
+  platform          TEXT NOT NULL CHECK (platform IN ('gmail', 'fastmail', 'slack', 'quo', 'gcal')),  -- platforms.py
+  external_id       TEXT NOT NULL UNIQUE,  -- email address, Slack team ID, or Quo Work number
+  self_id           TEXT NOT NULL,         -- Jeremy's address, Slack user ID, or Work number
+  label             TEXT NOT NULL,
+  connected_at      TEXT NOT NULL,
+  auth_ok           INTEGER NOT NULL DEFAULT 1 CHECK (auth_ok IN (0, 1)),
+  last_error        TEXT,
+  probe_error       TEXT,                  -- the last health check's failure (decision #119)
+  probed_at         TEXT,                  -- when the last health check ran
+  inbound           TEXT                   -- email: the address its forward reaches, the Worker's X-Inbox-To
+) STRICT;
+CREATE UNIQUE INDEX connections_inbound ON connections (inbound);
+
+CREATE TABLE channels (
+  id            TEXT PRIMARY KEY NOT NULL DEFAULT (new_id()),
+  connection_id TEXT NOT NULL REFERENCES connections (id),
+  native_id     TEXT NOT NULL,
+  name          TEXT,
+  kind          TEXT NOT NULL
+    CHECK (kind IN ('mailbox', 'channel', 'private', 'im', 'mpim', 'meeting')),  -- meeting: one Event UID (ADR 0007)
+  UNIQUE (connection_id, native_id)
+) STRICT;
+
+CREATE TABLE channel_rules (
+  id            TEXT PRIMARY KEY NOT NULL DEFAULT (new_id()),
+  connection_id TEXT NOT NULL REFERENCES connections (id),
+  kind          TEXT NOT NULL CHECK (kind IN ('channel', 'prefix', 'suffix')),
+  value         TEXT NOT NULL,
+  UNIQUE (connection_id, kind, value)
+) STRICT;
+
+CREATE TABLE cases (
+  id          TEXT PRIMARY KEY NOT NULL DEFAULT (new_id()),
+  title       TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',  -- free text shown above the Case's activity (decision #98)
+  created_at  TEXT NOT NULL
+) STRICT;
+
+CREATE TABLE threads (
+  id                TEXT PRIMARY KEY NOT NULL DEFAULT (new_id()),
+  channel_id        TEXT NOT NULL REFERENCES channels (id),
+  native_thread_id  TEXT NOT NULL,   -- first message's native_id
+  title             TEXT NOT NULL,
+  status            TEXT NOT NULL,
+  status_detail     TEXT NOT NULL,
+  status_changed_at TEXT NOT NULL,
+  snoozed_until     TEXT,
+  detail_before_snooze TEXT
+    CHECK (detail_before_snooze IN ('CREATED', 'NEW_REPLY', 'IN_PROGRESS')),
+  case_id           TEXT REFERENCES cases (id),
+  created_at        TEXT NOT NULL,
+  follow_up_at      TEXT,            -- Waiting for them: back to Todo at this time with no reply (#116)
+  merged_into       TEXT REFERENCES threads (id) CHECK (merged_into < id), -- stable alias, NULL = active
+  UNIQUE (channel_id, native_thread_id),
+  CHECK (
+    (status = 'TODO'
+      AND status_detail IN ('CREATED', 'NEW_REPLY', 'IN_PROGRESS'))
+    OR (status = 'SNOOZED'
+      AND status_detail IN ('WAITING_FOR_CUSTOMER',
+                            'WAITING_FOR_DURATION',
+                            'WAITING_INDEFINITELY'))
+    OR (status = 'DONE'
+      AND status_detail IN ('DONE_MANUALLY_SET', 'IGNORED'))
+  ),
+  CHECK ((status_detail = 'WAITING_FOR_DURATION') = (snoozed_until IS NOT NULL))
+) STRICT;
+CREATE INDEX threads_queue ON threads (status, status_changed_at);
+CREATE INDEX threads_case ON threads (case_id);
+
+CREATE TRIGGER threads_alias_insert BEFORE INSERT ON threads
+WHEN NEW.merged_into IS NOT NULL AND NOT EXISTS (
+  SELECT 1 FROM threads t JOIN channels ch ON ch.id = t.channel_id
+  WHERE t.id = NEW.merged_into AND t.merged_into IS NULL
+    AND t.channel_id = NEW.channel_id AND ch.kind = 'mailbox'
+)
+BEGIN
+  SELECT RAISE(ABORT, 'thread aliases require an active older thread in the same mailbox');
+END;
+
+CREATE TRIGGER threads_alias_update BEFORE UPDATE OF merged_into, channel_id ON threads
+WHEN (NEW.merged_into IS NOT NULL AND NOT EXISTS (
+  SELECT 1 FROM threads t JOIN channels ch ON ch.id = t.channel_id
+  WHERE t.id = NEW.merged_into AND t.merged_into IS NULL
+    AND t.channel_id = NEW.channel_id AND ch.kind = 'mailbox'
+)) OR (EXISTS (SELECT 1 FROM threads t WHERE t.merged_into = OLD.id)
+       AND (NEW.merged_into IS NOT NULL OR NEW.channel_id IS NOT OLD.channel_id))
+BEGIN
+  SELECT RAISE(ABORT, 'thread aliases require an active older thread in the same mailbox');
+END;
+
+CREATE TABLE persons (
+  id           TEXT PRIMARY KEY NOT NULL DEFAULT (new_id()),
+  display_name TEXT NOT NULL,
+  created_at   TEXT NOT NULL,
+  unsubscribed_at TEXT  -- asked not to be contacted: no Sequence enrolls them again
+) STRICT;
+
+CREATE TABLE identities (
+  id           TEXT PRIMARY KEY NOT NULL DEFAULT (new_id()),
+  person_id    TEXT REFERENCES persons (id),  -- NULL = detached
+  kind         TEXT NOT NULL CHECK (kind IN ('email', 'slack_user', 'phone')),
+  value        TEXT NOT NULL,
+  blocked      INTEGER NOT NULL DEFAULT 0 CHECK (blocked IN (0, 1)),
+  UNIQUE (kind, value)
+) STRICT;
+CREATE INDEX identities_person ON identities (person_id);
+
+CREATE TABLE organizations (
+  id         TEXT PRIMARY KEY NOT NULL DEFAULT (new_id()),
+  domain     TEXT NOT NULL UNIQUE,
+  name       TEXT NOT NULL,
+  created_at TEXT NOT NULL
+) STRICT;
+CREATE TABLE memberships (  -- Jeremy's own Membership changes; email domain decides the rest (GLOSSARY)
+  person_id       TEXT NOT NULL REFERENCES persons (id),
+  organization_id TEXT NOT NULL REFERENCES organizations (id),
+  member          INTEGER NOT NULL CHECK (member IN (0, 1)),  -- 1 added, 0 removed
+  changed_at      TEXT NOT NULL,
+  PRIMARY KEY (person_id, organization_id)
+) STRICT;
+
+CREATE TABLE activities (
+  id          TEXT PRIMARY KEY NOT NULL DEFAULT (new_id()),
+  thread_id   TEXT NOT NULL REFERENCES threads (id),
+  kind        TEXT NOT NULL CHECK (kind IN ('MESSAGE', 'EDIT', 'DELETE')),
+  occurred_at TEXT NOT NULL,
+  identity_id TEXT REFERENCES identities (id),  -- NULL = Jeremy
+  native_id   TEXT NOT NULL,
+  target_id   TEXT REFERENCES activities (id),
+  content     TEXT,
+  data        TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(data)),
+  UNIQUE (kind, native_id),
+  CHECK ((kind = 'MESSAGE') = (target_id IS NULL))
+) STRICT;
+CREATE INDEX activities_thread ON activities (thread_id, occurred_at);
+CREATE INDEX activities_identity ON activities (identity_id);
+
+CREATE TABLE email_refs (
+  activity_id TEXT NOT NULL REFERENCES activities (id),
+  native_id   TEXT NOT NULL,
+  PRIMARY KEY (activity_id, native_id)
+) STRICT;
+CREATE INDEX email_refs_native ON email_refs (native_id);
+
+CREATE TABLE resend_receipts (
+  email_id TEXT PRIMARY KEY,
+  connection_id TEXT NOT NULL REFERENCES connections (id),
+  message_id TEXT NOT NULL
+) STRICT;
+
+-- Audit log: each change to a Thread's Status or Case and its cause (action = Jeremy's key; message/edit/
+-- delete/call = the other side's Activity; reply = Jeremy's own message). old/new_detail are Status details;
+-- a CASE entry's case_id is the Case joined, NULL = removed, and data.from the Case it left; data holds a timed snooze's until.
+CREATE TABLE audit_log (
+  id          TEXT PRIMARY KEY NOT NULL DEFAULT (new_id()),
+  thread_id   TEXT NOT NULL REFERENCES threads (id),
+  occurred_at TEXT NOT NULL,
+  kind        TEXT NOT NULL CHECK (kind IN ('STATUS', 'CASE')),
+  cause       TEXT NOT NULL CHECK (cause IN ('action', 'reply', 'message', 'edit', 'delete', 'call',
+                                             'woke', 'reopen', 'blocked', 'undo', 'meeting')),
+  old_detail  TEXT,
+  new_detail  TEXT,
+  case_id     TEXT REFERENCES cases (id),
+  data        TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(data)),
+  CHECK ((kind = 'STATUS') = (new_detail IS NOT NULL))
+) STRICT;
+CREATE INDEX audit_log_thread ON audit_log (thread_id, occurred_at);
+CREATE TRIGGER audit_log_no_delete BEFORE DELETE ON audit_log
+BEGIN
+  SELECT RAISE(ABORT, 'the audit log is append-only');
+END;
+CREATE TRIGGER audit_log_no_update BEFORE UPDATE ON audit_log
+BEGIN
+  SELECT RAISE(ABORT, 'the audit log is append-only');
+END;
+
+-- Case log: changes to a Case itself, for its Activity feed; old is the description before the edit.
+CREATE TABLE case_log (
+  id          TEXT PRIMARY KEY NOT NULL DEFAULT (new_id()),
+  case_id     TEXT NOT NULL REFERENCES cases (id),
+  occurred_at TEXT NOT NULL,
+  kind        TEXT NOT NULL CHECK (kind IN ('DESCRIPTION')),
+  old         TEXT NOT NULL
+) STRICT;
+CREATE INDEX case_log_case ON case_log (case_id, occurred_at);
+CREATE TRIGGER case_log_no_delete BEFORE DELETE ON case_log
+BEGIN
+  SELECT RAISE(ABORT, 'the case log is append-only');
+END;
+CREATE TRIGGER case_log_no_update BEFORE UPDATE ON case_log
+BEGIN
+  SELECT RAISE(ABORT, 'the case log is append-only');
+END;
+
+CREATE VIEW thread_activities AS
+SELECT a.id, COALESCE(t.merged_into, a.thread_id) AS thread_id,
+       a.kind, a.occurred_at, a.identity_id, a.native_id, a.target_id, a.content, a.data
+FROM activities a JOIN threads t ON t.id = a.thread_id;
+
+CREATE TRIGGER activities_no_delete BEFORE DELETE ON activities
+BEGIN
+  SELECT RAISE(ABORT, 'activities are append-only');
+END;
+
+CREATE TRIGGER activities_no_update BEFORE UPDATE ON activities
+WHEN NOT (
+  NEW.content IS NULL
+  AND NEW.id IS OLD.id AND NEW.thread_id IS OLD.thread_id
+  AND NEW.kind IS OLD.kind AND NEW.occurred_at IS OLD.occurred_at
+  AND NEW.identity_id IS OLD.identity_id
+  AND NEW.native_id IS OLD.native_id AND NEW.target_id IS OLD.target_id
+  AND NEW.data IS OLD.data
+  AND EXISTS (
+    SELECT 1 FROM activities d
+    WHERE d.kind = 'DELETE'
+      AND d.target_id = COALESCE(OLD.target_id, OLD.id)
+  )
+)
+BEGIN
+  SELECT RAISE(ABORT, 'activities are append-only');
+END;
+
+CREATE TABLE composition_drafts (
+  id TEXT PRIMARY KEY NOT NULL DEFAULT (new_id()),
+  revision INTEGER NOT NULL CHECK (revision > 0),
+  connection_id TEXT REFERENCES connections (id),
+  kind TEXT NOT NULL CHECK (kind IN ('email', 'sms', 'slack')),
+  sender TEXT NOT NULL,
+  "to" TEXT NOT NULL,
+  cc TEXT NOT NULL,
+  subject TEXT,
+  body TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  sending_at TEXT,
+  thread_id TEXT REFERENCES threads (id),  -- a reply Draft: its Thread's reply box text (FR-SEQ-11)
+  task_id TEXT REFERENCES tasks (id),  -- an email Task's Draft (Sequences)
+  send_at TEXT,  -- send later: when the service sends it
+  send_error TEXT,  -- why a scheduled send did not go out
+  needs_edit INTEGER NOT NULL DEFAULT 0 CHECK (needs_edit IN (0, 1)),  -- unsendable until its text changes
+  CHECK ((kind = 'email' AND subject IS NOT NULL)
+         OR (kind IN ('sms', 'slack') AND subject IS NULL AND cc = ''))
+) STRICT;
+CREATE UNIQUE INDEX composition_drafts_thread ON composition_drafts (thread_id) WHERE thread_id IS NOT NULL;
+CREATE UNIQUE INDEX composition_drafts_task ON composition_drafts (task_id) WHERE task_id IS NOT NULL;
+
+-- Attachments (.agents/prd/2026-10-15-attachments.md): files copied on arrival, content-addressed in files/
+-- beside the database. Their own table, since activities.data never changes after ingest.
+CREATE TABLE attachments (
+  id TEXT PRIMARY KEY NOT NULL DEFAULT (new_id()),
+  activity_id TEXT NOT NULL REFERENCES activities (id),
+  position INTEGER NOT NULL CHECK (position >= 0),
+  name TEXT NOT NULL,
+  type TEXT NOT NULL,
+  size INTEGER NOT NULL CHECK (size >= 0),
+  inline INTEGER NOT NULL DEFAULT 0 CHECK (inline IN (0, 1)),
+  content_id TEXT,
+  source TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(source)),
+  sha TEXT,
+  state TEXT NOT NULL CHECK (state IN ('pending', 'stored', 'failed', 'expired')),
+  tries INTEGER NOT NULL DEFAULT 0,
+  UNIQUE (activity_id, position),
+  CHECK ((state = 'stored') = (sha IS NOT NULL))
+) STRICT;
+CREATE INDEX attachments_sha ON attachments (sha);
+CREATE INDEX attachments_pending ON attachments (state) WHERE state = 'pending';
+
+-- Files attached to an unsent Draft or to the open reply of one Thread (a reply Draft's files are its Thread's).
+CREATE TABLE staged_attachments (
+  id TEXT PRIMARY KEY NOT NULL DEFAULT (new_id()),
+  draft_id TEXT REFERENCES composition_drafts (id) ON DELETE CASCADE,
+  thread_id TEXT REFERENCES threads (id),
+  sha TEXT NOT NULL,
+  name TEXT NOT NULL,
+  type TEXT NOT NULL,
+  size INTEGER NOT NULL CHECK (size >= 0),
+  added_at TEXT NOT NULL,
+  CHECK ((draft_id IS NULL) <> (thread_id IS NULL))
+) STRICT;
+
+-- Sequences (.agents/prd/2026-10-16-sequencing.md P2-P4, ADR 0003): Jeremy's outreach, run one Person at a time.
+CREATE TABLE sequences (
+  id            TEXT PRIMARY KEY NOT NULL DEFAULT (new_id()),
+  name          TEXT NOT NULL,
+  connection_id TEXT REFERENCES connections (id),  -- the email Connection its email Tasks send from
+  archived_at   TEXT,
+  created_at    TEXT NOT NULL,
+  updated_at    TEXT NOT NULL,
+  description   TEXT NOT NULL DEFAULT ''  -- its "use when" line
+) STRICT;
+
+-- A Step is the template; position NULL marks a deleted Step, kept because Tasks name it. Positions run in outline
+-- order through the whole Sequence; a Step's path is its section plus the If (parent_step_id) and branch it sits
+-- under, and the next Step on a path is the next position on the same path (.agents/prd/2026-10-26-sequence-flow.md).
+CREATE TABLE sequence_steps (
+  id                 TEXT PRIMARY KEY NOT NULL DEFAULT (new_id()),
+  sequence_id        TEXT NOT NULL REFERENCES sequences (id),
+  position           INTEGER CHECK (position > 0),
+  section            TEXT NOT NULL DEFAULT 'body' CHECK (section IN ('start', 'body', 'completion')),
+  parent_step_id     TEXT REFERENCES sequence_steps (id),  -- the If whose path this Step is on
+  branch             INTEGER CHECK (branch IN (0, 1)),        -- 1 its true path, 0 its false path
+  kind               TEXT NOT NULL CHECK (kind IN ('email', 'call', 'linkedin', 'letter', 'action', 'if')),
+  gap_days           INTEGER NOT NULL DEFAULT 0 CHECK (gap_days >= 0),
+  at_time            TEXT CHECK (at_time GLOB '[0-2][0-9]:[0-5][0-9]'),
+  subject            TEXT NOT NULL DEFAULT '',  -- an email's subject; an If's question when Jeremy picks
+  body               TEXT NOT NULL DEFAULT '',
+  voicemail          TEXT NOT NULL DEFAULT '',
+  linkedin_move      TEXT CHECK (linkedin_move IN ('connect', 'message', 'engage')),
+  reply_to_step_id   TEXT REFERENCES sequence_steps (id),
+  enroll_sequence_id TEXT REFERENCES sequences (id),  -- an enroll Action: the Sequence it enrolls them in
+  action_kind        TEXT CHECK (action_kind IN ('set_stage', 'enroll', 'end_for_others', 'set_value')),
+  pipeline           TEXT CHECK (pipeline IN ('REVENUE', 'FUNDRAISING', 'TALENT')),
+  stage              TEXT,
+  value              INTEGER,
+  condition          TEXT CHECK (condition IN ('end_reason', 'has_channel', 'stage', 'jeremy_picks')),
+  operand            TEXT NOT NULL DEFAULT '',  -- end reasons (comma-separated) or a channel (email, phone, linkedin)
+  true_label         TEXT NOT NULL DEFAULT '',
+  false_label        TEXT NOT NULL DEFAULT '',
+  needs_edit         INTEGER NOT NULL DEFAULT 1 CHECK (needs_edit IN (0, 1)),  -- its Drafts start as Needs edit
+  UNIQUE (sequence_id, position),
+  CHECK ((parent_step_id IS NULL) = (branch IS NULL)),
+  CHECK ((kind = 'action') = (action_kind IS NOT NULL)),
+  CHECK ((kind = 'if') = (condition IS NOT NULL))
+) STRICT;
+
+CREATE TABLE enrollments (
+  id              TEXT PRIMARY KEY NOT NULL DEFAULT (new_id()),
+  person_id       TEXT NOT NULL REFERENCES persons (id),
+  sequence_id     TEXT NOT NULL REFERENCES sequences (id),
+  state           TEXT NOT NULL CHECK (state IN ('ACTIVE', 'PAUSED', 'FINISHING', 'FINISHED')),
+  reason          TEXT CHECK (reason IN ('COMPLETED', 'GOAL_MET', 'NOT_RIGHT_NOW', 'LOST', 'UNSUBSCRIBED', 'CANCELED')),
+  paused_at       TEXT,
+  pause_reason    TEXT,
+  enrolled_at     TEXT NOT NULL,
+  finished_at     TEXT,
+  starts_at       TEXT,  -- a later Start date (FR-SEQ-25): the first Task counts from it; NULL is the enroll day
+  responded_at    TEXT,  -- first reply or connected call; kept through Resume, so enroll Actions can tell
+  organization_id TEXT REFERENCES organizations (id),  -- the Organization it is for (FR-SEQ-36)
+  identity_id     TEXT REFERENCES identities (id),  -- the email address it sends to; NULL: the default
+  CHECK (state = 'PAUSED' OR (state IN ('FINISHING', 'FINISHED')) = (reason IS NOT NULL))  -- Paused keeps a Finishing reason
+) STRICT;
+CREATE UNIQUE INDEX enrollments_live ON enrollments (person_id, sequence_id) WHERE state != 'FINISHED';
+
+-- One Step for one Enrollment; created when the previous Task is done, due at due_at.
+CREATE TABLE tasks (
+  id            TEXT PRIMARY KEY NOT NULL DEFAULT (new_id()),
+  enrollment_id TEXT NOT NULL REFERENCES enrollments (id),
+  step_id       TEXT NOT NULL REFERENCES sequence_steps (id),
+  due_at        TEXT NOT NULL,
+  state         TEXT NOT NULL CHECK (state IN ('DUE', 'DONE', 'SKIPPED')),
+  done_at       TEXT,
+  thread_id     TEXT REFERENCES threads (id),  -- the Thread its email went out in, for later reply Steps
+  flag          TEXT,  -- why it waits for Jeremy: a reply target skipped, or a reply Draft already there
+  choice        INTEGER CHECK (choice IN (0, 1)),  -- Jeremy's pick on an If: 1 its true path, 0 its false path
+  UNIQUE (enrollment_id, step_id),
+  CHECK ((state = 'DUE') = (done_at IS NULL))
+) STRICT;
+CREATE INDEX tasks_due ON tasks (state, due_at);
+
+-- Calendar (ADR 0005): Events read from the Event provider, kept forever; calendar.py.
+CREATE TABLE events (
+  uid           TEXT NOT NULL,
+  recurrence_id TEXT NOT NULL DEFAULT '',  -- '' = the Event or series itself; else one occurrence (UTC or date)
+  ics           TEXT NOT NULL,             -- the VEVENT as Google gives it, less DTSTAMP
+  first_seen_at TEXT NOT NULL,
+  changed_at    TEXT NOT NULL,
+  deleted_at    TEXT,                      -- a Deleted Event: gone from the Event provider, kept
+  PRIMARY KEY (uid, recurrence_id)
+) STRICT;
+CREATE TABLE event_provider (
+  id        INTEGER PRIMARY KEY CHECK (id = 1),
+  owner     TEXT NOT NULL,                 -- the calendar's address (X-WR-CALNAME)
+  ok_at     TEXT,                          -- last good fetch, written when fetches start failing
+  failures  INTEGER NOT NULL DEFAULT 0,    -- failed fetches in a row
+  error     TEXT
+) STRICT;
+
+-- Pipeline (ADR 0006): Stage and Value per Organization, append-only
+CREATE TABLE pipeline_log (
+  id              TEXT PRIMARY KEY NOT NULL DEFAULT (new_id()),
+  organization_id TEXT NOT NULL REFERENCES organizations (id),
+  pipeline        TEXT NOT NULL CHECK (pipeline IN ('REVENUE', 'FUNDRAISING', 'TALENT')),
+  kind            TEXT NOT NULL CHECK (kind IN ('STAGE', 'VALUE', 'UNDO')),
+  stage           TEXT,
+  value           INTEGER,
+  undoes          TEXT REFERENCES pipeline_log (id),
+  effective_at    TEXT NOT NULL,             -- when it happened (backdated when seeding)
+  recorded_at     TEXT NOT NULL,
+  CHECK ((kind = 'STAGE') = (stage IS NOT NULL) AND (kind = 'VALUE') = (value IS NOT NULL)
+         AND (kind = 'UNDO') = (undoes IS NOT NULL))
+) STRICT;
+CREATE INDEX pipeline_log_org ON pipeline_log (organization_id, pipeline, effective_at);
+CREATE TRIGGER pipeline_log_no_delete BEFORE DELETE ON pipeline_log
+BEGIN
+  SELECT RAISE(ABORT, 'the pipeline log is append-only');
+END;
+CREATE TRIGGER pipeline_log_no_update BEFORE UPDATE ON pipeline_log
+BEGIN
+  SELECT RAISE(ABORT, 'the pipeline log is append-only');
+END;
+CREATE TABLE pipeline_targets (
+  pipeline TEXT PRIMARY KEY CHECK (pipeline IN ('REVENUE', 'FUNDRAISING')),
+  amount   INTEGER NOT NULL CHECK (amount > 0),
+  due      TEXT NOT NULL                     -- YYYY-MM-DD
+) STRICT;
+
+CREATE TABLE changes (  -- every committed row change, for the laptop's Change sets (ADR 0012); kept 7 days
+  seq    INTEGER PRIMARY KEY AUTOINCREMENT,
+  tbl    TEXT NOT NULL,
+  row_id TEXT NOT NULL,  -- the row's id; its rowid in a table keyed by natural columns
+  op     TEXT NOT NULL CHECK (op IN ('I', 'U', 'D')),
+  at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now') || '000+00:00')
+) STRICT;
+CREATE INDEX changes_at ON changes (at);
+-- Its triggers on every other table come from inbox.change_triggers(), so a new table cannot miss them.;
+INSERT INTO "connections" ("id", "platform", "external_id", "self_id", "label", "connected_at", "auth_ok", "last_error", "probe_error", "probed_at", "inbound") SELECT CASE WHEN [id] IS NULL THEN NULL ELSE printf('00000000-0000-7000-8000-%012x', [id]) END, [platform], [external_id], [self_id], [label], [connected_at], [auth_ok], [last_error], [probe_error], [probed_at], [inbound] FROM "connections__old";
+DROP TABLE "connections__old";
+INSERT INTO "channels" ("id", "connection_id", "native_id", "name", "kind") SELECT CASE WHEN [id] IS NULL THEN NULL ELSE printf('00000000-0000-7000-8000-%012x', [id]) END, CASE WHEN [connection_id] IS NULL THEN NULL ELSE printf('00000000-0000-7000-8000-%012x', [connection_id]) END, [native_id], [name], [kind] FROM "channels__old";
+DROP TABLE "channels__old";
+INSERT INTO "channel_rules" ("id", "connection_id", "kind", "value") SELECT CASE WHEN [id] IS NULL THEN NULL ELSE printf('00000000-0000-7000-8000-%012x', [id]) END, CASE WHEN [connection_id] IS NULL THEN NULL ELSE printf('00000000-0000-7000-8000-%012x', [connection_id]) END, [kind], [value] FROM "channel_rules__old";
+DROP TABLE "channel_rules__old";
+INSERT INTO "cases" ("id", "title", "description", "created_at") SELECT CASE WHEN [id] IS NULL THEN NULL ELSE printf('00000000-0000-7000-8000-%012x', [id]) END, [title], [description], [created_at] FROM "cases__old";
+DROP TABLE "cases__old";
+INSERT INTO "threads" ("id", "channel_id", "native_thread_id", "title", "status", "status_detail", "status_changed_at", "snoozed_until", "detail_before_snooze", "case_id", "created_at", "follow_up_at", "merged_into") SELECT CASE WHEN [id] IS NULL THEN NULL ELSE printf('00000000-0000-7000-8000-%012x', [id]) END, CASE WHEN [channel_id] IS NULL THEN NULL ELSE printf('00000000-0000-7000-8000-%012x', [channel_id]) END, [native_thread_id], [title], [status], [status_detail], [status_changed_at], [snoozed_until], [detail_before_snooze], CASE WHEN [case_id] IS NULL THEN NULL ELSE printf('00000000-0000-7000-8000-%012x', [case_id]) END, [created_at], [follow_up_at], CASE WHEN [merged_into] IS NULL THEN NULL ELSE printf('00000000-0000-7000-8000-%012x', [merged_into]) END FROM "threads__old";
+DROP TABLE "threads__old";
+INSERT INTO "persons" ("id", "display_name", "created_at", "unsubscribed_at") SELECT CASE WHEN [id] IS NULL THEN NULL ELSE printf('00000000-0000-7000-8000-%012x', [id]) END, [display_name], [created_at], [unsubscribed_at] FROM "persons__old";
+DROP TABLE "persons__old";
+INSERT INTO "identities" ("id", "person_id", "kind", "value", "blocked") SELECT CASE WHEN [id] IS NULL THEN NULL ELSE printf('00000000-0000-7000-8000-%012x', [id]) END, CASE WHEN [person_id] IS NULL THEN NULL ELSE printf('00000000-0000-7000-8000-%012x', [person_id]) END, [kind], [value], [blocked] FROM "identities__old";
+DROP TABLE "identities__old";
+INSERT INTO "organizations" ("id", "domain", "name", "created_at") SELECT CASE WHEN [id] IS NULL THEN NULL ELSE printf('00000000-0000-7000-8000-%012x', [id]) END, [domain], [name], [created_at] FROM "organizations__old";
+DROP TABLE "organizations__old";
+INSERT INTO "memberships" ("person_id", "organization_id", "member", "changed_at") SELECT CASE WHEN [person_id] IS NULL THEN NULL ELSE printf('00000000-0000-7000-8000-%012x', [person_id]) END, CASE WHEN [organization_id] IS NULL THEN NULL ELSE printf('00000000-0000-7000-8000-%012x', [organization_id]) END, [member], [changed_at] FROM "memberships__old";
+DROP TABLE "memberships__old";
+INSERT INTO "activities" ("id", "thread_id", "kind", "occurred_at", "identity_id", "native_id", "target_id", "content", "data") SELECT CASE WHEN [id] IS NULL THEN NULL ELSE printf('00000000-0000-7000-8000-%012x', [id]) END, CASE WHEN [thread_id] IS NULL THEN NULL ELSE printf('00000000-0000-7000-8000-%012x', [thread_id]) END, [kind], [occurred_at], CASE WHEN [identity_id] IS NULL THEN NULL ELSE printf('00000000-0000-7000-8000-%012x', [identity_id]) END, [native_id], CASE WHEN [target_id] IS NULL THEN NULL ELSE printf('00000000-0000-7000-8000-%012x', [target_id]) END, [content], [data] FROM "activities__old";
+DROP TABLE "activities__old";
+INSERT INTO "email_refs" ("activity_id", "native_id") SELECT CASE WHEN [activity_id] IS NULL THEN NULL ELSE printf('00000000-0000-7000-8000-%012x', [activity_id]) END, [native_id] FROM "email_refs__old";
+DROP TABLE "email_refs__old";
+INSERT INTO "resend_receipts" ("email_id", "connection_id", "message_id") SELECT [email_id], CASE WHEN [connection_id] IS NULL THEN NULL ELSE printf('00000000-0000-7000-8000-%012x', [connection_id]) END, [message_id] FROM "resend_receipts__old";
+DROP TABLE "resend_receipts__old";
+INSERT INTO "audit_log" ("id", "thread_id", "occurred_at", "kind", "cause", "old_detail", "new_detail", "case_id", "data") SELECT CASE WHEN [id] IS NULL THEN NULL ELSE printf('00000000-0000-7000-8000-%012x', [id]) END, CASE WHEN [thread_id] IS NULL THEN NULL ELSE printf('00000000-0000-7000-8000-%012x', [thread_id]) END, [occurred_at], [kind], [cause], [old_detail], [new_detail], CASE WHEN [case_id] IS NULL THEN NULL ELSE printf('00000000-0000-7000-8000-%012x', [case_id]) END, [data] FROM "audit_log__old";
+DROP TABLE "audit_log__old";
+INSERT INTO "case_log" ("id", "case_id", "occurred_at", "kind", "old") SELECT CASE WHEN [id] IS NULL THEN NULL ELSE printf('00000000-0000-7000-8000-%012x', [id]) END, CASE WHEN [case_id] IS NULL THEN NULL ELSE printf('00000000-0000-7000-8000-%012x', [case_id]) END, [occurred_at], [kind], [old] FROM "case_log__old";
+DROP TABLE "case_log__old";
+INSERT INTO "composition_drafts" ("id", "revision", "connection_id", "kind", "sender", "to", "cc", "subject", "body", "created_at", "updated_at", "sending_at", "thread_id", "task_id", "send_at", "send_error", "needs_edit") SELECT CASE WHEN [id] IS NULL THEN NULL ELSE printf('00000000-0000-7000-8000-%012x', [id]) END, [revision], CASE WHEN [connection_id] IS NULL THEN NULL ELSE printf('00000000-0000-7000-8000-%012x', [connection_id]) END, [kind], [sender], [to], [cc], [subject], [body], [created_at], [updated_at], [sending_at], CASE WHEN [thread_id] IS NULL THEN NULL ELSE printf('00000000-0000-7000-8000-%012x', [thread_id]) END, CASE WHEN [task_id] IS NULL THEN NULL ELSE printf('00000000-0000-7000-8000-%012x', [task_id]) END, [send_at], [send_error], [needs_edit] FROM "composition_drafts__old";
+DROP TABLE "composition_drafts__old";
+INSERT INTO "attachments" ("id", "activity_id", "position", "name", "type", "size", "inline", "content_id", "source", "sha", "state", "tries") SELECT CASE WHEN [id] IS NULL THEN NULL ELSE printf('00000000-0000-7000-8000-%012x', [id]) END, CASE WHEN [activity_id] IS NULL THEN NULL ELSE printf('00000000-0000-7000-8000-%012x', [activity_id]) END, [position], [name], [type], [size], [inline], [content_id], [source], [sha], [state], [tries] FROM "attachments__old";
+DROP TABLE "attachments__old";
+INSERT INTO "staged_attachments" ("id", "draft_id", "thread_id", "sha", "name", "type", "size", "added_at") SELECT CASE WHEN [id] IS NULL THEN NULL ELSE printf('00000000-0000-7000-8000-%012x', [id]) END, CASE WHEN [draft_id] IS NULL THEN NULL ELSE printf('00000000-0000-7000-8000-%012x', [draft_id]) END, CASE WHEN [thread_id] IS NULL THEN NULL ELSE printf('00000000-0000-7000-8000-%012x', [thread_id]) END, [sha], [name], [type], [size], [added_at] FROM "staged_attachments__old";
+DROP TABLE "staged_attachments__old";
+INSERT INTO "sequences" ("id", "name", "connection_id", "archived_at", "created_at", "updated_at", "description") SELECT CASE WHEN [id] IS NULL THEN NULL ELSE printf('00000000-0000-7000-8000-%012x', [id]) END, [name], CASE WHEN [connection_id] IS NULL THEN NULL ELSE printf('00000000-0000-7000-8000-%012x', [connection_id]) END, [archived_at], [created_at], [updated_at], [description] FROM "sequences__old";
+DROP TABLE "sequences__old";
+INSERT INTO "sequence_steps" ("id", "sequence_id", "position", "section", "parent_step_id", "branch", "kind", "gap_days", "at_time", "subject", "body", "voicemail", "linkedin_move", "reply_to_step_id", "enroll_sequence_id", "action_kind", "pipeline", "stage", "value", "condition", "operand", "true_label", "false_label", "needs_edit") SELECT CASE WHEN [id] IS NULL THEN NULL ELSE printf('00000000-0000-7000-8000-%012x', [id]) END, CASE WHEN [sequence_id] IS NULL THEN NULL ELSE printf('00000000-0000-7000-8000-%012x', [sequence_id]) END, [position], [section], CASE WHEN [parent_step_id] IS NULL THEN NULL ELSE printf('00000000-0000-7000-8000-%012x', [parent_step_id]) END, [branch], [kind], [gap_days], [at_time], [subject], [body], [voicemail], [linkedin_move], CASE WHEN [reply_to_step_id] IS NULL THEN NULL ELSE printf('00000000-0000-7000-8000-%012x', [reply_to_step_id]) END, CASE WHEN [enroll_sequence_id] IS NULL THEN NULL ELSE printf('00000000-0000-7000-8000-%012x', [enroll_sequence_id]) END, [action_kind], [pipeline], [stage], [value], [condition], [operand], [true_label], [false_label], [needs_edit] FROM "sequence_steps__old";
+DROP TABLE "sequence_steps__old";
+INSERT INTO "enrollments" ("id", "person_id", "sequence_id", "state", "reason", "paused_at", "pause_reason", "enrolled_at", "finished_at", "starts_at", "responded_at", "organization_id", "identity_id") SELECT CASE WHEN [id] IS NULL THEN NULL ELSE printf('00000000-0000-7000-8000-%012x', [id]) END, CASE WHEN [person_id] IS NULL THEN NULL ELSE printf('00000000-0000-7000-8000-%012x', [person_id]) END, CASE WHEN [sequence_id] IS NULL THEN NULL ELSE printf('00000000-0000-7000-8000-%012x', [sequence_id]) END, [state], [reason], [paused_at], [pause_reason], [enrolled_at], [finished_at], [starts_at], [responded_at], CASE WHEN [organization_id] IS NULL THEN NULL ELSE printf('00000000-0000-7000-8000-%012x', [organization_id]) END, CASE WHEN [identity_id] IS NULL THEN NULL ELSE printf('00000000-0000-7000-8000-%012x', [identity_id]) END FROM "enrollments__old";
+DROP TABLE "enrollments__old";
+INSERT INTO "tasks" ("id", "enrollment_id", "step_id", "due_at", "state", "done_at", "thread_id", "flag", "choice") SELECT CASE WHEN [id] IS NULL THEN NULL ELSE printf('00000000-0000-7000-8000-%012x', [id]) END, CASE WHEN [enrollment_id] IS NULL THEN NULL ELSE printf('00000000-0000-7000-8000-%012x', [enrollment_id]) END, CASE WHEN [step_id] IS NULL THEN NULL ELSE printf('00000000-0000-7000-8000-%012x', [step_id]) END, [due_at], [state], [done_at], CASE WHEN [thread_id] IS NULL THEN NULL ELSE printf('00000000-0000-7000-8000-%012x', [thread_id]) END, [flag], [choice] FROM "tasks__old";
+DROP TABLE "tasks__old";
+INSERT INTO "events" ("uid", "recurrence_id", "ics", "first_seen_at", "changed_at", "deleted_at") SELECT [uid], [recurrence_id], [ics], [first_seen_at], [changed_at], [deleted_at] FROM "events__old";
+DROP TABLE "events__old";
+INSERT INTO "event_provider" ("id", "owner", "ok_at", "failures", "error") SELECT [id], [owner], [ok_at], [failures], [error] FROM "event_provider__old";
+DROP TABLE "event_provider__old";
+INSERT INTO "pipeline_log" ("id", "organization_id", "pipeline", "kind", "stage", "value", "undoes", "effective_at", "recorded_at") SELECT CASE WHEN [id] IS NULL THEN NULL ELSE printf('00000000-0000-7000-8000-%012x', [id]) END, CASE WHEN [organization_id] IS NULL THEN NULL ELSE printf('00000000-0000-7000-8000-%012x', [organization_id]) END, [pipeline], [kind], [stage], [value], CASE WHEN [undoes] IS NULL THEN NULL ELSE printf('00000000-0000-7000-8000-%012x', [undoes]) END, [effective_at], [recorded_at] FROM "pipeline_log__old";
+DROP TABLE "pipeline_log__old";
+INSERT INTO "pipeline_targets" ("pipeline", "amount", "due") SELECT [pipeline], [amount], [due] FROM "pipeline_targets__old";
+DROP TABLE "pipeline_targets__old";

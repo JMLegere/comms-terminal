@@ -14,7 +14,7 @@ def test_activities_are_append_only_except_content_clearing_after_delete():
     db.execute("INSERT INTO connections (id, platform, external_id, self_id, label, connected_at)"
                " VALUES (2, 'slack', 'T0', 'U0JEREMY', 'Slack', '2026-10-12T00:00:00+00:00')")
     at = datetime(2026, 10, 12, 10, tzinfo=timezone.utc)
-    msg = inbox.Incoming(2, "D0ANA", "im", "MESSAGE", "D0ANA:1", inbox.Identity("slack_user", "U0ANA"), at, "secret")
+    msg = inbox.Incoming("2", "D0ANA", "im", "MESSAGE", "D0ANA:1", inbox.Identity("slack_user", "U0ANA"), at, "secret")
     thread = inbox.ingest(db, msg)
     assert inbox.ingest(db, msg) is None  # duplicate native_id stored once
 
@@ -33,20 +33,25 @@ def test_migrates_a_version_1_database(tmp_path):
     db = sqlite3.connect(tmp_path / "v1.db")
     db.execute("CREATE TABLE cases (id INTEGER PRIMARY KEY, title TEXT NOT NULL, created_at TEXT NOT NULL) STRICT")
     db.execute("INSERT INTO cases (title, created_at) VALUES ('Acme', '2026-10-01T00:00:00+00:00')")
-    db.execute("CREATE TABLE threads (id INTEGER PRIMARY KEY, status_detail TEXT NOT NULL,"
-               " status_changed_at TEXT NOT NULL) STRICT")
-    db.execute("INSERT INTO threads (status_detail, status_changed_at) VALUES"
-               " ('WAITING_FOR_CUSTOMER', '2026-10-01T09:30:00.250000+00:00'), ('CREATED', '2026-10-01T09:30:00+00:00')")
+    db.execute("CREATE TABLE threads (id INTEGER PRIMARY KEY, channel_id INTEGER NOT NULL REFERENCES channels (id),"
+               " native_thread_id TEXT NOT NULL, title TEXT NOT NULL, status TEXT NOT NULL, status_detail TEXT NOT NULL,"
+               " status_changed_at TEXT NOT NULL, snoozed_until TEXT, detail_before_snooze TEXT,"
+               " case_id INTEGER REFERENCES cases (id), created_at TEXT NOT NULL) STRICT")  # v1's columns: 33 copies each
+    db.execute("INSERT INTO threads (channel_id, native_thread_id, title, status, status_detail, status_changed_at,"
+               " created_at) VALUES (1, 't1', 'One', 'SNOOZED', 'WAITING_FOR_CUSTOMER', '2026-10-01T09:30:00.250000+00:00',"
+               " '2026-10-01T09:30:00+00:00'), (1, 't2', 'Two', 'TODO', 'CREATED', '2026-10-01T09:30:00+00:00',"
+               " '2026-10-01T09:30:00+00:00')")
     db.execute("CREATE TABLE connections (id INTEGER PRIMARY KEY, platform TEXT NOT NULL CHECK (platform IN"
                " ('email', 'slack')), external_id TEXT NOT NULL UNIQUE, self_id TEXT NOT NULL, label TEXT NOT NULL,"
                " connected_at TEXT NOT NULL, auth_ok INTEGER NOT NULL DEFAULT 1, last_error TEXT) STRICT")
-    db.executemany("INSERT INTO connections (platform, external_id, self_id, label, connected_at)"
-                   " VALUES (?, ?, ?, ?, '2026-10-01T00:00:00+00:00')",
+    db.executemany("INSERT INTO connections (id, platform, external_id, self_id, label, connected_at)"
+                   " VALUES ((SELECT printf('%d', count(*) + 1) FROM connections), ?, ?, ?, ?, '2026-10-01T00:00:00+00:00')",
                    [("slack", "T0", "U0", "Slack"), ("email", "me@x.io", "me@x.io", "Email"),
                     ("email", "me@fastmail.com", "me@fastmail.com", "Fastmail")])
     db.execute("CREATE TABLE channels (id INTEGER PRIMARY KEY, connection_id INTEGER NOT NULL REFERENCES connections (id),"
                " native_id TEXT NOT NULL, name TEXT, kind TEXT NOT NULL CHECK (kind IN ('mailbox', 'channel', 'private', 'im',"
                " 'mpim')), UNIQUE (connection_id, native_id)) STRICT")  # as in v1 (4ff3c55); 28 rebuilds it
+    db.execute("INSERT INTO channels (connection_id, native_id, kind) VALUES (1, 'C0', 'channel')")
     db.execute("CREATE TABLE identities (id INTEGER PRIMARY KEY, person_id INTEGER, kind TEXT NOT NULL CHECK (kind IN"
                " ('email', 'slack_user')), value TEXT NOT NULL, blocked INTEGER NOT NULL DEFAULT 0, UNIQUE (kind, value)) STRICT")
     db.execute("INSERT INTO identities (kind, value) VALUES ('email', 'ana@acme.com')")
@@ -56,6 +61,15 @@ def test_migrates_a_version_1_database(tmp_path):
                    [("accounts.google.com", "accounts.google.com"), ("google.com", "google.com"),
                     ("ws-ts.nb.ca", "ws-ts.nb.ca"), ("mail.attio.com", "Attio")])
     db.execute("CREATE TABLE persons (id INTEGER PRIMARY KEY, display_name TEXT NOT NULL, created_at TEXT NOT NULL) STRICT")
+    db.execute("CREATE TABLE channel_rules (id INTEGER PRIMARY KEY, connection_id INTEGER NOT NULL REFERENCES connections (id),"
+               " kind TEXT NOT NULL CHECK (kind IN ('channel', 'prefix', 'suffix')), value TEXT NOT NULL,"
+               " UNIQUE (connection_id, kind, value)) STRICT")  # as in v1 (4ff3c55); 33 rebuilds every table
+    db.execute("CREATE TABLE activities (id INTEGER PRIMARY KEY, thread_id INTEGER NOT NULL REFERENCES threads (id),"
+               " kind TEXT NOT NULL CHECK (kind IN ('MESSAGE', 'EDIT', 'DELETE')), occurred_at TEXT NOT NULL,"
+               " identity_id INTEGER REFERENCES identities (id), native_id TEXT NOT NULL,"
+               " target_id INTEGER REFERENCES activities (id), content TEXT,"
+               " data TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(data)), UNIQUE (kind, native_id),"
+               " CHECK ((kind = 'MESSAGE') = (target_id IS NULL))) STRICT")
     db.execute("PRAGMA user_version = 1")
     inbox.migrate(db)
     assert db.execute("SELECT description FROM cases").fetchone()[0] == ""
@@ -67,8 +81,8 @@ def test_migrates_a_version_1_database(tmp_path):
     assert db.execute("SELECT platform, external_id FROM connections ORDER BY id").fetchall() == [
         ("slack", "T0"), ("gmail", "me@x.io"), ("fastmail", "me@fastmail.com")]
     assert db.execute("SELECT kind, value FROM identities").fetchall() == [("email", "ana@acme.com")]
-    db.execute("INSERT INTO connections (platform, external_id, self_id, label, connected_at)"
-               " VALUES ('quo', '+15068324154', '+15068324154', 'Quo', '2026-10-12T00:00:00+00:00')")
+    db.execute("INSERT INTO connections (id, platform, external_id, self_id, label, connected_at)"
+               " VALUES ((SELECT printf('%d', count(*) + 1) FROM connections), 'quo', '+15068324154', '+15068324154', 'Quo', '2026-10-12T00:00:00+00:00')")
     db.execute("INSERT INTO identities (kind, value) VALUES ('phone', '+15066092430')")
     # v3 (#116): threads already Waiting get a follow-up 5 days after they began waiting, in _iso's format
     assert [r[0] for r in db.execute("SELECT follow_up_at FROM threads ORDER BY id")] == [
@@ -83,8 +97,8 @@ def test_an_echo_of_a_sent_reply_is_not_stored_twice():
     db = inbox.connect()
     inbox.migrate(db)
     with db:
-        cid = db.execute("INSERT INTO connections (platform, external_id, self_id, label, connected_at)"
-                         " VALUES ('gmail', 'me@x.io', 'me@x.io', 'Gmail', ?)", (at.isoformat(),)).lastrowid
+        cid = db.execute("INSERT INTO connections (id, platform, external_id, self_id, label, connected_at)"
+                         " VALUES ((SELECT printf('%d', count(*) + 1) FROM connections), 'gmail', 'me@x.io', 'me@x.io', 'Gmail', ?) RETURNING id", (at.isoformat(),)).fetchone()[0]
     ana = inbox.Identity("email", "ana@acme.com")
     t = inbox.ingest(db, inbox.Incoming(cid, "me@x.io", "mailbox", "MESSAGE", "<a1@acme.com>", ana, at, "hi", [], "Hi"))
     mine = inbox.Incoming(cid, "me@x.io", "mailbox", "MESSAGE", "<sent@x.io>", None, at + timedelta(minutes=5),
@@ -114,8 +128,8 @@ def test_waiting_returns_to_todo_after_four_days_without_a_reply():
     db = inbox.connect()
     inbox.migrate(db)
     with db:
-        cid = db.execute("INSERT INTO connections (platform, external_id, self_id, label, connected_at)"
-                         " VALUES ('gmail', 'me@x.io', 'me@x.io', 'Gmail', ?)", (at.isoformat(),)).lastrowid
+        cid = db.execute("INSERT INTO connections (id, platform, external_id, self_id, label, connected_at)"
+                         " VALUES ((SELECT printf('%d', count(*) + 1) FROM connections), 'gmail', 'me@x.io', 'me@x.io', 'Gmail', ?) RETURNING id", (at.isoformat(),)).fetchone()[0]
     mine = inbox.Incoming(cid, "me@x.io", "mailbox", "MESSAGE", "<m1@x.io>", None, at, "Proposal attached", [], "Proposal")
     t = inbox.ingest(db, mine)
     assert (t.status_detail, t.follow_up_at) == ("WAITING_FOR_CUSTOMER", "2026-10-16T09:00:00.000000+00:00")
@@ -133,11 +147,11 @@ def test_version_12_upgrade_adds_only_receipts_and_preserves_records_files_and_g
         sha = files.store_file(db, b"retained file")
         inbox.add_attachments(db, activity_id, [{"name": "retained.txt", "type": "text/plain", "size": 13, "sha": sha}])
         inbox.stage(db, sha=sha, name="reply.txt", type="text/plain", size=13, thread_id=thread_id)
-        inbox.save_draft(db, {"connection_id": 1, "kind": "email", "sender": "me@x.io", "to": "ana@acme.com",
+        inbox.save_draft(db, {"connection_id": "1", "kind": "email", "sender": "me@x.io", "to": "ana@acme.com",
                              "cc": "", "subject": "Retained draft", "body": "Unsent"})
         raw = b"Message-ID: <retained@test>\r\n\r\nRetained raw"
         raw_sha = files.store_raw(db, raw)
-        inbox.ingest(db, inbox.Incoming(1, "me@x.io", "mailbox", "MESSAGE", "<retained@test>", None, NOW,
+        inbox.ingest(db, inbox.Incoming("1", "me@x.io", "mailbox", "MESSAGE", "<retained@test>", None, NOW,
                                         "Retained raw", data={"raw": raw_sha}))
         from schema_history import downgrade
         downgrade(db, 12)
@@ -146,13 +160,13 @@ def test_version_12_upgrade_adds_only_receipts_and_preserves_records_files_and_g
         read = lambda: {name: [tuple(r) for r in db.execute(f'SELECT {columns[name]} FROM "{name}" ORDER BY rowid')]  # noqa: E731
                         for name in tables}
         rows = read()
-        from schema_history import changed_since
+        from schema_history import changed_since, unmigrated
         unchanged = ("SELECT type, name, tbl_name, sql FROM sqlite_schema WHERE tbl_name NOT IN"
                      f" ({', '.join(repr(t) for t in changed_since(12))}) ORDER BY name")
         schema = [tuple(r) for r in db.execute(unchanged)]
         inbox.migrate(db)
         assert db.execute("PRAGMA user_version").fetchone()[0] == inbox.SCHEMA_VERSION
-        assert read() == rows  # 13-17 add tables, and NULL columns on existing Drafts and People
+        assert unmigrated(read()) == rows  # 13-17 add tables, and NULL columns on existing Drafts and People
         assert db.execute("SELECT count(*) FROM composition_drafts WHERE thread_id IS NOT NULL").fetchone()[0] == 0
         names = {row[1] for row in schema}  # later migrations add tables too
         assert [tuple(r) for r in db.execute(unchanged) if r[1] in names] == schema
@@ -203,8 +217,8 @@ def test_version_23_gives_existing_email_connections_the_inbound_addresses_their
     with db:
         for platform, address in [("gmail", "Jeremy@agentmaple.com"), ("fastmail", "legere@fastmail.com"),
                                   ("slack", "T0")]:
-            db.execute("INSERT INTO connections (platform, external_id, self_id, label, connected_at)"
-                       " VALUES (?, ?, ?, 'x', '2026-10-20T00:00:00+00:00')", (platform, address, address))
+            db.execute("INSERT INTO connections (id, platform, external_id, self_id, label, connected_at)"
+                       " VALUES ((SELECT printf('%d', count(*) + 1) FROM connections), ?, ?, ?, 'x', '2026-10-20T00:00:00+00:00')", (platform, address, address))
     inbox.migrate(db)
     assert [tuple(r) for r in db.execute("SELECT platform, inbound FROM connections ORDER BY id")] == [
         ("gmail", "jeremy@inbox.agentmaple.com"), ("fastmail", "fastmail@inbox.agentmaple.com"), ("slack", None)]

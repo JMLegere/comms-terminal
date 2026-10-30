@@ -11,12 +11,14 @@ import random
 import re
 from collections import Counter
 import sqlite3
+import threading
 import urllib.parse
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
+from time import time_ns
 from email import policy
 from email.parser import BytesHeaderParser
 from email.utils import getaddresses
@@ -25,7 +27,7 @@ from typing import Protocol, Sequence
 from . import clock, files, platforms
 from .writers import writer
 
-SCHEMA_VERSION = 32
+SCHEMA_VERSION = 33
 WAIT = timedelta(days=4)  # Waiting for them ends after this with no reply: back to Todo to follow up (#116)
 EMAIL_CONFIRMATION_PENDING = "Email confirmation pending; wait for its sent receipt before replying."
 MIGRATIONS = {  # version -> statement that upgrades an existing database to it
@@ -599,10 +601,11 @@ ALTER TABLE composition_drafts ADD COLUMN needs_edit INTEGER NOT NULL DEFAULT 0 
 CREATE INDEX changes_at ON changes (at);""",
 }
 CHANGES_KEPT = timedelta(days=7)  # a laptop cursor older than this gets a whole Snapshot (ADR 0012)
+LEGACY_ID = "00000000-0000-7000-8000-%012x"  # migration 33: integer id n as a UUIDv7 from time zero, below every new id
 
 
 CHANGE_TRIGGER = ("CREATE TRIGGER IF NOT EXISTS changes_{table}_{event} AFTER {event} ON {table} BEGIN"
-                  " INSERT INTO changes (tbl, row_id, op) VALUES ('{table}', {row}.rowid, '{op}'); END")
+                  " INSERT INTO changes (tbl, row_id, op) VALUES ('{table}', {row}.{key}, '{op}'); END")
 CHANGE_EVENTS = (("insert", "NEW", "I"), ("update", "NEW", "U"), ("delete", "OLD", "D"))
 
 
@@ -613,7 +616,10 @@ def change_triggers(db) -> list[str]:
         return []  # before migration 32 there is no log to write to
     tables = [r[0] for r in db.execute("SELECT name FROM sqlite_schema WHERE type = 'table'"
                                         " AND name NOT LIKE 'sqlite_%' AND name != 'changes' ORDER BY name")]
-    return [CHANGE_TRIGGER.format(table=table, event=event, row=row, op=op)
+    keyed = {table for table in tables if any(c[1] == "id" and c[2] == "TEXT" for c in db.execute(
+        f'PRAGMA table_info("{table}")'))}
+    return [CHANGE_TRIGGER.format(table=table, event=event, row=row, op=op,
+                                  key="id" if table in keyed else "rowid")  # a natural-key table: its rowid
             for table in tables for event, row, op in CHANGE_EVENTS]
 
 
@@ -632,6 +638,34 @@ FREE_MAIL = frozenset({
 
 class SendFailed(Exception):
     """Raised by a Sender when a reply could not be sent."""
+
+
+_ids = threading.Lock()
+_last_id = [0, 0]  # milliseconds and counter of the newest id this process made
+
+
+def is_id(value) -> bool:
+    """Whether `value` can be a row id: non-empty text (ADR 0012)."""
+    return isinstance(value, str) and value != ""
+
+
+def new_id() -> str:
+    """A new row id: a UUIDv7 (RFC 9562), whose leading milliseconds sort it after every older id; within one
+    millisecond a counter keeps this process's ids in the order it made them (ADR 0012). It is each id column's
+    default, through the new_id() SQL function that connect() registers."""
+    ms = time_ns() // 1_000_000
+    with _ids:
+        last, seq = _last_id
+        if ms <= last:
+            ms, seq = (last, seq + 1) if seq < 0xFFF else (last + 1, 0)
+        else:
+            seq = int.from_bytes(os.urandom(2), "big") & 0x7FF  # a random start, with room left to count up
+        _last_id[:] = [ms, seq]
+    low = int.from_bytes(os.urandom(8), "big") & ((1 << 62) - 1)
+    return str(uuid.UUID(int=ms << 80 | 0x7 << 76 | seq << 64 | 0b10 << 62 | low))
+
+
+MIGRATIONS[33] = Path(__file__).with_name("migration_33.sql").read_text()
 
 
 class SendUnknown(SendFailed):
@@ -782,6 +816,7 @@ def connect(path: str = ":memory:") -> sqlite3.Connection:
     db.execute("PRAGMA foreign_keys = ON")
     db.execute("PRAGMA busy_timeout = 5000")  # the service and the console share the file
     db.create_function("org_key", 1, _org, deterministic=True)
+    db.create_function("new_id", 0, new_id)  # every id column's default (ADR 0012)
     if path != ":memory:":
         db.execute("PRAGMA journal_mode = WAL")
     return db
@@ -831,6 +866,7 @@ def migrate(db: sqlite3.Connection) -> None:
     sql = (Path(__file__).with_name("schema.sql")).read_text() if version == 0 else ";\n".join(
         MIGRATIONS[v] for v in range(version + 1, SCHEMA_VERSION + 1))
     db.create_function("org_key", 1, _org, deterministic=True)  # migration 7 (connect() also registers it)
+    db.create_function("new_id", 0, new_id)  # schema.sql's id defaults, migration 33
     fk = db.execute("PRAGMA foreign_keys").fetchone()[0]
     db.execute("PRAGMA foreign_keys = OFF")  # table rebuilds (5) drop and rename parents; checked before commit
     # A rebuild's statement journal spills to a temp file past 64 KiB; the update's migration check runs in a
@@ -887,12 +923,11 @@ def save_draft(db, values: dict, *, draft_id: int | None = None,
     elif values["subject"] is not None or values["cc"] != "":
         raise ValueError("SMS and Slack draft subject must be None and cc must be empty")
     connection_id = values["connection_id"]
-    if connection_id is not None and (type(connection_id) is not int or connection_id <= 0):
-        raise ValueError("draft connection_id must be a positive integer or None")
+    if connection_id is not None and not is_id(connection_id):
+        raise ValueError("draft connection_id must be an id or None")
     if (draft_id, expected_revision) != (None, None) and (
-            type(draft_id) is not int or draft_id <= 0
-            or type(expected_revision) is not int or expected_revision <= 0):
-        raise ValueError("existing draft requires positive integer draft_id and expected_revision")
+            not is_id(draft_id) or type(expected_revision) is not int or expected_revision <= 0):
+        raise ValueError("existing draft requires a draft_id and a positive integer expected_revision")
     with _write_snapshot(db):
         if connection_id is not None:
             c = db.execute("SELECT platform FROM connections WHERE id = ?", (connection_id,)).fetchone()
@@ -904,8 +939,8 @@ def save_draft(db, values: dict, *, draft_id: int | None = None,
         if draft_id is None:
             draft_id = db.execute(
                 'INSERT INTO composition_drafts (connection_id, kind, sender, "to", cc, subject, body,'
-                " revision, created_at, updated_at, thread_id, task_id) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)",
-                (*envelope, at, at, thread_id, task_id)).lastrowid
+                " revision, created_at, updated_at, thread_id, task_id) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?) RETURNING id",
+                (*envelope, at, at, thread_id, task_id)).fetchone()[0]
         else:
             saved = db.execute(
                 'UPDATE composition_drafts SET connection_id = ?, kind = ?, sender = ?, "to" = ?,'
@@ -1027,8 +1062,8 @@ def reply_draft(db, thread_id: int) -> dict | None:
 
 
 def get_draft(db, draft_id: int) -> dict:
-    if type(draft_id) is not int or draft_id <= 0:
-        raise ValueError("draft_id must be a positive integer")
+    if not is_id(draft_id):
+        raise ValueError("draft_id must be an id")
     r = db.execute("SELECT * FROM composition_drafts WHERE id = ?", (draft_id,)).fetchone()
     if r is None:
         raise KeyError(f"draft {draft_id}")
@@ -1094,7 +1129,7 @@ def draft_problem(values: dict, files: Sequence[Staged] = ()) -> str | None:
 
 
 def _send_checkpoint(db, connection_id):
-    high_water = db.execute("SELECT coalesce(max(id), 0) FROM activities").fetchone()[0]
+    high_water = db.execute("SELECT coalesce(max(id), ?) FROM activities", (LEGACY_ID % 0,)).fetchone()[0]
     states = {r["id"]: tuple(r)[1:] for r in db.execute(
         "SELECT t.id, t.status, t.status_detail, t.status_changed_at, t.snoozed_until,"
         " t.detail_before_snooze, t.follow_up_at, t.case_id FROM threads t"
@@ -1124,7 +1159,7 @@ def _preserve_send_changes(db, thread_id, changes):
     candidates = [(tid, state) for tid, state in changes.items() if get_thread(db, tid).id == thread_id]
     if not candidates:
         return False
-    _, state = max(candidates, key=lambda item: (datetime.fromisoformat(item[1][2]), -item[0]))
+    _, state = max(sorted(candidates, key=lambda item: item[0]), key=lambda item: datetime.fromisoformat(item[1][2]))  # a tie: the lowest id
     db.execute(
         "UPDATE threads SET status = ?, status_detail = ?, status_changed_at = ?, snoozed_until = ?,"
         " detail_before_snooze = ?, follow_up_at = ? WHERE id = ?", (*state[:6], thread_id))
@@ -1234,7 +1269,7 @@ def send_draft(db, draft_id: int, revision: int, sender: Sender, *, again: bool 
             data["seen_through_activity_id"] = checkpoint[0]
         return db.execute(
             "INSERT INTO activities (thread_id, kind, occurred_at, native_id, content, data)"
-            " VALUES (?, 'MESSAGE', ?, ?, ?, ?)", (thread_id, clock.iso(now), native_id, d["body"], json.dumps(data))).lastrowid, thread_id
+            " VALUES (?, 'MESSAGE', ?, ?, ?, ?) RETURNING id", (thread_id, clock.iso(now), native_id, d["body"], json.dumps(data))).fetchone()[0], thread_id
 
     def settle(thread_id):
         if gmail:
@@ -1259,8 +1294,8 @@ def send_draft(db, draft_id: int, revision: int, sender: Sender, *, again: bool 
 def _new_thread(db, channel_id, native_id, title, status, at) -> int:
     return db.execute(
         "INSERT INTO threads (channel_id, native_thread_id, title, status, status_detail,"
-        " status_changed_at, created_at, follow_up_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (channel_id, native_id, title, *status, clock.iso(at), clock.iso(at), _follow_up(status[1], at))).lastrowid
+        " status_changed_at, created_at, follow_up_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+        (channel_id, native_id, title, *status, clock.iso(at), clock.iso(at), _follow_up(status[1], at))).fetchone()[0]
 
 
 def _set_status(db, thread_id, at, status, detail, snoozed_until=None, before=None, *, cause):
@@ -1593,8 +1628,8 @@ def display_name(db, person_id: int) -> str:
 
 
 def _new_person(db, name) -> int:
-    return db.execute("INSERT INTO persons (display_name, created_at) VALUES (?, ?)",
-                      (name, clock.iso(clock.now()))).lastrowid
+    return db.execute("INSERT INTO persons (display_name, created_at) VALUES (?, ?) RETURNING id",
+                      (name, clock.iso(clock.now()))).fetchone()[0]
 
 
 def _identity_for(db, sender: Identity) -> sqlite3.Row:
@@ -1788,10 +1823,10 @@ def add_attachments(db, activity_id: int, items: list[dict]) -> list[int]:
 def _add_attachments(db, activity_id: int, items: list[dict]) -> list[int]:
     return [db.execute(
         "INSERT INTO attachments (activity_id, position, name, type, size, inline, content_id, source, sha, state)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
         (activity_id, it.get("position", k), it["name"], it["type"], it["size"], int(bool(it.get("inline"))),
          it.get("content_id"), json.dumps(it.get("source") or {}), it.get("sha"),
-         "stored" if it.get("sha") else "pending")).lastrowid
+         "stored" if it.get("sha") else "pending")).fetchone()[0]
         for k, it in enumerate(items)]
 
 
@@ -1877,7 +1912,7 @@ def stage(db, *, sha: str, name: str, type: str, size: int,
         raise ValueError("stage needs the sha256 of a stored file")
     with db:
         return db.execute(f"INSERT INTO staged_attachments ({column}, sha, name, type, size, added_at)"
-                          " VALUES (?, ?, ?, ?, ?, ?)", (owner, sha, name, type, size, clock.iso(clock.now()))).lastrowid
+                          " VALUES (?, ?, ?, ?, ?, ?) RETURNING id", (owner, sha, name, type, size, clock.iso(clock.now()))).fetchone()[0]
 
 
 def staged(db, *, draft_id: int | None = None, thread_id: int | None = None) -> list[dict]:
@@ -1960,7 +1995,7 @@ def resend_native_id(email_id: str) -> str:
 def record_resend_receipt(db, connection_id: int, email_id: str, message_id: str) -> bool:
     """Durably store verified receipt metadata. Requires an idle connection; never commits caller work."""
     email_id = resend_native_id(email_id)[1:-8]
-    if type(connection_id) is not int or connection_id <= 0:
+    if not is_id(connection_id):
         raise ValueError("invalid Gmail Connection")
     if not isinstance(message_id, str) or EMAIL_ID.fullmatch(message_id) is None:
         raise ValueError("invalid SMTP Message-ID")
@@ -2104,24 +2139,25 @@ def _reconcile_email_threads(db, apply, channel_id, recover=False) -> dict:
         if len(case_ids) > 1:
             result["conflicts"].append(ids)
             continue
-        source = max(ids, key=lambda tid: (datetime.fromisoformat(threads[tid]["status_changed_at"]), -tid))
+        source = min(ids, key=lambda tid: (-datetime.fromisoformat(threads[tid]["status_changed_at"]).timestamp(), tid))
         messages = [a for a in rows if a["thread_id"] in ids]
         latest_own = max((a for a in messages if a["identity_id"] is None),
                          key=lambda a: (datetime.fromisoformat(a["occurred_at"]), a["id"]), default=None)
         state = threads[source]
         data = json.loads(latest_own["data"]) if latest_own is not None else {}
         seen = data.get("seen_through_activity_id") if isinstance(data, dict) else None
+        seen = LEGACY_ID % seen if type(seen) is int and seen >= 0 else seen  # written before migration 33
         aliases = {n for a in messages for n in own[a["id"]] - _email_ids([a["native_id"]], single=True)}
         receipt_linked = any(a["identity_id"] is not None and valid_refs[a["id"]] & aliases for a in messages)
         if (state["status_detail"] == "WAITING_FOR_CUSTOMER" and receipt_linked
-                and type(seen) is int and 0 <= seen < latest_own["id"]
+                and is_id(seen) and seen < latest_own["id"]
                 and datetime.fromisoformat(state["status_changed_at"]) <= datetime.fromisoformat(latest_own["occurred_at"])):
             # The latest send's durable snapshot distinguishes unseen arrivals from already answered work.
             unseen = {a["thread_id"] for a in messages if a["identity_id"] is not None
                       and a["id"] > seen and threads[a["thread_id"]]["status"] == "TODO"}
             if unseen:
-                source = max(unseen, key=lambda tid: (
-                    datetime.fromisoformat(threads[tid]["status_changed_at"]), -tid))
+                source = min(unseen, key=lambda tid: (
+                    -datetime.fromisoformat(threads[tid]["status_changed_at"]).timestamp(), tid))
         result["groups"].append({"keep": ids[0], "merge": ids[1:], "status_source": source,
                                  "case_id": next(iter(case_ids), None)})
     if apply:
@@ -2146,7 +2182,7 @@ def reconcile_email_threads(db, apply: bool = False, channel_id: int | None = No
     """Preview exact mailbox reference groups; explicit apply atomically indexes raw headers and aliases."""
     if not isinstance(apply, bool):
         raise ValueError("apply must be True or False")
-    if channel_id is not None and type(channel_id) is not int:
+    if channel_id is not None and not is_id(channel_id):
         raise ValueError("channel_id must be a mailbox ID or None")
     if not apply:
         with _read_snapshot(db):
@@ -2229,9 +2265,9 @@ def _ingest(db, inc: Incoming) -> Thread | None:
 
     activity_id = db.execute(
         "INSERT INTO activities (thread_id, kind, occurred_at, identity_id, native_id,"
-        " target_id, content, data) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        " target_id, content, data) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
         (thread_id, inc.kind, clock.iso(at), identity_id, inc.native_id, target_id,
-         None if inc.kind == "DELETE" else inc.content, json.dumps(inc.data))).lastrowid
+         None if inc.kind == "DELETE" else inc.content, json.dumps(inc.data))).fetchone()[0]
     if inc.kind == "MESSAGE":
         _add_attachments(db, activity_id, _downloads(inc.data))
     if inc.kind == "MESSAGE" and inc.channel_kind == "mailbox":
@@ -2269,8 +2305,8 @@ def act(db, thread_id: int, action: Action | Reopen) -> Thread:
         if isinstance(action, SetCase):
             case_id = action.case_id
             if action.new_title is not None:
-                case_id = db.execute("INSERT INTO cases (title, created_at) VALUES (?, ?)",
-                                     (action.new_title, clock.iso(now))).lastrowid
+                case_id = db.execute("INSERT INTO cases (title, created_at) VALUES (?, ?) RETURNING id",
+                                     (action.new_title, clock.iso(now))).fetchone()[0]
             db.execute("UPDATE threads SET case_id = ? WHERE id = ?", (case_id, thread_id))
             if case_id != t.case_id:
                 _audit(db, thread_id, now, "action", case_id=case_id, data=_left(t.case_id))
@@ -2324,12 +2360,13 @@ def reply(db, thread_id: int, text: str, sender: Sender,
         data = {"to": list(to), "cc": list(cc)}
         if receipts:
             data["seen_through_activity_id"] = checkpoint[0]
-        cur = db.execute(
+        row = db.execute(
             "INSERT OR IGNORE INTO activities (thread_id, kind, occurred_at, native_id, content, data)"
-            " VALUES (?, 'MESSAGE', ?, ?, ?, ?)", (t.id, clock.iso(now), native_id, text, json.dumps(data)))
+            " VALUES (?, 'MESSAGE', ?, ?, ?, ?) RETURNING id", (t.id, clock.iso(now), native_id, text, json.dumps(data))
+        ).fetchone()
         db.execute("DELETE FROM composition_drafts WHERE thread_id = ?", (staged_on,))  # the reply Draft went out
         sequences.task_sent(db, draft, t.id, now)
-        return cur.lastrowid if cur.rowcount else None, t.id
+        return row[0] if row else None, t.id
 
     def settle(tid):
         t = get_thread(db, tid)
@@ -2636,7 +2673,7 @@ def rollup(details, order=CASE_VIEWS, empty="Todo") -> str:
 def create_case(db, title: str) -> int:
     """A Case with no Threads yet (#120)."""
     with db:
-        return db.execute("INSERT INTO cases (title, created_at) VALUES (?, ?)", (title, clock.iso(clock.now()))).lastrowid
+        return db.execute("INSERT INTO cases (title, created_at) VALUES (?, ?) RETURNING id", (title, clock.iso(clock.now()))).fetchone()[0]
 
 
 def case_queue(db, view: str | None = None) -> list[dict]:
@@ -2860,7 +2897,7 @@ def person_view(db, person_id: int, every: dict | None = None) -> dict:
         threads = person_threads(db, person_id, every)
         cases = sorted({r[0] for r in db.execute(
             "SELECT c.title FROM cases c JOIN threads t ON t.case_id = c.id WHERE t.id IN"
-            f" ({','.join(str(t.id) for t in threads) or 'NULL'})")})
+            f" ({','.join('?' * len(threads)) or 'NULL'})", [t.id for t in threads])})
         return {"id": person_id, "name": p["display_name"], "identities": identities,
                 "organizations": person_organizations(db, person_id), "threads": threads, "cases": cases}
 

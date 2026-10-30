@@ -28,7 +28,7 @@ class FakeSender:
 
 
 def email_draft(db, **changes):
-    return inbox.save_draft(db, envelope(connection_id=1, sender=SELF, to="Ana <ana@acme.test>, bo@acme.test",
+    return inbox.save_draft(db, envelope(connection_id="1", sender=SELF, to="Ana <ana@acme.test>, bo@acme.test",
                                          cc="cy@acme.test", subject="Checklist", body="Hi Ana") | changes)
 
 
@@ -95,24 +95,24 @@ def test_incomplete_or_stale_draft_makes_zero_provider_calls(db, changes, proble
 
 
 def test_sms_draft_joins_the_conversation_inside_the_grouping_window(db):
-    first = inbox.ingest(db, inbox.Incoming(3, PEER, "im", "MESSAGE", "quo-1", inbox.Identity("phone", PEER), AT,
+    first = inbox.ingest(db, inbox.Incoming("3", PEER, "im", "MESSAGE", "quo-1", inbox.Identity("phone", PEER), AT,
                                             "earlier text", data={"peer": PEER}))
-    two = inbox.save_draft(db, envelope("sms", connection_id=3, sender=PHONE, to=f"{PEER}, +15550001003", body="x"))
+    two = inbox.save_draft(db, envelope("sms", connection_id="3", sender=PHONE, to=f"{PEER}, +15550001003", body="x"))
     with pytest.raises(ValueError, match="one number"):
         inbox.send_draft(db, two["id"], two["revision"], FakeSender())
-    d = inbox.save_draft(db, envelope("sms", connection_id=3, sender=PHONE, to=PEER, body="New topic\nmore"))
+    d = inbox.save_draft(db, envelope("sms", connection_id="3", sender=PHONE, to=PEER, body="New topic\nmore"))
     t = inbox.send_draft(db, d["id"], d["revision"], FakeSender("quo-2"))
     assert t.id == first.id and t.status_detail == "WAITING_FOR_CUSTOMER"  # FR-33: same rule as a text from Quo
     assert db.execute("SELECT count(*) FROM threads").fetchone()[0] == 1
-    bare = inbox.save_draft(db, envelope("sms", connection_id=3, sender=PHONE, to="1 (555) 000-1002", body="y"))
+    bare = inbox.save_draft(db, envelope("sms", connection_id="3", sender=PHONE, to="1 (555) 000-1002", body="y"))
     sender = FakeSender("quo-3")
     inbox.send_draft(db, bare["id"], bare["revision"], sender)
     assert sender.calls[0][0] == [PEER]
-    reply = inbox.Incoming(3, PEER, "im", "MESSAGE", "quo-4", inbox.Identity("phone", PEER), AT, "Thanks",
+    reply = inbox.Incoming("3", PEER, "im", "MESSAGE", "quo-4", inbox.Identity("phone", PEER), AT, "Thanks",
                            data={"peer": PEER})
     assert inbox.ingest(db, reply).id == first.id  # the reply joins the same Thread
     # Quo's webhook echo of the sent text is a duplicate, not a second Activity
-    echo = inbox.Incoming(3, PEER, "im", "MESSAGE", "quo-2", None, AT, "New topic\nmore", data={"peer": PEER})
+    echo = inbox.Incoming("3", PEER, "im", "MESSAGE", "quo-2", None, AT, "New topic\nmore", data={"peer": PEER})
     assert inbox.ingest(db, echo) is None
 
 
@@ -250,15 +250,15 @@ def test_authenticated_sent_payload_is_minimal_durable_and_idempotent(db):
     body = json.dumps({"type": "email.sent", "data": {"email_id": RESEND_ID.upper(),
                       "message_id": "<Actual-ID@email.amazonses.com>", "to": ["private@example.test"],
                       "subject": "discard", "text": "discard"}}).encode()
-    assert email.handle_resend_hook(db, 1, body) == (204, True)
+    assert email.handle_resend_hook(db, "1", body) == (204, True)
     assert not db.in_transaction
-    assert email.handle_resend_hook(db, 1, body) == (204, False)
+    assert email.handle_resend_hook(db, "1", body) == (204, False)
     assert [tuple(r) for r in db.execute("SELECT * FROM resend_receipts")] == [
-        (RESEND_ID, 1, "<Actual-ID@email.amazonses.com>")]
+        (RESEND_ID, "1", "<Actual-ID@email.amazonses.com>")]
     assert all(db.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 0 for table in ("activities", "threads"))
     conflicting = json.dumps({"type": "email.sent", "data": {"email_id": RESEND_ID,
                               "message_id": "<different@email.amazonses.com>"}}).encode()
-    assert email.handle_resend_hook(db, 1, conflicting) == (409, False)
+    assert email.handle_resend_hook(db, "1", conflicting) == (409, False)
     assert db.execute("SELECT message_id FROM resend_receipts").fetchone()[0] == "<Actual-ID@email.amazonses.com>"
 
 
@@ -274,12 +274,12 @@ def test_authenticated_sent_payload_is_minimal_durable_and_idempotent(db):
     )],
 ])
 def test_authenticated_sent_payload_rejects_malformed_without_writes(db, body):
-    assert email.handle_resend_hook(db, 1, body) == (400, False)
+    assert email.handle_resend_hook(db, "1", body) == (400, False)
     assert db.execute("SELECT count(*) FROM resend_receipts").fetchone()[0] == 0
 
 
 def test_authenticated_unrelated_event_is_ignored_without_parsing_its_data(db):
-    assert email.handle_resend_hook(db, 1, b'{"type":"email.delivered","data":"not a sent receipt"}') == (204, False)
+    assert email.handle_resend_hook(db, "1", b'{"type":"email.delivered","data":"not a sent receipt"}') == (204, False)
     assert db.execute("SELECT count(*) FROM resend_receipts").fetchone()[0] == 0
 
 
@@ -289,7 +289,7 @@ def test_authenticated_sent_payload_does_not_acknowledge_storage_failure(db, mon
     monkeypatch.setattr(inbox, "record_resend_receipt", broken)
     body = json.dumps({"type": "email.sent", "data": {"email_id": RESEND_ID, "message_id": "<x@test>"}}).encode()
     with pytest.raises(sqlite3.OperationalError):
-        email.handle_resend_hook(db, 1, body)
+        email.handle_resend_hook(db, "1", body)
 
 
 @pytest.mark.parametrize("outcome,error", [
@@ -317,10 +317,10 @@ def test_quo_start_sends_to_the_one_number():
 
 def test_send_draft_route_maps_outcomes(db):
     d = email_draft(db)
-    senders = serve.Senders(made={1: FakeSender(inbox.SendUnknown("lost"))})
+    senders = serve.Senders(made={"1": FakeSender(inbox.SendUnknown("lost"))})
     body = json.dumps({"draft_id": d["id"], "revision": d["revision"]}).encode()
     assert serve.handle_send_draft(db, body, senders)[0] == 504
-    senders.made[1] = FakeSender()
+    senders.made["1"] = FakeSender()
     assert serve.handle_send_draft(db, body, senders)[0] == 504  # locked: no second send without `again`
     again = json.dumps({"draft_id": d["id"], "revision": d["revision"], "again": True}).encode()
     status, out = serve.handle_send_draft(db, again, senders)
@@ -334,11 +334,11 @@ class FakeSlackSender(FakeSender):
 
 
 def slack_draft(db, to, body="Deploy is out\nnotes"):
-    return inbox.save_draft(db, envelope("slack", connection_id=4, sender="USELF", to=to, body=body))
+    return inbox.save_draft(db, envelope("slack", connection_id="4", sender="USELF", to=to, body=body))
 
 
 def sam(native_id, at, **data):
-    return inbox.Incoming(4, "D1", "im", "MESSAGE", native_id, inbox.Identity("slack_user", "USAM"), at, "hi",
+    return inbox.Incoming("4", "D1", "im", "MESSAGE", native_id, inbox.Identity("slack_user", "USAM"), at, "hi",
                           data={"channel": "D1", "ts": native_id.split(":")[1], "kind": "im", **data})
 
 
@@ -354,7 +354,7 @@ def test_slack_draft_joins_a_dm_inside_24_hours_and_starts_one_after(db, monkeyp
     assert t.id != earlier.id and t.title == "New topic" and t.status_detail == "WAITING_FOR_CUSTOMER"
     a = db.execute("SELECT data FROM activities WHERE native_id = 'D1:3.0'").fetchone()
     assert json.loads(a["data"]) == {"channel": "D1", "ts": "3.0", "kind": "im"}
-    assert inbox.ingest(db, inbox.Incoming(4, "D1", "im", "MESSAGE", "D1:3.0", None, later, "New topic",
+    assert inbox.ingest(db, inbox.Incoming("4", "D1", "im", "MESSAGE", "D1:3.0", None, later, "New topic",
                                            data={"channel": "D1", "ts": "3.0"})) is None  # Slack's echo
     assert inbox.list_drafts(db) == []
 
@@ -363,10 +363,10 @@ def test_slack_draft_in_a_channel_follows_ordinary_channel_rules(db):
     d = slack_draft(db, "#eng <C1>")
     t = inbox.send_draft(db, d["id"], d["revision"], FakeSlackSender("C1:5.0"))
     assert t.title == "Deploy is out"
-    reply = inbox.Incoming(4, "C1", "channel", "MESSAGE", "C1:6.0", inbox.Identity("slack_user", "USAM"), AT, "nice",
+    reply = inbox.Incoming("4", "C1", "channel", "MESSAGE", "C1:6.0", inbox.Identity("slack_user", "USAM"), AT, "nice",
                            data={"channel": "C1", "ts": "6.0", "thread_ts": "5.0", "kind": "channel"})
     assert inbox.ingest(db, reply).id != t.id  # FR-4b: a reply-thread is its own Thread
-    top = inbox.Incoming(4, "C1", "channel", "MESSAGE", "C1:7.0", inbox.Identity("slack_user", "USAM"),
+    top = inbox.Incoming("4", "C1", "channel", "MESSAGE", "C1:7.0", inbox.Identity("slack_user", "USAM"),
                          AT + timedelta(hours=20), "also", data={"channel": "C1", "ts": "7.0", "kind": "channel"})
     assert inbox.ingest(db, top).id == t.id  # top-level within 24h joins
 
@@ -402,6 +402,6 @@ def test_slack_conversations_lists_channels_dms_and_group_dms_by_name(db):
         {"id": "G2", "kind": "mpim", "label": "ana, bo, jeremy"}, {"id": "C1", "kind": "channel", "label": "#eng"},
         {"id": "G1", "kind": "private", "label": "#ops"}, {"id": "D1", "kind": "im", "label": "Sam"}]
     assert sender.conversation("D1") == ("im", "Sam")
-    senders = serve.Senders(made={4: sender})
-    assert serve.handle_slack_conversations(db, b'{"connection_id": 4}', senders)[1]["conversations"][0]["id"] == "G2"
-    assert serve.handle_slack_conversations(db, b'{"connection_id": 3}', senders)[0] == 503
+    senders = serve.Senders(made={"4": sender})
+    assert serve.handle_slack_conversations(db, b'{"connection_id": "4"}', senders)[1]["conversations"][0]["id"] == "G2"
+    assert serve.handle_slack_conversations(db, b'{"connection_id": "3"}', senders)[0] == 503

@@ -75,8 +75,8 @@ def create_sequence(db, name: str, connection_id: int | None = None) -> int:
         connection_id = mail[0]["id"] if len(mail) == 1 else None
     at = clock.iso(clock.now())
     with inbox._write_snapshot(db):
-        return db.execute("INSERT INTO sequences (name, connection_id, created_at, updated_at) VALUES (?, ?, ?, ?)",
-                          (name.strip(), connection_id, at, at)).lastrowid
+        return db.execute("INSERT INTO sequences (name, connection_id, created_at, updated_at) VALUES (?, ?, ?, ?) RETURNING id",
+                          (name.strip(), connection_id, at, at)).fetchone()[0]
 
 
 @writer("write")
@@ -425,10 +425,10 @@ def add_step(db, sequence_id: int, kind: str, after: int | None = None, *, secti
         first = not on_path(steps, path)
         step_id = db.execute(
             "INSERT INTO sequence_steps (sequence_id, position, section, parent_step_id, branch, kind, gap_days,"
-            " linkedin_move, action_kind, condition) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " linkedin_move, action_kind, condition) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
             (sequence_id, position, *path, kind, 0 if first or kind in ("action", "if") else 1,
              "connect" if kind == "linkedin" else None, action_kind if kind == "action" else None,
-             condition if kind == "if" else None)).lastrowid
+             condition if kind == "if" else None)).fetchone()[0]
         _touch(db, sequence_id)
     return step_id
 
@@ -779,8 +779,8 @@ def _enroll(db, person_id: int, sequence_id: int, now: datetime, starts: str | N
                                                   " AND kind = 'email'", (identity_id, person_id)).fetchone():
         raise Refused(f"That email address is not {p['display_name']}'s.")
     return db.execute("INSERT INTO enrollments (person_id, sequence_id, state, enrolled_at, starts_at, organization_id,"
-                      " identity_id) VALUES (?, ?, 'ACTIVE', ?, ?, ?, ?)",
-                      (person_id, sequence_id, clock.iso(now), starts, organization_id, identity_id)).lastrowid
+                      " identity_id) VALUES (?, ?, 'ACTIVE', ?, ?, ?, ?) RETURNING id",
+                      (person_id, sequence_id, clock.iso(now), starts, organization_id, identity_id)).fetchone()[0]
 
 
 @writer("write")
@@ -906,8 +906,9 @@ def _next_task(db, e, now: datetime, due: datetime | None = None) -> int | None:
         return None
     base = datetime.fromisoformat(last["done_at"]) if last else datetime.fromisoformat(e["starts_at"] or e["enrolled_at"])
     due = due or due_date(base, step["gap_days"], step["at_time"])
-    return db.execute("INSERT OR IGNORE INTO tasks (enrollment_id, step_id, due_at, state) VALUES (?, ?, ?, 'DUE')",
-                      (e["id"], step["id"], clock.iso(due))).lastrowid
+    row = db.execute("INSERT OR IGNORE INTO tasks (enrollment_id, step_id, due_at, state) VALUES (?, ?, ?, 'DUE')"
+                     " RETURNING id", (e["id"], step["id"], clock.iso(due))).fetchone()
+    return row[0] if row else None
 
 
 def _auto_tasks(db, now: datetime) -> int:

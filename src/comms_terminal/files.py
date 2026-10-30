@@ -118,26 +118,26 @@ def file_url(db, sha: str, name: str, host: str, port: int) -> str:
     return f"http://{host}:{port}/f/{file_cap(files_secret(db), sha)}/{urllib.parse.quote(name, safe='')}"
 
 
-def upload_token(secret: bytes, owner: tuple[str, int], expires: float | None = None) -> str:
+def upload_token(secret: bytes, owner: tuple[str, str], expires: float | None = None) -> str:
     """An upload link's token for ("draft", id) or ("thread", id), valid until `expires` (default 1 hour)."""
     kind, owner_id = owner
     if kind not in ("draft", "thread"):
         raise ValueError("owner is a draft or a thread")
     expires = int(expires if expires is not None else time.time() + UPLOAD_TTL)
-    body = f"{kind}.{int(owner_id)}.{expires}"
+    body = f"{kind}.{owner_id}.{expires}"
     return f"{body}.{_mac(secret, 'up:' + body)}"
 
 
-def upload_owner(secret: bytes, token: str, now: float | None = None) -> tuple[str, int] | None:
+def upload_owner(secret: bytes, token: str, now: float | None = None) -> tuple[str, str] | None:
     """The token's owner, or None when it is forged, malformed, or expired."""
-    m = re.fullmatch(r"(draft|thread)\.(\d+)\.(\d+)\.([0-9a-f]{32})", token)
+    m = re.fullmatch(r"(draft|thread)\.([0-9a-f-]+)\.(\d+)\.([0-9a-f]{32})", token)
     if not m or not hmac.compare_digest(m[4], _mac(secret, f"up:{m[1]}.{m[2]}.{m[3]}")):
         return None
-    return (m[1], int(m[2])) if int(m[3]) > (now if now is not None else time.time()) else None
+    return (m[1], m[2]) if int(m[3]) > (now if now is not None else time.time()) else None
 
 
 @writer("service")
-def upload_url(db, owner: tuple[str, int], host: str, port: int) -> str:
+def upload_url(db, owner: tuple[str, str], host: str, port: int) -> str:
     """A 1-hour LAN upload page whose files are staged on `owner` (FR-A9)."""
     return f"http://{host}:{port}/up/{upload_token(files_secret(db), owner)}"
 

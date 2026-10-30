@@ -8,7 +8,7 @@ import pytest
 
 from comms_terminal import clock, email, files, inbox, platforms
 from test_email_reconcile import SCHEMA3
-from schema_history import changed_since
+from schema_history import changed_since, legacy, unmigrated
 from test_schema_equivalence import shape
 
 AT = datetime(2026, 10, 1, 10, tzinfo=timezone.utc)
@@ -61,7 +61,7 @@ def old_rows(db):
                                 " AND name NOT LIKE 'sqlite_%' AND name NOT IN ('composition_drafts', 'changes')")}
 
 
-@pytest.mark.parametrize("kind,connection_id", [("email", 1), ("email", 2), ("sms", 3)])
+@pytest.mark.parametrize("kind,connection_id", [("email", "1"), ("email", "2"), ("sms", "3")])
 def test_draft_create_save_reopen_keeps_exact_full_envelope(db, monkeypatch, kind, connection_id):
     before = old_rows(db)
     blank = inbox.save_draft(db, envelope(kind))
@@ -125,13 +125,13 @@ def test_failed_draft_save_rolls_back_without_losing_previous_row_or_edits(db, o
 @pytest.mark.parametrize("changes", [
     {"kind": None}, {"kind": []}, {"kind": "fax"}, {"sender": None}, {"to": []},
     {"cc": None}, {"body": 1}, {"subject": None}, {"subject": False},
-    {"connection_id": True}, {"connection_id": "1"}, {"connection_id": 0}, {"connection_id": -1},
-    {"connection_id": 999}, {"connection_id": 3}, {"connection_id": 4},
+    {"connection_id": True}, {"connection_id": 1}, {"connection_id": "0"}, {"connection_id": -1},
+    {"connection_id": "999"}, {"connection_id": "3"}, {"connection_id": "4"},
     {"kind": "sms", "subject": ""}, {"kind": "sms", "subject": None, "cc": "someone"},
-    {"kind": "sms", "subject": None, "connection_id": 1},
-    {"kind": "sms", "subject": None, "connection_id": 4}, {"unknown": "value"},
+    {"kind": "sms", "subject": None, "connection_id": "1"},
+    {"kind": "sms", "subject": None, "connection_id": "4"}, {"unknown": "value"},
     {"kind": "slack", "subject": ""}, {"kind": "slack", "subject": None, "cc": "#eng <C1>"},
-    {"kind": "slack", "subject": None, "connection_id": 3},
+    {"kind": "slack", "subject": None, "connection_id": "3"},
 ])
 def test_draft_strict_validation_preserves_saved_row(db, changes):
     original = inbox.save_draft(db, envelope(body="saved text"))
@@ -150,26 +150,27 @@ def test_draft_requires_all_fields_and_explicit_valid_revision_pair(db):
         del partial[k]
         with pytest.raises(ValueError):
             inbox.save_draft(db, partial, draft_id=original["id"], expected_revision=1)
-    for draft_id, revision in ((None, 1), (1, None), (True, 1), (1, True), ("1", 1),
-                               (1, "1"), (0, 1), (1, 0), (-1, 1), (1, -1)):
+    d = original["id"]
+    for draft_id, revision in ((None, 1), (d, None), (True, 1), (d, True), (1, 1),
+                               (d, "1"), (0, 1), (d, 0), (-1, 1), (d, -1)):
         with pytest.raises(ValueError):
             inbox.save_draft(db, envelope(), draft_id=draft_id, expected_revision=revision)
-    for value in (True, None, "1", 0, -1):
+    for value in (True, None, "", 1, 0, -1):
         with pytest.raises(ValueError):
             inbox.get_draft(db, value)
     with pytest.raises(KeyError):
-        inbox.get_draft(db, 999)
+        inbox.get_draft(db, "999")
     with pytest.raises(KeyError):
-        inbox.save_draft(db, envelope(), draft_id=999, expected_revision=1)
+        inbox.save_draft(db, envelope(), draft_id="999", expected_revision=1)
     assert inbox.list_drafts(db) == [original]
 
 
 def test_draft_list_latest_update_then_id_and_connection_format_change(db, monkeypatch):
-    one = inbox.save_draft(db, envelope(connection_id=1))
-    two = inbox.save_draft(db, envelope("sms", connection_id=3))
+    one = inbox.save_draft(db, envelope(connection_id="1"))
+    two = inbox.save_draft(db, envelope("sms", connection_id="3"))
     assert inbox.list_drafts(db) == [two, one]
     monkeypatch.setattr(clock, "now", lambda: AT + timedelta(minutes=1))
-    changed = inbox.save_draft(db, envelope("sms", connection_id=3, to=PEER),
+    changed = inbox.save_draft(db, envelope("sms", connection_id="3", to=PEER),
                                draft_id=one["id"], expected_revision=1)
     assert inbox.list_drafts(db) == [changed, two]
     cleared = inbox.save_draft(db, envelope(), draft_id=one["id"], expected_revision=2)
@@ -205,8 +206,8 @@ def test_v8_draft_migration_matches_fresh_preserves_old_rows_aliases_guards_and_
         changed = changed_since(8)
         assert {k: v for k, v in shape(old).items() if k in old_shape and k[1] not in changed} == \
             {k: v for k, v in old_shape.items() if k[1] not in changed}
-        assert {k: v for k, v in old_rows(old).items() if k in before} == before  # later migrations may add tables
-        assert inbox.get_thread(old, two.id).id == one.id
+        assert {k: v for k, v in unmigrated(old_rows(old)).items() if k in before} == before  # later migrations may add tables
+        assert inbox.get_thread(old, legacy(two.id)).id == legacy(one.id)
         assert old.execute("PRAGMA foreign_keys").fetchone()[0] == 1
         assert old.execute("PRAGMA foreign_key_check").fetchall() == []
         assert [tuple(r) for r in old.execute("PRAGMA foreign_key_list(composition_drafts)")] == [
@@ -214,17 +215,17 @@ def test_v8_draft_migration_matches_fresh_preserves_old_rows_aliases_guards_and_
             (1, 0, "threads", "thread_id", "id", "NO ACTION", "NO ACTION", "NONE"),  # 14: reply Drafts
             (2, 0, "connections", "connection_id", "id", "NO ACTION", "NO ACTION", "NONE")]
         for sql in ("DELETE FROM activities", "UPDATE activities SET content = 'changed'",
-                    f"UPDATE threads SET merged_into = {two.id} WHERE id = {one.id}"):
+                    f"UPDATE threads SET merged_into = '{legacy(two.id)}' WHERE id = '{legacy(one.id)}'"):
             with pytest.raises(sqlite3.DatabaseError), old:
                 old.execute(sql)
-        assert {k: v for k, v in old_rows(old).items() if k in before} == before  # later migrations may add tables
+        assert {k: v for k, v in unmigrated(old_rows(old)).items() if k in before} == before  # later migrations may add tables
         with old:
             old.execute("INSERT INTO connections (id, platform, external_id, self_id, label, connected_at)"
-                        " VALUES (5, 'gmail', 'draft@example.test', 'draft@example.test', 'Draft mail', ?)",
+                        " VALUES ('5', 'gmail', 'draft@example.test', 'draft@example.test', 'Draft mail', ?)",
                         (AT.isoformat(),))
-        draft = inbox.save_draft(old, envelope(connection_id=5, body="preserved"))
+        draft = inbox.save_draft(old, envelope(connection_id="5", body="preserved"))
         with pytest.raises(sqlite3.IntegrityError), old:
-            old.execute("DELETE FROM connections WHERE id = 5")
+            old.execute("DELETE FROM connections WHERE id = '5'")
         assert inbox.get_draft(old, draft["id"]) == draft
         rows, schema = old_rows(old), shape(old)
         inbox.migrate(old)
@@ -310,7 +311,7 @@ def test_recipient_history_ignores_incoming_to_cc_and_body_only_matches(db):
 
 
 def test_recipient_history_sms_detached_inbound_outgoing_peer_and_reply_channel(db):
-    sms = incoming("sms-in", connection_id=3, channel=PEER, channel_kind="im",
+    sms = incoming("sms-in", connection_id="3", channel=PEER, channel_kind="im",
                    sender=inbox.Identity("phone", PEER), data={"peer": PEER})
     inbound = inbox.ingest(db, sms)
     identity = db.execute("SELECT id FROM identities WHERE value = ?", (PEER,)).fetchone()[0]
@@ -323,7 +324,7 @@ def test_recipient_history_sms_detached_inbound_outgoing_peer_and_reply_channel(
     channel_only = inbox.ingest(db, replace(sms, native_id="sms-reply", sender=None,
                                             channel=unlinked, data={"to": [], "cc": []},
                                             occurred_at=AT + timedelta(days=16)))
-    inbox.ingest(db, incoming("DFAKE:1", connection_id=4, channel=PEER, channel_kind="im",
+    inbox.ingest(db, incoming("DFAKE:1", connection_id="4", channel=PEER, channel_kind="im",
                              sender=None, data={"peer": PEER}))
     before = old_rows(db)
     assert inbox.recipient_threads(db, "phone", PEER) == [inbound, outbound]
@@ -357,7 +358,7 @@ def test_recipient_names_show_people_and_keep_unknown_addresses(db):
 
 
 def test_slack_draft_saves_one_conversation_and_names_it(db):
-    d = inbox.save_draft(db, envelope("slack", connection_id=4, sender="USELF", to="#eng <C0123>", body="Deploy is out"))
+    d = inbox.save_draft(db, envelope("slack", connection_id="4", sender="USELF", to="#eng <C0123>", body="Deploy is out"))
     assert d["kind"] == "slack" and d["subject"] is None and d["cc"] == ""
     assert inbox.draft_problem(d) is None
     assert inbox.recipient_names(db, d["to"], "slack") == "#eng"

@@ -42,7 +42,7 @@ def test_version_12_upgrade_matches_fresh_schema(monkeypatch):
         changed = changed_since(12)
         assert {k: v for k, v in shape(old).items() if k in before and k[1] not in changed} == \
             {k: v for k, v in before.items() if k[1] not in changed}
-        assert "thread_id integer references threads(id)" in shape(old)[("table", "composition_drafts")]
+        assert "thread_id text references threads(id)" in shape(old)[("table", "composition_drafts")]
     finally:
         fresh.close()
         old.close()

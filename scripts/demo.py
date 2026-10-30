@@ -202,9 +202,9 @@ def main(argv=None) -> int:
     stamp = datetime.now(timezone.utc).isoformat()
     with db:
         gmail = db.execute("INSERT INTO connections (platform, external_id, self_id, label, connected_at)"
-                           " VALUES ('gmail', ?, ?, 'Gmail', ?)", (MAILBOX, MAILBOX, stamp)).lastrowid
+                           " VALUES ('gmail', ?, ?, 'Gmail', ?) RETURNING id", (MAILBOX, MAILBOX, stamp)).fetchone()[0]
         slack_id = db.execute("INSERT INTO connections (platform, external_id, self_id, label, connected_at)"
-                              " VALUES ('slack', ?, ?, 'Slack', ?)", (TEAM, ME, stamp)).lastrowid
+                              " VALUES ('slack', ?, ?, 'Slack', ?) RETURNING id", (TEAM, ME, stamp)).fetchone()[0]
     db.close()
 
     # Demo secrets in a private directory, loaded the way systemd's LoadCredentialEncrypted= exposes them.

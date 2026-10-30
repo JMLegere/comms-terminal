@@ -174,8 +174,7 @@ def handle_respond(db, body: bytes, client: gcal.Client | None) -> tuple[int, di
     try:
         req = json.loads(body)
         if not (isinstance(req, dict) and isinstance(req.get("answer"), str) and req["answer"] in gcal.STATUS
-                and ((set(req) == {"thread_id", "answer"} and type(req["thread_id"]) is int
-                      and 0 < req["thread_id"] <= 2**63 - 1)
+                and ((set(req) == {"thread_id", "answer"} and inbox.is_id(req["thread_id"]))
                      or (set(req) == {"event_uid", "answer"} and isinstance(req["event_uid"], str)
                          and req["event_uid"]))):
             raise ValueError
@@ -212,7 +211,7 @@ def handle_reply(db, body: bytes, senders: Senders) -> tuple[int, dict]:
     (nothing recorded either way). The Thread's staged Attachments go with it."""
     try:
         req = json.loads(body)
-        thread_id, text = int(req["thread_id"]), str(req["text"])
+        thread_id, text = str(req["thread_id"]), str(req["text"])
     except (ValueError, KeyError, TypeError):
         return 400, {"error": "expected thread_id and text"}
     r = db.execute("SELECT c.* FROM threads t JOIN channels ch ON ch.id = t.channel_id"
@@ -240,7 +239,9 @@ def handle_send_draft(db, body: bytes, senders: Senders) -> tuple[int, dict]:
     504 outcome unknown (Draft locked)."""
     try:
         req = json.loads(body)
-        draft_id, revision, again = int(req["draft_id"]), int(req["revision"]), bool(req.get("again"))
+        draft_id, revision, again = req["draft_id"], int(req["revision"]), bool(req.get("again"))
+        if not inbox.is_id(draft_id):
+            raise ValueError("draft_id")
     except (ValueError, KeyError, TypeError):
         return 400, {"error": "expected draft_id and revision"}
     try:
@@ -296,7 +297,9 @@ def send_due(db, senders: Senders, now: datetime) -> int:
 def handle_slack_conversations(db, body: bytes, senders: Senders) -> tuple[int, dict]:
     """POST /slack-conversations: {"connection_id"} -> {"conversations": [{id, kind, label}]} for the Slack Draft picker."""
     try:
-        connection_id = int(json.loads(body)["connection_id"])
+        connection_id = json.loads(body)["connection_id"]
+        if not inbox.is_id(connection_id):
+            raise ValueError("connection_id")
     except (ValueError, KeyError, TypeError):
         return 400, {"error": "expected connection_id"}
     r = db.execute("SELECT * FROM connections WHERE id = ? AND platform = 'slack'", (connection_id,)).fetchone()
@@ -348,8 +351,8 @@ def handle_slack_reactions(db, body: bytes, senders: Senders) -> tuple[int, dict
         fields = {"op", "thread_id", "message_id", "connection_id"}
         if req["op"] != "read":
             fields |= {"name", "expected_revision"}
-        ids = fields - {"op", "name"}
-        if (set(req) != fields or any(type(req[k]) is not int or not 0 < req[k] <= 2**63 - 1 for k in ids)
+        ids = fields - {"op", "name"}  # a message's revision is its latest Activity id
+        if (set(req) != fields or not all(inbox.is_id(req[k]) for k in ids)
                 or (req["op"] != "read" and (not isinstance(req["name"], str)
                                              or req["name"] not in slack.REACTION_NAMES))):
             raise ValueError
@@ -669,7 +672,7 @@ def hooks_server(db_path: str, host: str, port: int, client=None,
                 if len(rows) > 1:  # one Resend account sends for every Gmail Connection: the one it sent from
                     sender = email.receipt_sender(body)
                     rows = [r for r in rows if r["self_id"].lower() == sender]
-                if (len(rows) != 1 or rows[0]["id"] <= 0
+                if (len(rows) != 1 or not inbox.is_id(rows[0]["id"])
                         or not rows[0]["self_id"].strip() or not rows[0]["external_id"].strip()):
                     return 503, "text/plain", b""
                 status, inserted = email.handle_resend_hook(db, rows[0]["id"], body)

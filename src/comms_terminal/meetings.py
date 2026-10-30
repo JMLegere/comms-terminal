@@ -216,8 +216,8 @@ def respond_recorded(db, uid: str, status: str, rid: str | None = None) -> int |
         with db:
             return db.execute(
                 "INSERT INTO activities (thread_id, kind, occurred_at, native_id, content, data)"
-                " VALUES (?, 'MESSAGE', ?, ?, ?, ?)",
-                (t["id"], clock.iso(clock.now()), native_id, content, json.dumps({"meeting": meeting}))).lastrowid
+                " VALUES (?, 'MESSAGE', ?, ?, ?, ?) RETURNING id",
+                (t["id"], clock.iso(clock.now()), native_id, content, json.dumps({"meeting": meeting}))).fetchone()[0]
     r = db.execute("SELECT ics FROM events WHERE uid = ? AND recurrence_id = '' AND deleted_at IS NULL",
                    (uid,)).fetchone()
     if r is None:

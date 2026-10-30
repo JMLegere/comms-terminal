@@ -49,7 +49,7 @@ def test_due_reply_sends_with_its_scheduled_recipients_once(db):
     inbox.save_reply_draft(db, ids["ana"], "Tuesday works for us.")  # an edit keeps the schedule and recipients
     assert (inbox.get_draft(db, d["id"])["to"], inbox.get_draft(db, d["id"])["cc"]) == ("ana@acme.com", "")
     sender = Recorder()
-    senders = serve.Senders(made={1: sender})
+    senders = serve.Senders(made={"1": sender})
     assert serve.send_due(db, senders, now) == 0 and sender.calls == []
     assert serve.send_due(db, senders, now + timedelta(minutes=5)) == 1
     assert sender.calls == [("Tuesday works for us.", ["ana@acme.com"], [])]
@@ -61,7 +61,7 @@ def test_refused_scheduled_send_keeps_the_draft_with_its_error_and_is_not_retrie
     db, ids = db
     now = datetime(2026, 10, 17, 12, tzinfo=timezone.utc)
     inbox.schedule_reply(db, ids["ana"], "Hi", ["ana@acme.com"], [], now)
-    senders = serve.Senders(made={1: Recorder(inbox.SendFailed("HTTP 422 bad address"))})
+    senders = serve.Senders(made={"1": Recorder(inbox.SendFailed("HTTP 422 bad address"))})
     assert serve.send_due(db, senders, now) == 0
     d = inbox.reply_draft(db, ids["ana"])
     assert (d["body"], d["send_at"], d["send_error"]) == ("Hi", None, "HTTP 422 bad address")
@@ -72,10 +72,10 @@ def test_refused_scheduled_send_keeps_the_draft_with_its_error_and_is_not_retrie
 def test_due_new_draft_sends_as_a_new_thread(db):
     db, _ = db
     now = datetime(2026, 10, 17, 12, tzinfo=timezone.utc)
-    d = inbox.save_draft(db, {"connection_id": 1, "kind": "email", "sender": "jeremy@agentmaple.ai",
+    d = inbox.save_draft(db, {"connection_id": "1", "kind": "email", "sender": "jeremy@agentmaple.ai",
                               "to": "bo@acme.test", "cc": "", "subject": "Checklist", "body": "Hi Bo"})
     inbox.schedule_draft(db, d["id"], now)
-    assert serve.send_due(db, serve.Senders(made={1: FakeSender()}), now) == 1
+    assert serve.send_due(db, serve.Senders(made={"1": FakeSender()}), now) == 1
     assert d["id"] not in {x["id"] for x in inbox.list_drafts(db)}
     assert db.execute("SELECT count(*) FROM threads WHERE title = 'Checklist'").fetchone()[0] == 1
 

@@ -41,7 +41,7 @@ inbox.migrate(db)
 with db:
     db.execute("INSERT INTO connections (id, platform, external_id, self_id, label, connected_at)"
                " VALUES (2, 'slack', 'T0', 'U0JEREMY', 'Slack', '2026-10-12T00:00:00+00:00')")
-inbox.ingest(db, inbox.Incoming(2, "D0ANA", "im", "MESSAGE", "D0ANA:1", inbox.Identity("slack_user", "U0ANA"),
+inbox.ingest(db, inbox.Incoming("2", "D0ANA", "im", "MESSAGE", "D0ANA:1", inbox.Identity("slack_user", "U0ANA"),
                                 datetime.now(timezone.utc), "hi", data={"channel": "D0ANA"}))
 server = serve.reply_server(path, str(work / "s.sock"), serve.Senders(made={}))
 threading.Thread(target=server.serve_forever, daemon=True).start()

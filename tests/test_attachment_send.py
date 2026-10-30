@@ -39,7 +39,7 @@ def staged_file(db):
 
 
 def email_draft(db, size=len(PDF)):
-    d = inbox.save_draft(db, envelope(connection_id=1, sender=SELF, to="ana@acme.test", subject="Contract", body="Attached"))
+    d = inbox.save_draft(db, envelope(connection_id="1", sender=SELF, to="ana@acme.test", subject="Contract", body="Attached"))
     inbox.stage(db, sha=pdf(db), name="contract.pdf", type="application/pdf", size=size, draft_id=d["id"])
     return d
 
@@ -176,24 +176,24 @@ def test_email_reply_over_25_mb_is_refused_before_the_sender(db):
     t = gmail_thread(db, size=30 * MB)
     sender = FakeSender()
     status, out = serve.handle_reply(db, json.dumps({"thread_id": t.id, "text": "x"}).encode(),
-                                     serve.Senders(made={1: sender}))
+                                     serve.Senders(made={"1": sender}))
     assert (status, out) == (400, {"error": "Email Attachments total 30 MB; the limit is 25 MB"})
     assert sender.files is None and len(inbox.staged(db, thread_id=t.id)) == 1
 
 
 def test_slack_draft_or_reply_with_a_file_over_1_gb_is_refused_before_slack(db):
     big = 2**30 + 2**30 // 5
-    d = inbox.save_draft(db, envelope("slack", connection_id=4, sender="USELF", to="#eng <C1>", body="Cut"))
+    d = inbox.save_draft(db, envelope("slack", connection_id="4", sender="USELF", to="#eng <C1>", body="Cut"))
     inbox.stage(db, sha=pdf(db), name="big.mov", type="video/quicktime", size=big, draft_id=d["id"])
     sender = FakeSender()
     with pytest.raises(ValueError, match=r"^Slack files can be at most 1 GB; big.mov is 1.2 GB$"):
         inbox.send_draft(db, d["id"], d["revision"], sender)
     assert sender.files is None and inbox.get_draft(db, d["id"])["sending_at"] is None
-    t = inbox.ingest(db, inbox.Incoming(4, "C1", "channel", "MESSAGE", "C1:1.0",
+    t = inbox.ingest(db, inbox.Incoming("4", "C1", "channel", "MESSAGE", "C1:1.0",
                                         inbox.Identity("slack_user", "USAM"), AT, "hi"))
     inbox.stage(db, sha=pdf(db), name="big.mov", type="video/quicktime", size=big, thread_id=t.id)
     status, out = serve.handle_reply(db, json.dumps({"thread_id": t.id, "text": "x"}).encode(),
-                                     serve.Senders(made={4: sender}))
+                                     serve.Senders(made={"4": sender}))
     assert (status, out) == (400, {"error": "Slack files can be at most 1 GB; big.mov is 1.2 GB"})
     assert sender.files is None and len(inbox.staged(db, thread_id=t.id)) == 1
     assert platforms.slack_size_problem([inbox.Staged(None, "a", "", 2**30)]) is None
@@ -263,7 +263,7 @@ def test_sent_reply_and_slack_draft_record_their_files_as_stored_attachments(db)
         def conversation(self, channel):
             return "channel", "eng"
 
-    d = inbox.save_draft(db, envelope("slack", connection_id=4, sender="USELF", to="#eng <C1>", body="Notes"))
+    d = inbox.save_draft(db, envelope("slack", connection_id="4", sender="USELF", to="#eng <C1>", body="Notes"))
     inbox.stage(db, sha=pdf(db), name="contract.pdf", type="application/pdf", size=len(PDF), draft_id=d["id"])
     with pytest.raises(inbox.SendFailed):
         inbox.send_draft(db, d["id"], d["revision"], SlackDraftSender(inbox.SendFailed("not_in_channel")))
@@ -283,7 +283,7 @@ def test_alias_reply_sends_and_clears_only_selected_original_files(db):
     inbox.stage(db, sha=files.store_file(db, selected), name="selected.txt", type="text/plain",
                 size=len(selected), thread_id=old.id)
     assert old.id != keep.id
-    inbox.record_resend_receipt(db, 1, marker[1:-8], "<wire@delivery.test>")
+    inbox.record_resend_receipt(db, "1", marker[1:-8], "<wire@delivery.test>")
     inbox.reconcile_resend_receipts(db)
     assert sent_files(db, marker) == original_files
     assert inbox.get_thread(db, old.id).id == keep.id

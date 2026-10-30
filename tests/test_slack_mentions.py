@@ -35,8 +35,8 @@ def setup():  # noqa: D103
     db = inbox.connect()
     inbox.migrate(db)
     with db:
-        db.execute("INSERT INTO connections (platform, external_id, self_id, label, connected_at)"
-                   " VALUES ('slack', 'T1', ?, 'Slack', ?)", (ME, datetime.now(timezone.utc).isoformat()))
+        db.execute("INSERT INTO connections (id, platform, external_id, self_id, label, connected_at)"
+                   " VALUES ((SELECT printf('%d', count(*) + 1) FROM connections), 'slack', 'T1', ?, 'Slack', ?)", (ME, datetime.now(timezone.utc).isoformat()))
     return db, db.execute("SELECT * FROM connections").fetchone()
 
 

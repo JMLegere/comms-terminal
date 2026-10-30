@@ -86,7 +86,7 @@ def make_reaction_app(tmp_path, *, mode="ready", message_count=3):
     if len(messages) > 1:
         fake.groups[messages[1]["id"]] = [dict(name="+1", count=3, mine=False), dict(name="pray", count=2, mine=False)]
     ids = dict(thread=thread.id, other=other.id, messages=[m["id"] for m in messages], native=native,
-               keys=[(thread.id, m["id"], 1) for m in messages])
+               keys=[(thread.id, m["id"], "1") for m in messages])
     db.close()
     app = Console(path, reactions=fake)
     app.home, app.reaction_fixture = "view:0", (ids, fake)
@@ -332,7 +332,7 @@ def test_unknown_original_target_loss_fails_closed(tmp_path, loss):
     async def scenario(app, pilot):
         await prepare_reaction_state(app, pilot, "unknown")
         if loss == "deleted":
-            inbox.ingest(app.db, inbox.Incoming(1, "C_REVIEW", "channel", "DELETE", ids["native"][1], None,
+            inbox.ingest(app.db, inbox.Incoming("1", "C_REVIEW", "channel", "DELETE", ids["native"][1], None,
                                                 datetime.now(timezone.utc), None))
         else:
             with app.db:
@@ -476,7 +476,7 @@ def test_outgoing_item_refusal_keeps_later_snapshots_and_service_limits_stop_bat
 
     sender = slack.SlackSender("synthetic-token", client=slack.SlackClient("synthetic-token", get=get),
                                post=lambda *args: pytest.fail("snapshot performed a provider write"))
-    senders = serve.Senders(made={1: sender})
+    senders = serve.Senders(made={"1": sender})
 
     def fetch(payload):
         source = inbox.connect(path)
@@ -492,7 +492,7 @@ def test_outgoing_item_refusal_keeps_later_snapshots_and_service_limits_stop_bat
 
     async def scenario(app, pilot):
         await settle(app, pilot)
-        keys = [(thread.id, m["id"], 1) for m in messages]
+        keys = [(thread.id, m["id"], "1") for m in messages]
         if limitation:
             assert reads == ["100.1"] and len(responses) == 1
             assert responses[0][2]["outcome"] == "unavailable"
@@ -557,7 +557,7 @@ def test_user_triage_advances_snapshot_owner_without_incidental_refresh_reads(tm
         page = app.main.list
         assert page.current_thread_id() == app.main.thread_view.thread_id == ids["other"]
         assert fake.calls[before:] == [dict(op="read", thread_id=ids["other"],
-                                           message_id=other_message, connection_id=1)]
+                                           message_id=other_message, connection_id="1")]
         assert app.cursor[page.view_index] == page.query_one("#table").cursor_row
         before = len(fake.calls)
         page.after_change()
@@ -855,7 +855,7 @@ def test_remote_writer_proxies_keep_reaction_reads_adds_and_removes_on_private_t
 
 @pytest.mark.parametrize("transport", ["/tmp/fake.sock", ["ssh", "synthetic", "relay"]])
 def test_socket_reactions_uses_existing_transport_and_preserves_typed_outcomes(monkeypatch, transport):
-    payload = dict(op="add", thread_id=1, message_id=2, connection_id=3, name="+1", expected_revision=2)
+    payload = dict(op="add", thread_id="1", message_id="2", connection_id="3", name="+1", expected_revision="2")
     seen = []
     monkeypatch.setattr(remote, "post", lambda socket, path, body: seen.append((socket, path, body)) or
                         (504, dict(outcome="unknown", error="Response lost")))
@@ -1043,7 +1043,7 @@ def test_server_newer_revision_requires_review_without_a_write(tmp_path):
         await pilot.press("v")
         await pilot.pause()
         job = pending.pop()
-        app._reaction_read_done(job, dict(read_result(job), revision=job["revision"] + 100))
+        app._reaction_read_done(job, dict(read_result(job), revision=inbox.new_id()))  # a later Activity id
         await pilot.pause()
         assert "Message changed — review" in visible_text(message_row(app, job["key"]))
         await pilot.press("1")

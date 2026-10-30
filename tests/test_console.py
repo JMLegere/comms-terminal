@@ -330,7 +330,7 @@ def test_person_page_renames_and_undo_restores(tmp_path):
     assert seen["renamed"] == "Ana (site super)" and name() == old
     # a sender's display name does not overwrite Jeremy's name for the Person
     inbox.rename_person(db, pid, "Ana R.")
-    inbox.ingest(db, inbox.Incoming(1, "jeremy@agentmaple.com", "mailbox", "MESSAGE", "<n@acme.com>",
+    inbox.ingest(db, inbox.Incoming("1", "jeremy@agentmaple.com", "mailbox", "MESSAGE", "<n@acme.com>",
                                     inbox.Identity("email", "ana@acme.com", "Ana Ruiz"), datetime.now(timezone.utc), "hi"))
     assert name() == "Ana R."
 
@@ -344,7 +344,7 @@ def test_threads_refresh_when_the_service_writes(tmp_path):
 
     async def service_writes(app, pilot):
         other = inbox.connect(path)
-        inbox.ingest(other, inbox.Incoming(1, "jeremy@agentmaple.com", "mailbox", "MESSAGE", "<new@x.io>",
+        inbox.ingest(other, inbox.Incoming("1", "jeremy@agentmaple.com", "mailbox", "MESSAGE", "<new@x.io>",
                                            inbox.Identity("email", "new@x.io"), datetime.now(timezone.utc), "hi"))
         other.close()
         app.check_changes()

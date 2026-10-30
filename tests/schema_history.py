@@ -1,11 +1,47 @@
 """Fake an older database from a fresh one: undo the migrations after `version`, newest first."""
 
 import re
+import sqlite3
 from pathlib import Path
 
 from comms_terminal import inbox
 
+
+def _integer_keys_sql() -> str:
+    """Undo migration 33: rebuild each table from schema 33 (as migration_33.sql froze it) with integer ids, numbering
+    each table's rows in id order and following every foreign key through that numbering."""
+    frozen = Path(inbox.__file__).with_name("migration_33.sql").read_text()
+    v33 = frozen[frozen.index("DROP TABLE IF EXISTS changes;") + len("DROP TABLE IF EXISTS changes;"):
+                 frozen.index('INSERT INTO "')]
+    v32 = re.sub(r"TEXT( NOT NULL)? REFERENCES", r"INTEGER\1 REFERENCES",
+                 v33.replace("TEXT PRIMARY KEY NOT NULL DEFAULT (new_id())", "INTEGER PRIMARY KEY")
+                 .replace("row_id TEXT NOT NULL", "row_id INTEGER NOT NULL"))
+    shape = sqlite3.connect(":memory:")
+    shape.create_function("new_id", 0, inbox.new_id)
+    shape.executescript(v33)
+    tables = [r[0] for r in shape.execute("SELECT name FROM sqlite_schema WHERE type = 'table'"
+                                           " AND name NOT LIKE 'sqlite_%' AND name != 'changes'")]
+    keyed = {t for t in tables if any(c[1] == "id" and c[2] == "TEXT" for c in shape.execute(f'PRAGMA table_info("{t}")'))}
+    out = ["PRAGMA foreign_keys = OFF; PRAGMA legacy_alter_table = ON"]
+    out += [f'CREATE TEMP TABLE "map_{t}" AS SELECT id AS old, row_number() OVER (ORDER BY id) AS new FROM "{t}"'
+            for t in sorted(keyed)]
+    out += [f'DROP {k.upper()} IF EXISTS "{n}"' for k, n in shape.execute(
+        "SELECT type, name FROM sqlite_schema WHERE type IN ('index', 'trigger', 'view') AND sql IS NOT NULL")]
+    out += [f'DROP TRIGGER IF EXISTS "changes_{t}_{e}"' for t in tables for e in ("insert", "update", "delete")]
+    out += [f'ALTER TABLE "{t}" RENAME TO "{t}__new"' for t in tables] + ["DROP TABLE changes", v32.strip().rstrip(";")]
+    for t in tables:
+        refs = {r[3]: r[2] for r in shape.execute(f'PRAGMA foreign_key_list("{t}")') if r[2] in keyed}
+        cols = [c[1] for c in shape.execute(f'PRAGMA table_info("{t}")')]
+        conv = [f'(SELECT new FROM "map_{refs[c]}" WHERE old = "{c}")' if c in refs else
+                f'(SELECT new FROM "map_{t}" WHERE old = "{c}")' if c == "id" and t in keyed else f'"{c}"' for c in cols]
+        out += [f'INSERT INTO "{t}" ({", ".join(chr(34) + c + chr(34) for c in cols)}) SELECT {", ".join(conv)}'
+                f' FROM "{t}__new"', f'DROP TABLE "{t}__new"']
+    out += [f'DROP TABLE "map_{t}"' for t in sorted(keyed)]
+    return ";\n".join(out) + ";"
+
+
 UNDO = {
+    33: _integer_keys_sql(),
     32: "".join(f"DROP TRIGGER IF EXISTS changes_{t}_{e};" for t in re.findall(
         r"^CREATE TABLE (\w+)", Path(inbox.__file__).with_name("schema.sql").read_text(), re.M)
         for e in ("insert", "update", "delete")) + "DROP TABLE changes;",
@@ -119,6 +155,32 @@ PRAGMA legacy_alter_table = OFF; PRAGMA foreign_keys = ON;""",  # rebuilds the f
 def downgrade(db, version: int, extra: str = "") -> None:
     db.executescript("".join(UNDO[v] for v in range(inbox.SCHEMA_VERSION, version, -1))
                      + extra + f" PRAGMA user_version = {version};")
+
+
+LEGACY = re.compile(r"00000000-0000-7000-8000-([0-9a-f]{12})")
+
+
+def legacy(n: int) -> str:
+    """Integer id n as migration 33 leaves it."""
+    return inbox.LEGACY_ID % n
+
+
+def renumbered(db, table: str, *ids: str) -> list[str]:
+    """The ids these rows of `table` get from downgrade() past 33 and back: the legacy id of their rank in id order.
+    Read them before the downgrade."""
+    order = [r[0] for r in db.execute(f'SELECT id FROM "{table}" ORDER BY id')]
+    return [legacy(order.index(i) + 1) for i in ids]
+
+
+def unmigrated(value):
+    """`value` read after migration 33 with each legacy id back as its integer, to compare with what was read before."""
+    if isinstance(value, str) and (m := LEGACY.fullmatch(value)):
+        return int(m[1], 16)
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return type(value)(unmigrated(v) for v in value)
+    if isinstance(value, dict):
+        return {unmigrated(k): unmigrated(v) for k, v in value.items()}
+    return value
 
 
 def changed_since(version: int) -> tuple[str, ...]:

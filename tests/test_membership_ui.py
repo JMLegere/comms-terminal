@@ -73,8 +73,8 @@ def test_person_page_adds_and_removes_organizations_with_undo(tmp_path):
 
 def test_organization_page_adds_a_person_by_address(tmp_path):
     path, db, pid = seeded(tmp_path)
-    phone_only = db.execute("INSERT INTO persons (display_name, created_at) VALUES ('JP', '2026-10-01T00:00:00+00:00')"
-                            ).lastrowid
+    phone_only = db.execute("INSERT INTO persons (display_name, created_at) VALUES ('JP', '2026-10-01T00:00:00+00:00') RETURNING id"
+                            ).fetchone()[0]
     db.commit()
     inbox.add_identity(db, phone_only, "phone", "+15065550100")
     seen = {}

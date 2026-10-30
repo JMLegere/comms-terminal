@@ -22,12 +22,12 @@ def env(tmp_path):
     db = inbox.connect(db_path)
     inbox.migrate(db)
     with db:
-        db.execute("INSERT INTO connections (platform, external_id, self_id, label, connected_at)"
-                   " VALUES ('gmail', 'me@x.io', 'me@x.io', 'Email', ?)", (NOW.isoformat(),))
-    t = inbox.ingest(db, inbox.Incoming(1, "me@x.io", "mailbox", "MESSAGE", "<a@acme.com>",
+        db.execute("INSERT INTO connections (id, platform, external_id, self_id, label, connected_at)"
+                   " VALUES ((SELECT printf('%d', count(*) + 1) FROM connections), 'gmail', 'me@x.io', 'me@x.io', 'Email', ?)", (NOW.isoformat(),))
+    t = inbox.ingest(db, inbox.Incoming("1", "me@x.io", "mailbox", "MESSAGE", "<a@acme.com>",
                                         inbox.Identity("email", "ana@acme.com", "Ana"), NOW, "contract attached"))
     activity = db.execute("SELECT id FROM activities WHERE thread_id = ?", (t.id,)).fetchone()[0]
-    draft_id = inbox.save_draft(db, {"connection_id": 1, "kind": "email", "sender": "me@x.io", "to": "ana@acme.com",
+    draft_id = inbox.save_draft(db, {"connection_id": "1", "kind": "email", "sender": "me@x.io", "to": "ana@acme.com",
                                      "cc": "", "subject": "Plan", "body": "hi"})["id"]
     server = serve.files_server(db_path, "127.0.0.1", 0)
     threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -167,7 +167,8 @@ def test_bad_or_expired_tokens_and_oversize_uploads_are_refused(env):
     assert files.upload_owner(secret, expired) is None
     live = files.upload_token(secret, ("draft", draft_id))
     assert files.upload_owner(secret, live) == ("draft", draft_id)
-    assert files.upload_owner(secret, live.replace(f"draft.{draft_id}.", f"draft.{draft_id + 1}.")) is None
+    other = draft_id[:-1] + ("1" if draft_id[-1] == "0" else "0")  # another Draft's id
+    assert files.upload_owner(secret, live.replace(f"draft.{draft_id}.", f"draft.{other}.")) is None
     assert files.upload_owner(os.urandom(32), live) is None
     body = multipart([("a.txt", "text/plain", b"x")])
     for token in (expired, "draft.1.9999999999." + "0" * 32, "junk"):
@@ -175,7 +176,7 @@ def test_bad_or_expired_tokens_and_oversize_uploads_are_refused(env):
         assert post(port, f"/up/{token}", body)[0] == 404
     assert post(port, f"/up/{live}", b"", length=serve.UPLOAD_MAX + 1)[0] == 413
     assert inbox.staged(db, draft_id=draft_id) == []
-    gone = files.upload_token(secret, ("draft", draft_id + 99))
+    gone = files.upload_token(secret, ("draft", other))
     assert post(port, f"/up/{gone}", body)[0] == 404
 
 

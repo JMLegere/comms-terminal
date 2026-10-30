@@ -63,7 +63,7 @@ def test_a_change_set_carries_only_the_rows_changed_since_the_cursor(tmp_path):
 
 def test_a_deleted_row_comes_as_none_and_each_row_once(tmp_path):
     path, db, _ = demo(tmp_path)
-    values = {"connection_id": 1, "kind": "email", "sender": "me@x.io", "to": "ana@acme.com", "cc": "",
+    values = {"connection_id": "1", "kind": "email", "sender": "me@x.io", "to": "ana@acme.com", "cc": "",
               "subject": "Hi", "body": "one"}
     draft = inbox.save_draft(db, values)
     at = remote.cursor(db)

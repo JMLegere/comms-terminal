@@ -18,8 +18,8 @@ def connect(tmp_path, platform="gmail", external="me@x.io", self_id="me@x.io"):
     db = inbox.connect(str(tmp_path / "inbox.db"))
     inbox.migrate(db)
     with db:
-        db.execute("INSERT INTO connections (platform, external_id, self_id, label, connected_at)"
-                   " VALUES (?, ?, ?, ?, ?)", (platform, external, self_id, platform, NOW.isoformat()))
+        db.execute("INSERT INTO connections (id, platform, external_id, self_id, label, connected_at)"
+                   " VALUES ((SELECT printf('%d', count(*) + 1) FROM connections), ?, ?, ?, ?, ?)", (platform, external, self_id, platform, NOW.isoformat()))
     return db, db.execute("SELECT * FROM connections").fetchone()
 
 

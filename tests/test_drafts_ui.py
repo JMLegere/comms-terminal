@@ -54,9 +54,9 @@ def completion_seeded(tmp_path):
     inbox.save_draft(db, dict(connection_id=None, kind="email", sender="saved-sender@example.test",
                              to="Saved Recipient <saved-to@example.test>", cc="saved-cc@example.test",
                              subject="subject-only@example.test", body="body-only@example.test"))
-    inbox.save_draft(db, dict(connection_id=3, kind="sms", sender="+12025550888",
+    inbox.save_draft(db, dict(connection_id="3", kind="sms", sender="+12025550888",
                              to="+12025550777", cc="", subject=None, body="unsent SMS"))
-    inbox.ingest(db, inbox.Incoming(3, "+12025550999", "im", "MESSAGE", "completion-sms",
+    inbox.ingest(db, inbox.Incoming("3", "+12025550999", "im", "MESSAGE", "completion-sms",
                                    None, at, "captured SMS", data={"peer": "+12025550999"}))
     assert db.execute("SELECT 1 FROM identities WHERE value IN"
                       " ('captured-to@example.test', 'captured-cc@example.test', '+12025550999')").fetchone() is None
@@ -152,7 +152,7 @@ def test_full_envelope_save_restart_and_explicit_format_switch(tmp_path):
         assert "2" in [menu.get_option_at_index(i).id for i in range(menu.option_count)]  # Slack Drafts
         await choose(app, pilot, "1")
         assert view.values()["sender"] == "jeremy@agentmaple.com"
-        values = dict(connection_id=1, kind="email", sender="jeremy@agentmaple.com", to="  ANA@acme.com  ",
+        values = dict(connection_id="1", kind="email", sender="jeremy@agentmaple.com", to="  ANA@acme.com  ",
                       cc=" ops@acme.com ", subject="  Exact subject  ", body="\n Exact words\nwith trailing space \n")
         for name in ("to", "cc", "subject"):
             view.query_one(f".{name}input", Input).value = values[name]
@@ -196,7 +196,7 @@ def test_full_envelope_save_restart_and_explicit_format_switch(tmp_path):
         await pilot.press("ctrl+s")
         await pilot.pause()
         row = inbox.get_draft(app.db, view.draft_id)
-        assert row["kind"] == "sms" and row["connection_id"] == 3 and row["subject"] is None and row["cc"] == ""
+        assert row["kind"] == "sms" and row["connection_id"] == "3" and row["subject"] is None and row["cc"] == ""
 
     run(Console(path), [resume])
 
@@ -429,7 +429,7 @@ def test_connection_switch_recomputes_sms_destination_suggestions(tmp_path):
         await pilot.press("enter")
         await pilot.pause()
         await choose(app, pilot, "3")
-        assert view.kind == "sms" and view.connection_id == 3 and to.value == "ANA@"
+        assert view.kind == "sms" and view.connection_id == "3" and to.value == "ANA@"
         assert not view.query_one(".field.cc").display and not view.query_one(".field.subject").display
         to.focus()
         await pilot.pause()
@@ -643,7 +643,7 @@ def test_switching_drafts_repaints_the_saved_row(tmp_path):
 def test_send_confirms_envelope_then_removes_draft_or_locks_on_unknown(tmp_path):
     path, _ = seeded(tmp_path)
     db = inbox.connect(path)
-    first, second = (inbox.save_draft(db, dict(connection_id=1, kind="email", sender="jeremy@agentmaple.com",
+    first, second = (inbox.save_draft(db, dict(connection_id="1", kind="email", sender="jeremy@agentmaple.com",
                                                to="kory@example.test", cc="", subject=s, body="Hi Kory"))
                      for s in ("first", "second"))
     db.close()
@@ -724,7 +724,7 @@ def test_slack_draft_picks_a_conversation_by_tab_and_saves_it(tmp_path, columns)
         await choose(app, pilot, "clear")
         await app.workers.wait_for_complete()
         await pilot.pause()
-        assert view.kind == "slack" and asked == [2] and view.conversations == SLACK_CONVERSATIONS
+        assert view.kind == "slack" and asked == ["2"] and view.conversations == SLACK_CONVERSATIONS
         assert not view.query_one(".field.cc").display and not view.query_one(".field.subject").display
         to = view.query_one(".toinput", Input)
         await type_address(to, pilot, "ext")
@@ -749,7 +749,7 @@ def test_slack_draft_picks_a_conversation_by_tab_and_saves_it(tmp_path, columns)
         await pilot.pause()
         row = inbox.get_draft(app.db, view.draft_id)
         assert (row["kind"], row["connection_id"], row["to"], row["cc"], row["subject"]) == (
-            "slack", 2, "#ext-acme <C0EXTACME>", "", None)
+            "slack", "2", "#ext-acme <C0EXTACME>", "", None)
         assert inbox.draft_problem(row) is None
         assert "Slack" in view.query_one(".detailtext").render().plain
 
@@ -804,20 +804,20 @@ def test_selected_alias_reply_errors_keep_text_and_each_owners_files(tmp_path, o
         raise (inbox.SendUnknown("email send outcome unknown") if outcome in ("unknown", "cached-unknown")
                else inbox.SendFailed("HTTP 422 refused"))
 
-    senders = serve.Senders(made={1: SimpleNamespace(send=send)})
+    senders = serve.Senders(made={"1": SimpleNamespace(send=send)})
 
     def reply(tid, text, to, cc):
         service = inbox.connect(path)
         try:
             if cached:
-                inbox.record_resend_receipt(service, 1, "00000000-0000-4000-8000-000000000001",
+                inbox.record_resend_receipt(service, "1", "00000000-0000-4000-8000-000000000001",
                                             "<confirmed@email.amazonses.test>")
                 inbox.reconcile_resend_receipts(service)
             code, body = serve.handle_reply(service, json.dumps(
                 dict(thread_id=tid, text=text, to=to, cc=cc)).encode(), senders)
             requests.append((tid, code))
             if outcome == "pending-before-callback":
-                inbox.record_resend_receipt(service, 1, "00000000-0000-4000-8000-000000000001",
+                inbox.record_resend_receipt(service, "1", "00000000-0000-4000-8000-000000000001",
                                             "<confirmed@email.amazonses.test>")
                 inbox.reconcile_resend_receipts(service)
                 app.call_from_thread(refresh)
@@ -865,7 +865,7 @@ def test_selected_alias_reply_errors_keep_text_and_each_owners_files(tmp_path, o
             assert box.view["messages"][-1]["wire_id"] is None
             staged = {owner: inbox.staged(db, thread_id=owner) for owner in (ids["old"], ids["keep"])}
             drafts = dict(app.drafts)
-            inbox.record_resend_receipt(db, 1, "00000000-0000-4000-8000-000000000001",
+            inbox.record_resend_receipt(db, "1", "00000000-0000-4000-8000-000000000001",
                                         "<confirmed@email.amazonses.test>")
             inbox.reconcile_resend_receipts(db)
             app.check_changes()
@@ -978,7 +978,7 @@ def test_cancelled_reply_callbacks_preserve_material_warning_and_draft(tmp_path,
             else:
                 assert older in retained and newer not in retained
                 assert box.view["messages"][-1]["wire_id"] is None
-                inbox.record_resend_receipt(db, 1, "00000000-0000-4000-8000-000000000001",
+                inbox.record_resend_receipt(db, "1", "00000000-0000-4000-8000-000000000001",
                                             "<confirmed@email.amazonses.test>")
                 inbox.reconcile_resend_receipts(db)
                 app.check_changes()

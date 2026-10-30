@@ -23,8 +23,8 @@ def composition(tmp_path):
         db.executemany(
             "INSERT INTO connections (id, platform, external_id, self_id, label, connected_at)"
             " VALUES (?, ?, ?, ?, ?, ?)",
-            [(1, "gmail", SELF, SELF, "Mail", AT.isoformat()),
-             (2, "quo", "+15550001001", "+15550001001", "SMS", AT.isoformat())])
+            [("1", "gmail", SELF, SELF, "Mail", AT.isoformat()),
+             ("2", "quo", "+15550001001", "+15550001001", "SMS", AT.isoformat())])
     ctx = SimpleNamespace(db=db, path=path, values=None, draft=None, error=None,
                           read=None, thread=None, identity_id=None, history=None, before=None)
     yield ctx
@@ -33,7 +33,7 @@ def composition(tmp_path):
 
 def fields(datatable):
     values = {FIELDS[name]: value for name, value in datatable[1:]}
-    values["connection_id"] = None if values["connection_id"] == "none" else int(values["connection_id"])
+    values["connection_id"] = None if values["connection_id"] == "none" else values["connection_id"]
     if values["kind"] == "sms" and values["subject"] == "none":
         values["subject"] = None
     return values

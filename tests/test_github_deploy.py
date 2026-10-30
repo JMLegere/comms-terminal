@@ -98,9 +98,9 @@ def config(tmp_path):
     db = inbox.connect(str(database))
     inbox.migrate(db)
     with db:
-        cid = db.execute("INSERT INTO connections (platform, external_id, self_id, label, connected_at)"
-                         " VALUES ('slack', 'T0', 'U0', 'Preserved', ?)",
-                         (datetime.now(timezone.utc).isoformat(),)).lastrowid
+        cid = db.execute("INSERT INTO connections (id, platform, external_id, self_id, label, connected_at)"
+                         " VALUES ((SELECT printf('%d', count(*) + 1) FROM connections), 'slack', 'T0', 'U0', 'Preserved', ?) RETURNING id",
+                         (datetime.now(timezone.utc).isoformat(),)).fetchone()[0]
     inbox.ingest(db, inbox.Incoming(cid, "D0", "im", "MESSAGE", "D0:1",
                                    inbox.Identity("slack_user", "U1"), datetime.now(timezone.utc), "preserve me"))
     db.close()

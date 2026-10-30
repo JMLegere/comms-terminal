@@ -12,13 +12,13 @@ def setup():
     inbox.migrate(db)
     with db:
         for platform, addr, label in (("gmail", "jeremy@agentmaple.com", "Gmail"), ("fastmail", "legere@fastmail.com", "Fastmail")):
-            db.execute("INSERT INTO connections (platform, external_id, self_id, label, connected_at)"
-                       " VALUES (?, ?, ?, ?, ?)", (platform, addr, addr, label, AT.isoformat()))
+            db.execute("INSERT INTO connections (id, platform, external_id, self_id, label, connected_at)"
+                       " VALUES ((SELECT printf('%d', count(*) + 1) FROM connections), ?, ?, ?, ?, ?)", (platform, addr, addr, label, AT.isoformat()))
     return db
 
 
 def mail(db, n, addr, name):
-    return inbox.ingest(db, inbox.Incoming(1, "jeremy@agentmaple.com", "mailbox", "MESSAGE", f"<m{n}@x>",
+    return inbox.ingest(db, inbox.Incoming("1", "jeremy@agentmaple.com", "mailbox", "MESSAGE", f"<m{n}@x>",
                                            inbox.Identity("email", addr, name), AT, "hi", [], f"Subject {n}"))
 
 
@@ -87,7 +87,7 @@ def test_service_addresses_are_named_after_the_service():
 def test_thread_lists_everyone_involved():
     db = setup()
     t = mail(db, 1, "janet@ws.ca", "Janet Forbes")
-    inbox.ingest(db, inbox.Incoming(1, "jeremy@agentmaple.com", "mailbox", "MESSAGE", "<m2@x>",
+    inbox.ingest(db, inbox.Incoming("1", "jeremy@agentmaple.com", "mailbox", "MESSAGE", "<m2@x>",
                                     inbox.Identity("email", "john@ws.ca", "John Debly"), AT, "thanks", ["<m1@x>"], "Re",
                                     {"to": ["jeremy@agentmaple.com", "janet@ws.ca"], "cc": ["bob@acme.com", "logan@agentmaple.com"]}))
     v = inbox.thread_view(db, t.id)
@@ -100,14 +100,14 @@ def test_thread_lists_everyone_involved():
 def test_outbound_texts_list_who_was_texted():
     db = setup()
     with db:
-        db.execute("INSERT INTO connections (platform, external_id, self_id, label, connected_at)"
-                   " VALUES ('quo', 'PN1', '+15550000000', 'Quo', ?)", (AT.isoformat(),))
+        db.execute("INSERT INTO connections (id, platform, external_id, self_id, label, connected_at)"
+                   " VALUES ((SELECT printf('%d', count(*) + 1) FROM connections), 'quo', 'PN1', '+15550000000', 'Quo', ?)", (AT.isoformat(),))
     mail(db, 1, "nic@acme.com", "Nic Robichaud")
     nic = db.execute("SELECT person_id FROM identities WHERE value = 'nic@acme.com'").fetchone()[0]
     inbox.add_identity(db, nic, "phone", "+15550001001")
 
     def text(n, peer, sender=None):
-        return inbox.ingest(db, inbox.Incoming(3, peer, "im", "MESSAGE", f"sms-{n}", sender, AT, "hi", [], "hi",
+        return inbox.ingest(db, inbox.Incoming("3", peer, "im", "MESSAGE", f"sms-{n}", sender, AT, "hi", [], "hi",
                                                {"peer": peer}, channel_name=peer))
     known, unknown = text(1, "+15550001001"), text(2, "+15550001002")
     text(3, "+15550001001", inbox.Identity("phone", "+15550001001"))  # Nic answers

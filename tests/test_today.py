@@ -13,7 +13,7 @@ def thread_of(db, pid):
 
 
 def blank(db):
-    return inbox.save_draft(db, {"connection_id": 1, "kind": "email", "sender": ME, "to": "ana@acme.com",
+    return inbox.save_draft(db, {"connection_id": "1", "kind": "email", "sender": ME, "to": "ana@acme.com",
                                  "cc": "", "subject": "Hello", "body": "new"})
 
 

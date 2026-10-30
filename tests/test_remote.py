@@ -42,7 +42,7 @@ def service(tmp_path):
     with db:
         db.execute("INSERT INTO connections (id, platform, external_id, self_id, label, connected_at)"
                    " VALUES (2, 'slack', 'T0', 'U0JEREMY', 'Slack', '2026-10-12T00:00:00+00:00')")
-    t = inbox.ingest(db, inbox.Incoming(2, "D0ANA", "im", "MESSAGE", "D0ANA:1", inbox.Identity("slack_user", "U0ANA"),
+    t = inbox.ingest(db, inbox.Incoming("2", "D0ANA", "im", "MESSAGE", "D0ANA:1", inbox.Identity("slack_user", "U0ANA"),
                                         datetime.now(timezone.utc), "hi", data={"channel": "D0ANA"}))
     files.store_raw(db, b"Subject: hi\r\n\r\nbody\r\n")
     sock = str(tmp_path / "inbox.sock")
@@ -106,7 +106,7 @@ def test_pipeline_changes_reach_the_service_and_undo_by_its_id(service, laptop):
     rem, syncer, db, _ = laptop
     with sdb:
         org = sdb.execute("INSERT INTO organizations (domain, name, created_at) VALUES ('acme.com', 'Acme',"
-                          " '2026-10-01T00:00:00+00:00')").lastrowid
+                          " '2026-10-01T00:00:00+00:00') RETURNING id").fetchone()[0]
     syncer.apply(db, syncer.once())
     entry = tui.pipeline.set_stage(db, org, "REVENUE", "Selection")
     tui.pipeline.set_value(db, org, "REVENUE", "90k")

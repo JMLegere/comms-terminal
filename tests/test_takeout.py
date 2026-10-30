@@ -67,12 +67,12 @@ def _database(tmp_path):
         db.executemany(
             "INSERT INTO connections (id, platform, external_id, self_id, label, connected_at, last_error)"
             " VALUES (?, 'gmail', ?, ?, 'Fixture', ?, 'fixture health error')",
-            [(1, SELF, SELF, SINCE.isoformat()),
-             (2, "other@fixture.invalid", "other@fixture.invalid", SINCE.isoformat())])
+            [("1", SELF, SELF, SINCE.isoformat()),
+             ("2", "other@fixture.invalid", "other@fixture.invalid", SINCE.isoformat())])
     return path, db
 
 
-def _seed(db, key, action, connection_id=1):
+def _seed(db, key, action, connection_id="1"):
     connection = db.execute("SELECT * FROM connections WHERE id = ?", (connection_id,)).fetchone()
     raw = _mail(key, "Thu, 10 Sep 2026 00:00:00 +0000").as_bytes()
     incoming = email.parse(raw, connection)
@@ -98,7 +98,7 @@ def test_takeout_preview_apply_threading_scope_and_repeat(tmp_path):
     duplicate = _seed(db, "existing", inbox.Ignore())
     untouched_done = _seed(db, "untouched-done", inbox.Done())
     untouched_snooze = _seed(db, "untouched-snooze", inbox.Snooze(UNTIL + timedelta(days=2)))
-    foreign = _seed(db, "foreign-root", inbox.Wait(), connection_id=2)
+    foreign = _seed(db, "foreign-root", inbox.Wait(), connection_id="2")
     untouched = {thread_id: inbox.snapshot(db, thread_id)
                  for thread_id in (duplicate, untouched_done, untouched_snooze, foreign)}
     connections = _rows(db, "connections")
@@ -134,7 +134,7 @@ def test_takeout_preview_apply_threading_scope_and_repeat(tmp_path):
     })
 
     before = _files(path.parent)
-    preview = import_takeout.run(archive, path, 1, SINCE, UNTIL)
+    preview = import_takeout.run(archive, path, "1", SINCE, UNTIL)
     assert _files(path.parent) == before
     expected = {"scanned": 16, "outside_range": 3, "invalid_date": 3,
                 "filtered": 2, "duplicates": 2, "stored": 6,
@@ -143,11 +143,14 @@ def test_takeout_preview_apply_threading_scope_and_repeat(tmp_path):
     assert len(preview["threads"]) == 5
 
     offset = timezone(timedelta(hours=-4))
-    applied = import_takeout.run(archive, path, 1, SINCE.astimezone(offset), UNTIL.astimezone(offset), apply=True)
+    applied = import_takeout.run(archive, path, "1", SINCE.astimezone(offset), UNTIL.astimezone(offset), apply=True)
     assert {key: applied[key] for key in expected} == expected
-    assert set(applied["threads"]) == set(preview["threads"])
+    existing = {done, snoozed, *untouched}  # a new Thread gets a fresh id in each run, so only the count can match
+    assert set(applied["threads"]) & existing == set(preview["threads"]) & existing
+    assert len(set(applied["threads"]) - existing) == len(set(preview["threads"]) - existing)
     db = sqlite3.connect(path)
     db.row_factory = sqlite3.Row
+    db.create_function("new_id", 0, inbox.new_id)  # every id column's default
     affected = set(applied["threads"])
     assert {done, snoozed} <= affected
     assert affected.isdisjoint(untouched)
@@ -167,7 +170,7 @@ def test_takeout_preview_apply_threading_scope_and_repeat(tmp_path):
     assert new[_id("sent-only")]["identity_id"] is None
     channel = db.execute("SELECT c.connection_id FROM threads t JOIN channels c ON c.id = t.channel_id"
                          " WHERE t.id = ?", (new[_id("foreign-reference")]["thread_id"],)).fetchone()
-    assert channel[0] == 1
+    assert channel[0] == "1"
     occurred = [datetime.fromisoformat(row["occurred_at"]) for row in new.values()]
     assert occurred == sorted(occurred)
     assert datetime.fromisoformat(new[_id("root")]["occurred_at"]) == SINCE
@@ -187,7 +190,7 @@ def test_takeout_preview_apply_threading_scope_and_repeat(tmp_path):
     activities = _rows(db, "activities")
     db.close()
     before_repeat = _files(path.parent)
-    repeated = import_takeout.run(archive, path, 1, SINCE, UNTIL, apply=True)
+    repeated = import_takeout.run(archive, path, "1", SINCE, UNTIL, apply=True)
     assert repeated["stored"] == 0 and repeated["duplicates"] == 8
     assert repeated["threads"] == [] and repeated["existing_threads_changed"] == 0
     assert repeated["verified_todo"] == 0
@@ -205,7 +208,7 @@ def test_takeout_rejects_invalid_bounds_without_mutation(tmp_path, since, until)
     archive, _ = _archive(tmp_path, {"Inbox": [_mail("fixture")], "Sent": []})
     before = _files(path.parent)
     with pytest.raises(ValueError):
-        import_takeout.run(archive, path, 1, since, until, apply=True)
+        import_takeout.run(archive, path, "1", since, until, apply=True)
     assert _files(path.parent) == before
 
 
@@ -213,7 +216,7 @@ def test_takeout_requires_existing_database_and_connection(tmp_path):
     archive, _ = _archive(tmp_path, {"Inbox": [_mail("fixture")], "Sent": []})
     missing = tmp_path / "missing.db"
     with pytest.raises((ValueError, FileNotFoundError, sqlite3.OperationalError)):
-        import_takeout.run(archive, missing, 1, SINCE, UNTIL, apply=True)
+        import_takeout.run(archive, missing, "1", SINCE, UNTIL, apply=True)
     assert not missing.exists() and not (tmp_path / "raw").exists()
     path, db = _database(tmp_path)
     db.close()

@@ -79,9 +79,9 @@ def with_inline_image(tmp_path, stored):
     with db:
         mid = db.execute("INSERT INTO activities (thread_id, kind, occurred_at, identity_id, native_id, content, data)"
                          " SELECT thread_id, 'MESSAGE', ?, identity_id, '<look@acme.com>', 'Look', ? FROM activities"
-                         " WHERE id = ?", (datetime.now(timezone.utc).isoformat(),
+                         " WHERE id = ? RETURNING id", (datetime.now(timezone.utc).isoformat(),
                                            json.dumps({"raw": files.store_raw(db, bytes(m))}),
-                                           newest(db, ids["ana"]))).lastrowid
+                                           newest(db, ids["ana"]))).fetchone()[0]
     inbox.add_attachments(db, mid, [{"name": "shot1_x.png", "type": "image/png", "size": len(pic), "inline": True,
                                      "content_id": "shot1@x", "sha": files.store_file(db, pic) if stored else None}])
     return path, ids, db
@@ -121,7 +121,7 @@ def test_y_lists_each_stored_file_path_for_threads_and_drafts(tmp_path):
     text = thread_text(inbox.thread_view(db, ids["ana"]), files.raw_dir(db))
     assert f"Attachment: deck.pdf (application/pdf, 13 bytes) — {files.files_dir(db) / pdf}" in text
     assert "Attachment: late.zip (application/zip, 9 bytes)\n" in text + "\n"
-    d = inbox.save_draft(db, dict(connection_id=1, kind="email", sender="me@x.io", to="", cc="", subject="s", body=""))
+    d = inbox.save_draft(db, dict(connection_id="1", kind="email", sender="me@x.io", to="", cc="", subject="s", body=""))
     inbox.stage(db, sha=pdf, name="deck.pdf", type="application/pdf", size=13, draft_id=d["id"])
     assert f"Attachment: deck.pdf (application/pdf, 13 bytes) — {files.files_dir(db) / pdf}" in \
         agent.draft(db, str(d["id"]), {}, None, None)
@@ -166,7 +166,7 @@ def test_reply_attaches_a_workbox_file_shows_an_upload_link_and_delete_unstages(
 def test_pasting_an_image_path_into_a_draft_stages_it_and_other_text_is_typed(tmp_path):
     path, _ = seeded(tmp_path)
     db = inbox.connect(path)
-    d = inbox.save_draft(db, dict(connection_id=1, kind="email", sender="me@x.io", to="", cc="", subject="s", body=""))
+    d = inbox.save_draft(db, dict(connection_id="1", kind="email", sender="me@x.io", to="", cc="", subject="s", body=""))
     shot = tmp_path / "herdr-clipboard-1-0.png"
     shot.write_bytes(png())
     app, seen = Console(path), {}
@@ -194,7 +194,7 @@ def test_sms_reply_has_no_attach(tmp_path):
     with db:
         db.execute("INSERT INTO connections (id, platform, external_id, self_id, label, connected_at)"
                    " VALUES (3, 'quo', '+15550000000', '+15550000000', 'Quo', ?)", (now.isoformat(),))
-    t = inbox.ingest(db, inbox.Incoming(3, "+15551112222", "im", "MESSAGE", "SMS1",
+    t = inbox.ingest(db, inbox.Incoming("3", "+15551112222", "im", "MESSAGE", "SMS1",
                                         inbox.Identity("phone", "+15551112222", None), now, "hi"))
     shot = tmp_path / "shot.png"
     shot.write_bytes(png())
@@ -231,7 +231,7 @@ def test_f_forwards_the_newest_message_as_an_email_draft_with_its_files(tmp_path
     run(app, [go])
     d = inbox.list_drafts(db)[0]
     assert seen["page"] is DraftsPage and seen["shown"] == d["id"] and seen["focus"] == "DraftConnection"
-    assert d["kind"] == "email" and d["connection_id"] == 1 and d["subject"] == "Fwd: Pricing for 40 seats?"
+    assert d["kind"] == "email" and d["connection_id"] == "1" and d["subject"] == "Fwd: Pricing for 40 seats?"
     assert "---------- Forwarded message ---------\nFrom: ana@acme.com\nDate: " in d["body"]
     assert "Hi Jeremy, can we talk pricing" in d["body"]
     assert [r["name"] for r in inbox.staged(db, draft_id=d["id"])] == ["deck.pdf", "shot.png"]

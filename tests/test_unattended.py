@@ -28,15 +28,15 @@ def db(monkeypatch):
 
 def person(db, name, kind, value):
     with db:
-        pid = db.execute("INSERT INTO persons (display_name, created_at) VALUES (?, ?)", (name, NOW.isoformat())).lastrowid
+        pid = db.execute("INSERT INTO persons (display_name, created_at) VALUES (?, ?) RETURNING id", (name, NOW.isoformat())).fetchone()[0]
     inbox.add_identity(db, pid, kind, value)
     return pid
 
 
 def org(db, domain, name, stage=None):
     with db:
-        o = db.execute("INSERT INTO organizations (domain, name, created_at) VALUES (?, ?, ?)",
-                       (domain, name, NOW.isoformat())).lastrowid
+        o = db.execute("INSERT INTO organizations (domain, name, created_at) VALUES (?, ?, ?) RETURNING id",
+                       (domain, name, NOW.isoformat())).fetchone()[0]
     if stage:
         pl.set_stage(db, o, R, stage, at=NOW - 10 * DAY)
     return o
@@ -44,7 +44,7 @@ def org(db, domain, name, stage=None):
 
 def sent(db, native_id, at, **data):
     """A message Jeremy sent: only addressed People are in it."""
-    return inbox.ingest(db, inbox.Incoming(1, "jeremy@agentmaple.ai", "mailbox", "MESSAGE", native_id, None, at,
+    return inbox.ingest(db, inbox.Incoming("1", "jeremy@agentmaple.ai", "mailbox", "MESSAGE", native_id, None, at,
                                            "hi", title="Hello", data=data))
 
 
@@ -64,7 +64,7 @@ def test_rollup_counts_addressed_threads_phone_members_and_enrollments(db):
     sent(db, "<s1@x>", NOW - 2 * DAY, to=["jeremy@agentmaple.ai"], cc=["sam@stmec.com"])  # Cc counts too
     jp = person(db, "JP", "phone", "+15065550100")
     inbox.set_membership(db, jp, "lclexcavation.com", True)
-    sms = inbox.ingest(db, inbox.Incoming(2, "+15065550100", "im", "MESSAGE", "sms1", None, NOW - DAY, "on site?",
+    sms = inbox.ingest(db, inbox.Incoming("2", "+15065550100", "im", "MESSAGE", "sms1", None, NOW - DAY, "on site?",
                                           data={"peer": "+15065550100"}))
     inbox.act(db, sms.id, inbox.Snooze(NOW + 2 * DAY))
 

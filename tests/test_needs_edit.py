@@ -3,7 +3,7 @@ line, and Needs edit, a Draft that cannot send until its text changes."""
 
 from types import SimpleNamespace
 
-from schema_history import downgrade
+from schema_history import downgrade, renumbered
 from test_attachment_send import FakeSender
 from test_sequences import MONDAY, clock, db, draft_of, person  # noqa: F401 (fixtures)
 from textual.widgets import DataTable, Input
@@ -54,7 +54,7 @@ def test_a_ready_step_sends_unchanged_and_any_draft_can_be_marked(db):
 
 
 def test_cli_marks_a_draft_and_lists_use_when(db):
-    d = inbox.save_draft(db, dict(connection_id=1, kind="email", sender="jeremy@agentmaple.example",
+    d = inbox.save_draft(db, dict(connection_id="1", kind="email", sender="jeremy@agentmaple.example",
                                   to="dana@harbourline.example", cc="", subject="Hi", body="Hello"))
     out = agent.draft(db, str(d["id"]), {}, None, None, needs_edit=True)
     assert "- Needs edit:" in out and inbox.get_draft(db, d["id"])["needs_edit"] == 1
@@ -75,7 +75,7 @@ def test_markdown_carries_use_when_and_ready(db):
 
 
 def test_upgrade_keeps_existing_steps_sendable(db):
-    s = brief(db)
+    (s,) = renumbered(db, "sequences", brief(db))
     downgrade(db, 29)
     inbox.migrate(db)
     assert [st["needs_edit"] for st in sq.sequence_steps(db, s)] == [0]
@@ -110,12 +110,12 @@ def test_w_sets_use_when_in_the_console(tmp_path):
 def test_setting_sends_from_gives_flagged_tasks_their_drafts(db):
     with db:
         db.execute("INSERT INTO connections (id, platform, external_id, self_id, label, connected_at)"
-                   " VALUES (2, 'gmail', 'j@agentmaple.example', 'j@agentmaple.example', 'Email', ?)", (MONDAY.isoformat(),))
+                   " VALUES ('2', 'gmail', 'j@agentmaple.example', 'j@agentmaple.example', 'Email', ?)", (MONDAY.isoformat(),))
     s = brief(db)  # two email Connections: a new Sequence sends from neither until one is chosen
     sq.enroll(db, person(db, "dana@harbourline.example", "Dana Roy", org="Harbourline"), s, MONDAY)
     (t,) = sq.tasks_due(db, MONDAY)
     assert db.execute("SELECT flag FROM tasks WHERE id = ?", (t["id"],)).fetchone()[0] == "Sequence has no Connection"
-    out = agent.sequence_cmd(db, SimpleNamespace(sequence_cmd="sends-from", sequence=str(s), connection=2))
+    out = agent.sequence_cmd(db, SimpleNamespace(sequence_cmd="sends-from", sequence=str(s), connection="2"))
     assert "sends from" in out
     inbox.wake(db, MONDAY)
     assert draft_of(db, t["id"])["sender"] == "j@agentmaple.example"

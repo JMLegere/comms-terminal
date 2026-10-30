@@ -30,8 +30,8 @@ def db():
     d = inbox.connect()
     inbox.migrate(d)
     with d:
-        d.execute("INSERT INTO connections (platform, external_id, self_id, label, connected_at, inbound) VALUES"
-                  " ('gmail', 'jeremy@agentmaple.com', 'jeremy@agentmaple.com', 'Gmail', '2026-10-01T00:00:00+00:00',"
+        d.execute("INSERT INTO connections (id, platform, external_id, self_id, label, connected_at, inbound) VALUES"
+                  " ((SELECT printf('%d', count(*) + 1) FROM connections), 'gmail', 'jeremy@agentmaple.com', 'jeremy@agentmaple.com', 'Gmail', '2026-10-01T00:00:00+00:00',"
                   " 'jeremy@inbox.agentmaple.com')")
     return d
 
@@ -209,7 +209,7 @@ def test_the_service_refuses_a_reply_on_a_meeting_thread(db, clock):
     clock[0] = datetime(2026, 10, 20, 14, tzinfo=UTC)
     cal.sync(db, feed(DEMO), "2026-10-20T14:00:00+00:00")
     meetings.synced(db)
-    status, body = serve.handle_reply(db, f'{{"thread_id": {thread(db, "demo").id}, "text": "hi"}}'.encode(),
+    status, body = serve.handle_reply(db, f'{{"thread_id": "{thread(db, "demo").id}", "text": "hi"}}'.encode(),
                                       serve.Senders())
     assert (status, body["error"]) == (400, inbox.NO_REPLY)
 

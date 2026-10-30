@@ -88,7 +88,7 @@ def test_as_seq_20_running_out_of_steps_finishes_through_on_completion(db, close
 def test_as_seq_21_goal_met_on_a_paused_enrollment_chains_to_onboard(db, close_seq):
     dana = person(db, "dana@harbourline.example", "Dana Roy")
     eid = sq.enroll(db, dana, close_seq["close"], MONDAY)
-    inbox.ingest(db, inbox.Incoming(1, "jeremy@agentmaple.example", "mailbox", "MESSAGE", "<signed>",
+    inbox.ingest(db, inbox.Incoming("1", "jeremy@agentmaple.example", "mailbox", "MESSAGE", "<signed>",
                                     inbox.Identity("email", "dana@harbourline.example", "Dana Roy"), MONDAY + DAY,
                                     "Signed!", title="Hello"))
     assert state(db, eid) == ("PAUSED", None)
@@ -155,7 +155,7 @@ def test_as_seq_25_a_reply_pauses_a_finishing_enrollment_and_keeps_its_reason(db
     eid = sq.enroll(db, dana, s, MONDAY)
     sq.finish(db, eid, "GOAL_MET", MONDAY)
     assert state(db, eid) == ("FINISHING", "GOAL_MET")
-    inbox.ingest(db, inbox.Incoming(1, "jeremy@agentmaple.example", "mailbox", "MESSAGE", "<thanks>",
+    inbox.ingest(db, inbox.Incoming("1", "jeremy@agentmaple.example", "mailbox", "MESSAGE", "<thanks>",
                                     inbox.Identity("email", "dana@harbourline.example", "Dana Roy"), MONDAY + DAY,
                                     "Thanks!", title="Hello"))
     assert state(db, eid) == ("PAUSED", "GOAL_MET")
@@ -313,7 +313,7 @@ def test_an_enrollment_counts_only_for_its_own_organization(db):
     marc = person(db, "marc@climb.example", "Marc Savoie")
     with db:
         fund = db.execute("INSERT INTO organizations (domain, name, created_at) VALUES ('eastvalley.example',"
-                          " 'East Valley', 'x')").lastrowid
+                          " 'East Valley', 'x') RETURNING id").fetchone()[0]
         db.execute("INSERT INTO memberships VALUES (?, ?, 1, 'x')", (marc, fund))
     climb = org(db, "climb.example")
     for o in (climb, fund):

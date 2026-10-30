@@ -28,7 +28,7 @@ def seed(db, broken=False):
     def mail(frm, name, title, body, ago, refs=(), cc=()):
         at = now - ago
         mid = f"<demo{next(n)}@{frm.split('@')[1]}>"
-        return inbox.ingest(db, inbox.Incoming(1, ME, "mailbox", "MESSAGE", mid, inbox.Identity("email", frm, name), at,
+        return inbox.ingest(db, inbox.Incoming("1", ME, "mailbox", "MESSAGE", mid, inbox.Identity("email", frm, name), at,
                                                body, list(refs), title, {"from": frm, "to": [ME], "cc": list(cc), "subject": title}))
 
     def slack(user, name, channel, kind, text, ago, edit_of=None, delete_of=None, sender=True):
@@ -36,9 +36,9 @@ def seed(db, broken=False):
         ts = f"{at.timestamp():.6f}"
         ident = inbox.Identity("slack_user", user, name) if sender else None
         if delete_of:
-            return inbox.ingest(db, inbox.Incoming(2, channel, kind, "DELETE", delete_of, ident, at, None))
+            return inbox.ingest(db, inbox.Incoming("2", channel, kind, "DELETE", delete_of, ident, at, None))
         native = f"{edit_of}:{ts}" if edit_of else f"{channel}:{ts}"
-        return inbox.ingest(db, inbox.Incoming(2, channel, kind, "EDIT" if edit_of else "MESSAGE", native, ident, at,
+        return inbox.ingest(db, inbox.Incoming("2", channel, kind, "EDIT" if edit_of else "MESSAGE", native, ident, at,
                                                text, [], None, {"channel": channel, "ts": ts}))
 
     def first(t):
@@ -46,14 +46,14 @@ def seed(db, broken=False):
 
     ana = mail("ana@acme.com", "Ana Ruiz", "Pricing for 40 seats?", "Hi Jeremy, can we talk pricing for 40 seats?\nWe'd like to start in November.", timedelta(hours=3), cc=["ops@acme.com"])
     logan = slack("U0LOGAN", "Logan Carr", "D0LOGAN", "im", "staging looks good", timedelta(hours=5))
-    inbox.ingest(db, inbox.Incoming(2, "D0LOGAN", "im", "MESSAGE", f"D0LOGAN:{(now - timedelta(hours=4, minutes=50)).timestamp():.6f}", None, now - timedelta(hours=4, minutes=50), "nice, any blockers?", [], None, {"channel": "D0LOGAN"}))
+    inbox.ingest(db, inbox.Incoming("2", "D0LOGAN", "im", "MESSAGE", f"D0LOGAN:{(now - timedelta(hours=4, minutes=50)).timestamp():.6f}", None, now - timedelta(hours=4, minutes=50), "nice, any blockers?", [], None, {"channel": "D0LOGAN"}))
     slack("U0LOGAN", "Logan Carr", "D0LOGAN", "im", "none. deploy now?", timedelta(hours=4, minutes=40))
     mail("bob@gmail.com", None, "Invoice #2041", "Attached is invoice #2041 for October.", timedelta(days=2))
     mia = slack("U0MIA", "Mia Chen", "C0EXTACME", "channel", "Can you review the integration spec by Wednesday?", timedelta(days=3))
     inbox.act(db, mia.id, inbox.Investigate())
     spec = mail("dana@northwind.io", "Dana Kim", "Rollout plan (long)", LONG, timedelta(hours=8))
     priya = mail("priya@northwind.io", "Priya Nair", "Intro call", "Would love a quick intro.", timedelta(days=4))
-    inbox.ingest(db, inbox.Incoming(1, ME, "mailbox", "MESSAGE", "<demo-out@agentmaple.com>", None, now - timedelta(days=3), "Sure — Tuesday 2pm?", [first(priya)], "Re: Intro call", {"to": ["priya@northwind.io"]}))
+    inbox.ingest(db, inbox.Incoming("1", ME, "mailbox", "MESSAGE", "<demo-out@agentmaple.com>", None, now - timedelta(days=3), "Sure — Tuesday 2pm?", [first(priya)], "Re: Intro call", {"to": ["priya@northwind.io"]}))
     later = mail("sam@globex.com", "Sam Ortiz", "Partnership idea", "Let's revisit this next quarter.", timedelta(days=5))
     inbox.act(db, later.id, inbox.Snooze(now + timedelta(days=30)))
     edited = slack("U0RAJ", "Raj Patel", "D0RAJ", "im", "contract attached", timedelta(days=1))

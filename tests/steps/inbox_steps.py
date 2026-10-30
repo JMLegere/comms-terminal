@@ -9,7 +9,7 @@ from pytest_bdd import given, parsers, then, when
 
 from comms_terminal import inbox
 
-EMAIL, SLACK = 1, 2
+EMAIL, SLACK = "1", "2"
 MAILBOX = "jeremy@agentmaple.com"
 
 
@@ -31,9 +31,9 @@ def ctx():
     inbox.migrate(db)
     with db:
         db.execute("INSERT INTO connections (id, platform, external_id, self_id, label, connected_at)"
-                   " VALUES (1, 'gmail', ?, ?, 'Gmail', '2026-10-12T00:00:00+00:00')", (MAILBOX, MAILBOX))
+                   " VALUES ('1', 'gmail', ?, ?, 'Gmail', '2026-10-12T00:00:00+00:00')", (MAILBOX, MAILBOX))
         db.execute("INSERT INTO connections (id, platform, external_id, self_id, label, connected_at)"
-                   " VALUES (2, 'slack', 'T0AGENTMAPLE', 'U0JEREMY', 'Slack', '2026-10-12T00:00:00+00:00')")
+                   " VALUES ('2', 'slack', 'T0AGENTMAPLE', 'U0JEREMY', 'Slack', '2026-10-12T00:00:00+00:00')")
     return SimpleNamespace(db=db, thread=None, threads={}, persons={}, person=None, sender=FakeSender(),
                            error=None, clock=datetime(2026, 10, 12, 8, tzinfo=timezone.utc), n=0,
                            first={}, seen=[], before=0, thread_count=0, case_id=None, pending=None,

@@ -81,6 +81,7 @@ def run(archive, db_path, connection_id, since, until, apply=False) -> dict:
             db = stack.enter_context(closing(sqlite3.connect(":memory:")))
             _preview(db, path, private)
         db.row_factory = sqlite3.Row
+        db.create_function("new_id", 0, inbox.new_id)  # every id column's default (ADR 0012)
         db.execute("PRAGMA foreign_keys = ON")
         db.execute("PRAGMA busy_timeout = 5000")
         if db.execute("PRAGMA user_version").fetchone()[0] != inbox.SCHEMA_VERSION:
@@ -180,7 +181,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("archive")
     parser.add_argument("--db", required=True)
-    parser.add_argument("--connection-id", required=True, type=int)
+    parser.add_argument("--connection-id", required=True)
     parser.add_argument("--since", required=True)
     parser.add_argument("--until", required=True)
     parser.add_argument("--apply", action="store_true")

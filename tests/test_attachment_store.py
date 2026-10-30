@@ -14,9 +14,9 @@ def setup(tmp_path):
     db = inbox.connect(str(tmp_path / "inbox.db"))
     inbox.migrate(db)
     with db:
-        db.execute("INSERT INTO connections (platform, external_id, self_id, label, connected_at)"
-                   " VALUES ('gmail', 'me@x.io', 'me@x.io', 'Email', ?)", (NOW.isoformat(),))
-    t = inbox.ingest(db, inbox.Incoming(1, "me@x.io", "mailbox", "MESSAGE", "<a@acme.com>",
+        db.execute("INSERT INTO connections (id, platform, external_id, self_id, label, connected_at)"
+                   " VALUES ((SELECT printf('%d', count(*) + 1) FROM connections), 'gmail', 'me@x.io', 'me@x.io', 'Email', ?)", (NOW.isoformat(),))
+    t = inbox.ingest(db, inbox.Incoming("1", "me@x.io", "mailbox", "MESSAGE", "<a@acme.com>",
                                         inbox.Identity("email", "ana@acme.com", "Ana"), NOW, "contract attached"))
     activity = db.execute("SELECT id FROM activities WHERE thread_id = ?", (t.id,)).fetchone()[0]
     return db, t.id, activity
@@ -74,7 +74,7 @@ def test_a_stored_attachment_needs_its_sha(tmp_path):
 
 def test_staging_on_a_draft_or_a_reply(tmp_path):
     db, thread_id, _ = setup(tmp_path)
-    draft = inbox.save_draft(db, {"connection_id": 1, "kind": "email", "sender": "me@x.io", "to": "ana@acme.com",
+    draft = inbox.save_draft(db, {"connection_id": "1", "kind": "email", "sender": "me@x.io", "to": "ana@acme.com",
                                   "cc": "", "subject": "Contract", "body": "attached"})
     sha = files.store_file(db, b"%PDF")
     a = inbox.stage(db, sha=sha, name="contract.pdf", type="application/pdf", size=4, draft_id=draft["id"])

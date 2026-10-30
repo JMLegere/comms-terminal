@@ -62,7 +62,7 @@ class FakeSender:
 
 
 def console(path, drafts=None):
-    senders = {cid: FakeSender(cid) for cid in (1, 2)}
+    senders = {cid: FakeSender(cid) for cid in ("1", "2")}
 
     def reply(tid, text, to, cc):
         db = inbox.connect(str(path))
@@ -105,9 +105,9 @@ def test_old_link_selects_survivor_and_reply_uses_its_connection(tmp_path):
         await pilot.pause()
 
     run(app, scenario)
-    assert senders[1].calls == [(ids["keep"], "Correct account", ["second@example.test"], [],
+    assert senders["1"].calls == [(ids["keep"], "Correct account", ["second@example.test"], [],
                                 [FIRST, "<bridge@example.test>", SECOND])]
-    assert senders[2].calls == []
+    assert senders["2"].calls == []
 
 
 def test_single_retired_draft_remains_editable_under_original_key(tmp_path):
@@ -154,8 +154,8 @@ def test_multiple_drafts_use_existing_picker_and_send_only_chosen_text(tmp_path)
         assert app.drafts == {ids["keep"]: "First saved text"}
 
     run(app, scenario)
-    assert senders[1].calls[0][0:4] == (ids["keep"], "Second saved text!", ["second@example.test"], [])
-    assert senders[2].calls == []
+    assert senders["1"].calls[0][0:4] == (ids["keep"], "Second saved text!", ["second@example.test"], [])
+    assert senders["2"].calls == []
 
 
 def test_identical_saved_drafts_keep_other_original_key_after_send(tmp_path):
@@ -174,7 +174,7 @@ def test_identical_saved_drafts_keep_other_original_key_after_send(tmp_path):
         assert app.drafts == {ids["old"]: "Same saved text"}
 
     run(app, scenario)
-    assert senders[1].calls[0][1] == "Same saved text"
+    assert senders["1"].calls[0][1] == "Same saved text"
 
 
 def test_remote_merge_preserves_live_composer_selection_and_invalidates_undo(tmp_path):

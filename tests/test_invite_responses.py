@@ -26,12 +26,12 @@ def count(ctx, thread_id):
 def test_malformed_requests_and_unknown_threads_are_refused(ctx):
     meeting_thread_for(ctx, event(ctx, "Pints", "brendan.wood@snaptrade.com"))
     client = gcal.Client(dict(CRED), None, http=ctx.google)
-    for body in (b"{", b"[]", json.dumps({"thread_id": str(ctx.thread.id), "answer": "accept"}).encode(),
+    for body in (b"{", b"[]", json.dumps({"thread_id": 1, "answer": "accept"}).encode(),
                  json.dumps({"thread_id": ctx.thread.id, "answer": "yes"}).encode(),
                  json.dumps({"thread_id": 2**70, "answer": "accept"}).encode(),
                  json.dumps({"thread_id": ctx.thread.id, "answer": "accept", "note": "x"}).encode()):
         assert serve.handle_respond(ctx.db, body, client)[0] == 400
-    assert serve.handle_respond(ctx.db, b'{"thread_id": 999, "answer": "accept"}', client) == (
+    assert serve.handle_respond(ctx.db, b'{"thread_id": "999", "answer": "accept"}', client) == (
         404, {"outcome": "refused", "error": "No such Thread"})
     assert ctx.google.requests == []
 
@@ -90,7 +90,7 @@ def test_a_deleted_event_is_refused_even_with_a_live_occurrence(ctx, monkeypatch
 
 def test_a_thread_without_an_invitation_is_refused_before_google(ctx):
     google(ctx)
-    ctx.thread = inbox.ingest(ctx.db, inbox.Incoming(1, "jeremy@agentmaple.com", "mailbox", "MESSAGE", "<m1@test>",
+    ctx.thread = inbox.ingest(ctx.db, inbox.Incoming("1", "jeremy@agentmaple.com", "mailbox", "MESSAGE", "<m1@test>",
                                                      inbox.Identity("email", "sam@stmec.example"),
                                                      ctx.clock, "Hello", title="Hello"))
     assert respond(ctx) == (400, {"outcome": "refused", "error": "This Thread holds no invitation."})
@@ -235,7 +235,7 @@ def test_the_respond_route_is_on_the_reply_socket(tmp_path):
     server = serve.reply_server(path, sock, serve.Senders())
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
-        assert _post(sock, "/respond", {"thread_id": 1, "answer": "accept"}) == (
+        assert _post(sock, "/respond", {"thread_id": "1", "answer": "accept"}) == (
             404, {"outcome": "refused", "error": "No such Thread"})
         assert _post(sock, "/respond", {"event_uid": "missing@google.com", "answer": "accept"}) == (
             404, {"outcome": "refused", "error": "No such Event"})

@@ -25,7 +25,7 @@ ATTEMPT = AT + timedelta(days=1)
 
 
 def draft(db):
-    return inbox.save_draft(db, {"connection_id": 1, "kind": "email", "sender": SELF,
+    return inbox.save_draft(db, {"connection_id": "1", "kind": "email", "sender": SELF,
                                   "to": "ana@acme.test", "cc": "", "subject": "Checklist", "body": "Hi"})
 
 
@@ -39,7 +39,7 @@ def outbound(db, **changes):
 
 
 def receipt(db):
-    return inbox.record_resend_receipt(db, 1, EMAIL_ID, WIRE)
+    return inbox.record_resend_receipt(db, "1", EMAIL_ID, WIRE)
 
 
 def staged_file(db, **owner):
@@ -50,18 +50,18 @@ def staged_file(db, **owner):
 
 def test_receipt_is_minimal_durable_idempotent_and_does_not_create_work(db, tmp_path):
     assert inbox.resend_native_id(EMAIL_ID.upper()) == MARKER
-    assert inbox.record_resend_receipt(db, 1, EMAIL_ID.upper(), WIRE) is True
+    assert inbox.record_resend_receipt(db, "1", EMAIL_ID.upper(), WIRE) is True
     assert not db.in_transaction
     reader = inbox.connect(str(tmp_path / "inbox.db"))
     try:
-        assert [tuple(r) for r in reader.execute("SELECT * FROM resend_receipts")] == [(EMAIL_ID, 1, WIRE)]
+        assert [tuple(r) for r in reader.execute("SELECT * FROM resend_receipts")] == [(EMAIL_ID, "1", WIRE)]
         assert reader.execute("SELECT count(*) FROM activities").fetchone()[0] == 0
         assert reader.execute("SELECT count(*) FROM threads").fetchone()[0] == 0
     finally:
         reader.close()
     before = persisted(db)
     assert receipt(db) is False
-    for connection_id, message_id in ((2, WIRE), (1, "<Different@amazonses.test>"), (1, WIRE.lower())):
+    for connection_id, message_id in (("2", WIRE), ("1", "<Different@amazonses.test>"), ("1", WIRE.lower())):
         with pytest.raises(inbox.ResendReceiptConflict):
             inbox.record_resend_receipt(db, connection_id, EMAIL_ID, message_id)
         assert not db.in_transaction and persisted(db) == before
@@ -73,7 +73,7 @@ def test_invalid_provider_ids_cannot_become_local_or_receipt_identity(db, value)
     with pytest.raises(ValueError):
         inbox.resend_native_id(value)
     with pytest.raises(ValueError):
-        inbox.record_resend_receipt(db, 1, value, WIRE)
+        inbox.record_resend_receipt(db, "1", value, WIRE)
     assert persisted(db) == before
 
 
@@ -82,11 +82,11 @@ def test_invalid_provider_ids_cannot_become_local_or_receipt_identity(db, value)
 def test_receipt_requires_one_strict_smtp_id(db, value):
     before = persisted(db)
     with pytest.raises(ValueError):
-        inbox.record_resend_receipt(db, 1, EMAIL_ID, value)
+        inbox.record_resend_receipt(db, "1", EMAIL_ID, value)
     assert persisted(db) == before
 
 
-@pytest.mark.parametrize("connection_id", [True, 0, -1, 3, 999])
+@pytest.mark.parametrize("connection_id", [True, 0, -1, "3", "999"])
 def test_receipt_requires_an_explicit_eligible_gmail_connection(db, connection_id):
     before = persisted(db)
     with pytest.raises(ValueError):
@@ -125,7 +125,7 @@ def test_receipt_writers_serialize_duplicate_and_conflicting_uuid(db, tmp_path, 
         try:
             barrier.wait(timeout=5)
             try:
-                return inbox.record_resend_receipt(writer, 1, EMAIL_ID, value)
+                return inbox.record_resend_receipt(writer, "1", EMAIL_ID, value)
             except inbox.ResendReceiptConflict:
                 return "conflict"
         finally:
@@ -139,7 +139,7 @@ def test_receipt_writers_serialize_duplicate_and_conflicting_uuid(db, tmp_path, 
     stored = db.execute("SELECT message_id FROM resend_receipts").fetchone()[0]
     assert stored in values
     with pytest.raises(inbox.ResendReceiptConflict):
-        inbox.record_resend_receipt(db, 1, EMAIL_ID, "<Never-replace@amazonses.test>")
+        inbox.record_resend_receipt(db, "1", EMAIL_ID, "<Never-replace@amazonses.test>")
     assert db.execute("SELECT message_id FROM resend_receipts").fetchone()[0] == stored
 
 
@@ -240,7 +240,7 @@ def test_only_bound_outbound_self_activity_consumes_receipt(db, connection_id, c
 def test_alias_is_known_in_foreign_mailbox_and_cannot_be_a_shared_absent_ancestor(db):
     parent = outbound(db)
     receipt(db)
-    children = [inbox.ingest(db, incoming(f"<{name}@test>", [WIRE], connection_id=2, channel=OTHER))
+    children = [inbox.ingest(db, incoming(f"<{name}@test>", [WIRE], connection_id="2", channel=OTHER))
                 for name in ("one", "two")]
     result = inbox.reconcile_email_threads(db, apply=True)
     assert result["held_references"] == 2 and result["groups"] == []
@@ -327,10 +327,10 @@ def test_fastmail_and_generic_direct_ids_keep_existing_sender_contract(db):
         db.execute("INSERT INTO connections (id, platform, external_id, self_id, label, connected_at)"
                    " VALUES (4, 'fastmail', 'fast@test', 'fast@test', 'Fastmail', ?)", (AT.isoformat(),))
     with pytest.raises(ValueError, match="Gmail Connection"):
-        inbox.record_resend_receipt(db, 4, EMAIL_ID, WIRE)
+        inbox.record_resend_receipt(db, "4", EMAIL_ID, WIRE)
     receipt(db)
-    parent = inbox.ingest(db, incoming(MARKER, connection_id=4, channel="fast@test", sender=None))
-    child = inbox.ingest(db, incoming("<fast-child@test>", [WIRE], connection_id=4, channel="fast@test"))
+    parent = inbox.ingest(db, incoming(MARKER, connection_id="4", channel="fast@test", sender=None))
+    child = inbox.ingest(db, incoming("<fast-child@test>", [WIRE], connection_id="4", channel="fast@test"))
     inbox.reconcile_resend_receipts(db)
     assert inbox.get_thread(db, parent.id).id != inbox.get_thread(db, child.id).id
     sender = RecordingSender()
@@ -444,14 +444,14 @@ def test_non_gmail_start_uses_completion_time_and_joins_inbound_during_provider_
     if platform == "quo":
         with db:
             db.execute("INSERT INTO connections (id, platform, external_id, self_id, label, connected_at)"
-                       " VALUES (4, 'quo', ?, ?, 'Quo', ?)", (number, number, AT.isoformat()))
-        connection_id, kind, sender_id, destination = 4, "sms", number, peer
-        inc = inbox.Incoming(4, peer, "im", "MESSAGE", "quo-in", inbox.Identity("phone", peer),
+                       " VALUES ('4', 'quo', ?, ?, 'Quo', ?)", (number, number, AT.isoformat()))
+        connection_id, kind, sender_id, destination = "4", "sms", number, peer
+        inc = inbox.Incoming("4", peer, "im", "MESSAGE", "quo-in", inbox.Identity("phone", peer),
                              ATTEMPT + timedelta(seconds=1), "During send", data={"peer": peer})
         native_id = "quo-out"
     else:
-        connection_id, kind, sender_id, destination = 3, "slack", "USELF", "Sam <D1>"
-        inc = inbox.Incoming(3, "D1", "im", "MESSAGE", "D1:1.0", inbox.Identity("slack_user", "USAM"),
+        connection_id, kind, sender_id, destination = "3", "slack", "USELF", "Sam <D1>"
+        inc = inbox.Incoming("3", "D1", "im", "MESSAGE", "D1:1.0", inbox.Identity("slack_user", "USAM"),
                              ATTEMPT + timedelta(seconds=1), "During send",
                              data={"channel": "D1", "ts": "1.0", "kind": "im"})
         native_id = "D1:2.0"
@@ -480,7 +480,7 @@ def test_non_gmail_start_uses_completion_time_and_joins_inbound_during_provider_
 @pytest.mark.parametrize("platform", ["fastmail", "slack", "quo"])
 def test_non_gmail_reply_retains_completion_time(db, monkeypatch, platform):
     if platform == "slack":
-        inc = inbox.Incoming(3, "D1", "im", "MESSAGE", "D1:1.0", inbox.Identity("slack_user", "USAM"),
+        inc = inbox.Incoming("3", "D1", "im", "MESSAGE", "D1:1.0", inbox.Identity("slack_user", "USAM"),
                              AT, "Earlier", data={"channel": "D1", "ts": "1.0", "kind": "im"})
     else:
         own = "fast@example.test" if platform == "fastmail" else "+15550001001"
@@ -488,7 +488,7 @@ def test_non_gmail_reply_retains_completion_time(db, monkeypatch, platform):
         with db:
             db.execute("INSERT INTO connections (id, platform, external_id, self_id, label, connected_at)"
                        " VALUES (4, ?, ?, ?, ?, ?)", (platform, own, own, platform, AT.isoformat()))
-        inc = inbox.Incoming(4, own if platform == "fastmail" else peer,
+        inc = inbox.Incoming("4", own if platform == "fastmail" else peer,
                              "mailbox" if platform == "fastmail" else "im", "MESSAGE", "<earlier@test>",
                              inbox.Identity("email" if platform == "fastmail" else "phone", peer), AT, "Earlier")
     root = inbox.ingest(db, inc)
@@ -546,7 +546,7 @@ def skewed_send_before_receipt(db, kind):
     outgoing = db.execute("SELECT id, data FROM activities WHERE native_id = ?", (MARKER,)).fetchone()
     seen_through = json.loads(outgoing["data"])["seen_through_activity_id"]
     incoming_id = db.execute("SELECT id FROM activities WHERE native_id = '<skewed@test>'").fetchone()[0]
-    assert type(seen_through) is int and 0 <= seen_through < outgoing["id"]
+    assert inbox.is_id(seen_through) and seen_through < outgoing["id"]
     assert incoming_id > seen_through
     return sent.id, seen["incoming"], seen["state"]
 
@@ -661,7 +661,7 @@ def test_overlapping_two_sends_keep_second_unseen_reply_after_late_first_receipt
         db.close()
 
 
-@pytest.mark.parametrize("seen", ["missing", None, True, -1, "0", 999])
+@pytest.mark.parametrize("seen", ["missing", None, True, -1, "", "ffffffff-ffff-7fff-bfff-ffffffffffff"])
 def test_legacy_or_invalid_send_checkpoint_retains_ordinary_reducer(db, seen):
     data = {"from": SELF, "to": ["ana@acme.test"]}
     if seen != "missing":
@@ -690,7 +690,7 @@ def test_checkpoint_override_keeps_receipt_case_conflict_hold(db):
 def test_checkpoint_override_keeps_foreign_mailbox_reference_hold(db):
     d = draft(db)
     sent = inbox.send_draft(db, d["id"], d["revision"], StartSender())
-    foreign = inbox.ingest(db, incoming("<foreign-skewed@test>", [WIRE], connection_id=2, channel=OTHER,
+    foreign = inbox.ingest(db, incoming("<foreign-skewed@test>", [WIRE], connection_id="2", channel=OTHER,
                                         occurred_at=ATTEMPT - timedelta(seconds=1)))
     receipt(db)
     inbox.reconcile_resend_receipts(db)

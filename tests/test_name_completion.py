@@ -42,8 +42,8 @@ def named_seeded(tmp_path):
                 ("Phone Only", [], ["+12025550124"]),
                 ("Invalid Name", ["not-an-address"], ["not-a-number"]),
                 ("Unsafe\nName", ["untrusted-person@example.test"], ["+12025550125"])):
-            person = db.execute("INSERT INTO persons (display_name, created_at) VALUES (?, ?)",
-                                (name, at)).lastrowid
+            person = db.execute("INSERT INTO persons (display_name, created_at) VALUES (?, ?) RETURNING id",
+                                (name, at)).fetchone()[0]
             db.executemany("INSERT INTO identities (person_id, kind, value) VALUES (?, ?, ?)",
                            [(person, "email", value) for value in emails] +
                            [(person, "phone", value) for value in phones])

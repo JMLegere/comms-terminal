@@ -33,8 +33,8 @@ def setup():
     db = inbox.connect()
     inbox.migrate(db)
     with db:
-        cid = db.execute("INSERT INTO connections (platform, external_id, self_id, label, connected_at)"
-                         " VALUES ('quo', ?, ?, 'Quo', ?)", (ME, ME, NOW.isoformat())).lastrowid
+        cid = db.execute("INSERT INTO connections (id, platform, external_id, self_id, label, connected_at)"
+                         " VALUES ((SELECT printf('%d', count(*) + 1) FROM connections), 'quo', ?, ?, 'Quo', ?) RETURNING id", (ME, ME, NOW.isoformat())).fetchone()[0]
     return db, cid
 
 

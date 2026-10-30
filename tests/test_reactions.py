@@ -53,15 +53,15 @@ def arranged(channel="C1", kind="channel", data=None):
         db.execute("INSERT INTO connections (id, platform, external_id, self_id, label, connected_at)"
                    " VALUES (1, 'slack', 'T1', 'UME', 'Slack', ?)", (AT.isoformat(),))
     data = {"channel": channel, "ts": "100.2", "thread_ts": "100.1", "kind": kind} if data is None else data
-    t = inbox.ingest(db, inbox.Incoming(1, channel, kind, "MESSAGE", f"{channel}:100.2",
+    t = inbox.ingest(db, inbox.Incoming("1", channel, kind, "MESSAGE", f"{channel}:100.2",
                                        inbox.Identity("slack_user", "UOTHER"), AT, "Review ready", data=data))
     message = inbox.thread_view(db, t.id)["messages"][0]
     api = SlackAPI(channel)
     sender = slack.SlackSender("fake-user-token", get=api.get, post=api.post,
                                client=slack.SlackClient("fake-user-token", get=api.get))
     return SimpleNamespace(db=db, thread=t, message=message, api=api, sender=sender,
-                           senders=serve.Senders(made={1: sender}),
-                           request={"op": "read", "thread_id": t.id, "message_id": message["id"], "connection_id": 1})
+                           senders=serve.Senders(made={"1": sender}),
+                           request={"op": "read", "thread_id": t.id, "message_id": message["id"], "connection_id": "1"})
 
 
 @pytest.fixture
@@ -83,7 +83,7 @@ def change_request(ctx, op="add", name="eyes"):
 
 
 def affect(ctx, kind="EDIT"):
-    inc = inbox.Incoming(1, "C1", "channel", kind,
+    inc = inbox.Incoming("1", "C1", "channel", kind,
                          "C1:100.2:101.0" if kind == "EDIT" else "C1:100.2",
                          inbox.Identity("slack_user", "UOTHER"), AT + timedelta(minutes=1), "Changed",
                          data={"channel": "C1", "ts": "100.2", "kind": "channel"})
@@ -141,7 +141,7 @@ def test_malformed_groups_are_unavailable_not_zero(reaction, groups):
 
 
 @pytest.mark.parametrize("field", ["thread_id", "message_id", "connection_id", "expected_revision"])
-@pytest.mark.parametrize("value", [None, "", "1", False, True, 0, -1, 1.0, [], {}, 2**63])
+@pytest.mark.parametrize("value", [None, "", 1, False, True, 0, -1, 1.0, [], {}, 2**63])
 def test_ids_and_revision_are_positive_explicit_non_bool_integers(reaction, field, value):
     req = change_request(reaction) | {field: value}
     assert invoke(reaction, req)[0] == 400
@@ -184,11 +184,11 @@ def test_other_existing_thread_message_and_connection_are_not_substituted(reacti
     with reaction.db:
         reaction.db.execute("INSERT INTO connections (id, platform, external_id, self_id, label, connected_at)"
                             " VALUES (2, 'slack', 'T2', 'UME', 'Other', ?)", (AT.isoformat(),))
-    other = inbox.ingest(reaction.db, inbox.Incoming(2, "C2", "channel", "MESSAGE", "C2:200.1",
+    other = inbox.ingest(reaction.db, inbox.Incoming("2", "C2", "channel", "MESSAGE", "C2:200.1",
                         inbox.Identity("slack_user", "UOTHER"), AT, "Other account",
                         data={"channel": "C2", "ts": "200.1", "kind": "channel"}))
     other_message = inbox.thread_view(reaction.db, other.id)["messages"][0]
-    for changes in ({"thread_id": other.id}, {"message_id": other_message["id"]}, {"connection_id": 2}):
+    for changes in ({"thread_id": other.id}, {"message_id": other_message["id"]}, {"connection_id": "2"}):
         assert invoke(reaction, change_request(reaction) | changes)[0] == 400
     assert reaction.api.calls == []
 
@@ -200,9 +200,9 @@ def test_non_slack_platform_is_refused_without_provider_calls(reaction):
 
 
 def test_missing_sender_is_unavailable_and_clientless_sender_uses_injected_get(reaction):
-    reaction.senders.made[1] = None
+    reaction.senders.made["1"] = None
     assert invoke(reaction, change_request(reaction))[1]["outcome"] == "unavailable" and reaction.api.calls == []
-    reaction.senders.made[1] = reaction.sender
+    reaction.senders.made["1"] = reaction.sender
     reaction.sender.client = None
     assert invoke(reaction)[1]["groups"] == []
 
@@ -266,7 +266,7 @@ def test_exact_captured_reply_timestamp_and_explicit_own_change(channel, kind, o
     try:
         status, out = invoke(ctx, change_request(ctx, op, "pray"))
         assert status == 200 and out == {"outcome": "confirmed", "op": op, "name": "pray",
-                                        "thread_id": ctx.thread.id, "message_id": ctx.message["id"], "connection_id": 1,
+                                        "thread_id": ctx.thread.id, "message_id": ctx.message["id"], "connection_id": "1",
                                         "revision": ctx.message["revision"], "mine": op == "add", "changed": True}
         assert ctx.api.writes == [(f"reactions.{op}", "fake-user-token",
                                    {"channel": channel, "timestamp": "100.2", "name": "pray"})]
@@ -340,7 +340,7 @@ def test_recheck_after_auth_latency_keeps_source_target_and_identity(reaction, c
         elif change == "token":
             reaction.sender.token = "new-fake-token"
         else:
-            inbox.ingest(reaction.db, inbox.Incoming(1, "C1", "channel", "MESSAGE", "C1:200.1",
+            inbox.ingest(reaction.db, inbox.Incoming("1", "C1", "channel", "MESSAGE", "C1:200.1",
                          inbox.Identity("slack_user", "UOTHER"), AT + timedelta(minutes=2), "New arrival",
                          data={"channel": "C1", "ts": "200.1", "kind": "channel"}))
         expected.append(tuple(reaction.db.iterdump()))
