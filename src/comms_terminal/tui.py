@@ -14,6 +14,7 @@ import signal
 import sqlite3
 import stat
 import textwrap
+import threading
 import time
 import unicodedata
 from collections import Counter
@@ -1086,8 +1087,6 @@ class ThreadsPage(Page, ThreadActions):
         table = self.query_one(DataTable)
         first = next((i for i, r in enumerate(self.rows) if not r.get("header")), 0)
         row = self.app.cursor.get(view, first)  # past the headers above the first Thread
-        table.clear(columns=True)  # columns too: clear() keeps old widths, which pushed the age column off-screen
-        table.add_columns("s", "from", "title", "time")
         # Fit the row to the panel so the time column stays visible: the title keeps 12 columns, then
         # "· where" drops, then the name shortens. 10 = glyph and cell padding; then the widest time.
         deepest = max((r["depth"] for r in threads), default=0)  # Threads sit under their Status and Case headers
@@ -1098,6 +1097,13 @@ class ThreadsPage(Page, ThreadActions):
         who_w = with_where if show_where else min(max((len(r["who"]) for r in threads), default=0), max(6, room - 12))
         title_w = max(6, room - who_w)
         cut = lambda text, n: text if len(text) <= n else text[:n - 1] + "…"  # noqa: E731
+        shown = repr((self.size.width, view, self.rows, times))
+        rebuild = shown != getattr(self, "_shown", None)  # the same rows: no rebuild, no flicker (ADR 0012)
+        add = table.add_row if rebuild else (lambda *cells: None)
+        if rebuild:
+            self._shown = shown
+            table.clear(columns=True)  # columns too: clear() keeps old widths, which pushed the age column off-screen
+            table.add_columns("s", "from", "title", "time")
         for r in self.rows:
             indent = "  " * r["depth"]
             if r.get("header") and r.get("detail"):  # a Status header: its words run on into the title column
@@ -1107,23 +1113,23 @@ class ThreadsPage(Page, ThreadActions):
                         break
                     head += " " * bool(head) + word
                 rest = cut(r["title"][len(head):].strip(), title_w)
-                table.add_row(glyph(r["detail"]), f"[b {color}]{escape(head)}[/]", f"[b {color}]{escape(rest)}[/]",
+                add(glyph(r["detail"]), f"[b {color}]{escape(head)}[/]", f"[b {color}]{escape(rest)}[/]",
                               f"[#928374]{r['count']}[/]")
                 continue
             if r.get("header"):
                 icon = f"{indent}[#654735]{ICON['case']}[/]" if r["case_id"] else indent
                 name = f"{indent}[b #45707a]{escape(cut(r['title'], who_w + 2 * deepest))}[/]" if r["case_id"] else f"{indent}[b #928374]No case[/]"
-                table.add_row(icon, name, f"[#928374]{escape(cut(r['summary'], title_w))}[/]", "")
+                add(icon, name, f"[#928374]{escape(cut(r['summary'], title_w))}[/]", "")
                 continue
             who = f"{indent}[b]{escape(cut(r['who'], who_w))}[/]" + (f" [#928374]· {escape(r['where'])}[/]" if show_where else "")
             # A saved reply Draft on the Thread (or a merged alias) shows as a pencil before the title
             title = (f"[#b47109]{ICON['edited']}[/] " + escape(cut(r["title"], title_w - 2)) if r["drafted"]
                      else escape(cut(r["title"], title_w)))
-            table.add_row(indent + glyph(r["detail"]), who, title, f"[#928374]{times[r['id']]}[/]")
+            add(indent + glyph(r["detail"]), who, title, f"[#928374]{times[r['id']]}[/]")
         table.show_cursor = bool(self.rows)
         if not self.rows:
-            table.add_row("", f"[#928374]{self.EMPTY[VIEW_NAMES[view]]}[/]", "", "")
-        else:
+            add("", f"[#928374]{self.EMPTY[VIEW_NAMES[view]]}[/]", "", "")
+        elif rebuild:
             table.move_cursor(row=min(row, len(self.rows) - 1))
         main, ids = self.app.main, [r["id"] for r in self.rows]
         if keep is not None and keep in ids:
@@ -1222,6 +1228,10 @@ class ThreadsPage(Page, ThreadActions):
         if self.active and self.is_attached:
             self.app.main.show_thread(self.current_thread_id())
             self.app.schedule_reaction_snapshot(self.current_thread_id())
+            row, ids = self.query_one(DataTable).cursor_row, [None if r.get("header") else r["id"] for r in self.rows]
+            below = next((i for i in ids[row + 1:] if i is not None), None)  # the nearest Threads, past any header
+            above = next((i for i in reversed(ids[:max(row, 0)]) if i is not None), None)
+            self.app.prefetch([i for i in (below, above) if i is not None])
 
     def action_down(self):
         self.query_one(DataTable).action_cursor_down()
@@ -2488,13 +2498,15 @@ class ThreadView(Horizontal):
         """Repaint; a Thread just opened scrolls to its newest messages, a repaint keeps its place."""
         if not self.query(".thead"):  # not composed yet; on_mount fills it
             return
-        v = inbox.thread_view(self.app.db, self.thread_id, self.app.files)
+        v = (opened and self.app.prefetched(self.thread_id)) or inbox.thread_view(self.app.db, self.thread_id, self.app.files)
+        same = not opened and v == getattr(self, "view", None)  # a refresh that changed nothing in this Thread
         self.thread_id = v["thread"].id
         if self.members is None:
             self.members = v["members"]
         self.view = v
-        self.paint_status()
-        load_context(self, *thread_addresses([v]))
+        if not same:  # its header, properties, related Threads and context stay as painted (ADR 0012)
+            self.paint_status()
+            load_context(self, *thread_addresses([v]))
         timeline = self.query_one(".timeline")
         show_messages(self.query_one(".msgs"),
                       message_widgets(v, self.app.message_state(self.thread_id), self.app.raw,
@@ -3098,18 +3110,24 @@ class DraftsPage(Page):
             return
         self.items = items
         table = self.query_one(DataTable)
-        table.clear(columns=True)
-        narrow = self.size.width < 40
-        self.columns = table.add_columns(*(("status", "title") if narrow else ("", "To", "Subject", "Status")))
-        for draft in items:
-            table.add_row(*self.cells(draft), key=str(draft["id"]))
-        table.show_cursor = bool(items)
-        if items:
-            ids = [d["id"] for d in items]
-            wanted = self.app.selected_draft if select_id is None else select_id
-            table.move_cursor(row=ids.index(wanted) if wanted in ids else 0)
+        view = self.app.main.draft_view
+        shown = repr((self.size.width, items, (view.draft_id, view.dirty) if view else None))
+        if select_id is None and shown == getattr(self, "_shown", None):
+            pass  # the same Drafts: keep the table, its cursor and scroll (ADR 0012)
         else:
-            table.add_row("[#928374]No drafts · n new[/]", "", *(("", "") if not narrow else ()))
+            self._shown = shown
+            table.clear(columns=True)
+            narrow = self.size.width < 40
+            self.columns = table.add_columns(*(("status", "title") if narrow else ("", "To", "Subject", "Status")))
+            for draft in items:
+                table.add_row(*self.cells(draft), key=str(draft["id"]))
+            table.show_cursor = bool(items)
+            if items:
+                ids = [d["id"] for d in items]
+                wanted = self.app.selected_draft if select_id is None else select_id
+                table.move_cursor(row=ids.index(wanted) if wanted in ids else 0)
+            else:
+                table.add_row("[#928374]No drafts · n new[/]", "", *(("", "") if not narrow else ()))
         if self.host is not None:
             self.host.list_changed(self)
         if self.active:
@@ -3292,8 +3310,14 @@ class TablePage(Page):
     def refresh_data(self):
         table = self.query_one(DataTable)
         row = table.cursor_row
+        items = self.rows()
+        shown = repr([cells for _, cells in items])
+        if items and shown == getattr(self, "_shown", None):
+            self.items = items  # the same rows: keep the table, its cursor and scroll (ADR 0012)
+            return
+        self._shown = shown
         table.clear()
-        self.items = self.rows()
+        self.items = items
         for _, cells in self.items:
             table.add_row(*cells)
         table.show_cursor = bool(self.items)
@@ -4999,14 +5023,20 @@ class TasksPage(Page):
         keep = select_id or (self.selected() or {}).get("id")
         width = self.size.width
         narrow = width < 50
-        table.clear(columns=True)
-        table.add_columns("", "Person", "Task", "Sequence", "When")
+        tasks = self.tasks()
+        shown = repr((width, tasks))
+        rebuild = shown != getattr(self, "_shown", None)  # the same Tasks: no rebuild, no jump (ADR 0012)
+        add = table.add_row if rebuild else (lambda *cells: None)
+        if rebuild:
+            self._shown = shown
+            table.clear(columns=True)
+            table.add_columns("", "Person", "Task", "Sequence", "When")
         self.items, group = [], None
-        for t in self.tasks():
+        for t in tasks:
             if t["group"] != group:
                 group = t["group"]
                 self.items.append(None)
-                table.add_row("", f"[b #7c6f64]{group.upper()}[/]", "", "", "")
+                add("", f"[b #7c6f64]{group.upper()}[/]", "", "", "")
             mark = f"[#c14a4a]{ICON['warn']}[/] " if t["flag"] else ""
             name = t["person"][:max(4, width - 8 - 2 * bool(t["flag"]))]
             room = max(4, width - 40)
@@ -5014,16 +5044,17 @@ class TasksPage(Page):
             when = (f"{t['age']}d" if t["group"] == "overdue" else
                     datetime.fromisoformat(t["due_at"]).astimezone(sequences.LOCAL).strftime("%H:%M") if t["group"] == "later today" else "")
             self.items.append(t)
-            table.add_row(f"[#654735]{ICON[t['kind']]}[/]", mark + f"[b]{escape(name)}[/]",
+            add(f"[#654735]{ICON[t['kind']]}[/]", mark + f"[b]{escape(name)}[/]",
                           "" if narrow else f"Day {t['day']}", "" if narrow else f"[#928374]{escape(seq)}[/]",
                           "" if narrow else f"[{'#c14a4a' if t['group'] == 'overdue' else '#928374'}]{when}[/]")
         if not self.items:
-            table.add_row("", "[#928374]All caught up: no Tasks due. Tasks come due from Enrollments; enroll People from People (s).[/]",
+            add("", "[#928374]All caught up: no Tasks due. Tasks come due from Enrollments; enroll People from People (s).[/]",
                           "", "", "")
         table.show_cursor = bool(self.items)
         ids = [t and t["id"] for t in self.items]
         row = ids.index(keep) if keep is not None and keep in ids else next((i for i, t in enumerate(self.items) if t), 0)
-        table.move_cursor(row=row)
+        if rebuild or table.cursor_row != row:
+            table.move_cursor(row=row)
         label = {None: "due"} | {k: KIND_LABEL[k].lower() for k in KIND_LABEL}
         self.TITLE = f"{ICON['tasks']} tasks · " + (label.get(self.filter) if not isinstance(self.filter, tuple) else
                                                      escape(sequences.get_sequence(self.app.db, self.filter[1])["name"]))
@@ -7453,6 +7484,37 @@ class Console(App):
         self._reaction_repaint(target=job["key"])
 
     # Mouse: markup links ([@click=app.…]) and the rail, tables, menus, and footer keys are all clickable.
+    def view_token(self):
+        """Moves while nothing changed: this connection's own writes and everyone else's commits."""
+        return self.db.total_changes, self.db.execute("PRAGMA data_version").fetchone()[0]
+
+    def prefetch(self, thread_ids):
+        """Read these Threads' views and parse their messages on a reader thread, so moving to one paints from
+        memory (ADR 0012). A view counts only while view_token() is unchanged."""
+        token, cache = self.view_token(), self.__dict__.setdefault("_prefetched", {})
+        wanted = [t for t in thread_ids if cache.get(t, (None,))[0] != token]
+        if not wanted:
+            return
+
+        def work():
+            db = inbox.connect(self.db_path)
+            try:
+                for tid in wanted:
+                    v = inbox.thread_view(db, tid, self.files)
+                    for m in v["messages"]:
+                        if (sha := m["data"].get("raw")) and self.raw is not None:
+                            render.load(str(self.raw / f"{sha}.eml"))  # cached: the move needs no parse
+                    cache[tid] = (token, v)
+            except Exception:  # noqa: BLE001, S110 - a missed prefetch only means a normal read later
+                pass
+            finally:
+                db.close()
+        threading.Thread(target=work, daemon=True).start()
+
+    def prefetched(self, thread_id):
+        token, v = self.__dict__.get("_prefetched", {}).pop(thread_id, (None, None))
+        return v if token == self.view_token() else None
+
     def message_state(self, thread_id: int) -> dict:
         tid = inbox.get_thread(self.db, thread_id).id
         st = self.msg_states.setdefault(tid, new_message_state())
@@ -7611,7 +7673,10 @@ class Console(App):
             return
         self.check_copy()
         self.data_version = self.db.execute("PRAGMA data_version").fetchone()[0]
-        self.main.refresh_all()
+        if syncer.changed == [] and not self.remote.unconfirmed:  # an empty Change set: nothing to repaint
+            self.main.refresh_chrome()
+        else:
+            self.main.refresh_all()
         self.toast_pauses()
 
     def check_copy(self):

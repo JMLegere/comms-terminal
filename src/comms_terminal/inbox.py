@@ -2788,26 +2788,39 @@ def today(db, now: datetime | None = None) -> dict:
             "next_wake": wake, "next_task": later[0] if later else None}
 
 
+QUEUE = (  # each Thread's activity and Draft facts, aggregated once (ADR 0012): correlated subqueries on the
+    # thread_activities view scanned every Activity for every Thread
+    "WITH acts AS (SELECT COALESCE(m.merged_into, a.thread_id) AS tid, a.id, a.occurred_at, a.identity_id"
+    "   FROM activities a JOIN threads m ON m.id = a.thread_id),"
+    " agg AS (SELECT tid, max(occurred_at) AS last_at,"
+    "   max(CASE WHEN identity_id IS NOT NULL THEN occurred_at END) AS last_in FROM acts GROUP BY tid),"
+    " firsts AS (SELECT tid, identity_id AS first_identity FROM (SELECT tid, identity_id,"
+    "   row_number() OVER (PARTITION BY tid ORDER BY occurred_at, id) AS n FROM acts WHERE identity_id IS NOT NULL)"
+    "   WHERE n = 1),"
+    " drafts AS (SELECT COALESCE(m.merged_into, m.id) AS tid, 1 AS drafted,"
+    "   max(trim(d.body) != '' AND NOT d.needs_edit AND d.sending_at IS NULL) AS ready"
+    "   FROM composition_drafts d JOIN threads m ON m.id = d.thread_id GROUP BY 1)"
+    " SELECT t.id, t.title, t.status, t.status_detail, t.case_id, t.follow_up_at, t.snoozed_until,"
+    " ch.kind, ch.name, ch.native_id, c.platform, agg.last_at, agg.last_in, firsts.first_identity,"
+    " coalesce(drafts.drafted, 0) AS drafted, coalesce(drafts.ready, 0) AS ready"
+    " FROM threads t JOIN channels ch ON ch.id = t.channel_id JOIN connections c ON c.id = ch.connection_id"
+    " LEFT JOIN agg ON agg.tid = t.id LEFT JOIN firsts ON firsts.tid = t.id LEFT JOIN drafts ON drafts.tid = t.id"
+    " WHERE t.merged_into IS NULL AND t.status_detail IN ({marks})")
+
+
 def queue(db, view: str) -> list[dict]:
     """Rows for a Status view. Todo: longest-waiting first; others: most recent first."""
     details = VIEWS[view]
-    rows = db.execute(
-        "SELECT t.id, t.title, t.status, t.status_detail, t.case_id, t.follow_up_at, t.snoozed_until,"
-        " ch.kind, ch.name, ch.native_id, c.platform,"
-        " (SELECT max(occurred_at) FROM thread_activities a WHERE a.thread_id = t.id) AS last_at,"
-        " (SELECT max(occurred_at) FROM thread_activities a WHERE a.thread_id = t.id AND a.identity_id IS NOT NULL) AS last_in,"
-        " (SELECT identity_id FROM thread_activities a WHERE a.thread_id = t.id AND a.identity_id IS NOT NULL"
-        "   ORDER BY occurred_at, id LIMIT 1) AS first_identity,"
-        " EXISTS (SELECT 1 FROM composition_drafts d JOIN threads m ON m.id = d.thread_id"
-        "   WHERE m.id = t.id OR m.merged_into = t.id) AS drafted,"
-        " EXISTS (SELECT 1 FROM composition_drafts d JOIN threads m ON m.id = d.thread_id"
-        "   WHERE (m.id = t.id OR m.merged_into = t.id) AND trim(d.body) != '' AND NOT d.needs_edit"
-        "   AND d.sending_at IS NULL) AS ready"
-        f" FROM threads t JOIN channels ch ON ch.id = t.channel_id JOIN connections c ON c.id = ch.connection_id"
-        f" WHERE t.merged_into IS NULL AND t.status_detail IN ({','.join('?' * len(details))})", details).fetchall()
+    rows = db.execute(QUEUE.format(marks=",".join("?" * len(details))), details).fetchall()
+    ids = sorted({r["first_identity"] for r in rows if r["first_identity"]})
+    senders = {i["id"]: i for i in db.execute(  # every sender at once, as _sender reads one
+        "SELECT i.*, p.display_name FROM identities i LEFT JOIN persons p ON p.id = i.person_id"
+        f" WHERE i.id IN ({','.join('?' * len(ids))})", ids)} if ids else {}
     out = []
     for r in rows:
-        label, identity = _sender(db, r["first_identity"]) if r["first_identity"] else ("You", None)
+        identity = senders.get(r["first_identity"])
+        name = identity["display_name"] if identity is not None else None
+        label = "You" if identity is None else (name if name and name != identity["value"] else identity["value"])
         detail = REPLY_DRAFT if r["ready"] and r["status"] == "TODO" else r["status_detail"]
         out.append({"id": r["id"], "title": r["title"], "status": r["status"], "detail": detail,
                     "case_id": r["case_id"], "until": r["follow_up_at"] or r["snoozed_until"], "who": label, "where": _where(r, identity), "last_at": r["last_at"],
