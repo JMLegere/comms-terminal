@@ -385,3 +385,21 @@ _Avoid_: Entry, Event (for anything but an Event)
 **Deleted Event**:
 An Event that Google Calendar no longer has, including one removed occurrence of a repeating Event. Comms Terminal keeps it, marked deleted.
 _Avoid_: Cancelled Event, Removed Event
+
+## Laptop sync
+
+**Change log**:
+Oracle's record of every committed row change: the table, the row's id, and whether it was added, changed or removed, in order. It keeps 7 days (ADR 0012).
+_Avoid_: Audit log (that one records Status and Case changes with their cause), Event log
+
+**Change set**:
+What the laptop console receives from Oracle when something changed: each row changed since its place in the Change log, once, as it now stands (or gone), with the raw messages and Attachment links those rows need. A new install, a place older than 7 days, or another schema gets a whole Snapshot instead.
+_Avoid_: Diff, Delta, Patch
+
+**Base copy**:
+The laptop's copy of Oracle's state as last answered, kept in memory and saved as `base.db`. After each answer the console's copy becomes the Base copy again, with its Mutations not yet confirmed replayed on top.
+_Avoid_: Snapshot (the whole-database download), Cache
+
+**Mutation**:
+One write the laptop console queued for Oracle, numbered in that console's order and stamped with the moment it was made. Oracle applies each Mutation once; a resent one gets its first answer.
+_Avoid_: Transaction, Request, Call
