@@ -2540,12 +2540,11 @@ def recipient_threads(db, kind: str, value: str) -> list[Thread]:
 def person_organizations(db, person_id: int) -> list[str]:
     """A Person's Organizations (Membership): those of their company email domains, plus Jeremy's additions,
     less his removals."""
-    return [r[0] for r in db.execute(
-        "SELECT o.domain FROM organizations o WHERE COALESCE("
-        " (SELECT member FROM memberships WHERE person_id = :p AND organization_id = o.id),"
-        " EXISTS (SELECT 1 FROM identities i WHERE i.person_id = :p AND i.kind = 'email'"
-        "  AND org_key(substr(i.value, instr(i.value, '@') + 1)) = o.domain))"
-        " ORDER BY o.domain", {"p": person_id})]
+    own = {_org(r[0].split("@", 1)[-1]) for r in db.execute(  # their email domains, keyed once
+        "SELECT value FROM identities WHERE person_id = ? AND kind = 'email'", (person_id,))}
+    chosen = dict(db.execute("SELECT o.domain, m.member FROM memberships m JOIN organizations o"
+                             " ON o.id = m.organization_id WHERE m.person_id = ?", (person_id,)).fetchall())
+    return sorted(d for (d,) in db.execute("SELECT domain FROM organizations") if chosen.get(d, d in own))
 
 
 def _members(db) -> dict[str, set[int]]:
@@ -2873,11 +2872,11 @@ def thread_view(db, thread_id: int, files: tuple[str, int] | None = None) -> dic
                 else:
                     m["deleted"], m["content"] = True, None
         first = next((a["identity_id"] for a in acts if a["identity_id"]), None)
-        person = None
+        person, every = None, person_thread_ids(db)  # read once for every Person shown, not once each
         if first:
             pid = db.execute("SELECT person_id FROM identities WHERE id = ?", (first,)).fetchone()[0]
-            person = person_view(db, pid) if pid else None
-        people, others, orgs = _participants(db, acts)
+            person = person_view(db, pid, every) if pid else None
+        people, others, orgs = _participants(db, acts, every)
         case = db.execute("SELECT title FROM cases WHERE id = ?", (t.case_id,)).fetchone() if t.case_id else None
         platform = platforms.PLATFORMS[ch["platform"]]
         msgs = [_shaped(db, m, platform, ch, files) for m in msgs]
@@ -2891,7 +2890,7 @@ def thread_view(db, thread_id: int, files: tuple[str, int] | None = None) -> dic
                 "case": case["title"] if case else None, "where": _where(ch, None) if ch["kind"] != "mailbox" else "email"}
 
 
-def _participants(db, acts) -> tuple[list[dict], list[str], list[str]]:
+def _participants(db, acts, every: dict | None = None) -> tuple[list[dict], list[str], list[str]]:
     """Everyone involved in a Thread, in order of appearance (Jeremy, 2026-10-12): Persons who wrote or were
     addressed (To/Cc, or a phone peer), addresses that belong to no Person yet, and all their Organizations. Jeremy's own
     addresses, and his own company's domain, are left out."""
@@ -2915,7 +2914,8 @@ def _participants(db, acts) -> tuple[list[dict], list[str], list[str]]:
             elif addr not in others:
                 others.append(addr)
         pids += [p for p in found if p and p not in pids]
-    people = [person_view(db, p) for p in pids]
+    every = every if every is not None else person_thread_ids(db)
+    people = [person_view(db, p, every) for p in pids]
     known = {d for p in people for d in p["organizations"]}
     extra = {_org(d) for a in others if "@" in a and (d := a.rsplit("@", 1)[1]) not in FREE_MAIL}
     own = {_org(m.rsplit("@", 1)[1]) for m in mine if "@" in m}  # Agent Maple is not a counterparty
@@ -3020,8 +3020,9 @@ def people_count(db) -> int:
                       " (SELECT 1 FROM identities i WHERE i.person_id = p.id)").fetchone()[0]
 
 
-def organization_view(db, domain: str) -> dict:
-    """An Organization's Persons (by Membership) and their Threads."""
+def organization_view(db, domain: str, every: dict | None = None) -> dict:
+    """An Organization's Persons (by Membership) and their Threads; `every` is person_thread_ids, when already
+    read."""
     with _read_snapshot(db):
         pids = [r[0] for r in db.execute(
             "SELECT DISTINCT person_id FROM identities WHERE kind = 'email' AND person_id IS NOT NULL"
@@ -3030,7 +3031,7 @@ def organization_view(db, domain: str) -> dict:
                                       " ON o.id = m.organization_id WHERE o.domain = ? ORDER BY m.changed_at",
                                       (domain,)):
             pids = [p for p in pids if p != pid] + ([pid] if member else [])
-        every = person_thread_ids(db)
+        every = every if every is not None else person_thread_ids(db)
         persons = [person_view(db, pid, every) for pid in pids]
         threads = {t.id: t for p in persons for t in p["threads"]}
         return {"domain": domain, "people": persons, "threads": sorted(threads.values(), key=lambda t: t.id)}

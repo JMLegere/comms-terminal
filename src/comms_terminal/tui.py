@@ -2194,8 +2194,9 @@ def related_markup(db, v, limit: int = 6) -> list[str]:
     mine = [o for o in reversed(p["threads"]) if o.id not in seen]
     seen |= {o.id for o in mine}
     out = section("person", f"other threads with {escape(p['name'])}", mine, f"app.open_person({p['id']!r})")
+    every = inbox.person_thread_ids(db) if p["organizations"] else None  # once for all the Organizations below
     for domain in p["organizations"]:
-        theirs = [o for o in reversed(inbox.organization_view(db, domain)["threads"]) if o.id not in seen]
+        theirs = [o for o in reversed(inbox.organization_view(db, domain, every)["threads"]) if o.id not in seen]
         seen |= {o.id for o in theirs}
         out += section("organization", f"other threads with {escape(domain)}", theirs, f"app.open_org('{domain}')")
     return out
