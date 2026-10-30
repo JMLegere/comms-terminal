@@ -354,28 +354,64 @@ def build() -> str:
         return ""
 
 
+def cursor(db) -> int:
+    """The newest change-log sequence number (0 before the first change); pruning never lowers it."""
+    r = db.execute("SELECT seq FROM sqlite_sequence WHERE name = 'changes'").fetchone()
+    return r[0] if r else 0
+
+
+def change_set(db, since: int) -> list[dict] | None:
+    """Each row changed after change-log entry `since`, once, as it stands now (None: deleted); None when `since`
+    is older than the kept log or ahead of it, so the caller sends a whole Snapshot (ADR 0012)."""
+    now, oldest = cursor(db), db.execute("SELECT min(seq) FROM changes").fetchone()[0]
+    if since > now or since < (now + 1 if oldest is None else oldest) - 1:
+        return None
+    tables = {r[0] for r in db.execute("SELECT name FROM sqlite_schema WHERE type = 'table'")}
+    out = []
+    for tbl, row_id in db.execute("SELECT tbl, row_id FROM changes WHERE seq > ? GROUP BY tbl, row_id"
+                                  " ORDER BY max(seq)", (since,)).fetchall():
+        if tbl in tables:  # a table a later migration dropped has nothing left to send
+            row = db.execute(f"SELECT rowid AS rowid, * FROM {tbl} WHERE rowid = ?", (row_id,)).fetchone()
+            out.append({"tbl": tbl, "row_id": row_id, "row": dict(row) if row else None})
+    return out
+
+
 def handle_sync(db_path: str, changes: Changes, body: bytes, wait: float = 25) -> tuple[int, dict]:
-    """POST /sync {since}: once the database differs from `since` (at once for none), its snapshot, the raw
-    message names, signed Attachment link capabilities, and the service's build."""
+    """POST /sync {since, cursor?, schema?}: once the database differs from `since` (at once for none), what
+    changed. A caller that sends its change-log `cursor` and runs this schema gets a Change set: the rows changed
+    since then, the raw messages and Attachment capabilities they add, and the new cursor (ADR 0012). Anyone else,
+    or a cursor older than the kept log, gets the whole snapshot with every raw message name and capability. Both
+    carry the service's build."""
     try:
         req = json.loads(body or b"{}")
         since, wait = req.get("since"), min(wait, max(0.0, float(req.get("wait", wait))))
+        mine = req.get("cursor")
+        mine = int(mine) if mine is not None and req.get("schema") == inbox.SCHEMA_VERSION else None
     except (ValueError, AttributeError, TypeError):
         return 400, {"error": "bad sync"}
     token = changes.wait(since, wait)
     if token == since:
         return 200, {"since": token}  # nothing new
-    data = snapshot_bytes(db_path)
     db = inbox.connect(db_path)
     try:
+        at = cursor(db)  # before reading rows: a row changed meanwhile comes again next time, harmlessly
+        rows = change_set(db, mine) if mine is not None else None
+        secret = files.files_secret(db)
+        if rows is not None:
+            kept = [(c["tbl"], c["row"]) for c in rows if c["row"] is not None]
+            names = sorted({f"{raw}.eml" for tbl, r in kept if tbl == "activities"
+                            and (raw := json.loads(r["data"]).get("raw"))})
+            caps = {r["sha"]: files.file_cap(secret, r["sha"]) for tbl, r in kept if tbl == "attachments" and r["sha"]}
+            return 200, {"since": token, "cursor": at, "changes": rows, "raw": names, "caps": caps,
+                         "build": build()}
         raw = files.raw_dir(db)
         names = sorted(p.name for p in raw.iterdir()) if raw is not None and raw.is_dir() else []
-        secret = files.files_secret(db)
         caps = {r[0]: files.file_cap(secret, r[0])
                 for r in db.execute("SELECT DISTINCT sha FROM attachments WHERE sha IS NOT NULL")}
     finally:
         db.close()
-    return 200, {"since": token, "db": base64.b64encode(data).decode(), "raw": names, "caps": caps,
+    data = snapshot_bytes(db_path)
+    return 200, {"since": token, "cursor": at, "db": base64.b64encode(data).decode(), "raw": names, "caps": caps,
                  "build": build()}
 
 

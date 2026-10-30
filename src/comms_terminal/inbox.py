@@ -25,7 +25,7 @@ from typing import Protocol, Sequence
 from . import clock, files, platforms
 from .writers import writer
 
-SCHEMA_VERSION = 31
+SCHEMA_VERSION = 32
 WAIT = timedelta(days=4)  # Waiting for them ends after this with no reply: back to Todo to follow up (#116)
 EMAIL_CONFIRMATION_PENDING = "Email confirmation pending; wait for its sent receipt before replying."
 MIGRATIONS = {  # version -> statement that upgrades an existing database to it
@@ -588,7 +588,39 @@ ALTER TABLE sequence_steps ADD COLUMN needs_edit INTEGER NOT NULL DEFAULT 1 CHEC
 UPDATE sequence_steps SET needs_edit = 0;
 ALTER TABLE composition_drafts ADD COLUMN needs_edit INTEGER NOT NULL DEFAULT 0 CHECK (needs_edit IN (0, 1));""",
     31: "ALTER TABLE enrollments ADD COLUMN identity_id INTEGER REFERENCES identities (id);",
+    # Change log for the laptop's Change sets (ADR 0012); migrate() adds its triggers on every table.
+    32: """CREATE TABLE changes (  -- every committed row change, for the laptop's Change sets (ADR 0012); kept 7 days
+  seq    INTEGER PRIMARY KEY AUTOINCREMENT,
+  tbl    TEXT NOT NULL,
+  row_id INTEGER NOT NULL,  -- the row's rowid until rows carry UUIDs (ADR 0012)
+  op     TEXT NOT NULL CHECK (op IN ('I', 'U', 'D')),
+  at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now') || '000+00:00')
+) STRICT;
+CREATE INDEX changes_at ON changes (at);""",
 }
+CHANGES_KEPT = timedelta(days=7)  # a laptop cursor older than this gets a whole Snapshot (ADR 0012)
+
+
+CHANGE_TRIGGER = ("CREATE TRIGGER IF NOT EXISTS changes_{table}_{event} AFTER {event} ON {table} BEGIN"
+                  " INSERT INTO changes (tbl, row_id, op) VALUES ('{table}', {row}.rowid, '{op}'); END")
+CHANGE_EVENTS = (("insert", "NEW", "I"), ("update", "NEW", "U"), ("delete", "OLD", "D"))
+
+
+def change_triggers(db) -> list[str]:
+    """The change-log triggers each table needs (ADR 0012). migrate() runs them after every upgrade, so a table a
+    migration adds or rebuilds gets them back."""
+    if not db.execute("SELECT 1 FROM sqlite_schema WHERE name = 'changes'").fetchone():
+        return []  # before migration 32 there is no log to write to
+    tables = [r[0] for r in db.execute("SELECT name FROM sqlite_schema WHERE type = 'table'"
+                                        " AND name NOT LIKE 'sqlite_%' AND name != 'changes' ORDER BY name")]
+    return [CHANGE_TRIGGER.format(table=table, event=event, row=row, op=op)
+            for table in tables for event, row, op in CHANGE_EVENTS]
+
+
+def prune_changes(db, now: datetime) -> int:
+    """Drop change-log entries older than CHANGES_KEPT; the service's daily pass runs it."""
+    with db:
+        return db.execute("DELETE FROM changes WHERE at < ?", (clock.iso(now - CHANGES_KEPT),)).rowcount
 
 # ponytail: fixed list; extend when a free-mail sender forms an Organization by mistake.
 FREE_MAIL = frozenset({
@@ -806,6 +838,8 @@ def migrate(db: sqlite3.Connection) -> None:
     db.execute("PRAGMA temp_store = MEMORY")
     try:
         db.executescript(f"BEGIN IMMEDIATE;\n{sql}\nPRAGMA user_version = {SCHEMA_VERSION};")
+        for trigger in change_triggers(db):
+            db.execute(trigger)
         if db.execute("PRAGMA foreign_key_check").fetchone():
             raise ValueError("migration would leave a broken foreign key")
         db.execute("COMMIT")

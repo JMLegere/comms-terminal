@@ -55,8 +55,10 @@ def activities(db):
 
 
 def persisted(db):
-    """The dump without audit log rows: undo restores state and appends its own entry."""
-    return "\n".join(line for line in db.iterdump() if not line.startswith('INSERT INTO "audit_log"'))
+    """The dump without audit log or change log rows: undo restores state and appends its own entries."""
+    return "\n".join(line for line in db.iterdump()
+                     if not line.startswith(('INSERT INTO "audit_log"', 'INSERT INTO "changes"',
+                                             """INSERT INTO "sqlite_sequence" VALUES('changes',""")))
 
 
 def raw_bytes(db):

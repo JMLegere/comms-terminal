@@ -902,7 +902,8 @@ def files_server(db_path: str, host: str, port: int) -> ThreadingHTTPServer:
 def wake_loop(db_path: str, stop: threading.Event, every: float = 60, kick: threading.Event | None = None,
               get: dict | None = None, senders: Senders | None = None) -> None:
     """wake() each minute and send the scheduled Drafts that are due; reconcile durable receipts before slow file
-    downloads. Hook `kick` also wakes this pass (after acknowledgement, NFR-A5); old files expire once a day (NFR-A6)."""
+    downloads. Hook `kick` also wakes this pass (after acknowledgement, NFR-A5); old files and change-log entries
+    expire once a day (NFR-A6, ADR 0012)."""
     import logging
     kick, expired = kick or threading.Event(), None
     while True:
@@ -922,6 +923,7 @@ def wake_loop(db_path: str, stop: threading.Event, every: float = 60, kick: thre
             if expired is None or now - expired >= timedelta(days=1):
                 expired = now
                 inbox.expire_attachments(db, now)
+                inbox.prune_changes(db, now)  # the laptop's Change sets reach back 7 days (ADR 0012)
         except Exception as e:  # noqa: BLE001 - one failed pass must not stop the loop
             logging.getLogger("comms_terminal.wake").info("wake pass failed: %s", e)
         finally:

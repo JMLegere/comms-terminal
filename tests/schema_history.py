@@ -1,10 +1,14 @@
 """Fake an older database from a fresh one: undo the migrations after `version`, newest first."""
 
 import re
+from pathlib import Path
 
 from comms_terminal import inbox
 
 UNDO = {
+    32: "".join(f"DROP TRIGGER IF EXISTS changes_{t}_{e};" for t in re.findall(
+        r"^CREATE TABLE (\w+)", Path(inbox.__file__).with_name("schema.sql").read_text(), re.M)
+        for e in ("insert", "update", "delete")) + "DROP TABLE changes;",
     31: "ALTER TABLE enrollments DROP COLUMN identity_id;",
     30: "ALTER TABLE composition_drafts DROP COLUMN needs_edit; ALTER TABLE sequence_steps DROP COLUMN needs_edit;"
         " ALTER TABLE sequences DROP COLUMN description;",

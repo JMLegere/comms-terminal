@@ -405,3 +405,13 @@ CREATE TABLE pipeline_targets (
   amount   INTEGER NOT NULL CHECK (amount > 0),
   due      TEXT NOT NULL                     -- YYYY-MM-DD
 ) STRICT;
+
+CREATE TABLE changes (  -- every committed row change, for the laptop's Change sets (ADR 0012); kept 7 days
+  seq    INTEGER PRIMARY KEY AUTOINCREMENT,
+  tbl    TEXT NOT NULL,
+  row_id INTEGER NOT NULL,  -- the row's rowid until rows carry UUIDs (ADR 0012)
+  op     TEXT NOT NULL CHECK (op IN ('I', 'U', 'D')),
+  at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now') || '000+00:00')
+) STRICT;
+CREATE INDEX changes_at ON changes (at);
+-- Its triggers on every other table come from inbox.change_triggers(), so a new table cannot miss them.

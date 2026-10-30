@@ -58,7 +58,7 @@ def old_rows(db):
                               " probe_error, probed_at"}
     return {r[0]: [tuple(a) for a in db.execute(f'SELECT {columns.get(r[0], "*")} FROM "{r[0]}" ORDER BY rowid')]
             for r in db.execute("SELECT name FROM sqlite_schema WHERE type = 'table'"
-                                " AND name NOT LIKE 'sqlite_%' AND name != 'composition_drafts'")}
+                                " AND name NOT LIKE 'sqlite_%' AND name NOT IN ('composition_drafts', 'changes')")}
 
 
 @pytest.mark.parametrize("kind,connection_id", [("email", 1), ("email", 2), ("sms", 3)])
