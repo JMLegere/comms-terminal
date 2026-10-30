@@ -22,6 +22,22 @@ Email, Slack, and SMS land as Threads in one queue. Each Thread shows who owes t
 
 ## Install
 
+### Agent-assisted setup
+
+Use the [setup guide](docs/setup.md). For real use, reuse an existing authorized backend first. Otherwise, use one persistent, always-on compatible Linux host with systemd and one authoritative database. Choose console access from your actual environment.
+
+Copy this prompt into your assistant:
+
+```text
+Help me set up Comms Terminal. Read and follow:
+https://github.com/JMLegere/comms-terminal/blob/main/docs/setup.md
+(or docs/setup.md in the local checkout).
+Inspect my environment starting read-only. Recommend the simplest complete route,
+then guide me one verified step at a time.
+```
+
+### Manual package and demo
+
 Needs Python 3.11+, [uv](https://docs.astral.sh/uv/), and a [Nerd Font](https://www.nerdfonts.com/) in your terminal.
 
 ```sh
@@ -29,11 +45,12 @@ git clone https://github.com/JMLegere/comms-terminal.git && cd comms-terminal
 uv sync
 ```
 
-Try it on synthetic data:
+Opt-in demo on a compatible Linux host, in a POSIX shell: try synthetic data with a fresh disposable database and isolated socket.
 
 ```sh
-uv run python scripts/seed_demo.py --db /tmp/demo.db
-uv run comms-terminal --db /tmp/demo.db
+demo_dir="$(mktemp -d)" &&
+uv run python scripts/seed_demo.py --db "$demo_dir/inbox.db" &&
+uv run comms-terminal --db "$demo_dir/inbox.db" --socket "$demo_dir/inbox.sock"
 ```
 
 `?` lists every key. `q` quits.
@@ -132,18 +149,9 @@ Slack · Quo · Resend webhooks ───────────────┼
 
 ## Run your own
 
-One instance per person. Needs a Linux host with systemd and a domain on Cloudflare.
+One instance per person. A new backend needs a persistent Linux host with systemd and a domain on Cloudflare.
 
-1. Point the hard-coded domains and paths at yours:
-   - `src/comms_terminal/email.py` `INBOX`, `src/comms_terminal/fastmail.py` `INBOUND`
-   - `scripts/cloudflare_setup.py` `ZONE`, `HOOKS`, `INBOX`, `ADDRESSES`
-   - `deploy/email-worker/wrangler.toml`, `deploy/slack-app-manifest.yml`
-   - `/home/jerry` in `deploy/*.service`
-2. `uv tool install .` puts `comms-terminal` on your PATH.
-3. Connect channels with [`docs/runbook.md`](docs/runbook.md) §2–§3g, one section each. Start with email.
-4. `comms-terminal` opens the console.
-
-Secrets go in `~/.config/comms-terminal/` as 0600 files. `deploy/install.sh` encrypts them into systemd's credential store.
+Follow the [setup guide](docs/setup.md) to choose a route, then the [runbook](docs/runbook.md) for Connection setup and operations. The deployment files document the owner's installations; adapting them to a new host requires review and verification.
 
 ## Philosophy
 
@@ -172,6 +180,7 @@ A signed GitHub webhook triggers the updater on the production host. It builds a
 
 | Doc | For |
 |---|---|
+| [`docs/setup.md`](docs/setup.md) | Agent-assisted installation and route selection |
 | [`AGENTS.md`](AGENTS.md) | Concepts and rules for coding and terminal agents |
 | [`docs/prd.md`](docs/prd.md) | Requirements and decisions |
 | [`docs/adr/`](docs/adr) | Architecture decisions |
