@@ -91,14 +91,16 @@ def test_a_write_paints_locally_at_once_and_reaches_the_service_in_order(service
     assert inbox.get_thread(sdb, tid).status == "SNOOZED"
 
 
-def test_a_create_waits_for_the_service_id_and_the_copy_agrees(service, laptop):
+def test_a_create_paints_at_once_and_the_service_makes_the_same_row(service, laptop):
+    """ADR 0012: a create runs on the copy first; the service mints the same ids for the same write."""
     _, sdb, _, tid = service
     rem, _, db, _ = laptop
     case_id = tui.inbox.create_case(db, "Win Acme")
-    assert inbox.cases(sdb)[0]["id"] == case_id == inbox.cases(db)[0]["id"]
-    tui.inbox.act(db, tid, inbox.SetCase(new_title="Fix login"))  # a new Case inside act is a create too
+    assert [c["id"] for c in inbox.cases(db)] == [case_id] and inbox.cases(sdb) == []  # before the service answered
+    tui.inbox.act(db, tid, inbox.SetCase(new_title="Fix login"))  # a new Case inside act
+    assert rem.drain(10)
+    assert inbox.cases(sdb) == inbox.cases(db)
     assert inbox.get_thread(sdb, tid).case_id == inbox.get_thread(db, tid).case_id is not None
-    assert not rem.fresh.is_set()  # ids matched: no resync needed
 
 
 def test_pipeline_changes_reach_the_service_and_undo_by_its_id(service, laptop):
@@ -110,6 +112,7 @@ def test_pipeline_changes_reach_the_service_and_undo_by_its_id(service, laptop):
     syncer.apply(db, syncer.once())
     entry = tui.pipeline.set_stage(db, org, "REVENUE", "Selection")
     tui.pipeline.set_value(db, org, "REVENUE", "90k")
+    assert rem.drain(10)
     assert pipeline.current(sdb, org)["REVENUE"]["stage"] == "Selection" == pipeline.current(db, org)["REVENUE"]["stage"]
     tui.pipeline.undo(db, entry)
     rem.drain()
@@ -128,24 +131,34 @@ def test_a_service_change_arrives_as_a_new_snapshot(service, laptop):
     assert syncer.once(timeout=10) is None or True  # nothing new: the long poll may answer empty
 
 
-def test_a_snapshot_waits_while_a_local_write_is_on_its_way(service, laptop):
-    _, sdb, _, tid = service
+def test_an_answer_arriving_mid_write_keeps_the_write_on_top(service, laptop):
+    """ADR 0012: the service's news lands in the base; the console's unconfirmed write is replayed over it, and
+    leaves the queue once an answer holds it."""
+    _, sdb, _, _ = service
     rem, syncer, db, _ = laptop
-    body = syncer.once(timeout=0.5) or {"db": None, "since": "x"}
-    rem.idle.clear()  # a write still in flight
-    assert not syncer.apply(db, body)
-    assert rem.fresh.is_set()
-    rem.idle.set()
+    gate, call = threading.Event(), rem.call
+    rem.call = lambda *a, **k: (gate.wait(10), call(*a, **k))[1]  # the write is held on its way
+    inbox.create_case(sdb, "Made on the service")
+    tui.inbox.create_case(db, "From the laptop")
+    assert syncer.apply(db, syncer.once(timeout=8))
+    assert {c["title"] for c in inbox.cases(db)} == {"Made on the service", "From the laptop"}
+    assert [c["title"] for c in inbox.cases(sdb)] == ["Made on the service"]
+    gate.set()
+    assert rem.drain(10)
+    rem.fresh.clear()  # long-poll: the service's change watcher notices the write within a moment
+    assert syncer.apply(db, syncer.once(timeout=8))
+    assert inbox.cases(db) == inbox.cases(sdb) and rem.unconfirmed == []
 
 
-def test_service_errors_raise_the_same_exception_and_a_rejected_write_asks_for_resync(service, laptop):
+def test_service_errors_raise_the_same_exception_and_a_refused_write_leaves_the_queue(service, laptop):
     _, sdb, _, tid = service
     rem, _, db, _ = laptop
     values = {"connection_id": None, "kind": "email", "sender": "", "to": "", "cc": "", "subject": "", "body": "x"}
-    draft = tui.inbox.save_draft(db, values)  # a new Draft: a create
-    assert inbox.get_draft(sdb, draft["id"])["body"] == "x"
-    with pytest.raises(inbox.DraftConflict):
-        rem.call("inbox.save_draft", (values,), {"draft_id": draft["id"], "expected_revision": 7})
+    draft = tui.inbox.save_draft(db, values)  # a new Draft: applied here, then queued
+    assert rem.drain(10) and inbox.get_draft(sdb, draft["id"])["body"] == "x"
+    with pytest.raises(inbox.DraftConflict):  # made before the stored save, on an old revision
+        rem.call("inbox.save_draft", (values,), {"draft_id": draft["id"], "expected_revision": 7,
+                                                 "now": datetime(2000, 1, 1, tzinfo=timezone.utc)})
     with pytest.raises(inbox.SnoozeNeedsDate):  # FR-OA-10: the service refuses it as the console does
         rem.call("inbox.act", (tid, inbox.Snooze()), {})
     assert inbox.get_thread(sdb, tid).status_detail != "WAITING_INDEFINITELY"
@@ -153,8 +166,9 @@ def test_service_errors_raise_the_same_exception_and_a_rejected_write_asks_for_r
         rem.call("inbox.connect", (), {})  # not allowlisted
     said = []
     rem.say = lambda message, error=False: said.append(message)
-    rem.queue("inbox.restore", ({"id": 999},), {})  # the copy and the service disagree: refused
+    rem.queue("inbox.restore", ({"id": "999"},), {}, next(rem.mutations))  # the copy and the service disagree
     assert rem.drain(10) and rem.fresh.is_set() and said
+    assert [w[0] for w in rem.unconfirmed] == ["inbox.save_draft"]  # the refused write is gone; the Draft awaits a sync
 
 
 def test_reads_stay_local_and_offline_writes_are_refused(service, laptop):
@@ -246,15 +260,6 @@ def test_stale_confirmed_sync_cannot_clear_read_only_after_link_loss(laptop, mon
 
     from test_console import run
     run(tui.Console(syncer.db_path, remote=rem, syncer=syncer), [scenario])
-
-
-def test_a_create_the_copy_cannot_reproduce_resyncs_before_returning(service, laptop):
-    _, sdb, _, tid = service
-    rem, syncer, db, _ = laptop
-    inbox.create_case(sdb, "Made on the service")  # the copy has not seen it: its next id differs
-    case_id = tui.inbox.create_case(db, "From the laptop")
-    assert {c["title"] for c in inbox.cases(db)} == {"Made on the service", "From the laptop"}
-    assert inbox.cases(db) == inbox.cases(sdb) and case_id in {c["id"] for c in inbox.cases(db)}
 
 
 def test_a_large_answer_arrives_whole_through_the_relay(service, laptop, monkeypatch):

@@ -647,6 +647,7 @@ class SendFailed(Exception):
 
 _ids = threading.Lock()
 _last_id = [0, 0]  # milliseconds and counter of the newest id this process made
+_minting = threading.local()  # inside minting(): this thread's seed, milliseconds and count
 
 
 def is_id(value) -> bool:
@@ -657,7 +658,13 @@ def is_id(value) -> bool:
 def new_id() -> str:
     """A new row id: a UUIDv7 (RFC 9562), whose leading milliseconds sort it after every older id; within one
     millisecond a counter keeps this process's ids in the order it made them (ADR 0012). It is each id column's
-    default, through the new_id() SQL function that connect() registers."""
+    default, through the new_id() SQL function that connect() registers. Inside minting(), the ids come from its
+    seed instead, so the laptop and the service give the same write the same new rows."""
+    if getattr(_minting, "seed", None) is not None:
+        _minting.count += 1
+        bits = int.from_bytes(hashlib.sha256(f"{_minting.seed}:{_minting.count}".encode()).digest()[:10], "big")
+        seq, low = min(_minting.count, 0xFFF), bits & ((1 << 62) - 1)
+        return str(uuid.UUID(int=_minting.ms << 80 | 0x7 << 76 | seq << 64 | 0b10 << 62 | low))
     ms = time_ns() // 1_000_000
     with _ids:
         last, seq = _last_id
@@ -668,6 +675,17 @@ def new_id() -> str:
         _last_id[:] = [ms, seq]
     low = int.from_bytes(os.urandom(8), "big") & ((1 << 62) - 1)
     return str(uuid.UUID(int=ms << 80 | 0x7 << 76 | seq << 64 | 0b10 << 62 | low))
+
+
+@contextmanager
+def minting(seed: str, now: datetime):
+    """Within one queued write (ADR 0012): new rows take ids from `seed` (the console and its mutation number) and
+    the write's moment, in the order the write makes them; so the laptop's copy and the service agree."""
+    _minting.seed, _minting.ms, _minting.count = seed, int(now.timestamp() * 1000), 0
+    try:
+        yield
+    finally:
+        _minting.seed = None
 
 
 MIGRATIONS[33] = Path(__file__).with_name("migration_33.sql").read_text()
@@ -919,11 +937,12 @@ def get_thread(db, thread_id: int) -> Thread:
 @writer("write")
 def save_draft(db, values: dict, *, draft_id: int | None = None,
                expected_revision: int | None = None, thread_id: int | None = None, task_id: int | None = None,
-               overwrite: bool = False, now: datetime | None = None) -> dict:
+               now: datetime | None = None) -> dict:
     """Persist the complete edited envelope, including incomplete text; never send or create work.
     `thread_id` makes a new Draft that Thread's reply Draft (save_reply_draft) and `task_id` an email Task's
-    Draft (sequences); an edit keeps both. `overwrite`: the most recent save wins over a newer stored revision
-    (the console's editor) instead of raising DraftConflict (agents and the CLI)."""
+    Draft (sequences); an edit keeps both. An edit applies when it read the stored revision or was made later than
+    the stored save: the latest save wins, from the console or an agent (ADR 0012). An earlier edit over a newer
+    revision raises DraftConflict."""
     if not isinstance(values, dict) or set(values) != {
             "connection_id", "kind", "sender", "to", "cc", "subject", "body"}:
         raise ValueError("draft values must contain exactly connection_id, kind, sender, to, cc, subject, body")
@@ -960,11 +979,11 @@ def save_draft(db, values: dict, *, draft_id: int | None = None,
                 'UPDATE composition_drafts SET connection_id = ?, kind = ?, sender = ?, "to" = ?,'
                 " cc = ?, subject = ?, body = ?, revision = revision + 1, updated_at = ?,"
                 " needs_edit = CASE WHEN subject IS ? AND body = ? THEN needs_edit ELSE 0 END"  # a changed text clears it
-                " WHERE id = ? AND (? OR revision = ?)",
-                (*envelope, at, values["subject"], values["body"], draft_id, bool(overwrite), expected_revision)).rowcount
+                " WHERE id = ? AND (revision = ? OR updated_at < ?)",
+                (*envelope, at, values["subject"], values["body"], draft_id, expected_revision, at)).rowcount
             if not saved:
                 get_draft(db, draft_id)  # a missing row is distinct from a stale writer
-                raise DraftConflict("Draft changed since this revision; reload before saving.")
+                raise DraftConflict("Draft changed after this edit was made; reload before saving.")
         return get_draft(db, draft_id)
 
 

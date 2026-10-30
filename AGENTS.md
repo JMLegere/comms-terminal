@@ -74,8 +74,8 @@ The CLI matches the console. Every function that changes the database (`@writer`
 ### Rules
 
 - **Nothing sends from an agent.** The CLI never sends, completes a Task, or Responds to an invite. Prepare Drafts; Jeremy reviews and sends them from the console.
-- **Draft edits need the revision you read.** Read the Draft, then pass `--revision N`. A stale revision is refused; read again rather than forcing it.
-- **Jeremy may have the Draft open.** The console's save always wins: if he is typing in a Draft you change, his next save replaces your edit. Tell him before you change a Draft he is working, and after any edit name each changed Draft.
+- **Draft edits pass the revision you read.** Read the Draft, then pass `--revision N`. The latest save wins (ADR 0012): an edit made after the stored save applies even over a newer revision, and an earlier one is refused.
+- **Jeremy may have the Draft open.** Your later save replaces what he typed before it, and his next save replaces yours. Tell him before you change a Draft he is working, and after any edit name each changed Draft.
 - **Name things by title.** In anything Jeremy reads, name Threads, Drafts and Tasks by subject and who they are with; an ID may follow in parentheses.
 - **Live writes need Jeremy's go.** Enrolling, finishing or removing Enrollments, applying or deleting Sequences, setting Stages, Values or Targets, skipping Tasks, deleting Drafts, merging or blocking People all change the live database. Get his explicit go for that change, run `sequence apply --dry-run` first, and read the result back afterwards.
 - **No opt-out lines.** Never add a "reply stop" or other opt-out line to a Draft or a Step brief. Keep the Agent Maple Inc. signature and mailing address.

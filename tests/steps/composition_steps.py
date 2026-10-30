@@ -1,6 +1,6 @@
 """Public Draft storage and captured-history steps; synthetic local records only."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -66,12 +66,25 @@ def save_edited_draft(composition, body, revision):
         composition.error = error
 
 
+@when(parsers.parse('Save Draft is called with Body "{body}" at Draft revision {revision:d}, made {when} that save'))
+def save_edit_made_around(composition, body, revision, when):
+    """The latest save wins (ADR 0012): this edit's moment is a minute before or after the other writer's save."""
+    composition.values = composition.values | {"body": body}
+    at = composition.other_at + timedelta(minutes=-1 if when == "before" else 1)
+    try:
+        composition.draft = inbox.save_draft(composition.db, composition.values, draft_id=composition.draft["id"],
+                                             expected_revision=revision, now=at)
+    except inbox.DraftConflict as error:
+        composition.error = error
+
+
 @when(parsers.parse('another writer calls Save Draft with Body "{body}" at Draft revision {revision:d}'))
 def other_writer(composition, body, revision):
     db = inbox.connect(composition.path)
+    composition.other_at = datetime.fromisoformat(composition.draft["updated_at"]) + timedelta(minutes=2)
     try:
         inbox.save_draft(db, composition.values | {"body": body},
-                         draft_id=composition.draft["id"], expected_revision=revision)
+                         draft_id=composition.draft["id"], expected_revision=revision, now=composition.other_at)
     finally:
         db.close()
 

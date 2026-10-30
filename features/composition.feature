@@ -1,7 +1,7 @@
 Feature: Composition
   Draft is unsent work, not a Thread or an Activity. Draft revision is the saved version.
   Save Draft (inbox.save_draft), Get Draft (inbox.get_draft), and List Drafts (inbox.list_drafts)
-  persist and resume the complete edited fields. Draft Conflict (inbox.DraftConflict) rejects a stale save from the CLI or an agent; the console's editor saves with overwrite, so the most recent save wins.
+  persist and resume the complete edited fields. The latest save wins (ADR 0012): an edit made after the stored save applies over a newer revision, and Draft Conflict (inbox.DraftConflict) rejects one made before it, from the console, the CLI or an agent.
   Connection maps to connection_id, Message format to kind, Sender to sender, To to to,
   Cc to cc, Subject to subject, and Body to body. "none" means no Connection or no SMS Subject;
   every other field remains the exact edited string.
@@ -42,13 +42,21 @@ Feature: Composition
       | 2          | sms    | +15550001001 | +15550001002 | none    |
 
   @AS-22 @FR-20 @NFR-10 @I-7 @I-12
-  Scenario: Stale Draft revision cannot overwrite newer saved work
+  Scenario: An edit made before newer saved work cannot overwrite it
     Given a saved email Draft with Body "first saved text"
     When another writer calls Save Draft with Body "newer saved text" at Draft revision 1
-    And Save Draft is called with Body "unsaved edits" at Draft revision 1
+    And Save Draft is called with Body "unsaved edits" at Draft revision 1, made before that save
     Then Save Draft raises Draft Conflict
     And Get Draft reads Body "newer saved text" and Draft revision 2
     And the edited Draft Body remains "unsaved edits"
+    And no Thread or Activity was created
+
+  @AS-22 @FR-20
+  Scenario: The latest save wins over a newer Draft revision
+    Given a saved email Draft with Body "first saved text"
+    When another writer calls Save Draft with Body "newer saved text" at Draft revision 1
+    And Save Draft is called with Body "latest words" at Draft revision 1, made after that save
+    Then Get Draft reads Body "latest words" and Draft revision 3
     And no Thread or Activity was created
 
   @AS-29 @FR-19 @NFR-12 @I-8

@@ -193,21 +193,6 @@ def socket_context(socket_path, source):
     return fetch
 
 
-def creates(name: str, db, args, kwargs) -> bool:
-    """Whether this call makes a row whose id later actions use: those wait for the service's answer."""
-    if CALLS[name] != "write":
-        return True
-    if name == "inbox.act":
-        action = args[1] if len(args) > 1 else kwargs.get("action")
-        return isinstance(action, inbox.SetCase) and bool(action.new_title)
-    if name == "inbox.save_draft":
-        return kwargs.get("draft_id") is None
-    if name in ("inbox.save_reply_draft", "inbox.schedule_reply"):
-        thread_id, body = args[0], args[1] if len(args) > 1 else kwargs.get("body", "")
-        return bool(body.strip()) and inbox.reply_draft(db, thread_id) is None
-    return False
-
-
 # --- values over the wire ------------------------------------------------------
 
 DATACLASSES = {c.__name__: c for c in vars(inbox).values()  # the Action dataclasses and Thread, by name
@@ -261,19 +246,6 @@ def decode(v):
     return {k: decode(x) for k, x in v.items()}
 
 
-def ident(result):
-    """The part of a create's result that later actions rely on: the new row's id."""
-    if isinstance(result, (int, type(None))):
-        return result
-    if isinstance(result, dict):
-        return result.get("id")
-    if isinstance(result, tuple):
-        return tuple(ident(x) for x in result)
-    if isinstance(result, inbox.Thread):
-        return result.id, result.case_id  # SetCase(new_title=...) makes the Case
-    return result
-
-
 # --- service side ----------------------------------------------------------------
 
 def handle_call(db_path: str, body: bytes) -> tuple[int, dict]:
@@ -300,7 +272,11 @@ def handle_call(db_path: str, body: bytes) -> tuple[int, dict]:
                                (client, mutation)).fetchone()
             if first is not None:
                 return first["status"], json.loads(first["answer"])
-        status, answer = _apply(db, name, module, fn, args, kwargs)
+        if client is None:
+            status, answer = _apply(db, name, module, fn, args, kwargs)
+        else:
+            with inbox.minting(f"{client}:{mutation}", kwargs.get("now") or clock.now()):  # the copy's new ids
+                status, answer = _apply(db, name, module, fn, args, kwargs)
         if client is not None and status in (200, 409):  # a definite outcome; a 500 may be tried again
             # ponytail: recorded after the writer's own commit, so a crash in between applies a resent write twice;
             # close it when writers run inside a caller-owned transaction.
@@ -409,12 +385,16 @@ def handle_sync(db_path: str, changes: Changes, body: bytes, wait: float = 25) -
     changed. A caller that sends its change-log `cursor` and runs this schema gets a Change set: the rows changed
     since then, the raw messages and Attachment capabilities they add, and the new cursor (ADR 0012). Anyone else,
     or a cursor older than the kept log, gets the whole snapshot with every raw message name and capability. Both
-    carry the service's build."""
+    carry the service's build and, for a caller that names its console (client), the last of its writes applied,
+    whose effects the answer already holds."""
     try:
         req = json.loads(body or b"{}")
         since, wait = req.get("since"), min(wait, max(0.0, float(req.get("wait", wait))))
         mine = req.get("cursor")
         mine = int(mine) if mine is not None and req.get("schema") == inbox.SCHEMA_VERSION else None
+        client = req.get("client")
+        if client is not None and not inbox.is_id(client):
+            raise ValueError("client")
     except (ValueError, AttributeError, TypeError):
         return 400, {"error": "bad sync"}
     token = changes.wait(since, wait)
@@ -422,6 +402,8 @@ def handle_sync(db_path: str, changes: Changes, body: bytes, wait: float = 25) -
         return 200, {"since": token}  # nothing new
     db = inbox.connect(db_path)
     try:
+        done = {} if client is None else {"last_mutation": db.execute(  # first: its writes' rows are in what follows
+            "SELECT coalesce(max(mutation_id), 0) FROM applied_mutations WHERE client_id = ?", (client,)).fetchone()[0]}
         at = cursor(db)  # before reading rows: a row changed meanwhile comes again next time, harmlessly
         rows = change_set(db, mine) if mine is not None else None
         secret = files.files_secret(db)
@@ -431,7 +413,7 @@ def handle_sync(db_path: str, changes: Changes, body: bytes, wait: float = 25) -
                             and (raw := json.loads(r["data"]).get("raw"))})
             caps = {r["sha"]: files.file_cap(secret, r["sha"]) for tbl, r in kept if tbl == "attachments" and r["sha"]}
             return 200, {"since": token, "cursor": at, "changes": rows, "raw": names, "caps": caps,
-                         "build": build()}
+                         "build": build()} | done
         raw = files.raw_dir(db)
         names = sorted(p.name for p in raw.iterdir()) if raw is not None and raw.is_dir() else []
         caps = {r[0]: files.file_cap(secret, r[0])
@@ -440,7 +422,7 @@ def handle_sync(db_path: str, changes: Changes, body: bytes, wait: float = 25) -
         db.close()
     data = snapshot_bytes(db_path)
     return 200, {"since": token, "cursor": at, "db": base64.b64encode(data).decode(), "raw": names, "caps": caps,
-                 "build": build()}
+                 "build": build()} | done
 
 
 RAW_BATCH = 4 * 1024 * 1024
@@ -551,7 +533,7 @@ class Remote:
         self.idle = threading.Event()
         self.idle.set()
         self.fresh = threading.Event()  # the queue drained: ask for a snapshot at once
-        self.resync = None  # Syncer.now: the service's snapshot, applied before a create returns
+        self.unconfirmed = []  # (name, args, kwargs, mutation) not yet in a sync answer: replayed on each (ADR 0012)
         threading.Thread(target=self._send_loop, daemon=True).start()
 
     def call(self, name, args, kwargs, timeout=30, mutation=None):
@@ -570,11 +552,18 @@ class Remote:
         if not self.online:
             raise Offline(self.problem or "Offline · read-only")
 
-    def queue(self, name, args, kwargs):
+    def queue(self, name, args, kwargs, mutation):
         with self.lock:
             self.busy += 1
             self.idle.clear()
-        self.pending.put((name, args, kwargs, next(self.mutations)))
+            self.unconfirmed.append((name, args, kwargs, mutation))
+        self.pending.put((name, args, kwargs, mutation))
+
+    def confirm(self, last: int) -> list:
+        """Drop the writes the service has applied (up to mutation `last`); the rest, in order, to replay."""
+        with self.lock:
+            self.unconfirmed = [w for w in self.unconfirmed if w[3] > last]
+            return list(self.unconfirmed)
 
     def drain(self, timeout=30) -> bool:
         return self.idle.wait(timeout)
@@ -586,6 +575,8 @@ class Remote:
                 self.call(name, args, kwargs, mutation=mutation)
             except Exception as e:  # noqa: BLE001 - every failure reverts the copy to the service's state
                 LOG.info("write %s not applied: %s", name, e)
+                with self.lock:  # refused or lost: the next sync shows the service's state without it
+                    self.unconfirmed = [w for w in self.unconfirmed if w[3] != mutation]
                 self.say(f"Not saved on the inbox service · {e}. Showing its state.", error=True)
             finally:
                 with self.lock:
@@ -620,21 +611,11 @@ def proxy(remote: Remote, module, prefix: str):
                     kwargs = kwargs | {"now": clock.now()}  # one moment for the copy and the service (ADR 0012)
                 if kind == "service":
                     return remote.call(name, args, kwargs)
-                if creates(name, db, args, kwargs):
-                    if not remote.drain():
-                        raise Offline("The inbox service has not answered earlier changes yet.")
-                    result = remote.call(name, args, kwargs, mutation=next(remote.mutations))
-                    try:  # the copy follows; ids agree while it matches the service
-                        same = ident(value(db, *args, **kwargs)) == ident(result)
-                    except Exception:  # noqa: BLE001
-                        same = False
-                    if not same:  # the copy made another row: take the service's state before going on
-                        remote.fresh.set()
-                        if remote.resync is not None:
-                            remote.resync(db)
-                    return result
-                result = value(db, *args, **kwargs)  # raises exactly as the service would, and paints at once
-                remote.queue(name, args, kwargs)
+                mutation = next(remote.mutations)
+                now = inspect.signature(value).bind_partial(db, *args, **kwargs).arguments["now"]
+                with inbox.minting(f"{remote.client}:{mutation}", now):  # the service mints the same ids
+                    result = value(db, *args, **kwargs)  # raises exactly as the service would, and paints at once
+                remote.queue(name, args, kwargs, mutation)
                 return result
             return call
 
@@ -660,56 +641,60 @@ def install(tui, remote: Remote, caps: dict):
     files.file_url = signed_urls(caps)  # Attachment bytes and files-secret stay on the service (ADR 0004)
 
 
+def mirror():
+    """An in-memory base: the inbox's SQL functions (column defaults name them), no foreign-key checks, since rows
+    arrive in the service's order."""
+    db = inbox.connect(":memory:")
+    db.execute("PRAGMA foreign_keys = OFF")
+    return db
+
+
 class Syncer:
-    """Keeps the laptop copy current: waits on /sync, fetches new raw messages, and swaps the snapshot in on the
-    console's thread once no local write is still on its way."""
+    """Keeps the laptop copy current (ADR 0012). The base is the service's state as last answered: a whole snapshot
+    at first, then Change sets applied to it. After each answer the copy becomes the base again with the console's
+    unconfirmed writes replayed on top, so no frame shows the service's state without them."""
 
     def __init__(self, remote: Remote, db_path: str, caps: dict, build_file: Path | None = None):
         self.remote, self.db_path, self.caps, self.build_file = remote, db_path, caps, build_file
-        self.token_file = Path(db_path).parent / "sync-token"  # the copy's snapshot: unchanged, no new download
+        self.token_file = Path(db_path).parent / "sync-token"
+        self.base_path = Path(db_path).with_name("base.db")  # the base, kept for the next start
+        self.base, self.cursor, self.changed = None, None, None
         try:
-            self.since, caps_json, self.service_build = json.loads(self.token_file.read_text())
+            self.since, caps_json, self.service_build, *rest = json.loads(self.token_file.read_text())
             caps.update(caps_json)
-        except (OSError, ValueError, TypeError):
-            self.since, self.service_build = None, None
+            if rest and rest[0] is not None and self.base_path.exists():
+                self.base, self.cursor = mirror(), rest[0]
+                sqlite3.connect(self.base_path).backup(self.base)
+        except (OSError, ValueError, TypeError, sqlite3.Error):
+            self.since, self.service_build, self.base = None, None, None
         self.confirmed = False  # the service answered a /sync in this session
-        self.lock = threading.Lock()  # the loop and a create's resync both store what a /sync returned
-        remote.resync = self.now
-
-    def now(self, db):
-        """On the console's thread: fetch and apply the service's current snapshot (a create whose new id the
-        copy did not reproduce)."""
-        try:
-            self.remote.fresh.set()
-            body = self.once(timeout=30)
-            if body is not None:
-                self.apply(db, body)
-        except Exception as e:  # noqa: BLE001 - the loop's next round catches up
-            LOG.info("resync failed: %s", e)
+        self.lock = threading.Lock()
 
     def start(self):
         threading.Thread(target=self.run, daemon=True).start()
 
     def once(self, timeout=40) -> dict | None:
-        """One /sync round: the snapshot body when there is news, else None. Raises ReplyError when offline."""
-        fresh = self.remote.fresh.is_set()
+        """One /sync round: a snapshot or Change set when there is news, else None. Raises Offline when offline."""
+        fresh = self.remote.fresh.is_set()  # the queue drained: answer at once with its effects
         self.remote.fresh.clear()
-        status, body = self.remote.post(self.remote.link.command(), "/sync",
-                                        {"since": None if fresh else self.since,
-                                         "wait": 0 if fresh or not self.confirmed else max(0, timeout - 5)},
-                                        timeout)  # the session's first answer at once: writes wait on it
-        with self.lock:  # not around the request: the loop's long poll must not hold up a create's resync
+        req = {"since": self.since if self.base is not None else None, "client": self.remote.client,
+               "wait": 0 if fresh or not self.confirmed else max(0, timeout - 5)}
+        if self.base is not None:
+            req |= {"cursor": self.cursor, "schema": inbox.SCHEMA_VERSION}
+        status, body = self.remote.post(self.remote.link.command(), "/sync", req, timeout)
+        with self.lock:
             return self._received(status, body)
 
     def _received(self, status, body):
         if status != 200:
             raise Offline(body.get("error", f"HTTP {status}"))
         self.confirmed = True
-        if "db" not in body:
+        if "db" not in body and "changes" not in body:
             self.since = body["since"]
             return None
         self.fetch_raw(body["raw"])
-        self.caps.clear()
+        if "db" in body:
+            self.caps.clear()
         self.caps.update(body["caps"])
         self.service_build = body.get("build") or ""
         if self.build_file is not None:
@@ -734,21 +719,48 @@ class Syncer:
             missing = [n for n in missing if n not in got]
 
     def apply(self, db, body) -> bool:
-        """Swap the snapshot into the console's connection; False (try again) while a local write is pending."""
-        if not self.remote.idle.is_set():
-            self.remote.fresh.set()
+        """On the console's thread: bring the base up to the answer, make the copy the base, and replay the
+        console's unconfirmed writes on it. `changed` keeps the (table, id) pairs a Change set touched (None: all)."""
+        if "db" in body:
+            base = mirror()
+            base.deserialize(gzip.decompress(base64.b64decode(body["db"])))
+            for (name,) in base.execute("SELECT name FROM sqlite_schema WHERE type = 'trigger'").fetchall():
+                base.execute(f'DROP TRIGGER "{name}"')  # a mirror: rows arrive as the service already wrote them
+            self.base, self.changed = base, None
+        elif self.base is None:
             return False
-        mem = sqlite3.connect(":memory:")
-        try:
-            mem.deserialize(gzip.decompress(base64.b64decode(body["db"])))
-            mem.backup(db)
-        finally:
-            mem.close()
-        self.since = body["since"]
+        else:
+            self._patch(body["changes"])
+            self.changed = [(c["tbl"], c["row_id"]) for c in body["changes"]]
+        self.since, self.cursor = body["since"], body["cursor"]
+        pending = self.remote.confirm(body.get("last_mutation", 0))
+        self.base.backup(db)
+        for name, args, kwargs, mutation in pending:
+            module, fn = name.split(".")
+            try:
+                with inbox.minting(f"{self.remote.client}:{mutation}", kwargs.get("now") or clock.now()):
+                    getattr(MODULES[module], fn)(db, *args, **kwargs)
+            except Exception as e:  # noqa: BLE001 - the service will refuse it too; its answer reverts it
+                LOG.info("replay %s failed: %s", name, e)
+        self.base.backup(saved := sqlite3.connect(self.base_path))
+        saved.close()
         tmp = self.token_file.with_name(".sync-token.part")
-        tmp.write_text(json.dumps([self.since, self.caps, self.service_build]))
+        tmp.write_text(json.dumps([self.since, self.caps, self.service_build, self.cursor]))
         tmp.replace(self.token_file)
         return True
+
+    def _patch(self, changes):
+        """Apply a Change set's rows to the base: each as it now stands on the service, or gone."""
+        for c in changes:
+            tbl, row = c["tbl"], c["row"]
+            keyed = any(col[1] == "id" for col in self.base.execute(f'PRAGMA table_info("{tbl}")'))
+            if row is None:
+                self.base.execute(f'DELETE FROM "{tbl}" WHERE {"id" if keyed else "rowid"} = ?', (c["row_id"],))
+            else:
+                cols = ", ".join(f'"{k}"' for k in row)
+                self.base.execute(f'INSERT OR REPLACE INTO "{tbl}" ({cols}) VALUES ({", ".join("?" * len(row))})',
+                                  list(row.values()))
+        self.base.commit()
 
     def run(self):
         while True:
@@ -764,7 +776,6 @@ class Syncer:
                     self.offline("Offline · cannot reach the inbox service; read-only.")
                     time.sleep(2)
                     continue
-            self.remote.drain(None)  # a snapshot taken mid-write would only be refused
             try:
                 body = self.once()
             except Exception as e:  # noqa: BLE001 - the loop must outlive any one failed round

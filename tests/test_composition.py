@@ -368,13 +368,16 @@ def test_slack_draft_saves_one_conversation_and_names_it(db):
     assert inbox.draft_problem(d | {"body": " "}) == "Write a message"
 
 
-def test_an_overwriting_save_wins_over_a_newer_stored_revision(db):
-    """The console's editor keeps the most recent save: overwrite replaces a newer stored revision."""
-    original = inbox.save_draft(db, envelope(body="first"))
-    newer = inbox.save_draft(db, envelope(body="an agent's edit"), draft_id=original["id"], expected_revision=1)
+def test_the_latest_save_wins_over_a_newer_stored_revision(db):
+    """ADR 0012: an edit made later than the stored save wins, whoever made it; an earlier one over a newer revision
+    is refused."""
+    at = lambda minutes: AT + timedelta(minutes=minutes)  # noqa: E731
+    original = inbox.save_draft(db, envelope(body="first"), now=at(0))
+    newer = inbox.save_draft(db, envelope(body="an agent's edit"), draft_id=original["id"], expected_revision=1, now=at(2))
     latest = inbox.save_draft(db, envelope(subject="Jeremy's subject", body="Jeremy's latest words"),
-                              draft_id=original["id"], expected_revision=1, overwrite=True)
+                              draft_id=original["id"], expected_revision=1, now=at(3))
     assert latest["body"] == "Jeremy's latest words" and latest["subject"] == "Jeremy's subject"
     assert latest["revision"] == newer["revision"] + 1
-    with pytest.raises(inbox.DraftConflict):  # without overwrite a stale writer is still refused
-        inbox.save_draft(db, envelope(body="stale"), draft_id=original["id"], expected_revision=1)
+    with pytest.raises(inbox.DraftConflict):  # made before the stored save, on an old revision
+        inbox.save_draft(db, envelope(body="stale"), draft_id=original["id"], expected_revision=1, now=at(1))
+    assert inbox.get_draft(db, original["id"])["body"] == "Jeremy's latest words"

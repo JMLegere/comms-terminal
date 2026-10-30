@@ -81,9 +81,8 @@ def test_agent_commands_read_threads_and_change_drafts_by_revision(tmp_path, cap
     monkeypatch.setattr("sys.stdin", io.StringIO("Hi Ana,\nTuesday works.\n"))
     cli("draft", str(d["id"]), "--revision", "1", "--body", "-")
     assert inbox.get_draft(db, d["id"])["body"] == "Hi Ana,\nTuesday works.\n"
-    with pytest.raises(SystemExit, match="changed since"):  # a stale revision never overwrites newer words
-        cli("draft", str(d["id"]), "--revision", "1", "--body", "stale")
-    assert inbox.get_draft(db, d["id"])["revision"] == 2
+    cli("draft", str(d["id"]), "--revision", "1", "--body", "later")  # the latest save wins, even on revision 1
+    assert (inbox.get_draft(db, d["id"])["body"], inbox.get_draft(db, d["id"])["revision"]) == ("later", 3)
 
 
 @pytest.mark.parametrize("remote", ["unused-host", ""])

@@ -2940,7 +2940,7 @@ class DraftView(Composer, Horizontal):
             return True
         try:
             draft = inbox.save_draft(self.app.db, self.values(), draft_id=self.draft_id,
-                                     expected_revision=self.draft["revision"], overwrite=True)  # latest save wins
+                                     expected_revision=self.draft["revision"])  # the latest save wins (ADR 0012)
         except Exception:
             self.notice = "Save failed · edits kept; retry ctrl+s."
         else:
