@@ -70,3 +70,33 @@ def test_prune_drops_week_old_ledger_entries(tmp_path):
                        (n, (now - timedelta(days=days)).isoformat(timespec="microseconds")))
     inbox.prune_changes(db, now)
     assert [r[0] for r in db.execute("SELECT mutation_id FROM applied_mutations")] == [1]
+
+
+def test_a_write_and_its_ledger_row_commit_together(tmp_path, monkeypatch):
+    """No moment exists where the write is stored and its ledger row is not (the old crash window)."""
+    path = str(tmp_path / "inbox.db")
+    inbox.migrate(inbox.connect(path))
+    seen, real = {}, remote._apply
+
+    def watched(db, *a):
+        out = real(db, *a)
+        other = inbox.connect(path)  # what a reader, or a restart, would see right after the writer's own commit
+        seen["cases"] = len(inbox.cases(other))
+        other.close()
+        return out
+    monkeypatch.setattr(remote, "_apply", watched)
+    status, _ = call(path, fn="inbox.create_case", args=["Win Acme"], kwargs={}, client="c", mutation=1)
+    assert status == 200 and seen["cases"] == 0  # the writer's `with db:` did not commit on its own
+    db = inbox.connect(path)
+    assert len(inbox.cases(db)) == 1
+    assert db.execute("SELECT count(*) FROM applied_mutations").fetchone()[0] == 1
+
+
+def test_a_refused_write_keeps_nothing_but_its_answer(tmp_path):
+    path = str(tmp_path / "inbox.db")
+    inbox.migrate(inbox.connect(path))
+    first = call(path, fn="inbox.save_draft", args=[{"connection_id": None, "kind": "email", "sender": "", "to": "",
+                                                    "cc": "", "subject": "", "body": "x"}],
+                 kwargs={"draft_id": "missing", "expected_revision": 1}, client="c", mutation=1)
+    assert first[0] == 409 and inbox.list_drafts(inbox.connect(path)) == []
+    assert call(path, fn="inbox.save_draft", args=[{}], kwargs={}, client="c", mutation=1) == first  # its answer kept

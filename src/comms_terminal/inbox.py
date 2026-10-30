@@ -842,8 +842,8 @@ class Sender(Protocol):
 
 # --- storage ---------------------------------------------------------------
 
-def connect(path: str = ":memory:") -> sqlite3.Connection:
-    db = sqlite3.connect(path)
+def connect(path: str = ":memory:", factory=sqlite3.Connection) -> sqlite3.Connection:
+    db = sqlite3.connect(path, factory=factory)
     db.row_factory = sqlite3.Row
     db.execute("PRAGMA foreign_keys = ON")
     db.execute("PRAGMA busy_timeout = 5000")  # the service and the console share the file

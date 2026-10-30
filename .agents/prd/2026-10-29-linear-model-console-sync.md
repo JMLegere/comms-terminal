@@ -4,7 +4,7 @@
 
 | Field | Value |
 |---|---|
-| Status | **Delivered.** Phases 0–6 shipped to `main` and deployed (latest `e3a0f6c`); Phase 7 accepted by Jeremy (D-36) without a laptop measurement. NFR-1 (p95 < 100 ms) is unverified on the laptop; the Oracle live-copy numbers say Thread moves still miss it. |
+| Status | **Delivered.** Phases 0–6 shipped to `main` and deployed (latest `e3a0f6c`); Phase 7 accepted by Jeremy (D-36) without a laptop measurement. On the laptop Thread moves measure p50 255 / p95 399 ms, so NFR-1 (p95 < 100 ms) is not met for moves; Jeremy accepted the current speed (D-37). |
 | Owner / authority | Jeremy. Authority chain: Jeremy's instructions, then `AGENTS.md` (repository), then accepted ADRs in `docs/adr/`, then `.agents/` discovery and PRDs. |
 | Created / updated | 2026-10-29T17:37+00:00 / 2026-10-29T18:40+00:00 |
 | Topic | Every console action paints in under 100 ms; only changed rows travel and repaint. |
@@ -362,6 +362,10 @@ Every phase needs separate implementation authorization. Each phase ends with `u
 | D-23 | 2026-10-29 | No interim fixes for rebuild bugs | Jeremy | — | Approved | — |
 | D-24 | 2026-10-29 | ADR 0012 before Phase 1 | Jeremy | — | Approved | — |
 | D-33 | 2026-10-30 | Deterministic ids per queued write (`inbox.minting`) instead of client-passed uid arguments | Agent, in Phase 4 | No domain function changes; same ids on both sides | Implemented, pending push go | Refines D-9 mechanics; UUID keys unchanged |
+| D-41 | 2026-10-30 | Housekeeping: drop both universal-inbox stashes; remove the 8 merged worktrees and their branches; commit the planning docs; add sync terms to GLOSSARY; annotate old ids in memory | Jeremy | — | Done (`353f256` docs) | — |
+| D-40 | 2026-10-30 | Laptop acceptance run taken (tunnel opened) | Jeremy | — | Done: startup 1,459 ms; moves p50 255 / p95 399 ms | D-36's missing measurement |
+| D-39 | 2026-10-30 | Close the ledger crash window now | Jeremy | Writers' commits are held while handle_call runs a laptop write; write and ledger row commit together | Implemented on `jeremy/atomic-ledger` | Phase 3 ponytail note |
+| D-37 | 2026-10-30 | Accept current Thread-move speed; no more speed work | Jeremy | — | Accepted | Recommendation to measure then cut widget layout |
 | D-36 | 2026-10-30 | Phase 7 "accepted" without the laptop acceptance run | Jeremy | — | Accepted; NFR-1 and AS-6 unverified on the laptop | — |
 | D-35 | 2026-10-30 | "execute the entire prd"; then "Push all remaining phases" (after the auto-mode check blocked an unconfirmed push) | Jeremy | — | Approved for Phases 5-7 pushes when green | D-22 per-phase asks |
 | D-34 | 2026-10-30 | "execute the prd up to phase 5" | Jeremy | — | Done: `c3daef8` live | — |
@@ -419,11 +423,11 @@ This `/prd` invocation performed no product implementation. Prior work (`d5e823d
 
 | Measure | Result | Evidence |
 |---|---|---|
-| 1. p95 keypress-to-paint < 100 ms | **Not met for Thread moves on Oracle** (median ≈300 ms, p95 ≈570 ms, ARM); creates and writes no longer wait on Oracle. Laptop unmeasured. | Oracle live-copy probes, Phase 5–6 |
+| 1. p95 keypress-to-paint < 100 ms | **Not met for Thread moves**: laptop p50 255 / p95 399 ms (baseline p95 955); `e` 561 ms, new Draft 476 ms, Draft save 251 ms (local mode). Creates and writes no longer wait on Oracle. Accepted as is (D-37). | Laptop probe 2026-10-30, build `e3a0f6c` |
 | 2. No refresh-caused cursor/focus/text/scroll changes | Met for Threads, Tasks, Drafts and table pages on identical rows; rows that change still rebuild with the cursor kept by id | `tests/test_keyed_views.py`, `tests/test_today_ui.py` |
 | 3. Unchanged panes not repainted | Met for lists and the Thread pane's header and details; empty Change sets repaint chrome only | Phase 6 tests |
 | 4. < 10 KB per single-record change | Met (one-row edit Change set < 10 KB; no-news answer 115 bytes) | `tests/test_changes.py`; live probe |
 | 5. Refused write reverts with a toast | Met | `tests/test_remote.py` |
-| 6. Startup < 2 s | Laptop baseline 1,491 ms before; first start after Phase 4 downloads one snapshot; unmeasured since | Phase 0 baseline |
+| 6. Startup < 2 s | Met: 1,459 ms on the laptop (build `e3a0f6c`) | Laptop probe 2026-10-30 |
 
-**Remaining gap:** Thread moves are bound by Textual layout of the new Thread's widgets (≈45% of busy time). Next evidence: a laptop run of `scripts/latency_probe.py`, then a profile of widget count per message card.
+**Remaining gap (accepted, D-37):** Thread moves are bound by Textual layout of the new Thread's widgets (≈45% of busy time). A full-database sync plus refresh measured 460 ms on the laptop (255 ms at Phase 0, probe on the Drafts page); not investigated.

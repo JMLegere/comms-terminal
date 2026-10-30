@@ -248,6 +248,19 @@ def decode(v):
 
 # --- service side ----------------------------------------------------------------
 
+class Held(sqlite3.Connection):
+    """A connection whose writers' own commits wait while `held` (ADR 0012): handle_call commits a laptop write and
+    its applied_mutations row together, so a crash between them cannot apply a resent write twice."""
+    held = False
+
+    def commit(self):
+        if not self.held:
+            super().commit()
+
+    def __exit__(self, kind, value, tb):  # `with db:` in a writer
+        return False if self.held else super().__exit__(kind, value, tb)  # held: an error reaches the caller
+
+
 def handle_call(db_path: str, body: bytes) -> tuple[int, dict]:
     """POST /call {fn, args, kwargs, client?, mutation?}: one allowlisted function on the service's database. A call
     that names its laptop console (client) and its place in that console's queue (mutation) is applied once: sent
@@ -265,7 +278,7 @@ def handle_call(db_path: str, body: bytes) -> tuple[int, dict]:
             raise ValueError("client and mutation go together")
     except (ValueError, KeyError, TypeError):
         return 400, {"error": "bad call"}
-    db = inbox.connect(db_path)
+    db = inbox.connect(db_path, factory=Held)
     try:
         if client is not None:
             first = db.execute("SELECT status, answer FROM applied_mutations WHERE client_id = ? AND mutation_id = ?",
@@ -273,17 +286,25 @@ def handle_call(db_path: str, body: bytes) -> tuple[int, dict]:
             if first is not None:
                 return first["status"], json.loads(first["answer"])
         if client is None:
-            status, answer = _apply(db, name, module, fn, args, kwargs)
-        else:
+            return _apply(db, name, module, fn, args, kwargs)
+        db.held = True
+        db.execute("BEGIN IMMEDIATE")
+        try:
             with inbox.minting(f"{client}:{mutation}", kwargs.get("now") or clock.now()):  # the copy's new ids
                 status, answer = _apply(db, name, module, fn, args, kwargs)
-        if client is not None and status in (200, 409):  # a definite outcome; a 500 may be tried again
-            # ponytail: recorded after the writer's own commit, so a crash in between applies a resent write twice;
-            # close it when writers run inside a caller-owned transaction.
-            with db:
+            if status != 200:  # refused or failed: nothing it wrote stays
+                db.rollback()
+                db.execute("BEGIN IMMEDIATE")
+            if status in (200, 409):  # a definite outcome, kept with the write; a 500 may be tried again
                 db.execute("INSERT OR IGNORE INTO applied_mutations"
                            " (client_id, mutation_id, status, answer, applied_at) VALUES (?, ?, ?, ?, ?)",
                            (client, mutation, status, json.dumps(answer), clock.iso(clock.now())))
+            db.held = False
+            db.commit()
+        except BaseException:
+            db.held = False
+            db.rollback()
+            raise
         return status, answer
     finally:
         db.close()
