@@ -66,48 +66,48 @@ def email_connections(db) -> list:
 
 
 @writer("create")
-def create_sequence(db, name: str, connection_id: int | None = None) -> int:
+def create_sequence(db, name: str, connection_id: int | None = None, *, now: datetime | None = None) -> int:
     """A new, empty Sequence; it sends from `connection_id`, else the only email Connection."""
     if not name.strip():
         raise ValueError("A Sequence needs a name.")
     if connection_id is None:
         mail = email_connections(db)
         connection_id = mail[0]["id"] if len(mail) == 1 else None
-    at = clock.iso(clock.now())
+    at = clock.iso((now or clock.now()))
     with inbox._write_snapshot(db):
         return db.execute("INSERT INTO sequences (name, connection_id, created_at, updated_at) VALUES (?, ?, ?, ?) RETURNING id",
                           (name.strip(), connection_id, at, at)).fetchone()[0]
 
 
 @writer("write")
-def rename_sequence(db, sequence_id: int, name: str) -> None:
+def rename_sequence(db, sequence_id: int, name: str, *, now: datetime | None = None) -> None:
     if not name.strip():
         raise ValueError("A Sequence needs a name.")
     with db:
-        db.execute("UPDATE sequences SET name = ?, updated_at = ? WHERE id = ?", (name.strip(), clock.iso(clock.now()), sequence_id))
+        db.execute("UPDATE sequences SET name = ?, updated_at = ? WHERE id = ?", (name.strip(), clock.iso((now or clock.now())), sequence_id))
 
 
 @writer("write")
-def describe_sequence(db, sequence_id: int, description: str) -> None:
+def describe_sequence(db, sequence_id: int, description: str, *, now: datetime | None = None) -> None:
     """Its one-line "use when", shown in the Sequence list and the enroll picker."""
     with inbox._write_snapshot(db):
         db.execute("UPDATE sequences SET description = ?, updated_at = ? WHERE id = ?",
-                   (" ".join(description.split()), clock.iso(clock.now()), sequence_id))
+                   (" ".join(description.split()), clock.iso((now or clock.now())), sequence_id))
 
 
 @writer("write")
-def set_connection(db, sequence_id: int, connection_id: int) -> None:
+def set_connection(db, sequence_id: int, connection_id: int, *, now: datetime | None = None) -> None:
     """Its email Tasks send from `connection_id`; Due Tasks flagged for having none get their Drafts on the next
     materialize."""
     with db:
         db.execute("UPDATE sequences SET connection_id = ?, updated_at = ? WHERE id = ?",
-                   (connection_id, clock.iso(clock.now()), sequence_id))
+                   (connection_id, clock.iso((now or clock.now())), sequence_id))
         db.execute("UPDATE tasks SET flag = NULL WHERE flag = 'Sequence has no Connection' AND state = 'DUE'"
                    " AND enrollment_id IN (SELECT id FROM enrollments WHERE sequence_id = ?)", (sequence_id,))
 
 
 @writer("create")
-def replace_sequence(db, plan: dict, dry_run: bool = False) -> list[str]:
+def replace_sequence(db, plan: dict, dry_run: bool = False, *, now: datetime | None = None) -> list[str]:
     """Reconcile a complete Sequence tree, resolve its links, and validate the exact stored result atomically.
     `plan` has name, description, start/body/completion lists; Steps use STEP_FIELDS, source `line`, an `enroll`
     name, a `reply` email number, and an If's yes/no and yes_done/no_done lists. Kept Steps retain their IDs and
@@ -122,7 +122,7 @@ def replace_sequence(db, plan: dict, dry_run: bool = False) -> list[str]:
                 trial.execute("PRAGMA foreign_keys = ON")
             else:
                 db.backup(trial)
-            return replace_sequence(trial, plan)
+            return replace_sequence(trial, plan, now=now)
         finally:
             trial.close()
     with inbox._write_snapshot(db):
@@ -257,16 +257,16 @@ def archive_sequence(db, sequence_id: int, cancel_live: bool, now: datetime | No
 
 
 @writer("write")
-def restore_sequence(db, sequence_id: int, undo: list[dict] = ()) -> None:
+def restore_sequence(db, sequence_id: int, undo: list[dict] = (), *, now: datetime | None = None) -> None:
     with db:
         _tx(db)
-        db.execute("UPDATE sequences SET archived_at = NULL, updated_at = ? WHERE id = ?", (clock.iso(clock.now()), sequence_id))
+        db.execute("UPDATE sequences SET archived_at = NULL, updated_at = ? WHERE id = ?", (clock.iso((now or clock.now())), sequence_id))
         for u in undo:
             _restore_finish(db, u)
 
 
 @writer("write")
-def delete_sequence(db, sequence_id: int) -> dict:
+def delete_sequence(db, sequence_id: int, *, now: datetime | None = None) -> dict:
     """Only a Sequence that never had an Enrollment can be deleted; returns its rows for undo."""
     with db:
         _tx(db)
@@ -281,7 +281,7 @@ def delete_sequence(db, sequence_id: int) -> dict:
 
 
 @writer("write")
-def undelete_sequence(db, rows: dict) -> None:
+def undelete_sequence(db, rows: dict, *, now: datetime | None = None) -> None:
     with db:
         _tx(db)
         _insert(db, "sequences", rows["sequence"])
@@ -296,8 +296,8 @@ def _insert(db, table: str, row: dict) -> None:
                tuple(row.values()))
 
 
-def _touch(db, sequence_id):
-    db.execute("UPDATE sequences SET updated_at = ? WHERE id = ?", (clock.iso(clock.now()), sequence_id))
+def _touch(db, sequence_id, *, now: datetime | None = None):
+    db.execute("UPDATE sequences SET updated_at = ? WHERE id = ?", (clock.iso((now or clock.now())), sequence_id))
 
 
 # --- the Step tree (.agents/prd/2026-10-26-sequence-flow.md) ------------------------------------------------
@@ -390,7 +390,7 @@ def step_summary(st: dict, names: dict) -> str:
 @writer("create")
 def add_step(db, sequence_id: int, kind: str, after: int | None = None, *, section: str = "body",
              parent_step_id: int | None = None, branch: int | None = None, action_kind: str = "enroll",
-             condition: str = "jeremy_picks", front: bool = False) -> int:
+             condition: str = "jeremy_picks", front: bool = False, now: datetime | None = None) -> int:
     """A new Step of `kind` right after the Step at position `after`, on that Step's path; with no `after`, last on
     the path named by `section`, `parent_step_id`, and `branch` (default: the body), or first on it with `front`. A touch is due one business day
     after the previous Step, the first on its path, an Action, and an If at once."""
@@ -429,12 +429,12 @@ def add_step(db, sequence_id: int, kind: str, after: int | None = None, *, secti
             (sequence_id, position, *path, kind, 0 if first or kind in ("action", "if") else 1,
              "connect" if kind == "linkedin" else None, action_kind if kind == "action" else None,
              condition if kind == "if" else None)).fetchone()[0]
-        _touch(db, sequence_id)
+        _touch(db, sequence_id, now=now)
     return step_id
 
 
 @writer("write")
-def save_step(db, step_id: int, **fields) -> dict:
+def save_step(db, step_id: int, *, now: datetime | None = None, **fields) -> dict:
     """Edit a Step; Tasks already due keep their content (FR-SEQ-5)."""
     if set(fields) - set(STEP_FIELDS):
         raise ValueError(f"unknown Step fields: {', '.join(sorted(set(fields) - set(STEP_FIELDS)))}")
@@ -464,12 +464,12 @@ def save_step(db, step_id: int, **fields) -> dict:
         if fields:
             db.execute(f"UPDATE sequence_steps SET {', '.join(f'{k} = ?' for k in fields)} WHERE id = ?",
                        (*fields.values(), step_id))
-            _touch(db, row["sequence_id"])
+            _touch(db, row["sequence_id"], now=now)
         return dict(db.execute("SELECT * FROM sequence_steps WHERE id = ?", (step_id,)).fetchone())
 
 
 @writer("write")
-def move_step(db, step_id: int, delta: int) -> None:
+def move_step(db, step_id: int, delta: int, *, now: datetime | None = None) -> None:
     """Swap a Step with its neighbour on its path (`delta` -1 up, +1 down); an If stays last on its path."""
     with db:
         _tx(db)
@@ -484,7 +484,7 @@ def move_step(db, step_id: int, delta: int) -> None:
         db.execute("UPDATE sequence_steps SET position = NULL WHERE id = ?", (step_id,))
         db.execute("UPDATE sequence_steps SET position = ? WHERE id = ?", (st["position"], other["id"]))
         db.execute("UPDATE sequence_steps SET position = ? WHERE id = ?", (other["position"], step_id))
-        _touch(db, st["sequence_id"])
+        _touch(db, st["sequence_id"], now=now)
 
 
 @writer("write")
@@ -510,7 +510,7 @@ def delete_step(db, step_id: int, now: datetime | None = None) -> tuple[int, dic
             db.execute("UPDATE sequence_steps SET position = position - 1 WHERE sequence_id = ? AND position > ?",
                        (st["sequence_id"], g["position"]))
         db.execute(f"UPDATE sequence_steps SET reply_to_step_id = NULL WHERE reply_to_step_id IN ({marks})", ids)
-        _touch(db, st["sequence_id"])
+        _touch(db, st["sequence_id"], now=now)
         before = _max_task(db)
         states = [dict(db.execute("SELECT * FROM enrollments WHERE id = ?", (t["enrollment_id"],)).fetchone()) for t in open_tasks]
         materialize(db, now)
@@ -518,7 +518,7 @@ def delete_step(db, step_id: int, now: datetime | None = None) -> tuple[int, dic
 
 
 @writer("write")
-def restore_step(db, undo: dict) -> None:
+def restore_step(db, undo: dict, *, now: datetime | None = None) -> None:
     """Put a deleted Step back (an If with its paths), with the Tasks and Drafts it removed; Tasks made since for
     those Enrollments go."""
     gone = undo.get("steps") or [undo["step"]]
@@ -784,7 +784,7 @@ def _enroll(db, person_id: int, sequence_id: int, now: datetime, starts: str | N
 
 
 @writer("write")
-def unenroll(db, enrollment_id: int) -> None:
+def unenroll(db, enrollment_id: int, *, now: datetime | None = None) -> None:
     """Undo an enroll before any Task is done: the Enrollment, its Tasks, and their unsent Drafts go."""
     with db:
         _tx(db)
@@ -796,7 +796,7 @@ def unenroll(db, enrollment_id: int) -> None:
 
 
 @writer("create")
-def task_new_thread(db, task_id: int) -> int:
+def task_new_thread(db, task_id: int, *, now: datetime | None = None) -> int:
     """A reply Task whose target was skipped starts a new Thread instead (FR-SEQ-8): a new email Draft with the
     replied-to Step's subject. Returns the Draft's id."""
     with db:
@@ -1095,7 +1095,7 @@ def skip_task(db, task_id: int, now: datetime | None = None) -> dict:
 
 
 @writer("write")
-def undo_task(db, undo: dict) -> None:
+def undo_task(db, undo: dict, *, now: datetime | None = None) -> None:
     """Back to before complete_task or skip_task: the Task due again, its Draft and Enrollment as they were."""
     with db:
         _tx(db)
@@ -1393,7 +1393,7 @@ def _unsubscribe(db, person_id: int, now: datetime) -> list[dict]:
 
 
 @writer("write")
-def restore_finish(db, undo: list[dict]) -> None:
+def restore_finish(db, undo: list[dict], *, now: datetime | None = None) -> None:
     with db:
         _tx(db)
         for u in undo:
@@ -1405,10 +1405,10 @@ def restore_finish(db, undo: list[dict]) -> None:
                 _restore_finish(db, u)
 
 
-def merge_people(db, keep: int, drop: int) -> None:
+def merge_people(db, keep: int, drop: int, *, now: datetime | None = None) -> None:
     """Inside merge_persons: `drop`'s Enrollments move to `keep`; where both are live in one Sequence, `drop`'s
     is Canceled. Unsubscribed carries over."""
-    now = clock.now()
+    now = (now or clock.now())
     for e in db.execute("SELECT e.id FROM enrollments e WHERE e.person_id = ? AND e.state != 'FINISHED' AND EXISTS"
                         " (SELECT 1 FROM enrollments k WHERE k.person_id = ? AND k.sequence_id = e.sequence_id"
                         " AND k.state != 'FINISHED')", (drop, keep)).fetchall():

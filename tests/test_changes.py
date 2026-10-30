@@ -28,7 +28,7 @@ def triggers(db):
 
 def tables(db):
     return [r[0] for r in db.execute("SELECT name FROM sqlite_schema WHERE type = 'table'"
-                                     " AND name NOT LIKE 'sqlite_%' AND name != 'changes'")]
+                                     " AND name NOT LIKE 'sqlite_%' AND name NOT IN ('changes', 'applied_mutations')")]
 
 
 def test_every_table_logs_its_changes_fresh_and_after_an_upgrade(tmp_path):

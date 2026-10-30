@@ -14,6 +14,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -49,7 +50,7 @@ def files_dir(db) -> Path | None:
 
 
 @writer("service")
-def store_file(db, data: bytes) -> str | None:
+def store_file(db, data: bytes, *, now: datetime | None = None) -> str | None:
     """Keep one file's bytes, content-addressed and 0600; returns the sha256 name (unchanged once written)."""
     d = files_dir(db)
     if d is None:
@@ -137,7 +138,7 @@ def upload_owner(secret: bytes, token: str, now: float | None = None) -> tuple[s
 
 
 @writer("service")
-def upload_url(db, owner: tuple[str, str], host: str, port: int) -> str:
+def upload_url(db, owner: tuple[str, str], host: str, port: int, *, now: datetime | None = None) -> str:
     """A 1-hour LAN upload page whose files are staged on `owner` (FR-A9)."""
     return f"http://{host}:{port}/up/{upload_token(files_secret(db), owner)}"
 

@@ -92,54 +92,54 @@ def find_org(db, text: str):
     return rows[0]
 
 
-def _effective(at) -> str:
+def _effective(at, *, now: datetime | None = None) -> str:
     """Now, or a backdated date or time; a future one is refused."""
     if at is None:
-        return clock.iso(clock.now())
+        return clock.iso((now or clock.now()))
     if isinstance(at, str):
         at = date.fromisoformat(at) if len(at) == 10 else datetime.fromisoformat(at)
     if not isinstance(at, datetime):
         at = datetime.combine(at, time(), LOCAL)
-    if at > clock.now():
+    if at > (now or clock.now()):
         raise Refused(f"{at.date()} is in the future")
     return clock.iso(at.astimezone(timezone.utc))
 
 
-def _append(db, org_id, pipeline, kind, at=None, stage=None, value=None, undoes=None) -> int:
+def _append(db, org_id, pipeline, kind, at=None, stage=None, value=None, undoes=None, *, now: datetime | None = None) -> int:
     with inbox._write_snapshot(db):
         return db.execute(
             "INSERT INTO pipeline_log (organization_id, pipeline, kind, stage, value, undoes, effective_at,"
             " recorded_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
-            (org_id, pipeline, kind, stage, value, undoes, _effective(at), clock.iso(clock.now()))).fetchone()[0]
+            (org_id, pipeline, kind, stage, value, undoes, _effective(at, now=now), clock.iso((now or clock.now())))).fetchone()[0]
 
 
 @writer("create")
-def set_stage(db, org_id: int, pipeline: str, stage: str, at=None) -> int | None:
+def set_stage(db, org_id: int, pipeline: str, stage: str, at=None, *, now: datetime | None = None) -> int | None:
     """Move an Organization to a Stage; returns the log entry, or None when it is already there."""
     stage = parse_stage(pipeline, stage)
     if current(db, org_id).get(pipeline, {}).get("stage") == stage:
         return None
-    return _append(db, org_id, pipeline, "STAGE", at, stage=stage)
+    return _append(db, org_id, pipeline, "STAGE", at, stage=stage, now=now)
 
 
 @writer("create")
-def set_value(db, org_id: int, pipeline: str, value, at=None) -> int | None:
+def set_value(db, org_id: int, pipeline: str, value, at=None, *, now: datetime | None = None) -> int | None:
     """Set the Organization's Revenue Value or Fundraising Value; it belongs to the Pipeline, not the Stage."""
     value = parse_amount(value)
     if current(db, org_id).get(pipeline, {}).get("value") == value:
         return None
-    return _append(db, org_id, pipeline, "VALUE", at, value=value)
+    return _append(db, org_id, pipeline, "VALUE", at, value=value, now=now)
 
 
 @writer("write")
-def undo(db, entry_id: int) -> None:
+def undo(db, entry_id: int, *, now: datetime | None = None) -> None:
     """Cancel one Stage or Value entry; the math and history skip both (FR-PL-4)."""
     e = db.execute("SELECT * FROM pipeline_log WHERE id = ?", (entry_id,)).fetchone()
     if e is None or e["kind"] == "UNDO":
         raise Refused("nothing to undo")
     if db.execute("SELECT 1 FROM pipeline_log WHERE undoes = ?", (entry_id,)).fetchone():
         raise Refused("already undone")
-    _append(db, e["organization_id"], e["pipeline"], "UNDO", undoes=entry_id)
+    _append(db, e["organization_id"], e["pipeline"], "UNDO", undoes=entry_id, now=now)
 
 
 def set_target(db, pipeline: str, amount, due) -> None:

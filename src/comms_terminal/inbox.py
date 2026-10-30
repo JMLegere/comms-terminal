@@ -27,7 +27,7 @@ from typing import Protocol, Sequence
 from . import clock, files, platforms
 from .writers import writer
 
-SCHEMA_VERSION = 33
+SCHEMA_VERSION = 34
 WAIT = timedelta(days=4)  # Waiting for them ends after this with no reply: back to Todo to follow up (#116)
 EMAIL_CONFIRMATION_PENDING = "Email confirmation pending; wait for its sent receipt before replying."
 MIGRATIONS = {  # version -> statement that upgrades an existing database to it
@@ -615,7 +615,8 @@ def change_triggers(db) -> list[str]:
     if not db.execute("SELECT 1 FROM sqlite_schema WHERE name = 'changes'").fetchone():
         return []  # before migration 32 there is no log to write to
     tables = [r[0] for r in db.execute("SELECT name FROM sqlite_schema WHERE type = 'table'"
-                                        " AND name NOT LIKE 'sqlite_%' AND name != 'changes' ORDER BY name")]
+                                        " AND name NOT LIKE 'sqlite_%' AND name NOT IN ('changes', 'applied_mutations')"
+                                        " ORDER BY name")]  # the service's own ledgers stay off the log
     keyed = {table for table in tables if any(c[1] == "id" and c[2] == "TEXT" for c in db.execute(
         f'PRAGMA table_info("{table}")'))}
     return [CHANGE_TRIGGER.format(table=table, event=event, row=row, op=op,
@@ -624,9 +625,13 @@ def change_triggers(db) -> list[str]:
 
 
 def prune_changes(db, now: datetime) -> int:
-    """Drop change-log entries older than CHANGES_KEPT; the service's daily pass runs it."""
+    """Drop change-log and applied-mutation entries older than CHANGES_KEPT; the service's daily pass runs it. A
+    laptop resends a write only while its console runs, so a week of ledger is plenty."""
+    cutoff = clock.iso(now - CHANGES_KEPT)
     with db:
-        return db.execute("DELETE FROM changes WHERE at < ?", (clock.iso(now - CHANGES_KEPT),)).rowcount
+        db.execute("DELETE FROM applied_mutations WHERE applied_at < ?", (cutoff,))
+        return db.execute("DELETE FROM changes WHERE at < ?", (cutoff,)).rowcount
+
 
 # ponytail: fixed list; extend when a free-mail sender forms an Organization by mistake.
 FREE_MAIL = frozenset({
@@ -666,6 +671,15 @@ def new_id() -> str:
 
 
 MIGRATIONS[33] = Path(__file__).with_name("migration_33.sql").read_text()
+# The service applies each queued laptop write once (ADR 0012): a resent mutation gets its first answer.
+MIGRATIONS[34] = """CREATE TABLE applied_mutations (  -- each laptop write applied once, by its client and mutation id (ADR 0012)
+  client_id   TEXT NOT NULL,
+  mutation_id INTEGER NOT NULL,
+  status      INTEGER NOT NULL,   -- the answer the first call got, sent again for a repeat
+  answer      TEXT NOT NULL CHECK (json_valid(answer)),
+  applied_at  TEXT NOT NULL,
+  PRIMARY KEY (client_id, mutation_id)
+) STRICT;"""
 
 
 class SendUnknown(SendFailed):
@@ -905,7 +919,7 @@ def get_thread(db, thread_id: int) -> Thread:
 @writer("write")
 def save_draft(db, values: dict, *, draft_id: int | None = None,
                expected_revision: int | None = None, thread_id: int | None = None, task_id: int | None = None,
-               overwrite: bool = False) -> dict:
+               overwrite: bool = False, now: datetime | None = None) -> dict:
     """Persist the complete edited envelope, including incomplete text; never send or create work.
     `thread_id` makes a new Draft that Thread's reply Draft (save_reply_draft) and `task_id` an email Task's
     Draft (sequences); an edit keeps both. `overwrite`: the most recent save wins over a newer stored revision
@@ -934,7 +948,7 @@ def save_draft(db, values: dict, *, draft_id: int | None = None,
             platform = platforms.PLATFORMS.get(c["platform"]) if c else None
             if platform is None or platform.format != values["kind"]:
                 raise ValueError("draft Connection must support its message format")
-        at = clock.iso(clock.now())
+        at = clock.iso((now or clock.now()))
         envelope = tuple(values[k] for k in ("connection_id", "kind", "sender", "to", "cc", "subject", "body"))
         if draft_id is None:
             draft_id = db.execute(
@@ -955,7 +969,7 @@ def save_draft(db, values: dict, *, draft_id: int | None = None,
 
 
 @writer("write")
-def mark_needs_edit(db, draft_id: int) -> dict:
+def mark_needs_edit(db, draft_id: int, *, now: datetime | None = None) -> dict:
     """Needs edit: the Draft cannot send until its text is changed (GLOSSARY). The revision stays."""
     with db:
         get_draft(db, draft_id)
@@ -964,7 +978,7 @@ def mark_needs_edit(db, draft_id: int) -> dict:
 
 
 @writer("write")
-def save_reply_draft(db, thread_id: int, body: str, task_id: int | None = None) -> dict | None:
+def save_reply_draft(db, thread_id: int, body: str, task_id: int | None = None, *, now: datetime | None = None) -> dict | None:
     """The reply Draft kept under one Thread id (the one its reply box opened on, so an alias keeps its own):
     text replaces it, empty text deletes it. The envelope comes from the Thread as the reply box shows it; the
     box still sends its own To and Cc. ponytail: last writer wins here; revisions guard the agent's edits."""
@@ -975,7 +989,7 @@ def save_reply_draft(db, thread_id: int, body: str, task_id: int | None = None) 
             if row:
                 db.execute("DELETE FROM composition_drafts WHERE id = ?", (row["id"],))
                 from . import sequences
-                sequences.task_draft_deleted(db, dict(row))  # an email Task's reply cleared: the Task is skipped
+                sequences.task_draft_deleted(db, dict(row), now=now)  # an email Task's reply cleared: the Task is skipped
             return None
         v = thread_view(db, thread_id)
         ch, title = v["channel"], v["thread"].title
@@ -993,8 +1007,8 @@ def save_reply_draft(db, thread_id: int, body: str, task_id: int | None = None) 
         if row and row["send_at"]:  # a scheduled reply keeps the To and Cc its reply box scheduled it with
             values |= dict(to=row["to"], cc=row["cc"])
         if row:
-            return save_draft(db, values, draft_id=row["id"], expected_revision=row["revision"])
-        return save_draft(db, values, thread_id=thread_id, task_id=task_id)
+            return save_draft(db, values, draft_id=row["id"], expected_revision=row["revision"], now=now)
+        return save_draft(db, values, thread_id=thread_id, task_id=task_id, now=now)
 
 
 def send_time(choice: str, now: datetime, rand=random.random) -> datetime:
@@ -1007,7 +1021,7 @@ def send_time(choice: str, now: datetime, rand=random.random) -> datetime:
 
 
 @writer("write")
-def schedule_draft(db, draft_id: int, send_at: datetime | None) -> dict:
+def schedule_draft(db, draft_id: int, send_at: datetime | None, *, now: datetime | None = None) -> dict:
     """Set when the service sends this Draft (None: only when Jeremy sends it); clears any failed send. The
     revision stays, so an open editor's next save does not conflict."""
     with db:
@@ -1021,16 +1035,16 @@ def schedule_draft(db, draft_id: int, send_at: datetime | None) -> dict:
 
 
 @writer("write")
-def schedule_reply(db, thread_id: int, body: str, to: list[str], cc: list[str], send_at: datetime | None) -> dict:
+def schedule_reply(db, thread_id: int, body: str, to: list[str], cc: list[str], send_at: datetime | None, *, now: datetime | None = None) -> dict:
     """Save a reply box as its Thread's reply Draft, with the box's To and Cc, to send at `send_at`."""
     with db:
         if not db.in_transaction:
             db.execute("BEGIN IMMEDIATE")
-        d = save_reply_draft(db, thread_id, body)
+        d = save_reply_draft(db, thread_id, body, now=now)
         if d is None:
             raise ValueError("Nothing to send.")
         db.execute('UPDATE composition_drafts SET "to" = ?, cc = ? WHERE id = ?', (", ".join(to), ", ".join(cc), d["id"]))
-        return schedule_draft(db, d["id"], send_at)
+        return schedule_draft(db, d["id"], send_at, now=now)
 
 
 def claim_due_drafts(db, now: datetime) -> list[dict]:
@@ -1071,18 +1085,18 @@ def get_draft(db, draft_id: int) -> dict:
 
 
 @writer("write")
-def delete_draft(db, draft_id: int) -> dict:
+def delete_draft(db, draft_id: int, *, now: datetime | None = None) -> dict:
     """Remove one unsent Draft; return its row so `restore_draft` can put it back."""
     from . import sequences
     with db:
         draft = get_draft(db, draft_id)
         db.execute("DELETE FROM composition_drafts WHERE id = ?", (draft_id,))
-        sequences.task_draft_deleted(db, draft)  # deleting an email Task's Draft skips the Task
+        sequences.task_draft_deleted(db, draft, now=now)  # deleting an email Task's Draft skips the Task
     return draft
 
 
 @writer("write")
-def restore_draft(db, draft: dict) -> None:
+def restore_draft(db, draft: dict, *, now: datetime | None = None) -> None:
     from . import sequences
     columns = ", ".join(f'"{c}"' for c in draft)
     with db:
@@ -1385,13 +1399,13 @@ def reopen_imported(db, thread_id: int) -> Thread:
 
 # --- people ----------------------------------------------------------------
 
-def _ensure_org(db, kind, value):
+def _ensure_org(db, kind, value, *, now: datetime | None = None):
     if kind != "email" or "@" not in value:
         return
     domain = value.rsplit("@", 1)[1]
     if domain not in FREE_MAIL:
         db.execute("INSERT OR IGNORE INTO organizations (domain, name, created_at)"
-                   " VALUES (?, ?, ?)", (_org(domain), _org(domain), clock.iso(clock.now())))
+                   " VALUES (?, ?, ?)", (_org(domain), _org(domain), clock.iso((now or clock.now()))))
 
 
 AUTOMATED = re.compile(r"^(no-?reply|do-?not-?reply|donotreply|noreply|service|notifications?|notify|alerts?|"
@@ -1481,14 +1495,14 @@ def _same_person(db, name: str, value: str, kind: str) -> int | None:
 
 
 @writer("write")
-def rename_person(db, person_id: int, name: str) -> None:
+def rename_person(db, person_id: int, name: str, *, now: datetime | None = None) -> None:
     """Jeremy's own name for a Person; senders' display names only replace a name that is still an address."""
     with db:
         db.execute("UPDATE persons SET display_name = ? WHERE id = ?", (name.strip(), person_id))
 
 
 @writer("write")
-def merge_persons(db, keep: int, drop: int) -> None:
+def merge_persons(db, keep: int, drop: int, *, now: datetime | None = None) -> None:
     """One Person from two: `drop`'s Identities (and so its Threads) move to `keep`, which keeps the
     fuller name."""
     if keep == drop:
@@ -1499,7 +1513,7 @@ def merge_persons(db, keep: int, drop: int) -> None:
         db.execute("UPDATE OR IGNORE memberships SET person_id = ? WHERE person_id = ?", (keep, drop))
         db.execute("DELETE FROM memberships WHERE person_id = ?", (drop,))  # keep's own change wins
         from . import sequences
-        sequences.merge_people(db, keep, drop)
+        sequences.merge_people(db, keep, drop, now=now)
         db.execute("DELETE FROM persons WHERE id = ?", (drop,))
         db.execute("UPDATE persons SET display_name = ? WHERE id = ?", (name, keep))
 
@@ -1627,9 +1641,9 @@ def display_name(db, person_id: int) -> str:
     return db.execute("SELECT display_name FROM persons WHERE id = ?", (person_id,)).fetchone()[0]
 
 
-def _new_person(db, name) -> int:
+def _new_person(db, name, *, now: datetime | None = None) -> int:
     return db.execute("INSERT INTO persons (display_name, created_at) VALUES (?, ?) RETURNING id",
-                      (name, clock.iso(clock.now()))).fetchone()[0]
+                      (name, clock.iso((now or clock.now())))).fetchone()[0]
 
 
 def _identity_for(db, sender: Identity) -> sqlite3.Row:
@@ -1663,7 +1677,7 @@ def _identity_for(db, sender: Identity) -> sqlite3.Row:
 
 
 @writer("create")
-def block(db, kind: str, value: str, blocked: bool = True) -> None:
+def block(db, kind: str, value: str, blocked: bool = True, *, now: datetime | None = None) -> None:
     value = value.lower() if kind == "email" else value
     with db:
         if db.execute("SELECT 1 FROM identities WHERE kind = ? AND value = ?",
@@ -1687,7 +1701,7 @@ def thread_senders(db, thread_id: int) -> list[dict]:
 
 
 @writer("create")
-def add_identity(db, person_id: int, kind: str, value: str) -> None:
+def add_identity(db, person_id: int, kind: str, value: str, *, now: datetime | None = None) -> None:
     value = value.lower() if kind == "email" else value
     with db:
         row = db.execute("SELECT person_id FROM identities WHERE kind = ? AND value = ?",
@@ -1700,11 +1714,11 @@ def add_identity(db, person_id: int, kind: str, value: str) -> None:
                        (person_id, kind, value))
         elif row["person_id"] != person_id:
             raise IdentityTaken(value)
-        _ensure_org(db, kind, value)
+        _ensure_org(db, kind, value, now=now)
 
 
 @writer("write")
-def remove_identity(db, identity_id: int) -> None:
+def remove_identity(db, identity_id: int, *, now: datetime | None = None) -> None:
     with db:
         db.execute("UPDATE identities SET person_id = NULL WHERE id = ?", (identity_id,))
 
@@ -1904,7 +1918,7 @@ def _owner(db, draft_id, thread_id) -> tuple[str, int]:
 
 @writer("create")
 def stage(db, *, sha: str, name: str, type: str, size: int,
-          draft_id: int | None = None, thread_id: int | None = None) -> int:
+          draft_id: int | None = None, thread_id: int | None = None, now: datetime | None = None) -> int:
     """Attach a stored file to an unsent Draft or to one Thread's open reply."""
     column, owner = _owner(db, draft_id, thread_id)
     path = files.attachment_path(db, sha)
@@ -1912,7 +1926,7 @@ def stage(db, *, sha: str, name: str, type: str, size: int,
         raise ValueError("stage needs the sha256 of a stored file")
     with db:
         return db.execute(f"INSERT INTO staged_attachments ({column}, sha, name, type, size, added_at)"
-                          " VALUES (?, ?, ?, ?, ?, ?) RETURNING id", (owner, sha, name, type, size, clock.iso(clock.now()))).fetchone()[0]
+                          " VALUES (?, ?, ?, ?, ?, ?) RETURNING id", (owner, sha, name, type, size, clock.iso((now or clock.now())))).fetchone()[0]
 
 
 def staged(db, *, draft_id: int | None = None, thread_id: int | None = None) -> list[dict]:
@@ -1933,7 +1947,7 @@ def staged_files(db, *, draft_id: int | None = None, thread_id: int | None = Non
 
 
 @writer("write")
-def unstage(db, staged_id: int) -> None:
+def unstage(db, staged_id: int, *, now: datetime | None = None) -> None:
     with db:
         db.execute("DELETE FROM staged_attachments WHERE id = ?", (staged_id,))
 
@@ -2295,13 +2309,13 @@ def _ingest(db, inc: Incoming) -> Thread | None:
 # --- act, reply, wake ------------------------------------------------------
 
 @writer("write")
-def act(db, thread_id: int, action: Action | Reopen) -> Thread:
+def act(db, thread_id: int, action: Action | Reopen, *, now: datetime | None = None) -> Thread:
     with db:
         if not db.in_transaction:
             db.execute("BEGIN IMMEDIATE")
         t = get_thread(db, thread_id)
         thread_id = t.id
-        now = clock.now()
+        now = (now or clock.now())
         if isinstance(action, SetCase):
             case_id = action.case_id
             if action.new_title is not None:
@@ -2550,7 +2564,7 @@ def membership(db, person_id: int, domain: str) -> bool | None:
 
 
 @writer("create")
-def set_membership(db, person_id: int, domain: str, member: bool | None) -> bool | None:
+def set_membership(db, person_id: int, domain: str, member: bool | None, *, now: datetime | None = None) -> bool | None:
     """Add (True) or remove (False) a Person from an Organization, or drop Jeremy's change (None) so the email
     domain decides again. Creates the Organization for a new company domain. Returns the previous change, for
     undo."""
@@ -2560,19 +2574,19 @@ def set_membership(db, person_id: int, domain: str, member: bool | None) -> bool
     with db:
         before = membership(db, person_id, domain)
         db.execute("INSERT OR IGNORE INTO organizations (domain, name, created_at) VALUES (?, ?, ?)",
-                   (domain, domain, clock.iso(clock.now())))
+                   (domain, domain, clock.iso((now or clock.now()))))
         org = db.execute("SELECT id FROM organizations WHERE domain = ?", (domain,)).fetchone()[0]
         if member is None:
             db.execute("DELETE FROM memberships WHERE person_id = ? AND organization_id = ?", (person_id, org))
         else:
             db.execute("INSERT INTO memberships (person_id, organization_id, member, changed_at) VALUES (?, ?, ?, ?)"
                        " ON CONFLICT DO UPDATE SET member = excluded.member, changed_at = excluded.changed_at",
-                       (person_id, org, int(member), clock.iso(clock.now())))
+                       (person_id, org, int(member), clock.iso((now or clock.now()))))
     return before
 
 
 @writer("create")
-def create_sole_proprietorship(db, person_id: int) -> int:
+def create_sole_proprietorship(db, person_id: int, *, now: datetime | None = None) -> int:
     """A Sole proprietorship for a Person acting on their own account (GLOSSARY; FR-SEQ-37): an Organization named
     for them, keyed `person-<id>.sole`, which no email domain produces, with their Membership. Returns its id; a
     second call returns the same one."""
@@ -2582,11 +2596,11 @@ def create_sole_proprietorship(db, person_id: int) -> int:
     domain = sole_key(person_id)
     with db:
         db.execute("INSERT OR IGNORE INTO organizations (domain, name, created_at) VALUES (?, ?, ?)",
-                   (domain, name[0], clock.iso(clock.now())))
+                   (domain, name[0], clock.iso((now or clock.now()))))
         org = db.execute("SELECT id FROM organizations WHERE domain = ?", (domain,)).fetchone()[0]
         db.execute("INSERT INTO memberships (person_id, organization_id, member, changed_at) VALUES (?, ?, 1, ?)"
                    " ON CONFLICT DO UPDATE SET member = 1, changed_at = excluded.changed_at",
-                   (person_id, org, clock.iso(clock.now())))
+                   (person_id, org, clock.iso((now or clock.now()))))
     return org
 
 
@@ -2600,13 +2614,13 @@ def is_sole_key(domain: str) -> bool:
 
 
 @writer("write")
-def set_case_description(db, case_id: int, description: str) -> None:
+def set_case_description(db, case_id: int, description: str, *, now: datetime | None = None) -> None:
     with db:
         old = db.execute("SELECT description FROM cases WHERE id = ?", (case_id,)).fetchone()[0]
         if description != old:
             db.execute("UPDATE cases SET description = ? WHERE id = ?", (description, case_id))
             db.execute("INSERT INTO case_log (case_id, occurred_at, kind, old) VALUES (?, ?, 'DESCRIPTION', ?)",
-                       (case_id, clock.iso(clock.now()), old))
+                       (case_id, clock.iso((now or clock.now())), old))
 
 
 def case_feed(db, case_id: int) -> list[dict]:
@@ -2670,10 +2684,10 @@ def rollup(details, order=CASE_VIEWS, empty="Todo") -> str:
 
 
 @writer("create")
-def create_case(db, title: str) -> int:
+def create_case(db, title: str, *, now: datetime | None = None) -> int:
     """A Case with no Threads yet (#120)."""
     with db:
-        return db.execute("INSERT INTO cases (title, created_at) VALUES (?, ?) RETURNING id", (title, clock.iso(clock.now()))).fetchone()[0]
+        return db.execute("INSERT INTO cases (title, created_at) VALUES (?, ?) RETURNING id", (title, clock.iso((now or clock.now())))).fetchone()[0]
 
 
 def case_queue(db, view: str | None = None) -> list[dict]:
@@ -2919,14 +2933,14 @@ def channel_rules(db, connection_id: int) -> list[dict]:
 
 
 @writer("create")
-def add_channel_rule(db, connection_id: int, kind: str, value: str) -> None:
+def add_channel_rule(db, connection_id: int, kind: str, value: str, *, now: datetime | None = None) -> None:
     with db:
         db.execute("INSERT OR IGNORE INTO channel_rules (connection_id, kind, value) VALUES (?, ?, ?)",
                    (connection_id, kind, value))
 
 
 @writer("write")
-def delete_channel_rule(db, rule_id: int) -> None:
+def delete_channel_rule(db, rule_id: int, *, now: datetime | None = None) -> None:
     with db:
         db.execute("DELETE FROM channel_rules WHERE id = ?", (rule_id,))
 
@@ -3020,7 +3034,7 @@ def snapshot(db, thread_id: int) -> dict:
 
 
 @writer("write")
-def restore(db, snap: dict) -> Thread:
+def restore(db, snap: dict, *, now: datetime | None = None) -> Thread:
     with db:
         if not db.in_transaction:
             db.execute("BEGIN IMMEDIATE")
@@ -3032,7 +3046,7 @@ def restore(db, snap: dict) -> Thread:
                    " detail_before_snooze = ?, case_id = ?, follow_up_at = ? WHERE id = ?",
                    (snap["status"], snap["status_detail"], snap["status_changed_at"], snap["snoozed_until"],
                     snap["detail_before_snooze"], snap["case_id"], snap["follow_up_at"], thread_id))
-        now = clock.now()
+        now = (now or clock.now())
         if snap["status_detail"] != current["status_detail"]:
             _audit(db, thread_id, now, "undo", current["status_detail"], snap["status_detail"],
                    data={"until": snap["snoozed_until"]} if snap["snoozed_until"] else {})

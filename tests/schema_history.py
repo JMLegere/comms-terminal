@@ -41,6 +41,7 @@ def _integer_keys_sql() -> str:
 
 
 UNDO = {
+    34: "DROP TABLE applied_mutations;",
     33: _integer_keys_sql(),
     32: "".join(f"DROP TRIGGER IF EXISTS changes_{t}_{e};" for t in re.findall(
         r"^CREATE TABLE (\w+)", Path(inbox.__file__).with_name("schema.sql").read_text(), re.M)

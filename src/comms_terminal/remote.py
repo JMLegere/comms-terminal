@@ -14,6 +14,8 @@ import base64
 import dataclasses
 import gzip
 import http.client
+import inspect
+import itertools
 import json
 import logging
 import os
@@ -23,10 +25,11 @@ import sqlite3
 import subprocess
 import threading
 import time
+import uuid
 from datetime import datetime
 from pathlib import Path
 
-from . import files, inbox, pipeline, sequences, writers
+from . import clock, files, inbox, pipeline, sequences, writers
 
 LOG = logging.getLogger("comms_terminal.remote")
 
@@ -274,7 +277,9 @@ def ident(result):
 # --- service side ----------------------------------------------------------------
 
 def handle_call(db_path: str, body: bytes) -> tuple[int, dict]:
-    """POST /call {fn, args, kwargs}: one allowlisted function on the service's database."""
+    """POST /call {fn, args, kwargs, client?, mutation?}: one allowlisted function on the service's database. A call
+    that names its laptop console (client) and its place in that console's queue (mutation) is applied once: sent
+    again, it gets the answer it got the first time (ADR 0012)."""
     try:
         req = json.loads(body)
         name = req["fn"]
@@ -282,9 +287,32 @@ def handle_call(db_path: str, body: bytes) -> tuple[int, dict]:
             return 403, {"error": f"{name} is not callable"}
         module, fn = name.split(".")
         args, kwargs = decode(req.get("args", [])), decode(req.get("kwargs", {}))
+        client, mutation = req.get("client"), req.get("mutation")
+        if (client is None) != (mutation is None) or (client is not None and (
+                not inbox.is_id(client) or type(mutation) is not int or mutation <= 0)):
+            raise ValueError("client and mutation go together")
     except (ValueError, KeyError, TypeError):
         return 400, {"error": "bad call"}
     db = inbox.connect(db_path)
+    try:
+        if client is not None:
+            first = db.execute("SELECT status, answer FROM applied_mutations WHERE client_id = ? AND mutation_id = ?",
+                               (client, mutation)).fetchone()
+            if first is not None:
+                return first["status"], json.loads(first["answer"])
+        status, answer = _apply(db, name, module, fn, args, kwargs)
+        if client is not None and status in (200, 409):  # a definite outcome; a 500 may be tried again
+            # ponytail: recorded after the writer's own commit, so a crash in between applies a resent write twice;
+            # close it when writers run inside a caller-owned transaction.
+            with db:
+                db.execute("INSERT OR IGNORE INTO applied_mutations (client_id, mutation_id, status, answer, applied_at)"
+                           " VALUES (?, ?, ?, ?, ?)", (client, mutation, status, json.dumps(answer), clock.iso(clock.now())))
+        return status, answer
+    finally:
+        db.close()
+
+
+def _apply(db, name, module, fn, args, kwargs) -> tuple[int, dict]:
     try:
         result = getattr(MODULES[module], fn)(db, *args, **kwargs)
         return 200, {"result": encode(result)}
@@ -294,8 +322,6 @@ def handle_call(db_path: str, body: bytes) -> tuple[int, dict]:
     except Exception as e:  # noqa: BLE001 - answer, so the console reverts instead of waiting
         LOG.info("call %s failed: %s", name, e)
         return 500, {"error": f"{type(e).__name__}: {e}"}
-    finally:
-        db.close()
 
 
 class Changes:
@@ -518,6 +544,7 @@ class Remote:
         self.online, self.problem = False, "Connecting to the inbox service…"
         self.app = None
         self.pending = queue.Queue()
+        self.client, self.mutations = str(uuid.uuid4()), itertools.count(1)  # this console's writes, in order
         self.busy = 0  # writes applied locally and not yet answered by the service
         self.lock = threading.Lock()
         self.idle = threading.Event()
@@ -526,9 +553,11 @@ class Remote:
         self.resync = None  # Syncer.now: the service's snapshot, applied before a create returns
         threading.Thread(target=self._send_loop, daemon=True).start()
 
-    def call(self, name, args, kwargs, timeout=30):
-        status, body = self.post(self.link.command(), "/call",
-                                 {"fn": name, "args": encode(list(args)), "kwargs": encode(kwargs)}, timeout)
+    def call(self, name, args, kwargs, timeout=30, mutation=None):
+        payload = {"fn": name, "args": encode(list(args)), "kwargs": encode(kwargs)}
+        if mutation is not None:  # applied once, however often it is sent (ADR 0012)
+            payload |= {"client": self.client, "mutation": mutation}
+        status, body = self.post(self.link.command(), "/call", payload, timeout)
         if status == 200:
             return decode(body["result"])
         error = ERRORS.get(body.get("type"))
@@ -544,16 +573,16 @@ class Remote:
         with self.lock:
             self.busy += 1
             self.idle.clear()
-        self.pending.put((name, args, kwargs))
+        self.pending.put((name, args, kwargs, next(self.mutations)))
 
     def drain(self, timeout=30) -> bool:
         return self.idle.wait(timeout)
 
     def _send_loop(self):
         while True:
-            name, args, kwargs = self.pending.get()
+            name, args, kwargs, mutation = self.pending.get()
             try:
-                self.call(name, args, kwargs)
+                self.call(name, args, kwargs, mutation=mutation)
             except Exception as e:  # noqa: BLE001 - every failure reverts the copy to the service's state
                 LOG.info("write %s not applied: %s", name, e)
                 self.say(f"Not saved on the inbox service · {e}. Showing its state.", error=True)
@@ -586,12 +615,14 @@ def proxy(remote: Remote, module, prefix: str):
             def call(db, *args, **kwargs):
                 remote.require_online()
                 kind = CALLS[name]
+                if "now" not in inspect.signature(value).bind_partial(db, *args, **kwargs).arguments:
+                    kwargs = kwargs | {"now": clock.now()}  # one moment for the copy and the service (ADR 0012)
                 if kind == "service":
                     return remote.call(name, args, kwargs)
                 if creates(name, db, args, kwargs):
                     if not remote.drain():
                         raise Offline("The inbox service has not answered earlier changes yet.")
-                    result = remote.call(name, args, kwargs)
+                    result = remote.call(name, args, kwargs, mutation=next(remote.mutations))
                     try:  # the copy follows; ids agree while it matches the service
                         same = ident(value(db, *args, **kwargs)) == ident(result)
                     except Exception:  # noqa: BLE001

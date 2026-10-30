@@ -415,3 +415,12 @@ CREATE TABLE changes (  -- every committed row change, for the laptop's Change s
 ) STRICT;
 CREATE INDEX changes_at ON changes (at);
 -- Its triggers on every other table come from inbox.change_triggers(), so a new table cannot miss them.
+
+CREATE TABLE applied_mutations (  -- each laptop write applied once, by its client and mutation id (ADR 0012)
+  client_id   TEXT NOT NULL,
+  mutation_id INTEGER NOT NULL,
+  status      INTEGER NOT NULL,   -- the answer the first call got, sent again for a repeat
+  answer      TEXT NOT NULL CHECK (json_valid(answer)),
+  applied_at  TEXT NOT NULL,
+  PRIMARY KEY (client_id, mutation_id)
+) STRICT;
