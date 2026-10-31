@@ -164,3 +164,47 @@ def test_a_bracketed_html_link_renders_as_markup_textual_reads():
     from textual.content import Content
     shown, _ = render.html_body('<p>Recording: [<a href="https://drive.google.com/file/d/1">Click Here</a>]</p>')
     assert Content.from_markup(shown).plain.startswith("Recording: [Click Here")
+
+
+T = "http://127.0.0.1:8799/t"
+CRAFTED = f"""<!DOCTYPE html><html><head>
+<link rel="stylesheet" href="{T}/link.css"><base href="{T}/base/"><meta http-equiv="refresh" content="0;url={T}/meta">
+<style>@import url("{T}/import.css"); @import '{T}/import2.css'; body {{ background: url({T}/bg.png) }}
+.x {{ background-image: url( '{T}/bg2.png' ) }} .y {{ behavior: url({T}/htc) }}</style>
+<script src="{T}/s.js"></script><script>fetch("{T}/inline")</script></head>
+<body background="{T}/bodybg.png" onload="fetch('{T}/onload')">
+<p style="background:url({T}/style.png)">Hello &amp; welcome &#8212; friend</p>
+<img src="{T}/pixel.gif" width="1" height="1"><img src="cid:logo@x" alt="logo"><img src="{T}/deals.png" alt="Deals">
+<img src="data:image/png;base64,iVBORw0KGgo=" alt="d"><img srcset="{T}/a.png 1x, {T}/b.png 2x" alt="s">
+<picture><source srcset="{T}/pic.webp"><img src="{T}/pic.png" alt="p"></picture>
+<video poster="{T}/poster.png" src="{T}/v.mp4"></video><iframe src="{T}/frame"></iframe>
+<object data="{T}/obj"></object><embed src="{T}/embed"><input type="image" src="{T}/input.png">
+<table background="{T}/tablebg.png"><tr><td background="{T}/tdbg.png">cell</td></tr></table>
+<!--[if mso]><v:rect><v:fill src="{T}/vml.png"/></v:rect><![endif]-->
+<form action="{T}/form"><input name="q"></form><a href="https://example.com/page">a link</a>
+<a href="javascript:fetch('{T}/js')">bad</a><svg><image href="{T}/svgimg.png"/></svg>
+</body></html>"""
+
+
+def test_clean_html_leaves_no_remote_fetch():
+    """FR-7, AS-2: every fetch vector found in Phase 0 goes; text, links and inline images stay."""
+    out, removed = render.clean_html(CRAFTED, {"logo@x": "data:image/png;base64,AAAA"})
+    assert "127.0.0.1" not in out
+    assert not any(t in out for t in ("<script", "<iframe", "<link", "<base", "srcset", "@import", "javascript:"))
+    assert 'src="data:image/png;base64,AAAA"' in out and 'src="data:image/png;base64,iVBORw0KGgo="' in out
+    assert 'href="https://example.com/page"' in out and "Hello &amp; welcome &#8212; friend" in out
+    assert '<span class="ct-alt">Deals</span>' in out  # a removed image leaves its alt text, as a browser does
+    assert removed >= 20
+
+
+def test_safe_html_inlines_cid_images_and_fetches_remote_ones_only_on_request():
+    raw = (b"Content-Type: multipart/related; boundary=b\r\n\r\n--b\r\nContent-Type: text/html\r\n\r\n"
+           b"<img src=\"cid:logo\"><img src=\"https://t.example/p.png\" alt=\"P\">\r\n--b\r\nContent-Type: image/png\r\n"
+           b"Content-ID: <logo>\r\nContent-Transfer-Encoding: base64\r\n\r\niVBORw0KGgo=\r\n--b--\r\n")
+    plain = render.safe_html(raw)
+    assert "data:image/png;base64,iVBORw0KGgo=" in plain["html"] and "t.example" not in plain["html"]
+    assert plain["remote"] == 1
+    asked = []
+    loaded = render.safe_html(raw, fetch=lambda url: asked.append(url) or "data:image/png;base64,QQ==")
+    assert asked == ["https://t.example/p.png"] and 'src="data:image/png;base64,QQ=="' in loaded["html"]
+    assert render.safe_html(b"Content-Type: text/plain\r\n\r\nhi") is None

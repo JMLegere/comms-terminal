@@ -1,0 +1,2793 @@
+{
+ "openrpc": "1.3.2",
+ "info": {
+  "title": "Comms Terminal Local API",
+  "version": "1.0.0",
+  "description": "ADR 0013. Values use remote.encode's tags ($dt, $dc, $tuple, $bytes, $dict)."
+ },
+ "methods": [
+  {
+   "name": "case.page",
+   "summary": "One Case: its Activity feed and its Threads.",
+   "params": [
+    {
+     "name": "case_id",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "cases.list",
+   "summary": "Cases with their rolled-up Status.",
+   "params": [
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "channels.list",
+   "summary": "One Connection's channel rules.",
+   "params": [
+    {
+     "name": "connection_id",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.files.store_file",
+   "summary": "The files.store_file writer (service).",
+   "params": [
+    {
+     "name": "data",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": true,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.files.upload_url",
+   "summary": "The files.upload_url writer (service).",
+   "params": [
+    {
+     "name": "owner",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "host",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "port",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": false,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.inbox.act",
+   "summary": "The inbox.act writer (write).",
+   "params": [
+    {
+     "name": "thread_id",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "action",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": true,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.inbox.add_channel_rule",
+   "summary": "The inbox.add_channel_rule writer (create).",
+   "params": [
+    {
+     "name": "connection_id",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "kind",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "value",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": true,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.inbox.add_identity",
+   "summary": "The inbox.add_identity writer (create).",
+   "params": [
+    {
+     "name": "person_id",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "kind",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "value",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": true,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.inbox.block",
+   "summary": "The inbox.block writer (create).",
+   "params": [
+    {
+     "name": "kind",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "value",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "blocked",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": true,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.inbox.create_case",
+   "summary": "The inbox.create_case writer (create).",
+   "params": [
+    {
+     "name": "title",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": true,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.inbox.create_sole_proprietorship",
+   "summary": "The inbox.create_sole_proprietorship writer (create).",
+   "params": [
+    {
+     "name": "person_id",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": true,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.inbox.delete_channel_rule",
+   "summary": "The inbox.delete_channel_rule writer (write).",
+   "params": [
+    {
+     "name": "rule_id",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": true,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.inbox.delete_draft",
+   "summary": "The inbox.delete_draft writer (write).",
+   "params": [
+    {
+     "name": "draft_id",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": true,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.inbox.mark_needs_edit",
+   "summary": "The inbox.mark_needs_edit writer (write).",
+   "params": [
+    {
+     "name": "draft_id",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": true,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.inbox.merge_persons",
+   "summary": "The inbox.merge_persons writer (write).",
+   "params": [
+    {
+     "name": "keep",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "drop",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": true,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.inbox.remove_identity",
+   "summary": "The inbox.remove_identity writer (write).",
+   "params": [
+    {
+     "name": "identity_id",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": true,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.inbox.rename_person",
+   "summary": "The inbox.rename_person writer (write).",
+   "params": [
+    {
+     "name": "person_id",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "name",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": true,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.inbox.restore",
+   "summary": "The inbox.restore writer (write).",
+   "params": [
+    {
+     "name": "snap",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": false,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.inbox.restore_draft",
+   "summary": "The inbox.restore_draft writer (write).",
+   "params": [
+    {
+     "name": "draft",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": false,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.inbox.save_draft",
+   "summary": "The inbox.save_draft writer (write).",
+   "params": [
+    {
+     "name": "values",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "draft_id",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "expected_revision",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "thread_id",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "task_id",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": true,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.inbox.save_reply_draft",
+   "summary": "The inbox.save_reply_draft writer (write).",
+   "params": [
+    {
+     "name": "thread_id",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "body",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "task_id",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": true,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.inbox.schedule_draft",
+   "summary": "The inbox.schedule_draft writer (write).",
+   "params": [
+    {
+     "name": "draft_id",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "send_at",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": false,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.inbox.schedule_reply",
+   "summary": "The inbox.schedule_reply writer (write).",
+   "params": [
+    {
+     "name": "thread_id",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "body",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "to",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "cc",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "send_at",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": false,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.inbox.set_case_description",
+   "summary": "The inbox.set_case_description writer (write).",
+   "params": [
+    {
+     "name": "case_id",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "description",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": true,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.inbox.set_membership",
+   "summary": "The inbox.set_membership writer (create).",
+   "params": [
+    {
+     "name": "person_id",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "domain",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "member",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": true,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.inbox.stage",
+   "summary": "The inbox.stage writer (create).",
+   "params": [
+    {
+     "name": "sha",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "name",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "type",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "size",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "draft_id",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "thread_id",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": true,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.inbox.unstage",
+   "summary": "The inbox.unstage writer (write).",
+   "params": [
+    {
+     "name": "staged_id",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": true,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.pipeline.set_stage",
+   "summary": "The pipeline.set_stage writer (create).",
+   "params": [
+    {
+     "name": "org_id",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "pipeline",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "stage",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "at",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": true,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.pipeline.set_value",
+   "summary": "The pipeline.set_value writer (create).",
+   "params": [
+    {
+     "name": "org_id",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "pipeline",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "value",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "at",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": true,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.pipeline.undo",
+   "summary": "The pipeline.undo writer (write).",
+   "params": [
+    {
+     "name": "entry_id",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": false,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.sequences.add_step",
+   "summary": "The sequences.add_step writer (create).",
+   "params": [
+    {
+     "name": "sequence_id",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "kind",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "after",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "section",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "parent_step_id",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "branch",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "action_kind",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "condition",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "front",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": true,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.sequences.archive_sequence",
+   "summary": "The sequences.archive_sequence writer (write).",
+   "params": [
+    {
+     "name": "sequence_id",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "cancel_live",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": true,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.sequences.complete_task",
+   "summary": "The sequences.complete_task writer (create).",
+   "params": [
+    {
+     "name": "task_id",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": false,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.sequences.create_sequence",
+   "summary": "The sequences.create_sequence writer (create).",
+   "params": [
+    {
+     "name": "name",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "connection_id",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": true,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.sequences.delete_sequence",
+   "summary": "The sequences.delete_sequence writer (write).",
+   "params": [
+    {
+     "name": "sequence_id",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": true,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.sequences.delete_step",
+   "summary": "The sequences.delete_step writer (write).",
+   "params": [
+    {
+     "name": "step_id",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": true,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.sequences.describe_sequence",
+   "summary": "The sequences.describe_sequence writer (write).",
+   "params": [
+    {
+     "name": "sequence_id",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "description",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": true,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.sequences.enroll",
+   "summary": "The sequences.enroll writer (create).",
+   "params": [
+    {
+     "name": "person_id",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "sequence_id",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "start",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "organization_id",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "identity_id",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": true,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.sequences.finish",
+   "summary": "The sequences.finish writer (write).",
+   "params": [
+    {
+     "name": "enrollment_id",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "reason",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": true,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.sequences.move_step",
+   "summary": "The sequences.move_step writer (write).",
+   "params": [
+    {
+     "name": "step_id",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "delta",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": true,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.sequences.pick",
+   "summary": "The sequences.pick writer (create).",
+   "params": [
+    {
+     "name": "task_id",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "choice",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": false,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.sequences.rename_sequence",
+   "summary": "The sequences.rename_sequence writer (write).",
+   "params": [
+    {
+     "name": "sequence_id",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "name",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": true,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.sequences.replace_sequence",
+   "summary": "The sequences.replace_sequence writer (create).",
+   "params": [
+    {
+     "name": "plan",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "dry_run",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": true,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.sequences.reschedule",
+   "summary": "The sequences.reschedule writer (write).",
+   "params": [
+    {
+     "name": "enrollment_id",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "start",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": true,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.sequences.restore_finish",
+   "summary": "The sequences.restore_finish writer (write).",
+   "params": [
+    {
+     "name": "undo",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": false,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.sequences.restore_sequence",
+   "summary": "The sequences.restore_sequence writer (write).",
+   "params": [
+    {
+     "name": "sequence_id",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "undo",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": false,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.sequences.restore_step",
+   "summary": "The sequences.restore_step writer (write).",
+   "params": [
+    {
+     "name": "undo",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": false,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.sequences.resume",
+   "summary": "The sequences.resume writer (write).",
+   "params": [
+    {
+     "name": "enrollment_id",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": true,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.sequences.save_step",
+   "summary": "The sequences.save_step writer (write).",
+   "params": [
+    {
+     "name": "step_id",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": true,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.sequences.set_connection",
+   "summary": "The sequences.set_connection writer (write).",
+   "params": [
+    {
+     "name": "sequence_id",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "connection_id",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": true,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.sequences.skip_task",
+   "summary": "The sequences.skip_task writer (create).",
+   "params": [
+    {
+     "name": "task_id",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": true,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.sequences.task_new_thread",
+   "summary": "The sequences.task_new_thread writer (create).",
+   "params": [
+    {
+     "name": "task_id",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": true,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.sequences.undelete_sequence",
+   "summary": "The sequences.undelete_sequence writer (write).",
+   "params": [
+    {
+     "name": "rows",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": false,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.sequences.undo_task",
+   "summary": "The sequences.undo_task writer (write).",
+   "params": [
+    {
+     "name": "undo",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": false,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.sequences.unenroll",
+   "summary": "The sequences.unenroll writer (write).",
+   "params": [
+    {
+     "name": "enrollment_id",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": true,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "connections.list",
+   "summary": "Every Connection.",
+   "params": [
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "core.status",
+   "summary": "Online or read-only, builds, schema, pending writes, event sequence.",
+   "params": [
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "draft.view",
+   "summary": "One Draft and the files staged on it.",
+   "params": [
+    {
+     "name": "draft_id",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "drafts.list",
+   "summary": "Every Draft.",
+   "params": [
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "events.subscribe",
+   "summary": "Status now, then events on this connection: rows, status, toast, update, heartbeat, missed.",
+   "params": [
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "message.body",
+   "summary": "A message's HTML with every remote fetch removed (FR-7).",
+   "params": [
+    {
+     "name": "raw",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "message.load_images",
+   "summary": "The same, with remote images fetched by the core as data: URIs.",
+   "params": [
+    {
+     "name": "raw",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "organization.page",
+   "summary": "One Organization by its domain.",
+   "params": [
+    {
+     "name": "domain",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "organizations.list",
+   "summary": "Every Organization, with each Organization's Pipeline Stages.",
+   "params": [
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "paused.list",
+   "summary": "Paused Enrollments.",
+   "params": [
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "people.find",
+   "summary": "People whose name or Identity matches `text`, as [id, name] pairs.",
+   "params": [
+    {
+     "name": "text",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "people.list",
+   "summary": "Every Person.",
+   "params": [
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "person.page",
+   "summary": "One Person: Identities, Threads, Organizations and Enrollments.",
+   "params": [
+    {
+     "name": "person_id",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "pipeline.page",
+   "summary": "One Pipeline (revenue, fundraising or talent): its math and its board as Markdown.",
+   "params": [
+    {
+     "name": "name",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "pipeline.unattended",
+   "summary": "Organizations in an open Stage with nothing bringing them back.",
+   "params": [
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "rail.summary",
+   "summary": "Counts and lists the rail shows: Status views, Cases, People, Today, Connections, Sequences, due Tasks.",
+   "params": [
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "respond",
+   "summary": "Respond to an invite (FR-13e; Jeremy only).",
+   "x-panel": false,
+   "params": [
+    {
+     "name": "payload",
+     "required": true,
+     "schema": {
+      "type": "object"
+     }
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "rpc.discover",
+   "summary": "This document.",
+   "params": [
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "send.draft",
+   "summary": "Send a Draft now (Jeremy only).",
+   "x-panel": false,
+   "params": [
+    {
+     "name": "draft_id",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
+    {
+     "name": "revision",
+     "required": true,
+     "schema": {
+      "type": "integer"
+     }
+    },
+    {
+     "name": "again",
+     "required": false,
+     "schema": {
+      "type": "boolean"
+     }
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "send.reply",
+   "summary": "Send a reply (Jeremy only).",
+   "x-panel": false,
+   "params": [
+    {
+     "name": "thread_id",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
+    {
+     "name": "text",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
+    {
+     "name": "to",
+     "required": false,
+     "schema": {
+      "type": "array"
+     }
+    },
+    {
+     "name": "cc",
+     "required": false,
+     "schema": {
+      "type": "array"
+     }
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "sequence.page",
+   "summary": "One Sequence: its Steps, their outline, and what would stop it running.",
+   "params": [
+    {
+     "name": "sequence_id",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "sequences.list",
+   "summary": "Every Sequence.",
+   "params": [
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "slack.reactions",
+   "summary": "Read, add or remove Jeremy's own Slack reaction (FR-R).",
+   "x-panel": false,
+   "params": [
+    {
+     "name": "payload",
+     "required": true,
+     "schema": {
+      "type": "object"
+     }
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "tasks.list",
+   "summary": "Due Tasks.",
+   "params": [
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "thread.view",
+   "summary": "One Thread: timeline, senders, its Reply Draft, files staged on it, and the Cases it may join.",
+   "params": [
+    {
+     "name": "thread_id",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "threads.queue",
+   "summary": "The rows of one Status view: Todo, Snoozed, Done, Ignored or All.",
+   "params": [
+    {
+     "name": "view",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "today.page",
+   "summary": "Today: Todo Threads by Case, due Tasks, and Drafts not shown through them.",
+   "params": [
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "upload",
+   "summary": "Stage a file from this machine on a Draft or Thread.",
+   "x-panel": false,
+   "params": [
+    {
+     "name": "owner_kind",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
+    {
+     "name": "owner_id",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
+    {
+     "name": "path",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  }
+ ]
+}

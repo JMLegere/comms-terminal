@@ -403,3 +403,41 @@ _Avoid_: Snapshot (the whole-database download), Cache
 **Mutation**:
 One write the laptop console queued for Oracle, numbered in that console's order and stamped with the moment it was made. Oracle applies each Mutation once; a resent one gets its first answer.
 _Avoid_: Transaction, Request, Call
+
+## Clients
+
+**Service**:
+The process on Oracle that is the only writer of the live database and holds every secret. It ingests, sends, and answers the laptop's sync.
+_Avoid_: Server, Backend, Daemon
+
+**Client**:
+Any program that works on Comms Terminal's data on Jeremy's behalf: the Console, the App, and the CLI.
+_Avoid_: Frontend, UI
+
+**Console**:
+The terminal Client (Textual). It keeps its own laptop copy and stays as the plain-terminal way in.
+_Avoid_: TUI, Terminal app
+
+**App**:
+The native desktop Client: a GPU-drawn window that works through the Local core (ADR 0013).
+_Avoid_: Desktop console, GUI, Frontend
+
+**Local core**:
+The process on Jeremy's machine that holds the laptop copy, the write queue and the sync with the Service, and serves the Local API. It keeps running when the App closes.
+_Avoid_: Daemon, Agent, Sidecar
+
+**Local API**:
+The Local core's published contract: JSON-RPC on a user-only socket, described by an OpenRPC document that only grows.
+_Avoid_: Service API (the Service's own routes), Protocol
+
+**Origin**:
+Who made a Local API call: a view (the App's built-in screens, on Jeremy's input) or a Panel. Panels cannot send, complete Tasks, undo or Respond.
+_Avoid_: Caller, Source
+
+**Interface files**:
+The files that set the App's layout, keys, settings, themes and Panels, with an `AGENTS.md` that explains them to agents. Edits apply while the App runs.
+_Avoid_: Config, Preferences
+
+**Panel**:
+A small script, kept in the Interface files, that draws one part of the App and acts through the Local API with the Panel Origin.
+_Avoid_: Mod, Plugin, Widget, Extension

@@ -8,12 +8,14 @@ boilerplate footers) is split off so the console can fold it behind `•••`.
 event card; Attachments are listed for chips.
 """
 
+import base64
 import functools
 import mimetypes
 import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from email import message_from_bytes, policy
+from html import escape as html_escape
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlparse
@@ -549,3 +551,136 @@ def load(path: str) -> Body | None:
         return from_raw(Path(path).read_bytes())
     except OSError:
         return None
+
+
+# --- HTML for the App (ADR 0013, FR-7) -----------------------------------------
+
+DROP = {"script", "iframe", "frame", "frameset", "object", "embed", "applet", "form", "link", "base", "noscript",
+        "template", "audio", "video", "source", "track"}  # source: <picture>/<video> srcset and src
+VOID = {"area", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr", "base"}
+FETCH_ATTRS = {"src", "background", "poster", "lowsrc", "dynsrc", "data", "action", "formaction", "ping",
+               "longdesc", "cite", "xlink:href"}
+CSS_URL = re.compile(r"url\s*\(\s*(['\"]?)(.*?)\1\s*\)", re.I | re.S)
+CSS_IMPORT = re.compile(r"@import[^;]*;?", re.I)
+CSS_BAD = re.compile(r"expression\s*\(|behavior\s*:|-moz-binding", re.I)
+
+
+class _Safe(HTMLParser):
+    """Rebuilds HTML with every remote fetch removed; `fetch(url)` may turn a remote <img> into a data: URI."""
+
+    def __init__(self, cids: dict[str, str], fetch=None):
+        super().__init__(convert_charrefs=False)
+        self.cids, self.fetch, self.out, self.skip, self.removed, self.in_style = cids, fetch, [], 0, 0, False
+
+    def _src(self, value: str, tag: str = "", attr: str = "") -> str | None:
+        v = value.strip()
+        if v.lower().startswith("cid:"):
+            return self.cids.get(v[4:].strip("<>"))
+        if v.lower().startswith("data:image/"):
+            return v
+        if self.fetch is not None and tag == "img" and attr == "src" and v.lower().startswith(("https:", "http:")):
+            got = self.fetch(v)
+            if got:
+                return got
+        self.removed += 1
+        return None
+
+    def _css(self, css: str) -> str:
+        def url(m):
+            inner = m.group(2).strip()
+            if inner.lower().startswith("data:image/"):
+                return m.group(0)
+            if inner.lower().startswith("cid:") and inner[4:] in self.cids:
+                return f"url('{self.cids[inner[4:]]}')"
+            self.removed += 1
+            return "none"
+        self.removed += len(CSS_IMPORT.findall(css)) + len(CSS_BAD.findall(css))
+        return CSS_BAD.sub("x(", CSS_IMPORT.sub("", CSS_URL.sub(url, css)))
+
+    def handle_starttag(self, tag, attrs, closed=False):
+        if tag in DROP or (tag == "meta" and any(k == "http-equiv" for k, _ in attrs)):
+            self.removed += tag in ("script", "iframe", "frame", "object", "embed", "link", "base", "meta", "source")
+            if tag not in VOID and not closed:
+                self.skip += 1
+            return
+        if self.skip:
+            return
+        kept, lost = [], False
+        for k, v in attrs:
+            k, v = k.lower(), v or ""
+            if k.startswith("on") or k in ("srcset", "sizes", "imagesrcset"):
+                self.removed += k != "sizes"
+                continue
+            if k in FETCH_ATTRS or (k == "href" and tag not in ("a", "area")):  # svg <image href> fetches
+                v = self._src(v, tag, k)
+                if v is None:
+                    lost = True
+                    continue
+            elif k == "href" and re.match(r"\s*(javascript|vbscript|data):", v, re.I):
+                continue
+            elif k == "style":
+                v = self._css(v)
+            kept.append(f' {k}="{html_escape(v, quote=True)}"')
+        if tag == "img" and lost:  # a remote image shows its alt text in its place, as a browser does
+            alt = dict(attrs).get("alt") or ""
+            if alt.strip():
+                self.out.append(f'<span class="ct-alt">{html_escape(alt)}</span>')
+            return
+        self.out.append(f"<{tag}{''.join(kept)}{' /' if closed else ''}>")
+        self.in_style = tag == "style"
+
+    def handle_startendtag(self, tag, attrs):
+        self.handle_starttag(tag, attrs, closed=True)
+
+    def handle_endtag(self, tag):
+        if tag in DROP:
+            if tag not in VOID and self.skip:
+                self.skip -= 1
+            return
+        if not self.skip:
+            self.out.append(f"</{tag}>")
+        self.in_style = False
+
+    def handle_data(self, data):
+        if not self.skip:
+            self.out.append(self._css(data) if self.in_style else data)
+
+    def handle_entityref(self, name):
+        if not self.skip:
+            self.out.append(f"&{name};")
+
+    def handle_charref(self, name):
+        if not self.skip:
+            self.out.append(f"&#{name};")
+
+    def handle_comment(self, data):  # Outlook conditional comments hold VML with remote fetches: drop them all
+        pass
+
+    def handle_decl(self, decl):
+        self.out.append(f"<!{decl}>")
+
+
+def clean_html(html: str, cids: dict[str, str] | None = None, fetch=None) -> tuple[str, int]:
+    """HTML with no remote fetch left -> (html, remote references removed). Links stay (a click is not a fetch);
+    cid: images come from `cids` as data: URIs; `fetch(url) -> data URI | None` loads remote <img>s on request."""
+    s = _Safe(cids or {}, fetch)
+    s.feed(html)
+    s.close()
+    return "".join(s.out), s.removed
+
+
+def safe_html(raw: bytes, fetch=None) -> dict | None:
+    """A message's HTML for the App (FR-7): no remote fetch, inline images as data: URIs. None without an HTML
+    part. `remote` counts the references removed, so the App knows whether "Load images" would change anything."""
+    msg = message_from_bytes(raw, policy=policy.default)
+    part = msg.get_body(preferencelist=("html",))
+    if part is None:
+        return None
+    cids = {}
+    for p in msg.walk():
+        cid = (p.get("Content-ID") or "").strip().strip("<>")
+        if cid and p.get_content_maintype() == "image":
+            data = p.get_payload(decode=True) or b""
+            cids[cid] = f"data:{p.get_content_type()};base64,{base64.b64encode(data).decode()}"
+    html, removed = clean_html(part.get_content(), cids, fetch)
+    return {"html": html, "remote": removed}
