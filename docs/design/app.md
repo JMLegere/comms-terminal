@@ -1,16 +1,16 @@
 # App design
 
-Status: **Draft for Jeremy's review** (2026-10-31; Phase 3 shell built). Plan: `.agents/prd/2026-10-31-desktop-app.md` (FR-1, FR-6, FR-11). Architecture: ADR 0013. The Console's contract (`docs/design/console.md`) still governs the Console.
+Status: **Draft for Jeremy's review** (2026-10-31; Phases 3–5 built 2026-11-01). Plan: `.agents/prd/2026-10-31-desktop-app.md` (FR-1, FR-6, FR-11). Architecture: ADR 0013. The Console's contract (`docs/design/console.md`) still governs the Console.
 
 ## 1. Form
 
-- A native GPU-drawn window built the way `herdr-app` is: a small Rust host (`app/`) on GPUI (`gpui-pre` 0.3.8) and herdr-app's vendored gpui-kit 0.7.1 (`app/vendor/`). Every screen is a gpui-shell script (`views/<name>/main.js`), the same kind of script a Panel is; the host draws only the layout, the banners and the escape key. Started from `comms-terminal-app.desktop` on Mani (niri, Wayland) in Phase 6.
+- A native GPU-drawn window built the way `herdr-app` is: a small Rust host (`app/`) on GPUI (`gpui-pre` 0.3.8) and herdr-app's vendored gpui-kit 0.7.1 (`app/vendor/`). Every screen is a gpui-shell script (`views/<name>/main.js`), the same kind of script a Panel is; the host draws only the layout, the banners and the escape key. Started from `comms-terminal-app.desktop` on Mani (niri, Wayland), which runs `deploy/comms-terminal-app`: it installs the Local core and the App at the Service's build and opens the window again after an update (exit 75).
 - The App is one Client of the Local core (ADR 0013). It starts `comms-terminal core` when the socket is absent. Closing the window stops nothing.
 - Everything Jeremy or an agent may change lives in Interface files under `~/.config/comms-terminal-app/`, mirroring `herdr-app`'s layout:
 
 | File | Decides | Applied |
 |---|---|---|
-| `layouts/<name>.json` | blocks, Panels, sizes, the theme and fonts per layout | live |
+| `layouts/<name>.json` | blocks, Panels, sizes; a block's `pages` map picks its view per page (`shared("page")`, and `"<page>:<detail>"` for Today's rows) | live |
 | `keys.json` | every key | live |
 | `settings.json` | `theme`, `ui_font`, `core` (the command that starts the Local core) | live |
 | `themes/<name>.json` | colour tokens (§2) | live |
@@ -36,15 +36,17 @@ References, in Jeremy's words "slick, sexy and beautiful": Linear (dense, quiet 
 
 The default layout is `main`: a sidebar (rail) on the left and the work area on the right, as in `herdr-app`.
 
-- **Rail**: Today, Todo, Snoozed, Done, Ignored with counts (`rail.summary`); Cases, Drafts, Tasks, Calendar, Sequences, Pipelines, People, Organizations, Channels.
-- **List + Thread**: a list of the current view (`threads.queue`) beside the selected Thread (`thread.view`), laid out like the Console's Thread (conversation and reply box on the left, properties on the right). Moving the selection shows the next Thread at once, as Jeremy chose on 2026-10-19 (ADR 0004 consequences).
+- **Rail**: in the Console's order: Today and Calendar; Todo, Snoozed, Done, Ignored with counts, and Drafts; Cases (all, then each); Tasks and Sequences; the three Pipelines; People, Organizations and Channels; Connections with their health. A pick sets `shared("page")`, and the list and detail blocks show that page's views.
+- **Pages** (list · detail): Threads (`threads` · `thread`), Today (`today` · the row's Thread, Task, Draft, Person or Organization), Calendar (`calendar`: a month grid and the day's Events · `event`), Drafts (`drafts` · `draft`, the editor), Cases (`cases` · `case`: description, Threads, Activity), Tasks (`tasks` · `task`), Sequences (`sequences` · `sequence`: the Steps outline and a Step editor), a Pipeline (`pipeline`: verdict, Bowtie rates and Organizations by Stage · `organization`), People (`people`, filterable · `person`), Organizations (`organizations` · `organization`), Channels (`channels`: Connections · `connection`: channel rules). Moving the selection shows the next item at once, as Jeremy chose on 2026-10-19 (ADR 0004 consequences).
 - **Message**: the header (name, time), then the body. An email with an HTML part shows it in `MessageBody` (litehtml on a worker thread, painted in 512 px tiles on a white card; `app/src/body.rs`); other messages show their text. Bodies load once the selection rests for 150 ms. Remote images show their alt text until "Load images" (`message.load_images`, or `thread.images`). A plain click opens a link (http, https and mailto only); Attachments open with one click through their signed link. Trimmed content folding behind `•••` is not built yet.
-- **Reply box and Drafts**: as the Console's composer (#92, #99), in Phase 5. Files dropped anywhere on the window are staged on the selected Thread's reply (`upload`) and listed under the messages as Reply files. Send and schedule are view-only (Origin `view`).
+- **Reply box**: under the messages. Idle it shows the saved Reply Draft's first line, or "Leave a reply…"; r or a opens it with From, To, Cc and Subject (email) and the text, which saves 800 ms after typing stops. ctrl-enter offers Send now, tomorrow, next Monday, Unschedule and Keep editing; ctrl-s saves; Escape closes and keeps the Draft. Files dropped on the window are staged on the shown Draft, else on the selected Thread's reply (`upload`); delete removes one. Send and schedule are view-only (Origin `view`).
+- **Draft editor**: the same fields for any Draft, saved with the revision it read (ADR 0012); an agent's newer save replaces the fields while nothing here is unsaved. A Send outcome unknown Draft offers Keep locked, Send again, or Mark as sent.
+- **Overlay**: one picker and prompt drawn over the window for every view (the Console's Pick and Ask): type to filter, ↑/↓, Enter, Escape. `?` opens it as a key palette for the page.
 - **Status bar**: online, or read-only with the reason (`core.status`); toasts from the Local core's events.
 
 ## 4. Keys
 
-The default `keys.json` gives every Console binding the same key (`docs/design/console.md` §4). Each Console binding is either mapped or listed with a reason, and `tests/test_app_parity.py` checks this (FR-6). Mouse: one click opens links and Attachments; drag and drop attaches files.
+The default `keys.json` gives every Console binding the same key where it can (`docs/design/console.md` §4), in sections: `global`, `page:<page>` (plain keys, quiet while a text field has the keyboard) and `always`. Keys that move a detail pane's own cursor are shifted (J/K for a Case's Threads, a Person's Identities, a Sequence's Steps, a Connection's rules). `tests/test_app_parity.py` maps each Console binding to an App command its view handles, a key read inside a text field, or a reason (FR-6, AS-11). Mouse: one click opens links and Attachments; drag and drop attaches files.
 
 ## 5. States to check (visual QA)
 

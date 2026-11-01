@@ -15,7 +15,7 @@ Feature: App
     When Jeremy chooses Load images
     Then the remote image shows
 
-  @wip @AS-APP-2 @FR-APP-7 @NFR-APP-4
+  @AS-APP-2 @FR-APP-7 @NFR-APP-4
   Scenario: A Message Body makes no request for any remote reference
     Given an email whose HTML uses a stylesheet link, CSS url(), srcset, an iframe and a script
     When the App opens its Message Body
@@ -55,7 +55,7 @@ Feature: App
     When Jeremy presses the escape key combination
     Then the App restores its default layout and keys
 
-  @wip @AS-APP-8 @FR-APP-13
+  @AS-APP-8 @FR-APP-13
   Scenario: A Panel cannot send
     Given a Panel that calls the send command for a Draft
     When the Panel runs
@@ -76,12 +76,12 @@ Feature: App
     Then the Thread shows
     And the write is refused with the read-only banner
 
-  @wip @AS-APP-11 @FR-APP-6
+  @AS-APP-11 @FR-APP-6
   Scenario: Every Console key has an App key or a reason
     Given the Console's key bindings
     Then each one maps to a key in the App's default "keys.json" or is listed with a reason
 
-  @wip @AS-APP-12 @FR-APP-4 @NFR-APP-6
+  @AS-APP-12 @FR-APP-4 @NFR-APP-6
   Scenario: A breaking change to the Local API fails its check
     Given the released Local API document
     When a released method loses a parameter

@@ -25,12 +25,12 @@ CLI. Never add an opt-out line to a Draft.
 
 | File | What it decides | When it applies |
 |---|---|---|
-| `layouts/main.json` | the window: rows, columns and blocks; each block shows a view or Panel by name | at once |
-| `keys.json` | every key: `{ "global": { "j": "threads.next" }, "view:<name>": { … } }` | at once |
+| `layouts/main.json` | the window: rows, columns and blocks; each block shows a view or Panel by name, and its `pages` map picks another view per page (`"drafts": "draft"`) | at once |
+| `keys.json` | every key: `{ "global": { "1": "nav.today" }, "page:threads": { "e": "thread.done" }, "always": { … } }`; `global` and `page:` keys stay quiet while a text field has the keyboard | at once |
 | `settings.json` | `theme` (a file in `themes/`), `core` (the command that starts the Local core) | at once |
 | `themes/<name>.json` | colour tokens; views read them through `theme()` | at once |
 | `panels/<name>/main.js` | your Panels | at once (hot reload) |
-| `views/<name>/main.js` | the App's shipped views: `brand`, `nav` (the rail), `topbar`, `threads`, `thread`, `status` | rewritten on every start: don't edit them; copy one into `panels/` and change the layout to use the copy |
+| `views/<name>/main.js` | the App's shipped views: `brand`, `nav` (the rail), `topbar`, `status`, `overlay` (pickers), and a list and a detail view per page (`threads`/`thread`, `today`, `drafts`/`draft`, `cases`/`case`, `tasks`/`task`, `sequences`/`sequence`, `pipeline`, `people`/`person`, `organizations`/`organization`, `channels`/`connection`, `calendar`/`event`) | rewritten on every start: don't edit them; copy one into `panels/` and change the layout to use the copy |
 | `comms.d.ts` | the `comms` module's types | rewritten on every start |
 | `data/` | each view's and Panel's `localStorage` | written by the App |
 
@@ -79,8 +79,15 @@ Then add a block for it to `layouts/main.json`: `{ "id": "todo-count", "type": "
   parameters; `schema/local-api.openrpc.json` in the repository is the same document.
 - `nextEvent()` waits for the core's next event: `rows` (data changed: load again), `status`, `toast`,
   `update`, `heartbeat`, `missed` (load everything again), `disconnected`.
-- `shared(key)` and `setShared(key, value)` are state every view sees; the shipped views use `view` (the
-  Status view shown) and `thread` (the selected Thread's id).
+- `shared(key)` and `setShared(key, value)` are state every view sees. The shipped views use `page` (the page
+  shown: `threads`, `today`, `drafts`, …), `view` (the Status view), `detail` (Today's row kind), and the selection
+  of each page: `thread`, `draft`, `case`, `person`, `organization` (`{id, domain}`), `task`, `sequence`,
+  `connection`, `event`, `pipeline`.
+- A picker or prompt: `setShared("picker", { title, options: [{ value, label, hint }], reply: "<view>.<command>",
+  prompt, value })` then `run("overlay.open")`; the choice comes back to that view's `nextCommand()` as
+  `<command>:<JSON {value, text}>`.
+- `toast(message, severity)` shows a message in the status bar; `focusMain()` gives the keyboard back after a text
+  field; `keys()` returns keys.json.
 - `run("<view>.<command>")` sends a command to a view's `nextCommand()`; `keys.json` actions do the same.
 - `open(url)` opens an http, https or mailto link in the default browser, such as an Attachment's `url`.
 - `MessageBody(key, html)`, imported from `"gpui-component"`, shows a message's HTML from
