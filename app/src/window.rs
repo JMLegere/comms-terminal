@@ -7,7 +7,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use gpui::{
-    AnyElement, Context, Entity, FocusHandle, IntoElement, KeyBinding, KeyBindingContextPredicate, ParentElement, Render, SharedString,
+    AnyElement, Context, Entity, ExternalPaths, FocusHandle, IntoElement, KeyBinding, KeyBindingContextPredicate, ParentElement, Render, SharedString,
     Styled, Window, div, prelude::*, px,
 };
 use gpui_shell::action::ShellAction;
@@ -64,7 +64,7 @@ impl AppWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let runtime = ShellRuntime::new(cx).expect("the script runtime starts");
+        let runtime = ShellRuntime::new_with_components(cx, crate::body::components()).expect("the script runtime starts");
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
         let (layout, problem) = match load_layout(&home) {
@@ -133,6 +133,8 @@ impl AppWindow {
                 }
             }
             Request::Run(command) => self.run(&command, window, cx),
+            Request::Open(url) => crate::body::open(&url, cx),
+            Request::Repaint => window.refresh(),
             Request::Control { cmd, reply } => self.control(cmd, reply, window, cx),
         }
     }
@@ -444,6 +446,7 @@ impl Render for AppWindow {
             .text_size(px(13.))
             .track_focus(&self.focus)
             .on_action(cx.listener(|this, action: &ShellAction, window, cx| this.run(action.id(), window, cx)))
+            .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| this.attach(paths, cx)))
             .child(div().flex_1().min_h_0().flex().child(self.render_node(&self.layout, true)));
         if let Some(font) = crate::theme::font() {
             root = root.font_family(SharedString::from(font));
@@ -456,6 +459,33 @@ impl Render for AppWindow {
         }
         root
     }
+}
+
+impl AppWindow {
+    /// Files dropped on the window go on the selected Thread's reply (FR-10): the core stages each through the
+    /// Service's upload page, and the Thread view shows them when its rows change.
+    fn attach(&mut self, paths: &ExternalPaths, cx: &mut Context<Self>) {
+        let thread = host::shared("thread");
+        let (Some(thread), Some(core)) = (thread.as_str().map(str::to_owned), host::core()) else {
+            return toast("Select a Thread first: dropped files go on its reply.", "warning");
+        };
+        let paths: Vec<PathBuf> = paths.paths().iter().filter(|p| p.is_file()).cloned().collect();
+        cx.background_spawn(async move {
+            for path in paths {
+                let params = serde_json::json!({"origin": "view", "owner_kind": "thread", "owner_id": thread, "path": path});
+                if let Err(e) = core.clone().call("upload".into(), params).await {
+                    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                    toast(&format!("{name} was not attached: {e}"), "error");
+                }
+            }
+        })
+        .detach();
+    }
+}
+
+/// A toast in the views, as the core's own toasts arrive.
+fn toast(message: &str, severity: &str) {
+    host::broadcast(&serde_json::json!({"kind": "toast", "data": {"message": message, "severity": severity}}));
 }
 
 fn load_layout(home: &std::path::Path) -> Result<Node, String> {

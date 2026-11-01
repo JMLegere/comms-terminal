@@ -1,6 +1,7 @@
 //! comms-terminal-app: Comms Terminal's native desktop App (ADR 0013). A GPUI host for gpui-shell views, on the
 //! Local core. `comms-terminal-app` opens the window; `comms-terminal-app check <dir>` checks a view or Panel.
 
+mod body;
 mod control;
 mod host;
 mod layout;
@@ -32,7 +33,7 @@ fn main() {
             let _ = workspace::write(&home);
             let (_tx, rx) = async_channel::unbounded();
             window::prepare_policy(&home, "check", "panel", rx); // so `import … from "comms"` resolves
-            gpui_shell::host::main_with_components(gpui_shell::FrozenComponentRegistry::default());
+            gpui_shell::host::main_with_components(body::components());
         }
         Some("shot" | "status" | "do" | "probe") => std::process::exit(control::client(&args[1..])),
         Some("--help" | "-h" | "help") => println!("{HELP}"),

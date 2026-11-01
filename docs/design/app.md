@@ -38,8 +38,8 @@ The default layout is `main`: a sidebar (rail) on the left and the work area on 
 
 - **Rail**: Today, Todo, Snoozed, Done, Ignored with counts (`rail.summary`); Cases, Drafts, Tasks, Calendar, Sequences, Pipelines, People, Organizations, Channels.
 - **List + Thread**: a list of the current view (`threads.queue`) beside the selected Thread (`thread.view`), laid out like the Console's Thread (conversation and reply box on the left, properties on the right). Moving the selection shows the next Thread at once, as Jeremy chose on 2026-10-19 (ADR 0004 consequences).
-- **Message**: the header (name, absolute and relative time, to and cc), then the body (`message.body`). Remote images show their alt text until "Load images" (`message.load_images`). Trimmed content folds behind `•••` as in the Console.
-- **Reply box and Drafts**: as the Console's composer (#92, #99). Files dropped on it are staged (`upload`). Send and schedule are view-only (Origin `view`).
+- **Message**: the header (name, time), then the body. An email with an HTML part shows it in `MessageBody` (litehtml on a worker thread, painted in 512 px tiles on a white card; `app/src/body.rs`); other messages show their text. Bodies load once the selection rests for 150 ms. Remote images show their alt text until "Load images" (`message.load_images`, or `thread.images`). A plain click opens a link (http, https and mailto only); Attachments open with one click through their signed link. Trimmed content folding behind `•••` is not built yet.
+- **Reply box and Drafts**: as the Console's composer (#92, #99), in Phase 5. Files dropped anywhere on the window are staged on the selected Thread's reply (`upload`) and listed under the messages as Reply files. Send and schedule are view-only (Origin `view`).
 - **Status bar**: online, or read-only with the reason (`core.status`); toasts from the Local core's events.
 
 ## 4. Keys

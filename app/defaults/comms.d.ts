@@ -25,6 +25,9 @@ export function origin(): "view" | "panel";
 export function shared(key: string): any;
 export function setShared(key: string, value: unknown): boolean;
 
+/** Open a link in the default browser: an http, https or mailto link, such as an Attachment's `url`. */
+export function open(url: string): void;
+
 /** Run an App command: "app.reset", or "<view>.<command>". */
 export function run(command: string): void;
 

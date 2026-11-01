@@ -17,6 +17,7 @@ gpui-base = { path = "vendor/gpui-kit/crates/base" }
 anyhow = "1"
 async-channel = "2"
 image = { version = "0.25", default-features = false, features = ["png"] }
+litehtml = { version = "0.2.6", features = ["pixbuf", "email"] }
 notify = "7"
 serde_json = "1"
 

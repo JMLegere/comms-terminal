@@ -82,6 +82,11 @@ Then add a block for it to `layouts/main.json`: `{ "id": "todo-count", "type": "
 - `shared(key)` and `setShared(key, value)` are state every view sees; the shipped views use `view` (the
   Status view shown) and `thread` (the selected Thread's id).
 - `run("<view>.<command>")` sends a command to a view's `nextCommand()`; `keys.json` actions do the same.
+- `open(url)` opens an http, https or mailto link in the default browser, such as an Attachment's `url`.
+- `MessageBody(key, html)`, imported from `"gpui-component"`, shows a message's HTML from
+  `call("message.body", { raw })` (the message's `raw`). Nothing is fetched; `message.load_images` returns the
+  same HTML with remote images fetched by the core. Give each body its own `key`, such as `` `${id}:${loaded}` ``.
+  A plain click on a link opens it.
 - **Never keep a `cx` and use it later.** Every callback gets its own.
 
 ## Check before you finish

@@ -31,6 +31,10 @@ pub enum Request {
     Refresh,
     /// Run an App command (`app.reset`, `<view>.<command>`).
     Run(String),
+    /// Open a web link or an Attachment's signed link in the default browser (FR-9).
+    Open(String),
+    /// Paint again: a message body finished laying out or painting a tile (`body.rs`).
+    Repaint,
     /// A control-socket request (`control.rs`) and where its answer goes.
     Control { cmd: Value, reply: std::sync::mpsc::Sender<Value> },
 }
@@ -44,6 +48,19 @@ pub fn mark(name: &str) {
 pub fn install(core: Arc<Core>, requests: async_channel::Sender<Request>) {
     let _ = CORE.set(core);
     let _ = REQUESTS.set(requests);
+}
+
+/// Sends a request to the window from any thread; false before the window runs (as in `check`).
+pub fn request(request: Request) -> bool {
+    REQUESTS.get().is_some_and(|tx| tx.try_send(request).is_ok())
+}
+
+pub fn core() -> Option<Arc<Core>> {
+    CORE.get().cloned()
+}
+
+pub fn shared(key: &str) -> Value {
+    SHARED.with(|s| s.borrow().get(key).cloned().unwrap_or(Value::Null))
 }
 
 pub fn status() -> Value {
@@ -141,6 +158,13 @@ pub fn module(origin: &'static str, commands: async_channel::Receiver<String>) -
         })
         .function("mark", |args| {
             mark(args.string(0)?);
+            Ok(HostValue::Null)
+        })
+        .function("open", |args| {
+            let url = args.string(0)?.to_owned();
+            if let Some(tx) = REQUESTS.get() {
+                let _ = tx.try_send(Request::Open(url));
+            }
             Ok(HostValue::Null)
         })
         .function("run", |args| {
