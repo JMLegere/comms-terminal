@@ -14,6 +14,8 @@ pub struct Node {
     pub kind: Kind,
     pub size: Size,
     pub view: Option<String>,
+    /// `"pages": {"drafts": "drafts", …}`: the view shown while `shared("page")` names that page; `view` otherwise.
+    pub pages: Vec<(String, String)>,
     pub children: Vec<Node>,
     /// Look, in herdr-app's terms: a theme token behind the node, one bordered side (or all, for a card),
     /// inner padding and the gap between children. A card is a rounded, bordered block on the canvas.
@@ -48,6 +50,14 @@ pub fn parse(v: &Value) -> Result<Node, String> {
     if kind == Kind::Block && view.is_none() {
         return Err(format!("block {id:?} names no view"));
     }
+    let pages = match v.get("pages") {
+        None => Vec::new(),
+        Some(Value::Object(m)) => m
+            .iter()
+            .map(|(page, view)| view.as_str().map(|v| (page.clone(), v.to_owned())).ok_or_else(|| format!("{id}: pages.{page} must name a view")))
+            .collect::<Result<Vec<_>, _>>()?,
+        Some(_) => return Err(format!("{id}: pages must map page names to views")),
+    };
     let children = match v.get("children") {
         Some(Value::Array(items)) => items.iter().map(parse).collect::<Result<Vec<_>, _>>()?,
         Some(_) => return Err(format!("{id}: children must be a list")),
@@ -66,11 +76,18 @@ pub fn parse(v: &Value) -> Result<Node, String> {
     };
     let number = |key: &str| v.get(key).and_then(Value::as_f64).unwrap_or(0.0) as f32;
     let card = v.get("card").and_then(Value::as_bool).unwrap_or(false);
-    Ok(Node { id, kind, size, view, children, background: token("background"), border, padding: number("padding"), gap: number("gap"), card })
+    Ok(Node { id, kind, size, view, pages, children, background: token("background"), border, padding: number("padding"), gap: number("gap"), card })
 }
 
 impl Node {
-    /// Every view the layout shows, once each, in order.
+    /// The view this block shows on `page`, where `detail` (`shared("detail")`) may pick a page's variant: a block
+    /// with `"today:task"` shows that view while Today's cursor is on a Task, and `"today"` otherwise.
+    pub fn view_on(&self, page: Option<&str>, detail: Option<&str>) -> Option<&str> {
+        let find = |key: &str| self.pages.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str());
+        page.and_then(|p| detail.and_then(|d| find(&format!("{p}:{d}"))).or_else(|| find(p))).or(self.view.as_deref())
+    }
+
+    /// Every view the layout can show, once each, in order.
     pub fn views(&self) -> Vec<String> {
         let mut out = Vec::new();
         self.collect(&mut out);
@@ -78,7 +95,7 @@ impl Node {
     }
 
     fn collect(&self, out: &mut Vec<String>) {
-        if let Some(v) = &self.view {
+        for v in self.view.iter().chain(self.pages.iter().map(|(_, v)| v)) {
             if !out.contains(v) {
                 out.push(v.clone());
             }
@@ -98,9 +115,23 @@ mod tests {
     fn parses_the_shipped_layout() {
         let v: Value = serde_json::from_str(include_str!("../defaults/layouts/main.json")).unwrap();
         let node = parse(&v).unwrap();
-        assert_eq!(node.views(), ["brand", "nav", "topbar", "threads", "thread", "status"]);
+        let views = node.views();
+        assert_eq!(views[..6], ["brand", "nav", "topbar", "threads", "today", "calendar"]);
+        for page in ["drafts", "draft", "cases", "case", "people", "person", "organization", "pipeline", "sequence", "event", "status"] {
+            assert!(views.contains(&page.to_owned()), "{page}");
+        }
         assert_eq!(node.background.as_deref(), Some("canvas"));
         assert!(node.children[1].children[1].children.iter().all(|c| c.card));
+    }
+
+    #[test]
+    fn a_page_and_its_detail_choose_the_view() {
+        let node = parse(&json!({"id": "x", "view": "threads", "pages": {"today": "thread", "today:task": "task"}})).unwrap();
+        assert_eq!(node.view_on(None, None), Some("threads"));
+        assert_eq!(node.view_on(Some("today"), None), Some("thread"));
+        assert_eq!(node.view_on(Some("today"), Some("task")), Some("task"));
+        assert_eq!(node.view_on(Some("drafts"), Some("task")), Some("threads"));
+        assert_eq!(node.views(), ["threads", "thread", "task"]);
     }
 
     #[test]

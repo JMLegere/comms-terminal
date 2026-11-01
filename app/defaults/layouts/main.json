@@ -6,30 +6,101 @@
     {
       "id": "sidebar",
       "type": "column",
-      "size": { "px": 248 },
+      "size": {
+        "px": 248
+      },
       "background": "chrome",
-      "border": { "side": "right", "color": "border" },
+      "border": {
+        "side": "right",
+        "color": "border"
+      },
       "children": [
-        { "id": "brand", "type": "block", "size": { "px": 46 }, "view": "brand" },
-        { "id": "rail", "type": "block", "view": "nav" }
+        {
+          "id": "brand",
+          "type": "block",
+          "size": {
+            "px": 46
+          },
+          "view": "brand"
+        },
+        {
+          "id": "rail",
+          "type": "block",
+          "view": "nav"
+        }
       ]
     },
     {
       "id": "work",
       "type": "column",
       "children": [
-        { "id": "topbar", "type": "block", "size": { "px": 42 }, "view": "topbar" },
+        {
+          "id": "topbar",
+          "type": "block",
+          "size": {
+            "px": 42
+          },
+          "view": "topbar"
+        },
         {
           "id": "work-body",
           "type": "row",
           "padding": 8,
           "gap": 8,
           "children": [
-            { "id": "list", "type": "block", "size": { "px": 460 }, "view": "threads", "card": true },
-            { "id": "detail", "type": "block", "view": "thread", "card": true }
+            {
+              "id": "list",
+              "type": "block",
+              "size": {
+                "px": 460
+              },
+              "view": "threads",
+              "card": true,
+              "pages": {
+                "today": "today",
+                "calendar": "calendar",
+                "drafts": "drafts",
+                "cases": "cases",
+                "tasks": "tasks",
+                "sequences": "sequences",
+                "pipeline": "pipeline",
+                "people": "people",
+                "organizations": "organizations",
+                "channels": "channels"
+              }
+            },
+            {
+              "id": "detail",
+              "type": "block",
+              "view": "thread",
+              "card": true,
+              "pages": {
+                "today": "thread",
+                "calendar": "event",
+                "drafts": "draft",
+                "cases": "case",
+                "tasks": "task",
+                "sequences": "sequence",
+                "pipeline": "organization",
+                "people": "person",
+                "organizations": "organization",
+                "channels": "connection",
+                "today:task": "task",
+                "today:draft": "draft",
+                "today:paused": "person",
+                "today:unattended": "organization"
+              }
+            }
           ]
         },
-        { "id": "statusbar", "type": "block", "size": { "px": 28 }, "view": "status" }
+        {
+          "id": "statusbar",
+          "type": "block",
+          "size": {
+            "px": 28
+          },
+          "view": "status"
+        }
       ]
     }
   ]

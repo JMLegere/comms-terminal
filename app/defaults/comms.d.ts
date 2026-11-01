@@ -28,6 +28,15 @@ export function setShared(key: string, value: unknown): boolean;
 /** Open a link in the default browser: an http, https or mailto link, such as an Attachment's `url`. */
 export function open(url: string): void;
 
+/** Show a message in the status bar, as the core's own toasts show. */
+export function toast(message: string, severity?: "information" | "warning" | "error"): void;
+
+/** keys.json as it stands: { "global": { "j": "threads.next" }, "page:<name>": { … } }. */
+export function keys(): Record<string, Record<string, string>>;
+
+/** Give the keyboard back to the window after a text field (Escape in a reply box, say), so plain keys act again. */
+export function focusMain(): void;
+
 /** Run an App command: "app.reset", or "<view>.<command>". */
 export function run(command: string): void;
 

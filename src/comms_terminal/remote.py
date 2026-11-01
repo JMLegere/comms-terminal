@@ -26,7 +26,7 @@ import subprocess
 import threading
 import time
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 from . import clock, files, inbox, pipeline, sequences, writers
@@ -205,10 +205,12 @@ ERRORS |= {"ValueError": ValueError, "KeyError": KeyError}
 
 
 def encode(v):
-    """JSON for call arguments and results: datetimes, the action and Thread dataclasses, tuples, bytes, and
+    """JSON for call arguments and results: datetimes, dates, the action and Thread dataclasses, tuples, bytes, and
     dicts with non-string keys are tagged so `decode` gives them back."""
     if isinstance(v, datetime):
         return {"$dt": v.isoformat()}
+    if isinstance(v, date):
+        return {"$date": v.isoformat()}
     if dataclasses.is_dataclass(v) and type(v).__name__ in DATACLASSES:
         return {"$dc": type(v).__name__, "f": {f.name: encode(getattr(v, f.name)) for f in dataclasses.fields(v)}}
     if isinstance(v, sqlite3.Row):
@@ -235,6 +237,8 @@ def decode(v):
         return v
     if len(v) == 1 and "$dt" in v:
         return datetime.fromisoformat(v["$dt"])
+    if len(v) == 1 and "$date" in v:
+        return date.fromisoformat(v["$date"])
     if len(v) == 1 and "$tuple" in v:
         return tuple(decode(x) for x in v["$tuple"])
     if len(v) == 1 and "$bytes" in v:

@@ -27,7 +27,7 @@ from concurrent.futures import Future
 from importlib import resources
 from pathlib import Path
 
-from . import agent, files, inbox, pipeline, remote, render, sequences, writers
+from . import agent, calendar, files, inbox, pipeline, remote, render, sequences, writers
 
 LOG = logging.getLogger("comms_terminal.core")
 GENERATION = 1  # the Local API's protocol generation: a breaking change starts the next one (ADR 0013)
@@ -97,6 +97,77 @@ def _thread(core, db, thread_id):
             "cases": inbox.cases(db)}
 
 
+@query("thread.snapshot", thread_id="string")
+def _snapshot(core, db, thread_id):
+    """A Thread's triage state and Case, for undoing an action with `command.inbox.restore`."""
+    return inbox.snapshot(db, thread_id)
+
+
+@query("thread.markdown", thread_id="string")
+def _thread_markdown(core, db, thread_id):
+    """One Thread as the Markdown `comms-terminal thread` prints (without Context sources), for an agent."""
+    v = inbox.thread_view(db, thread_id)
+    return agent.thread_text(v, files.raw_dir(db), {}) + f"\nFresh copy: `comms-terminal thread {v['thread'].id}`\n"
+
+
+@query("draft.markdown", draft_id="string")
+def _draft_markdown(core, db, draft_id):
+    """One Draft as the Markdown `comms-terminal draft` prints, for an agent."""
+    return agent.draft(db, draft_id, {}, None, None)
+
+
+@query("reply.envelope", thread_id="string", mode="string")
+def _envelope(core, db, thread_id, mode):
+    """Where a reply goes: `mode` "all" or "sender"; the From, To, Cc and Subject an email reply starts with (empty
+    lists elsewhere), whether the Thread takes replies at all, its native link, and the send-later times."""
+    from . import clock, email, platforms
+    from .tui import native_link
+    v = inbox.thread_view(db, thread_id)
+    p = platforms.PLATFORMS[v["channel"]["platform"]]
+    to = cc = []
+    if p.format == "email":
+        history = [{"native_id": m["native_id"], "data": m["data"]} for m in v["messages"]]
+        to, cc = (email.reply_all if mode == "all" else email.reply_sender)(history, v["channel"]["external_id"])
+    title = v["thread"].title or ""
+    now = clock.now()
+    return {"email": p.format == "email", "takes_replies": p.takes_replies, "sends_files": p.sends_files,
+            "from": v["channel"]["external_id"], "where": v["where"], "to": list(to), "cc": list(cc),
+            "subject": title if title.lower().startswith("re:") else f"Re: {title}", "link": native_link(v),
+            "later": {k: inbox.send_time(k, now).isoformat() for k in ("tomorrow", "monday")}}
+
+
+@query("thread.forward", thread_id="string")
+def _forward(core, db, thread_id):
+    """The newest message as a new email Draft's values, and its stored files to stage on it (FR-A11)."""
+    from .tui import forward_values
+    v = inbox.thread_view(db, thread_id)
+    m = next((m for m in reversed(v["messages"]) if not m["deleted"]), None)
+    if m is None:
+        return None
+    files_ = [{k: a[k] for k in ("sha", "name", "type", "size")} for a in m["attachments"] if not a["inline"]]
+    return {"values": forward_values(v, m, inbox.connections(db)), "files": files_}
+
+
+@query("send.later")
+def _later(core, db):
+    """The send-later times a send menu offers: tomorrow and next Monday, at a random minute from 7 to 9 am."""
+    from . import clock
+    now = clock.now()
+    return {k: inbox.send_time(k, now).isoformat() for k in ("tomorrow", "monday")}
+
+
+@query("enroll.choices", person_id="string", organization_id="string")
+def _enroll_choices(core, db, person_id, organization_id):
+    """What enrolling one Person asks (FR-SEQ-6, -36): active Sequences with the Person's live state in each, the
+    Organizations it can be for, the addresses it can send to at `organization_id` ("" for none), and the
+    reasons an Enrollment can finish with."""
+    live = {e["sequence_id"]: e["state"] for e in sequences.enrollments(db, person_id) if e["state"] != "FINISHED"}
+    return {"sequences": [q | {"live": live.get(q["id"])} for q in sequences.sequences(db) if not q["archived_at"]],
+            "organizations": sequences.organization_choices(db, person_id),
+            "addresses": sequences.address_choices(db, person_id, organization_id or None),
+            "reasons": sequences.REASON_LABEL, "finishing": list(sequences.FINISHING_REASONS)}
+
+
 @query("cases.list")
 def _cases(core, db):
     """Cases with their rolled-up Status."""
@@ -105,8 +176,10 @@ def _cases(core, db):
 
 @query("case.page", case_id="string")
 def _case(core, db, case_id):
-    """One Case: its Activity feed and its Threads."""
-    return {"feed": inbox.case_feed(db, case_id), "threads": inbox.case_threads(db, case_id)}
+    """One Case: its title and description, its Activity feed and its Threads."""
+    row = db.execute("SELECT * FROM cases WHERE id = ?", (case_id,)).fetchone()
+    return {"case": dict(row) if row else None, "feed": inbox.case_feed(db, case_id),
+            "threads": inbox.case_threads(db, case_id)}
 
 
 @query("drafts.list")
@@ -125,6 +198,16 @@ def _draft(core, db, draft_id):
 def _tasks(core, db):
     """Due Tasks."""
     return sequences.tasks_due(db)
+
+
+@query("task.markdown", task_id="string")
+def _task_markdown(core, db, task_id):
+    """One due Task as the Markdown `comms-terminal tasks` prints, for an agent."""
+    from .tui import task_markdown
+    t = next((t for t in sequences.tasks_due(db) if t["id"] == task_id), None)
+    if t is None:
+        raise ApiError(-32602, f"no due Task {task_id}")
+    return task_markdown(db, t)
 
 
 @query("sequences.list")
@@ -181,15 +264,39 @@ def _organization(core, db, domain):
 
 @query("pipeline.page", name="string")
 def _pipeline(core, db, name):
-    """One Pipeline (revenue, fundraising or talent): its math and its board as Markdown."""
+    """One Pipeline (revenue, fundraising or talent): its math, its verdict on the Target, and its board as Markdown."""
     p = pipeline.parse_pipeline(name)
-    return {"math": pipeline.math(db, p) if p in pipeline.MATH else None, "board": pipeline.board_markdown(db, p)}
+    m = pipeline.math(db, p) if p in pipeline.MATH else None
+    verdict = pipeline.on_track(m) if m else None
+    return {"math": m, "verdict": list(verdict) if verdict else None, "board": pipeline.board_markdown(db, p)}
+
+
+@query("pipeline.stages")
+def _stages(core, db):
+    """Each Pipeline's name and Stages in order (open, paying, ending), keyed by its code (REVENUE, …)."""
+    return {p: {"name": pipeline.NAMES[p], "stages": list(pipeline.STAGES[p]), "open": list(pipeline.OPEN[p]),
+                "paying": list(pipeline.PAYING[p]), "ending": list(pipeline.ENDING[p]), "math": p in pipeline.MATH}
+            for p in pipeline.PIPELINES}
+
+
+@query("organization.history", org_id="string")
+def _org_history(core, db, org_id):
+    """One Organization's Stage and Value changes, newest first."""
+    return pipeline.history(db, org_id)
 
 
 @query("pipeline.unattended")
 def _unattended(core, db):
     """Organizations in an open Stage with nothing bringing them back."""
     return pipeline.unattended(db)
+
+
+@query("calendar.events", start="string", end="string")
+def _events(core, db, start, end):
+    """Calendar Events overlapping the local days [start, end), both YYYY-MM-DD, in start order."""
+    from datetime import date
+    found = calendar.expand(db, date.fromisoformat(start), date.fromisoformat(end), deleted=False)
+    return [{**e, "start": e["start"].isoformat(), "end": e["end"].isoformat()} for e in found]
 
 
 @query("connections.list")
@@ -202,6 +309,18 @@ def _connections(core, db):
 def _channels(core, db, connection_id):
     """One Connection's channel rules."""
     return inbox.channel_rules(db, connection_id)
+
+
+def _plain_dates(v):
+    """Dates (a Pipeline's math has them) as YYYY-MM-DD: remote.encode tags datetimes only."""
+    from datetime import date, datetime
+    if isinstance(v, date) and not isinstance(v, datetime):
+        return v.isoformat()
+    if isinstance(v, dict):
+        return {k: _plain_dates(x) for k, x in v.items()}
+    if isinstance(v, (list, tuple)):
+        return type(v)(_plain_dates(x) for x in v) if isinstance(v, list) else tuple(_plain_dates(x) for x in v)
+    return v
 
 
 # --- the core ------------------------------------------------------------------------------------------------------
@@ -365,7 +484,7 @@ class Core:
         if method in QUERIES:
             fn, spec, _ = QUERIES[method]
             _require(params, spec)
-            return remote.encode(self.call_from_thread(fn, self, self.db, **params))
+            return remote.encode(_plain_dates(self.call_from_thread(fn, self, self.db, **params)))
         if method in ("message.body", "message.load_images"):
             raw = self._raw(params.get("raw"))
             return render.safe_html(raw, fetch=fetch_image if method == "message.load_images" else None)

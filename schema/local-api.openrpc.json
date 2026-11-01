@@ -7,8 +7,43 @@
  },
  "methods": [
   {
+   "name": "calendar.events",
+   "summary": "Calendar Events overlapping the local days [start, end), both YYYY-MM-DD, in start order.",
+   "params": [
+    {
+     "name": "start",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
+    {
+     "name": "end",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
    "name": "case.page",
-   "summary": "One Case: its Activity feed and its Threads.",
+   "summary": "One Case: its title and description, its Activity feed and its Threads.",
    "params": [
     {
      "name": "case_id",
@@ -2085,6 +2120,34 @@
    }
   },
   {
+   "name": "draft.markdown",
+   "summary": "One Draft as the Markdown `comms-terminal draft` prints, for an agent.",
+   "params": [
+    {
+     "name": "draft_id",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
    "name": "draft.view",
    "summary": "One Draft and the files staged on it.",
    "params": [
@@ -2116,6 +2179,41 @@
    "name": "drafts.list",
    "summary": "Every Draft.",
    "params": [
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "enroll.choices",
+   "summary": "What enrolling one Person asks (FR-SEQ-6, -36): active Sequences with the Person's live state in each, the Organizations it can be for, the addresses it can send to at `organization_id` (\"\" for none), and the reasons an Enrollment can finish with.",
+   "params": [
+    {
+     "name": "person_id",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
+    {
+     "name": "organization_id",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
     {
      "name": "origin",
      "required": false,
@@ -2188,6 +2286,34 @@
    "params": [
     {
      "name": "raw",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "organization.history",
+   "summary": "One Organization's Stage and Value changes, newest first.",
+   "params": [
+    {
+     "name": "org_id",
      "required": true,
      "schema": {
       "type": "string"
@@ -2359,7 +2485,7 @@
   },
   {
    "name": "pipeline.page",
-   "summary": "One Pipeline (revenue, fundraising or talent): its math and its board as Markdown.",
+   "summary": "One Pipeline (revenue, fundraising or talent): its math, its verdict on the Target, and its board as Markdown.",
    "params": [
     {
      "name": "name",
@@ -2368,6 +2494,27 @@
       "type": "string"
      }
     },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "pipeline.stages",
+   "summary": "Each Pipeline's name and Stages in order (open, paying, ending), keyed by its code (REVENUE, \u2026).",
+   "params": [
     {
      "name": "origin",
      "required": false,
@@ -2410,6 +2557,41 @@
    "name": "rail.summary",
    "summary": "Counts and lists the rail shows: Status views, Cases, People, Today, Connections, Sequences, due Tasks.",
    "params": [
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "reply.envelope",
+   "summary": "Where a reply goes: `mode` \"all\" or \"sender\"; the From, To, Cc and Subject an email reply starts with (empty lists elsewhere), whether the Thread takes replies at all, its native link, and the send-later times.",
+   "params": [
+    {
+     "name": "thread_id",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
+    {
+     "name": "mode",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
     {
      "name": "origin",
      "required": false,
@@ -2503,6 +2685,27 @@
       "type": "boolean"
      }
     },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "send.later",
+   "summary": "The send-later times a send menu offers: tomorrow and next Monday, at a random minute from 7 to 9 am.",
+   "params": [
     {
      "name": "origin",
      "required": false,
@@ -2649,9 +2852,121 @@
    }
   },
   {
+   "name": "task.markdown",
+   "summary": "One due Task as the Markdown `comms-terminal tasks` prints, for an agent.",
+   "params": [
+    {
+     "name": "task_id",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
    "name": "tasks.list",
    "summary": "Due Tasks.",
    "params": [
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "thread.forward",
+   "summary": "The newest message as a new email Draft's values, and its stored files to stage on it (FR-A11).",
+   "params": [
+    {
+     "name": "thread_id",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "thread.markdown",
+   "summary": "One Thread as the Markdown `comms-terminal thread` prints (without Context sources), for an agent.",
+   "params": [
+    {
+     "name": "thread_id",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "thread.snapshot",
+   "summary": "A Thread's triage state and Case, for undoing an action with `command.inbox.restore`.",
+   "params": [
+    {
+     "name": "thread_id",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
     {
      "name": "origin",
      "required": false,

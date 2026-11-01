@@ -20,6 +20,8 @@ use crate::layout::{self, Kind, Node, Size};
 use crate::workspace;
 
 pub const ESCAPE_HATCH: &str = "ctrl-alt-shift-escape";
+/// The view drawn over the whole window while `shared("picker")` is set: pickers and prompts for every view.
+const OVERLAY: &str = "overlay";
 
 struct Copy {
     root: Option<Entity<ShellRoot>>,
@@ -99,7 +101,7 @@ impl AppWindow {
     }
 
     fn load_views(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        for name in self.layout.views() {
+        for name in self.layout.views().into_iter().chain([OVERLAY.to_owned()]) {
             if self.copies.contains_key(&name) {
                 continue;
             }
@@ -131,7 +133,9 @@ impl AppWindow {
                         let _ = self.runtime.refresh(root, cx);
                     }
                 }
+                cx.notify(); // the page, and so a block's view, may have changed
             }
+            Request::Focus => window.focus(&self.focus, cx),
             Request::Run(command) => self.run(&command, window, cx),
             Request::Open(url) => crate::body::open(&url, cx),
             Request::Repaint => window.refresh(),
@@ -266,11 +270,16 @@ impl AppWindow {
         let mut bindings = vec![KeyBinding::new(ESCAPE_HATCH, ShellAction::new("app.reset"), None)];
         if let Ok(Value::Object(sections)) = keys {
             for (section, map) in sections {
+                // Plain keys stay quiet while a text field has the keyboard; `always` keys (ctrl-enter, escape) do not.
                 let context = match section.as_str() {
-                    "global" => None,
-                    s => s.strip_prefix("view:").map(|v| format!("view == {v}")),
+                    "always" => None,
+                    "global" => Some("!Input".to_owned()),
+                    s => s
+                        .strip_prefix("page:")
+                        .map(|p| format!("page == {p} && !Input"))
+                        .or_else(|| s.strip_prefix("view:").map(|v| format!("view == {v}"))),
                 };
-                if section != "global" && context.is_none() {
+                if section != "always" && context.is_none() {
                     continue;
                 }
                 for (keystroke, action) in map.as_object().into_iter().flatten() {
@@ -416,7 +425,8 @@ impl AppWindow {
             Kind::Row => el.flex().flex_row().children(node.children.iter().map(|c| self.render_node(c, true))).into_any_element(),
             Kind::Column => el.flex().flex_col().children(node.children.iter().map(|c| self.render_node(c, false))).into_any_element(),
             Kind::Block => {
-                let name = node.view.clone().unwrap_or_default();
+                let (page, detail) = (host::shared("page"), host::shared("detail"));
+                let name = node.view_on(page.as_str(), detail.as_str()).unwrap_or_default().to_owned();
                 let el = el.overflow_hidden().key_context(format!("View view={name}").as_str());
                 match self.copies.get(&name) {
                     Some(Copy { root: Some(root), .. }) => el.child(root.clone()).into_any_element(),
@@ -437,7 +447,11 @@ impl Render for AppWindow {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         use crate::theme::color;
         self.renders += 1;
+        let page = host::shared("page");
+        let page = page.as_str().unwrap_or("threads");
         let mut root = div()
+            .key_context(format!("Page page={page}").as_str())
+            .relative()
             .size_full()
             .flex()
             .flex_col()
@@ -448,6 +462,11 @@ impl Render for AppWindow {
             .on_action(cx.listener(|this, action: &ShellAction, window, cx| this.run(action.id(), window, cx)))
             .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| this.attach(paths, cx)))
             .child(div().flex_1().min_h_0().flex().child(self.render_node(&self.layout, true)));
+        if !host::shared("picker").is_null() {
+            if let Some(Copy { root: Some(overlay), .. }) = self.copies.get(OVERLAY) {
+                root = root.child(div().absolute().inset_0().child(overlay.clone()));
+            }
+        }
         if let Some(font) = crate::theme::font() {
             root = root.font_family(SharedString::from(font));
         }
@@ -462,17 +481,19 @@ impl Render for AppWindow {
 }
 
 impl AppWindow {
-    /// Files dropped on the window go on the selected Thread's reply (FR-10): the core stages each through the
-    /// Service's upload page, and the Thread view shows them when its rows change.
+    /// Files dropped on the window go on the Draft shown (Drafts, or a Draft on Today), else on the selected
+    /// Thread's reply (FR-10): the core stages each through the Service's upload page, and the view shows them
+    /// when its rows change.
     fn attach(&mut self, paths: &ExternalPaths, cx: &mut Context<Self>) {
-        let thread = host::shared("thread");
-        let (Some(thread), Some(core)) = (thread.as_str().map(str::to_owned), host::core()) else {
-            return toast("Select a Thread first: dropped files go on its reply.", "warning");
+        let on_draft = host::shared("page") == "drafts" || (host::shared("page") == "today" && host::shared("detail") == "draft");
+        let (kind, owner) = if on_draft { ("draft", host::shared("draft")) } else { ("thread", host::shared("thread")) };
+        let (Some(owner), Some(core)) = (owner.as_str().map(str::to_owned), host::core()) else {
+            return toast("Select a Thread or Draft first: dropped files go on its reply.", "warning");
         };
         let paths: Vec<PathBuf> = paths.paths().iter().filter(|p| p.is_file()).cloned().collect();
         cx.background_spawn(async move {
             for path in paths {
-                let params = serde_json::json!({"origin": "view", "owner_kind": "thread", "owner_id": thread, "path": path});
+                let params = serde_json::json!({"origin": "view", "owner_kind": kind, "owner_id": owner, "path": path});
                 if let Err(e) = core.clone().call("upload".into(), params).await {
                     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                     toast(&format!("{name} was not attached: {e}"), "error");

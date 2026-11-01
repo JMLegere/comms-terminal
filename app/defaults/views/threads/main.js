@@ -51,12 +51,15 @@ export default class Threads extends View {
       try {
         const rows = await call("threads.queue", { view });
         const rank = (r) => { const i = ORDER.indexOf(detailOf(r)); return i < 0 ? ORDER.length : i; };
+        const was = this.rows.findIndex((r) => r.id === shared("thread"));
         this.rows = rows.map((r, i) => [r, i]).sort((a, b) => rank(a[0]) - rank(b[0]) || a[1] - b[1]).map(([r]) => r);
         this.error = null;
+        // A Thread that left this view (Done, Snoozed, Ignored) hands the selection to the one that took its place.
+        if ((shared("page") ?? "threads") === "threads" && !this.rows.some((r) => r.id === shared("thread")))
+          this.select(this.rows[Math.max(0, Math.min(was, this.rows.length - 1))]?.id ?? null);
       } catch (e) {
         this.error = String(e);
       }
-      if (!this.rows.some((r) => r.id === shared("thread"))) this.select(this.rows[0]?.id ?? null);
       cx.notify();
     });
   }
@@ -69,7 +72,7 @@ export default class Threads extends View {
   }
 
   command(c, cx) {
-    if (c === "reload") return this.load(cx);
+    if (c === "reload" || c === "show") return this.load(cx);
     const i = this.rows.findIndex((r) => r.id === shared("thread"));
     const n = c === "next" ? i + 1 : c === "prev" ? i - 1 : i;
     const row = this.rows[Math.max(0, Math.min(this.rows.length - 1, n))];

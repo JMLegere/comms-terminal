@@ -33,6 +33,8 @@ pub enum Request {
     Run(String),
     /// Open a web link or an Attachment's signed link in the default browser (FR-9).
     Open(String),
+    /// Give the keyboard back to the window, out of any text field.
+    Focus,
     /// Paint again: a message body finished laying out or painting a tile (`body.rs`).
     Repaint,
     /// A control-socket request (`control.rs`) and where its answer goes.
@@ -164,6 +166,22 @@ pub fn module(origin: &'static str, commands: async_channel::Receiver<String>) -
             let url = args.string(0)?.to_owned();
             if let Some(tx) = REQUESTS.get() {
                 let _ = tx.try_send(Request::Open(url));
+            }
+            Ok(HostValue::Null)
+        })
+        .function("toast", |args| {
+            let message = args.string(0)?.to_owned();
+            let severity = args.get(1).map(from_host).and_then(|v| v.as_str().map(str::to_owned)).unwrap_or("information".into());
+            broadcast(&json!({"kind": "toast", "data": {"message": message, "severity": severity}}));
+            Ok(HostValue::Null)
+        })
+        .function("keys", |_| {
+            let keys = crate::workspace::read_json(&crate::workspace::home(), "keys.json").unwrap_or(Value::Null);
+            Ok(to_host(&keys))
+        })
+        .function("focusMain", |_| {
+            if let Some(tx) = REQUESTS.get() {
+                let _ = tx.try_send(Request::Focus);
             }
             Ok(HostValue::Null)
         })

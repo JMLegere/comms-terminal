@@ -49,6 +49,7 @@ def demo_core(tmp_path):
 def test_every_query_answers_on_the_demo_data(demo_core):
     db = inbox.connect(demo_core.db_path)
     inbox.create_case(db, "Demo case")
+    inbox.save_reply_draft(db, db.execute("SELECT id FROM threads").fetchone()[0], "A reply")  # demo data has no Drafts
 
     def first(sql):
         row = db.execute(sql).fetchone()
@@ -56,7 +57,9 @@ def test_every_query_answers_on_the_demo_data(demo_core):
     values = {"view": "Todo", "thread_id": first("SELECT id FROM threads"), "case_id": first("SELECT id FROM cases"),
               "draft_id": first("SELECT id FROM composition_drafts"), "sequence_id": first("SELECT id FROM sequences"),
               "person_id": first("SELECT id FROM persons"), "domain": first("SELECT domain FROM organizations"),
-              "name": "revenue", "text": "a", "connection_id": first("SELECT id FROM connections")}
+              "name": "revenue", "text": "a", "connection_id": first("SELECT id FROM connections"),
+              "start": "2026-01-01", "end": "2026-12-31", "mode": "all", "organization_id": "", "org_id": first("SELECT id FROM organizations"),
+              "task_id": first("SELECT id FROM tasks WHERE state = 'DUE'")}
     answered = 0
     for name, (_, spec, summary) in core.QUERIES.items():
         assert summary, name
@@ -67,6 +70,17 @@ def test_every_query_answers_on_the_demo_data(demo_core):
         json.dumps(answer)  # plain JSON all the way down
         answered += 1
     assert answered >= len(core.QUERIES) - 3
+
+
+def test_a_pipeline_with_a_target_answers_with_its_dates_as_text(demo_core):
+    from datetime import date
+    from comms_terminal import pipeline
+    db = inbox.connect(demo_core.db_path)
+    org = db.execute("SELECT id FROM organizations").fetchone()[0]
+    pipeline.set_stage(db, org, pipeline.REVENUE, pipeline.STAGES[pipeline.REVENUE][1])
+    pipeline.set_target(db, pipeline.REVENUE, 100000, date(2027, 6, 1))
+    answer = call(demo_core, "pipeline.page", name="revenue")
+    assert answer["result"]["math"]["summary"]["target"]["due"] == "2027-06-01", answer
 
 
 def test_a_write_applies_to_the_copy_at_once_and_reaches_the_service(service, laptop_core):
