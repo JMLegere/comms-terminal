@@ -13,7 +13,7 @@ Comms Terminal adopts Herdr's shape:
 - **Grow-only contract.** `rpc.discover` returns an OpenRPC document generated from the registries. `schema/local-api.openrpc.json` is that document; one test fails when it is stale, and another fails when it breaks `schema/released.openrpc.json` (a removed method, or a removed or newly required parameter). A real break needs a new protocol generation.
 - **Origins.** Each call names its origin: `view` (the App's built-in views, on Jeremy's input) or `panel` (Interface-file scripts that agents may write). Panels may run queries and the commands in `agent.COMMANDS`; send, schedule, Task completion, undo, Respond, reactions and upload links stay with views. "Nothing sends from an agent" therefore holds in the App as it does in the CLI.
 - **Mail bodies.** The core serves each message's HTML with every remote fetch removed (`render.safe_html`), and fetches remote images only when a view asks for them. The App renders bodies with litehtml, which fetches nothing by itself. Phase 0 rated 30 of 30 real messages readable with litehtml, against 25 of 30 with Blitz.
-- **App.** A separate GPU-drawn window, built on gpui-kit (GPUI), with its code in `app/`. It starts the core when the core is absent; closing or updating the App stops nothing. Its layout, keys, theme and Panels are Interface files with an `AGENTS.md`, `check` and `shot`.
+- **App.** A separate GPU-drawn window with its code in `app/`, built as `herdr-app` is: a Rust host on GPUI with herdr-app's gpui-kit stack vendored in `app/vendor/` (the published gpui-kit 0.8.1 differs from it), and every screen a gpui-shell script, as a Panel is. It starts the core when the core is absent; closing or updating the App stops nothing. Its layout, keys, theme, views and Panels are Interface files with an `AGENTS.md`, `check` and `shot`.
 - **Console kept.** The Console keeps its own copy and its in-process sync for now, as Herdr kept Herdr TUI. Moving it onto the core is a later, separate decision.
 
 ## Considered Options
@@ -27,6 +27,7 @@ Comms Terminal adopts Herdr's shape:
 
 ## Consequences
 
+- The vendored GPUI stack (24 MB) is ours to update; changes to it are marked `COMMS:` and listed in `app/vendor/README.md`.
 - Two laptop copies while the Console keeps its own (about 30 MB each).
 - Two release trains, Service and App. The core and the App follow the Service's build as `deploy/comms-terminal-local` does, and stay read-only while builds differ.
 - ADR 0004's invariants hold: the Service stays the only writer, and `files-secret` and platform secrets never leave it.

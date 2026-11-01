@@ -246,6 +246,8 @@ class Core:
         self.worker.start()
         self.db = self.call_from_thread(inbox.connect, db_path)
         self.raw = self.call_from_thread(files.raw_dir, self.db)
+        if syncer is not None and syncer.base is not None:  # loaded from base.db on the caller's thread
+            self.call_from_thread(_rebase, syncer)
         if remote_ is not None:
             remote_.app = self
         threading.Thread(target=self._heartbeat, daemon=True).start()
@@ -447,6 +449,19 @@ class Core:
 
     def _socket(self):
         return self.remote.link.command() if self.remote is not None else self.socket
+
+
+def _rebase(syncer):
+    """Load the Syncer's base again on the worker thread: SQLite refuses a connection from another thread, and a
+    restarted core's Syncer read base.db on the main thread."""
+    import sqlite3
+    base = remote.mirror()
+    saved = sqlite3.connect(syncer.base_path)
+    try:
+        saved.backup(base)
+    finally:
+        saved.close()
+    syncer.base = base
 
 
 SERVICE = {  # method -> (Core method, {param: (json type, required)}, summary)

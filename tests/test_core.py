@@ -87,6 +87,22 @@ def test_a_create_mints_the_same_id_on_the_service(service, laptop_core):
     assert [x["id"] for x in inbox.cases(sdb)] == [case_id]
 
 
+def test_a_restarted_core_keeps_syncing_from_its_saved_base(service, laptop_core, tmp_path):
+    """A second start finds base.db: the Syncer loads it on the main thread; the core must still apply on its own."""
+    _, sdb, sock, tid = service
+    first, _, _ = laptop_core
+    copy = first.db_path
+    rem, caps = remote.Remote(LocalLink(sock), remote.post), {}
+    syncer = remote.Syncer(rem, copy, caps)
+    assert syncer.base is not None  # read from base.db, on this thread
+    c = core.Core(copy, None, rem, syncer)
+    inbox.act(sdb, tid, inbox.Done())
+    body = syncer.once(timeout=6)  # unconfirmed: asks with no wait, which may come before the Service notices
+    body = body or syncer.once(timeout=6)
+    c.call_from_thread(c.apply_snapshot, syncer, body)
+    assert c.call_from_thread(inbox.get_thread, c.db, tid).status == "DONE"
+
+
 def test_panels_cannot_send_schedule_or_undo(laptop_core):
     c, _, _ = laptop_core
     tomorrow = remote.encode(datetime.now(timezone.utc) + timedelta(days=1))

@@ -106,6 +106,8 @@ uv run pytest -m wip                                     # scenarios not built y
 | Path | What |
 |---|---|
 | `src/comms_terminal/` | The app (`src/AGENTS.md`) |
+| `app/` | The desktop App: GPUI host and gpui-shell views on the Local core (`app/AGENTS.md`, ADR 0013) |
+| `schema/` | The Local API's OpenRPC document and its released copy |
 | `features/` | Gherkin acceptance scenarios (`features/AGENTS.md`) |
 | `tests/` | pytest, BDD steps in `tests/steps/` |
 | `deploy/` | Oracle container runtime, updater, systemd units, laptop launcher, Email Worker (`deploy/AGENTS.md`) |

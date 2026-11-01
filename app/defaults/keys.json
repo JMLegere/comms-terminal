@@ -1,0 +1,12 @@
+{
+  "global": {
+    "j": "threads.next",
+    "k": "threads.prev",
+    "down": "threads.next",
+    "up": "threads.prev",
+    "1": "nav.todo",
+    "2": "nav.snoozed",
+    "3": "nav.done",
+    "4": "nav.ignored"
+  }
+}

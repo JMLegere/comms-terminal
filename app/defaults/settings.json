@@ -1,0 +1,5 @@
+{
+  "theme": "gruvbox-material-light",
+  "ui_font": "JetBrainsMono Nerd Font Mono",
+  "core": ["comms-terminal"]
+}
