@@ -225,6 +225,21 @@ export default class Thread extends View {
           }
         });
       case "undo": return this.restore(cx);
+      case "unstage": {
+        const files = this.staged ?? [];
+        if (!files.length) return toast("No files staged here.");
+        setShared("picker", { title: "Remove a staged file", reply: "thread.unstaged", options: files.map((a) => ({ value: a.id, label: a.name })) });
+        return run("overlay.open");
+      }
+      case "unstaged":
+        return cx.spawn(async () => {
+          try {
+            await call("command.inbox.unstage", { staged_id: answer.value });
+            toast("File removed; it stays in the store.");
+          } catch (e) {
+            toast(String(e), "error");
+          }
+        });
       case "reply_all": case "reply_sender":
         return this.open(name === "reply_sender" ? "sender" : "all", cx);
       case "send": return this.send(cx);

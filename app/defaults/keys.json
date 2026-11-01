@@ -34,7 +34,8 @@
     "y": "thread.copy",
     "f": "thread.forward",
     "v": "thread.react",
-    "i": "thread.respond"
+    "i": "thread.respond",
+    "delete": "thread.unstage"
   },
   "page:today": {
     "j": "today.next",
@@ -55,7 +56,8 @@
     "y": "thread.copy",
     "f": "thread.forward",
     "v": "thread.react",
-    "i": "thread.respond"
+    "i": "thread.respond",
+    "delete": "thread.unstage"
   },
   "page:cases": {
     "j": "cases.next",
@@ -81,7 +83,8 @@
     "v": "thread.react",
     "i": "thread.respond",
     "shift-j": "case.next",
-    "shift-k": "case.prev"
+    "shift-k": "case.prev",
+    "delete": "thread.unstage"
   },
   "page:drafts": {
     "j": "drafts.next",
@@ -91,7 +94,8 @@
     "n": "drafts.new",
     "x": "drafts.delete",
     "y": "drafts.copy",
-    "enter": "draft.edit"
+    "enter": "draft.edit",
+    "delete": "draft.unstage"
   },
   "page:people": {
     "j": "people.next",

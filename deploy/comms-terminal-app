@@ -1,0 +1,60 @@
+#!/bin/sh
+# The Comms Terminal desktop App on Mani (ADR 0013). Installed as ~/.local/bin/comms-terminal-app-launch; the
+# desktop entry runs it. Like deploy/comms-terminal-local it installs the build the Service runs: the Local core
+# (Python, with uv) and the App (Rust, with cargo) from an export of that commit in the local checkout
+# (COMMS_TERMINAL_REPO). The core works on its own copy of the inbox in $DATA and outlives the window; an update
+# stops it so the new one starts. The App quits with 75 when the Service reports a new build: update, open again.
+#   comms-terminal-app-launch            update if needed, then open the App
+#   comms-terminal-app-launch --install  install this checkout's desktop entry and launcher, then update
+set -eu
+
+SSH_ARGS="-i $HOME/.ssh/oracle-dev -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UpdateHostKeys=no \
+-o HostKeyAlias=universal-inbox-existing-arm -o BatchMode=yes -o ConnectTimeout=10 -o LogLevel=ERROR \
+ubuntu@168.138.69.153"
+DATA="${XDG_DATA_HOME:-$HOME/.local/share}/comms-terminal-app"
+REPO="${COMMS_TERMINAL_REPO:-$HOME/Workspace/comms-terminal}"
+export UV_TOOL_DIR="$DATA/tools" UV_TOOL_BIN_DIR="$DATA/bin" CARGO_TARGET_DIR="$DATA/target"
+mkdir -p "$DATA/bin"
+chmod 700 "$DATA"
+
+if [ "${1:-}" = "--install" ]; then
+    install -D -m 755 "$REPO/deploy/comms-terminal-app" "$HOME/.local/bin/comms-terminal-app-launch"
+    install -D -m 644 "$REPO/deploy/comms-terminal-app.desktop" "${XDG_DATA_HOME:-$HOME/.local/share}/applications/comms-terminal-app.desktop"
+fi
+
+installed() {  # the build this install came from (written below), or nothing
+    cat "$DATA/installed-build" 2>/dev/null || true
+}
+
+stop_core() {  # the old core keeps the old code; the App starts the new one
+    pkill -f -- "--db $DATA/inbox.db" 2>/dev/null || true
+}
+
+update() {
+    want=$(cat "$DATA/service-build" 2>/dev/null || true)
+    have=$(installed)
+    [ -n "$have" ] && { [ -z "$want" ] || [ "$want" = "$have" ]; } && return 0
+    echo "Comms Terminal App: installing the Service's version ${want:-(latest main)}…"
+    git -C "$REPO" fetch -q origin
+    rev=$(git -C "$REPO" rev-parse --verify -q "${want:-origin/main}^{commit}")
+    short=${want:-$(git -C "$REPO" rev-parse --short "$rev")}
+    src="$DATA/src"
+    rm -rf "$src"
+    mkdir -p "$src"
+    git -C "$REPO" archive "$rev" | tar -x -C "$src"
+    COMMS_TERMINAL_BUILD="$(git -C "$REPO" log -1 --format=%ct "$rev") $short" \
+        uv tool install -q --reinstall --python 3.12 "$src"
+    cargo build -q --release --manifest-path "$src/app/Cargo.toml"
+    install -m 755 "$CARGO_TARGET_DIR/release/comms-terminal-app" "$DATA/bin/comms-terminal-app"
+    stop_core
+    echo "$short" > "$DATA/installed-build"
+}
+
+export COMMS_TERMINAL_CORE="[\"$DATA/bin/comms-terminal\", \"--db\", \"$DATA/inbox.db\", \"--remote\", \"$SSH_ARGS\"]"
+while :; do
+    update
+    rc=0
+    "$DATA/bin/comms-terminal-app" || rc=$?
+    [ "$rc" -eq 75 ] && continue
+    exit "$rc"
+done

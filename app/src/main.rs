@@ -55,8 +55,12 @@ fn run() {
         std::process::exit(1);
     }
     let settings = workspace::read_json(&home, "settings.json").unwrap_or(Value::Null);
-    let command: Vec<String> = settings
-        .get("core")
+    // The command that starts the core: COMMS_TERMINAL_CORE (a JSON list, set by deploy/comms-terminal-app), else
+    // settings.json's "core", else `comms-terminal` on PATH.
+    let from_env = std::env::var("COMMS_TERMINAL_CORE").ok().and_then(|s| serde_json::from_str::<Value>(&s).ok());
+    let command: Vec<String> = from_env
+        .as_ref()
+        .or_else(|| settings.get("core"))
         .and_then(Value::as_array)
         .map(|a| a.iter().filter_map(|s| s.as_str().map(str::to_owned)).collect())
         .filter(|c: &Vec<String>| !c.is_empty())

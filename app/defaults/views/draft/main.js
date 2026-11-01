@@ -112,6 +112,21 @@ export default class Draft extends View {
       case "save": return cx.spawn(async (cx) => this.save(cx, "Saved."));
       case "close": return cx.spawn(async (cx) => { await this.save(cx); focusMain(); });
       case "send": return cx.spawn(async (cx) => this.send(cx));
+      case "unstage": {
+        const files = this.staged ?? [];
+        if (!files.length) return toast("No files staged here.");
+        setShared("picker", { title: "Remove a staged file", reply: "draft.unstaged", options: files.map((a) => ({ value: a.id, label: a.name })) });
+        return run("overlay.open");
+      }
+      case "unstaged":
+        return cx.spawn(async () => {
+          try {
+            await call("command.inbox.unstage", { staged_id: answer.value });
+            toast("File removed; it stays in the store.");
+          } catch (e) {
+            toast(String(e), "error");
+          }
+        });
       case "send-picked": return cx.spawn(async (cx) => this.sendPicked(answer.value, cx));
       case "unknown-picked": return cx.spawn(async (cx) => this.resolve(answer.value, cx));
     }

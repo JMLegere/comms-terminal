@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Comms Terminal App
+GenericName=Communications
+Comment=Every professional conversation in one queue
+Exec=sh -c '"$HOME/.local/bin/comms-terminal-app-launch"'
+Icon=mail-message-new
+Terminal=false
+Categories=Network;Email;
+StartupWMClass=comms-terminal-app

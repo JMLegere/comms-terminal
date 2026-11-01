@@ -22,6 +22,8 @@ use crate::workspace;
 pub const ESCAPE_HATCH: &str = "ctrl-alt-shift-escape";
 /// The view drawn over the whole window while `shared("picker")` is set: pickers and prompts for every view.
 const OVERLAY: &str = "overlay";
+/// The exit code that asks the launcher to install the Service's build (tui.UPDATE_EXIT).
+pub const UPDATE_EXIT: i32 = 75;
 
 struct Copy {
     root: Option<Entity<ShellRoot>>,
@@ -88,6 +90,11 @@ impl AppWindow {
                 let status = event["kind"] == "status";
                 if status {
                     host::set_status(event["data"].clone());
+                }
+                // The Service runs another build (AS-9): once no write is on its way, quit with 75 so
+                // deploy/comms-terminal-app installs that build and opens the App again, as the Console does.
+                if event["kind"] == "update" && host::status()["pending"].as_u64().unwrap_or(0) == 0 {
+                    std::process::exit(UPDATE_EXIT);
                 }
                 host::broadcast(&event); // views that care render themselves
                 if status {

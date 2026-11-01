@@ -61,7 +61,7 @@ export default class Calendar extends View {
   }
 
   command(c, cx) {
-    const move = { prev_day: -1, next_day: 1, prev_week: -7, next_week: 7 }[c];
+    const move = { "prev_day": -1, "next_day": 1, "prev_week": -7, "next_week": 7 }[c];
     const month = this.day.getMonth();
     if (c === "show") return this.load(cx);
     if (move) this.day.setDate(this.day.getDate() + move);
