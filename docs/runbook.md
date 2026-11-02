@@ -296,7 +296,7 @@ Comms Terminal runs the console on Jeremy's laptop against a copy of the Oracle 
 - Updates: the service updates from `main` as in section 8. When a sync reports a new build, the console quits with exit code 75 once no write is on its way and no read-only reply text is held; the launcher installs that commit from an export of the local checkout (`COMMS_TERMINAL_REPO`, default `~/Workspace/comms-terminal`) with `uv tool install` into `~/.local/share/comms-terminal/`, then opens the console again. A held reply keeps the console open and READ-ONLY until it is saved or closed.
 - Back to the SSH console: restore the desktop entry's previous `Exec` (kept as a comment in the file). The service routes are additive; the SSH console needs nothing else.
 
-## 10. The desktop App on Mani
+## 10. The desktop App (Mani, and a teammate's Mac)
 
 The App is a native window on the Local core (ADR 0013); the Console stays as it is.
 
@@ -305,4 +305,20 @@ The App is a native window on the Local core (ADR 0013); the Console stays as it
 - Updates: the Service updates from `main` (§8). The next sync reports the new build; the App turns read-only, quits with 75 once no write is on its way, and the launcher installs that build, stops the old core and opens the App again.
 - The core keeps running when the window closes. Stop it with `pkill -f -- "--db $HOME/.local/share/comms-terminal-app/inbox.db"`.
 - Uninstall: remove the launcher, `~/.local/share/applications/comms-terminal-app.desktop`, and `~/.local/share/comms-terminal-app/`. The Console's entry is untouched.
+- Another Service: set `COMMS_TERMINAL_SSH` to the `ssh` arguments that reach it (key, options, `user@host`) when running `--install`. The launcher keeps it, and `COMMS_TERMINAL_REPO`, in `~/.local/share/comms-terminal-app/env`, so the desktop entry uses the same Service. Unset, it is Jeremy's Oracle. The Service's user needs passwordless `sudo` for the relay, as `ubuntu` has on Oracle.
+
+### A teammate's Mac (Apple silicon)
+
+The teammate needs their own Service, set up like Oracle (§1–§8) on their own host (AWS for Logan), with an SSH key that reaches it. The App builds on the Mac from source, so it needs no Apple signing. The `App on macOS` workflow (`.github/workflows/app-macos.yml`) builds, tests and draws the demo inbox on Apple silicon for every change to `app/`.
+
+1. Install the Xcode command line tools (`xcode-select --install`), Rust (`curl https://sh.rustup.rs -sSf | sh`) and uv (`curl -LsSf https://astral.sh/uv/install.sh | sh`).
+2. `git clone https://github.com/JMLegere/comms-terminal ~/Workspace/comms-terminal`
+3. Connect once to accept the host's key: `ssh -i ~/.ssh/comms-terminal ubuntu@THEIR-HOST true`. Then install, naming their Service:
+   ```sh
+   COMMS_TERMINAL_SSH="-i $HOME/.ssh/comms-terminal -o BatchMode=yes -o ConnectTimeout=10 ubuntu@THEIR-HOST" \
+     sh ~/Workspace/comms-terminal/deploy/comms-terminal-app --install
+   ```
+   The first build takes about 10 minutes; then the App opens. Later, open "Comms Terminal App" from `~/Applications` (Spotlight finds it).
+4. Updates work as on Mani: their Service updates from `main` (§8), and the App follows it.
+5. Uninstall: remove `~/Applications/Comms Terminal App.app`, `~/.local/bin/comms-terminal-app-launch` and `~/.local/share/comms-terminal-app/`.
 

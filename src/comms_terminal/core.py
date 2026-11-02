@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import queue
+import shlex
 import socketserver
 import threading
 import urllib.request
@@ -358,6 +359,7 @@ class Core:
 
     def __init__(self, db_path: str, socket=None, remote_=None, syncer=None):
         self.db_path, self.socket, self.remote, self.syncer = db_path, socket, remote_, syncer
+        self.service = None  # the Service's name for the status bar (run() sets it)
         self.jobs = queue.Queue()
         self.worker = threading.Thread(target=self._work, daemon=True)
         self.lock, self.seq, self.subscribers = threading.Lock(), 0, []
@@ -441,7 +443,7 @@ class Core:
         return {"generation": GENERATION, "online": True if r is None else r.online,
                 "problem": None if r is None else r.problem, "build": build(),
                 "service_build": getattr(self.syncer, "service_build", None), "schema": inbox.SCHEMA_VERSION,
-                "pending": 0 if r is None else r.busy, "seq": self.seq}
+                "pending": 0 if r is None else r.busy, "seq": self.seq, "service": self.service}
 
     # The Local API.
 
@@ -727,6 +729,9 @@ def run(db_path: str, socket_path: str, ssh_args: str | None, listen: Path):
         from .main import start_remote
         _, rem, syncer = start_remote(ssh_args, db_path, console=False)
     core = Core(db_path, socket_path, rem, syncer)
+    # COMMS_TERMINAL_SERVICE_NAME (the launcher sets "Oracle" for Jeremy's), else the ssh destination's host.
+    core.service = os.environ.get("COMMS_TERMINAL_SERVICE_NAME") or (
+        shlex.split(ssh_args)[-1].rsplit("@", 1)[-1] if ssh_args else None)
     if syncer is not None:
         syncer.start()
     server = serve(core, listen)
