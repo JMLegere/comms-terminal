@@ -81,6 +81,28 @@ Feature: App
     Given the Console's key bindings
     Then each one maps to a key in the App's default "keys.json" or is listed with a reason
 
+  @AS-APP-11 @FR-APP-6
+  Scenario Outline: Ctrl Enter in the App uses the right send path for a Draft
+    Given an App Draft editor containing a "<kind>" with edited text and recipients
+    When Jeremy presses Ctrl Enter and chooses Send now in the Draft editor
+    Then the App calls "<method>" with the edited Draft contents
+
+    Examples:
+      | kind             | method     |
+      | Reply Draft      | send.reply |
+      | New Thread Draft | send.draft |
+
+  @AS-APP-11 @FR-APP-6
+  Scenario Outline: A Reply Draft in the App refuses missing text or recipients
+    Given an App Reply Draft editor with empty "<field>"
+    When Jeremy presses Ctrl Enter and chooses Send now in the Draft editor
+    Then the App refuses the send with "<error>"
+
+    Examples:
+      | field | error                                      |
+      | To    | Not sent: add at least one recipient in To. |
+      | Body  | Nothing to send.                           |
+
   @AS-APP-12 @FR-APP-4 @NFR-APP-6
   Scenario: A breaking change to the Local API fails its check
     Given the released Local API document

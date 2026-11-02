@@ -173,9 +173,18 @@ export default class Draft extends View {
   }
 
   async dispatch(again, cx) {
-    toast("Sending…");
     try {
-      await call("send.draft", { draft_id: this.draft.id, revision: this.draft.revision, again });
+      const d = this.draft, v = this.values();
+      const list = (s) => s.split(",").map((value) => value.trim()).filter(Boolean);
+      const to = list(v.to), cc = list(v.cc);
+      if (d.thread_id && !v.body.trim()) return toast("Nothing to send.", "error");
+      if (d.thread_id && d.kind === "email" && !to.length) return toast("Not sent: add at least one recipient in To.", "error");
+      toast("Sending…");
+      if (d.thread_id) {
+        await call("send.reply", { thread_id: d.thread_id, text: v.body, to, cc });
+      } else {
+        await call("send.draft", { draft_id: d.id, revision: d.revision, again });
+      }
       toast("Sent.");
       focusMain();
     } catch (e) {

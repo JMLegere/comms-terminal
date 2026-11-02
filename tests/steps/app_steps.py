@@ -5,6 +5,7 @@ import base64
 import copy
 import http.server
 import json
+import subprocess
 import threading
 import time
 from email.message import EmailMessage
@@ -212,6 +213,52 @@ def every_key_placed(app):
     app.parity.test_every_console_binding_reaches_the_app_or_says_why()
     app.parity.test_each_mapped_command_is_bound_and_handled()
     app.parity.test_each_typed_key_is_in_its_view()
+
+
+@given(parsers.parse('an App Draft editor containing a "{kind}" with edited text and recipients'))
+def edited_app_draft(app, kind):
+    app.draft_kind = kind
+
+
+@given(parsers.parse('an App Reply Draft editor with empty "{field}"'))
+def empty_app_reply_draft(app, field):
+    app.draft_kind = "Reply Draft"
+    app.empty_draft_field = field
+
+
+@when("Jeremy presses Ctrl Enter and chooses Send now in the Draft editor")
+def send_in_app_draft_editor(app):
+    script = Path(__file__).resolve().parents[1] / "app_draft_view.mjs"
+    result = subprocess.run(["node", "--experimental-vm-modules", str(script), app.draft_kind,
+                             getattr(app, "empty_draft_field", "")],
+                            capture_output=True, text=True, timeout=10, check=True)
+    app.draft_send = json.loads(result.stdout)
+
+
+@then(parsers.parse('the App calls "{method}" with the edited Draft contents'))
+def app_uses_draft_send_path(app, method):
+    calls = app.draft_send["calls"]
+    sends = [c for c in calls if c["method"] in {"send.reply", "send.draft"}]
+    assert len(sends) == 1 and sends[0]["method"] == method, sends
+    assert app.draft_send["saved"] == {
+        "connection_id": "connection-1", "kind": "email", "sender": "me@example.test",
+        "to": " ana@example.test, ben@example.test ", "cc": " copy@example.test ",
+        "subject": "Edited subject", "body": "Edited text",
+    }
+    assert calls[0]["method"] == "command.inbox.save_draft"
+    if method == "send.reply":
+        assert sends[0]["params"] == {
+            "thread_id": "thread-1", "text": "Edited text",
+            "to": ["ana@example.test", "ben@example.test"], "cc": ["copy@example.test"],
+        }
+    else:
+        assert sends[0]["params"] == {"draft_id": "draft-1", "revision": 2, "again": False}
+
+
+@then(parsers.parse('the App refuses the send with "{error}"'))
+def app_refuses_empty_reply(app, error):
+    assert not [c for c in app.draft_send["calls"] if c["method"] in {"send.reply", "send.draft"}]
+    assert app.draft_send["toasts"][-1] == error
 
 
 # --- AS-12: the Local API only grows ---
