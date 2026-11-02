@@ -28,7 +28,10 @@ jobs:
       - name: Build
         run: cargo build --release --manifest-path app/Cargo.toml
       - name: Views pass check
-        run: app/target/release/comms-terminal-app check
+        run: |
+          for view in app/defaults/views/*/; do
+            app/target/release/comms-terminal-app check "$HOME/.config/comms-terminal-app/views/$(basename "$view")"
+          done
       - name: Local core tests
         run: uv run pytest -q tests/test_core.py tests/test_features.py -k "core or app or App"
       - name: Draw the demo inbox
