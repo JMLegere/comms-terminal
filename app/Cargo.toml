@@ -1,0 +1,50 @@
+[package]
+name = "comms-terminal-app"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "Comms Terminal's native desktop App: a GPUI host for gpui-shell views on the Local core (ADR 0013)"
+
+[[bin]]
+name = "comms-terminal-app"
+path = "src/main.rs"
+
+[dependencies]
+gpui = { package = "gpui-pre", version = "=0.3.8", features = ["render-to-image"] }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.8", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
+gpui-shell = { path = "vendor/gpui-kit/crates/shell" }
+gpui-base = { path = "vendor/gpui-kit/crates/base" }
+anyhow = "1"
+async-channel = "2"
+image = { version = "0.25", default-features = false, features = ["png"] }
+litehtml = { version = "0.2.6", features = ["pixbuf", "email"] }
+notify = "7"
+serde_json = "1"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gpui_linux = { package = "gpui-pre-linux", version = "=0.3.8", features = ["render-to-image"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+gpui_macos = { package = "gpui-pre-macos", version = "=0.3.8", features = ["render-to-image"] }
+
+[workspace]
+exclude = ["vendor"]
+
+# The same copies herdr-app builds with (vendor/README.md); their changes are marked HERDR:.
+[patch.crates-io]
+gpui-pre = { path = "vendor/gpui-pre" }
+gpui-pre-wgpu = { path = "vendor/gpui-pre-wgpu" }
+gpui-pre-apple = { path = "vendor/gpui-pre-apple" }
+rquickjs = { path = "vendor/gpui-kit/crates/shell/rquickjs-compat" }
+gpui-pre-macos = { path = "vendor/gpui-pre-macos" }
+gpui-pre-linux = { path = "vendor/gpui-pre-linux" }
+zed-xim = { path = "vendor/zed-xim" }
+xim-ctext = { path = "vendor/xim-ctext" }
+gpui-pre-windows = { path = "vendor/gpui-pre-windows" }
+taffy = { path = "vendor/taffy" }
+
+[patch."https://github.com/longbridge/quickjs-jit"]
+quickjs-jit-runtime = { path = "vendor/quickjs-jit-runtime" }
+
+[profile.release.build-override]
+strip = "none"

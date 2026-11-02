@@ -295,3 +295,14 @@ Comms Terminal runs the console on Jeremy's laptop against a copy of the Oracle 
 - Slack reactions (local implementation in progress) bypass that optimistic write queue: one explicit request uses private `/slack-reactions`, with honest confirmed/refused/unknown feedback. Offline/build mismatch prevents a change; reconnect never replays it. Snapshots and recovery require separately approved real access as in §3, Slack reaction access and recovery.
 - Updates: the service updates from `main` as in section 8. When a sync reports a new build, the console quits with exit code 75 once no write is on its way and no read-only reply text is held; the launcher installs that commit from an export of the local checkout (`COMMS_TERMINAL_REPO`, default `~/Workspace/comms-terminal`) with `uv tool install` into `~/.local/share/comms-terminal/`, then opens the console again. A held reply keeps the console open and READ-ONLY until it is saved or closed.
 - Back to the SSH console: restore the desktop entry's previous `Exec` (kept as a comment in the file). The service routes are additive; the SSH console needs nothing else.
+
+## 10. The desktop App on Mani
+
+The App is a native window on the Local core (ADR 0013); the Console stays as it is.
+
+- Install, from a checkout on Mani: `sh deploy/comms-terminal-app --install` (with `COMMS_TERMINAL_REPO` set when the checkout is not `~/Workspace/comms-terminal`). It installs `~/.local/bin/comms-terminal-app-launch` and the desktop entry "Comms Terminal App", then installs the core (uv) and builds the App (cargo, first build several minutes) at the Service's build, and opens it. It needs `uv`, `cargo` and the `oracle-dev` SSH key, as `comms-terminal-local` does.
+- Everything lives in `~/.local/share/comms-terminal-app/`: its own `inbox.db` copy, `service-build`, `installed-build`, the core (`tools/`, `bin/comms-terminal`), the App (`bin/comms-terminal-app`) and cargo's `target/`. Interface files are in `~/.config/comms-terminal-app/`.
+- Updates: the Service updates from `main` (§8). The next sync reports the new build; the App turns read-only, quits with 75 once no write is on its way, and the launcher installs that build, stops the old core and opens the App again.
+- The core keeps running when the window closes. Stop it with `pkill -f -- "--db $HOME/.local/share/comms-terminal-app/inbox.db"`.
+- Uninstall: remove the launcher, `~/.local/share/applications/comms-terminal-app.desktop`, and `~/.local/share/comms-terminal-app/`. The Console's entry is untouched.
+

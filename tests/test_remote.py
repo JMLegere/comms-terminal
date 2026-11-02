@@ -199,8 +199,9 @@ def test_attachment_links_come_signed_from_the_service(service, laptop, tmp_path
 def test_values_survive_the_wire():
     when = datetime(2026, 10, 19, 12, tzinfo=timezone.utc)
     for v in (inbox.Snooze(when), inbox.SetCase(new_title="x"), {"_members": [1, 2], 3: (4, b"\x00")},
-              [inbox.Done(), None, 1.5, "s"]):
+              [inbox.Done(), None, 1.5, "s"], {"start": when.date()}):
         assert remote.decode(remote.encode(v)) == v
+    assert type(remote.decode(remote.encode(when.date()))) is type(when.date())  # an Enrollment's Start date
 
 
 def test_the_console_on_the_copy_triages_through_the_service_and_shows_read_only(service, laptop, tmp_path):

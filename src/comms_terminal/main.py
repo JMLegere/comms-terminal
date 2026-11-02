@@ -45,6 +45,9 @@ def main(argv=None) -> None:
     p.add_argument("--remote", metavar="SSH_ARGS",
                    help="console: work on a local copy (--db) of the service reached by `ssh SSH_ARGS` (ADR 0004)")
     sub = p.add_subparsers(dest="cmd")
+    c = sub.add_parser("core", help="the Local core: the laptop copy and the Local API for the App (ADR 0013)")
+    c.add_argument("--listen", help="the Local API's socket (default $XDG_RUNTIME_DIR/comms-terminal/core.sock)")
+    c.add_argument("--schema", action="store_true", help="print the Local API's OpenRPC document and exit")
     s = sub.add_parser("serve", help="run the hooks server, reply socket, and wake timer")
     s.add_argument("--host", default="127.0.0.1")
     s.add_argument("--port", type=int, default=8787)
@@ -70,8 +73,8 @@ def main(argv=None) -> None:
     agent.add_parsers(sub)
     agent_commands = set(sub.choices) - before
     a = p.parse_args(argv)
-    if a.remote is not None and a.cmd is not None:
-        p.error("--remote is only valid for the console (without a command)")
+    if a.remote is not None and a.cmd not in (None, "core"):
+        p.error("--remote is only valid for the console (without a command) and `core`")
     Path(a.db).parent.mkdir(parents=True, exist_ok=True)
 
     if a.cmd in agent_commands:
@@ -79,6 +82,13 @@ def main(argv=None) -> None:
         db = inbox.connect(a.db)
         inbox.migrate(db)
         agent.run(a, db)
+    elif a.cmd == "core":
+        import json
+        from . import core
+        if a.schema:
+            print(json.dumps(core.openrpc(), indent=1))
+            return
+        core.run(a.db, a.socket, a.remote, Path(a.listen) if a.listen else core.default_listen())
     elif a.cmd == "serve":
         from . import serve
         serve.run(a.db, a.socket, a.host, a.port, a.files_host, a.files_port)
@@ -167,17 +177,21 @@ def main(argv=None) -> None:
             raise SystemExit(app.return_code)
 
 
-def start_remote(ssh_args: str, db_path: str):
-    """Comms Terminal's laptop copy (remote.py): start the SSH master, point the console at the service, and on
-    the first run wait for a first copy of the database."""
+def start_remote(ssh_args: str, db_path: str, console: bool = True):
+    """Comms Terminal's laptop copy (remote.py): start the SSH master, point the console (or, for the Local core,
+    only the file links) at the service, and on the first run wait for a first copy of the database."""
     import shlex
-    from . import inbox, remote, tui
+    from . import files, inbox, remote
     from .remote import ReplyError
     Path(db_path).parent.chmod(0o700)
     control = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / f"comms-terminal-{os.getpid()}.ssh"
     link = remote.Link(shlex.split(ssh_args), str(control))
     rem, caps = remote.Remote(link, remote.post), {}
-    remote.install(tui, rem, caps)
+    if console:
+        from . import tui
+        remote.install(tui, rem, caps)
+    else:  # the Local core makes its own write proxies (core.Core); file links still come signed by the service
+        files.file_url = remote.signed_urls(caps)
     syncer = remote.Syncer(rem, db_path, caps, Path(db_path).parent / "service-build")
     link.start()
     if not Path(db_path).exists():
