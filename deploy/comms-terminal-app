@@ -25,6 +25,7 @@ SSH_ARGS="${COMMS_TERMINAL_SSH:-"-i $HOME/.ssh/oracle-dev -o IdentitiesOnly=yes 
 -o UpdateHostKeys=no -o HostKeyAlias=universal-inbox-existing-arm -o BatchMode=yes -o ConnectTimeout=10 \
 -o LogLevel=ERROR ubuntu@168.138.69.153"}"
 REPO="${COMMS_TERMINAL_REPO:-$HOME/Workspace/comms-terminal}"
+[ -n "${COMMS_TERMINAL_SSH:-}" ] || export COMMS_TERMINAL_SERVICE_NAME="${COMMS_TERMINAL_SERVICE_NAME:-Oracle}"
 # A desktop entry or a macOS app starts with a bare PATH: find uv and cargo where their installers put them.
 PATH="$HOME/.local/bin:$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 export UV_TOOL_DIR="$DATA/tools" UV_TOOL_BIN_DIR="$DATA/bin" CARGO_TARGET_DIR="$DATA/target"
