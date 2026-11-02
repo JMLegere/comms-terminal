@@ -128,3 +128,23 @@ pub fn locate(home: &Path, name: &str) -> Option<(PathBuf, &'static str)> {
     let panel = home.join("panels").join(name);
     panel.join("main.js").is_file().then_some((panel, "panel"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// AS-7: a broken keys.json writes keys.error and the caller keeps its last good keys; a good one clears it.
+    #[test]
+    fn a_broken_file_says_why_and_a_good_one_clears_it() {
+        let home = std::env::temp_dir().join(format!("ct-app-read-json-{}", std::process::id()));
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(home.join("keys.json"), "{ \"global\": ").unwrap();
+        assert!(read_json(&home, "keys.json").is_err());
+        let why = std::fs::read_to_string(home.join("keys.error")).unwrap();
+        assert!(why.starts_with("keys.json: ") && why.contains("keeps the last good version"), "{why}");
+        std::fs::write(home.join("keys.json"), shipped("keys.json").unwrap()).unwrap();
+        assert!(read_json(&home, "keys.json").unwrap()["global"].is_object());
+        assert!(!home.join("keys.error").exists());
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+}

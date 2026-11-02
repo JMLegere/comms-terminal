@@ -5,7 +5,7 @@ Feature: App
   remote fetch removed (render.safe_html). Tags name the feature PRD's acceptance scenarios (AS-APP-n) and
   requirements (FR-APP-n, NFR-APP-n), numbered as AS-n, FR-n and NFR-n in that PRD.
 
-  @wip @AS-APP-1 @FR-APP-7 @FR-APP-8 @NFR-APP-4
+  @AS-APP-1 @FR-APP-7 @FR-APP-8 @NFR-APP-4
   Scenario: A newsletter shows its inline images and holds back remote ones
     Given an email whose HTML has an inline image "logo@x" and a remote image with alt "Weekly deals"
     When the App opens its Message Body
@@ -35,13 +35,13 @@ Feature: App
     When Jeremy drops "contract.pdf" from Mani's disk on the reply
     Then the Reply Draft shows "contract.pdf" within 2 seconds
 
-  @wip @AS-APP-5 @FR-APP-2 @FR-APP-5
+  @AS-APP-5 @FR-APP-2 @FR-APP-5
   Scenario: A write made just before the App quits still reaches the Service
     Given a Thread in Status "TODO"
     When Jeremy marks it Done in the App and quits the App at once
     Then the Service's Thread has Status "DONE"
 
-  @wip @AS-APP-6 @NFR-APP-2
+  @AS-APP-6 @NFR-APP-2
   Scenario: An agent's Draft edit shows in the open App
     Given a Draft open in the App
     When an agent saves new text for that Draft through the CLI
@@ -62,14 +62,14 @@ Feature: App
     Then the Local core refuses the call for the Panel Origin
     And the Draft is not sent
 
-  @wip @AS-APP-9 @FR-APP-14 @FR-APP-15
+  @AS-APP-9 @FR-APP-14 @FR-APP-15
   Scenario: A new Service build makes the App read-only until it updates
     Given the App and the Local core on the Service's build
     When the Service reports a different build
     Then the App shows read-only and refuses writes
     And the update installs the Service's build
 
-  @wip @AS-APP-10 @FR-APP-14
+  @AS-APP-10 @FR-APP-14
   Scenario: Offline, reads work and writes are refused
     Given the Local core cannot reach the Service
     When Jeremy opens a Thread and then marks it Done
