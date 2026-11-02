@@ -1,21 +1,33 @@
 #!/bin/sh
-# The Comms Terminal desktop App on Mani (ADR 0013). Installed as ~/.local/bin/comms-terminal-app-launch; the
-# desktop entry runs it. Like deploy/comms-terminal-local it installs the build the Service runs: the Local core
-# (Python, with uv) and the App (Rust, with cargo) from an export of that commit in the local checkout
-# (COMMS_TERMINAL_REPO). The core works on its own copy of the inbox in $DATA and outlives the window; an update
-# stops it so the new one starts. The App quits with 75 when the Service reports a new build: update, open again.
+# The Comms Terminal desktop App on Linux and macOS (ADR 0013). Installed as ~/.local/bin/comms-terminal-app-launch;
+# the desktop entry (Linux) or ~/Applications/Comms Terminal App.app (macOS) runs it. Like deploy/comms-terminal-local
+# it installs the build the Service runs: the Local core (Python, with uv) and the App (Rust, with cargo) from an
+# export of that commit in the local checkout (COMMS_TERMINAL_REPO). The core works on its own copy of the inbox in
+# $DATA and outlives the window; an update stops it so the new one starts. The App quits with 75 when the Service reports a new build: update, open again.
 #   comms-terminal-app-launch            update if needed, then open the App
 #   comms-terminal-app-launch --install  install main's desktop entry and launcher, then update
+# --install keeps COMMS_TERMINAL_REPO and COMMS_TERMINAL_SSH (the ssh arguments that reach your Service; Jeremy's
+# Oracle when unset) in $DATA/env, so the desktop entry, which starts without them, finds the same ones.
 set -eu
 
-SSH_ARGS="-i $HOME/.ssh/oracle-dev -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UpdateHostKeys=no \
--o HostKeyAlias=universal-inbox-existing-arm -o BatchMode=yes -o ConnectTimeout=10 -o LogLevel=ERROR \
-ubuntu@168.138.69.153"
 DATA="${XDG_DATA_HOME:-$HOME/.local/share}/comms-terminal-app"
-REPO="${COMMS_TERMINAL_REPO:-$HOME/Workspace/comms-terminal}"
-export UV_TOOL_DIR="$DATA/tools" UV_TOOL_BIN_DIR="$DATA/bin" CARGO_TARGET_DIR="$DATA/target"
 mkdir -p "$DATA/bin"
 chmod 700 "$DATA"
+if [ "${1:-}" = "--install" ]; then
+    for name in COMMS_TERMINAL_REPO COMMS_TERMINAL_SSH; do
+        eval "value=\${$name:-}"
+        case "$value" in *"'"*) echo "$name must not contain a single quote" >&2; exit 2 ;; esac
+        if [ -n "$value" ]; then printf "%s='%s'\n" "$name" "$value"; fi
+    done > "$DATA/env"
+fi
+[ -f "$DATA/env" ] && . "$DATA/env"
+SSH_ARGS="${COMMS_TERMINAL_SSH:-"-i $HOME/.ssh/oracle-dev -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+-o UpdateHostKeys=no -o HostKeyAlias=universal-inbox-existing-arm -o BatchMode=yes -o ConnectTimeout=10 \
+-o LogLevel=ERROR ubuntu@168.138.69.153"}"
+REPO="${COMMS_TERMINAL_REPO:-$HOME/Workspace/comms-terminal}"
+# A desktop entry or a macOS app starts with a bare PATH: find uv and cargo where their installers put them.
+PATH="$HOME/.local/bin:$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+export UV_TOOL_DIR="$DATA/tools" UV_TOOL_BIN_DIR="$DATA/bin" CARGO_TARGET_DIR="$DATA/target"
 
 place() {  # place FILE MODE DEST: main's copy of deploy/FILE, whatever the checkout has checked out
     mkdir -p "$(dirname "$3")"
@@ -27,7 +39,15 @@ place() {  # place FILE MODE DEST: main's copy of deploy/FILE, whatever the chec
 if [ "${1:-}" = "--install" ]; then
     git -C "$REPO" fetch -q origin
     place comms-terminal-app 755 "$HOME/.local/bin/comms-terminal-app-launch"
-    place comms-terminal-app.desktop 644 "${XDG_DATA_HOME:-$HOME/.local/share}/applications/comms-terminal-app.desktop"
+    if [ "$(uname)" = Darwin ]; then
+        app="$HOME/Applications/Comms Terminal App.app/Contents"
+        place comms-terminal-app.plist 644 "$app/Info.plist"
+        mkdir -p "$app/MacOS"
+        printf '#!/bin/sh\nexec "$HOME/.local/bin/comms-terminal-app-launch"\n' > "$app/MacOS/comms-terminal-app-launch"
+        chmod 755 "$app/MacOS/comms-terminal-app-launch"
+    else
+        place comms-terminal-app.desktop 644 "${XDG_DATA_HOME:-$HOME/.local/share}/applications/comms-terminal-app.desktop"
+    fi
 fi
 
 installed() {  # the build this install came from (written below), or nothing
