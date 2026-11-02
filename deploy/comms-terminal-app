@@ -5,7 +5,7 @@
 # (COMMS_TERMINAL_REPO). The core works on its own copy of the inbox in $DATA and outlives the window; an update
 # stops it so the new one starts. The App quits with 75 when the Service reports a new build: update, open again.
 #   comms-terminal-app-launch            update if needed, then open the App
-#   comms-terminal-app-launch --install  install this checkout's desktop entry and launcher, then update
+#   comms-terminal-app-launch --install  install main's desktop entry and launcher, then update
 set -eu
 
 SSH_ARGS="-i $HOME/.ssh/oracle-dev -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UpdateHostKeys=no \
@@ -17,9 +17,17 @@ export UV_TOOL_DIR="$DATA/tools" UV_TOOL_BIN_DIR="$DATA/bin" CARGO_TARGET_DIR="$
 mkdir -p "$DATA/bin"
 chmod 700 "$DATA"
 
+place() {  # place FILE MODE DEST: main's copy of deploy/FILE, whatever the checkout has checked out
+    mkdir -p "$(dirname "$3")"
+    git -C "$REPO" show "origin/main:deploy/$1" > "$3.new"
+    chmod "$2" "$3.new"
+    mv "$3.new" "$3"
+}
+
 if [ "${1:-}" = "--install" ]; then
-    install -D -m 755 "$REPO/deploy/comms-terminal-app" "$HOME/.local/bin/comms-terminal-app-launch"
-    install -D -m 644 "$REPO/deploy/comms-terminal-app.desktop" "${XDG_DATA_HOME:-$HOME/.local/share}/applications/comms-terminal-app.desktop"
+    git -C "$REPO" fetch -q origin
+    place comms-terminal-app 755 "$HOME/.local/bin/comms-terminal-app-launch"
+    place comms-terminal-app.desktop 644 "${XDG_DATA_HOME:-$HOME/.local/share}/applications/comms-terminal-app.desktop"
 fi
 
 installed() {  # the build this install came from (written below), or nothing
