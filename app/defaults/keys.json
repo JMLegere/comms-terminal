@@ -19,6 +19,10 @@
     "escape": "nav.back",
     "left": "nav.focus_left",
     "right": "nav.focus_right",
+    "ctrl-,": "settings.open",
+    "ctrl-=": "app.zoom_in",
+    "ctrl--": "app.zoom_out",
+    "ctrl-0": "app.zoom_reset",
     "h": "nav.focus_left",
     "l": "nav.focus_right"
   },

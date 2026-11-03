@@ -189,6 +189,7 @@ export default class Nav extends View {
 
   /** esc: back a column (detail → list, rail → the page), then back a page. */
   back(cx) {
+    if (shared("settings")) return run("settings.close"); // esc closes Settings first
     const at = shared("focus") ?? "list";
     if (at === "rail") return this.into(shared("list_view") ? "list" : "detail", cx);
     if (at === "detail" && shared("subcol")) return run(`${shared("detail_view")}.left`);
@@ -272,8 +273,17 @@ export default class Nav extends View {
           .when(active, (el) => el.font_semibold()).child(i.label))
         .child(tail);
     };
-    return v_flex().id("rail").size_full().min_h(0).bg(t.chrome).text_size(13).overflow_y_scroll().pb(12)
-      .children(this.items().map(row))
-      .when(Boolean(this.error), (el) => el.child(div().px(16).py(8).text_size(11.5).text_color(t.danger).child(this.error ?? "")));
+    // Settings sits at the bottom-left, as herdr-app's gear (FR-SET-1); the rail scrolls above it.
+    const gear = h_flex().id("rail-settings").h(30).px(8).mx(8).my(6).flex_none().rounded(8).items_center().gap(9).cursor_pointer()
+      .when(Boolean(shared("settings")), (el) => el.bg(t.selected)).hover((st) => st.bg(t.hover))
+      .on_click(() => run("settings.open"))
+      .child(svg("icons/settings.svg").size(14).flex_none().text_color(t.muted))
+      .child(div().flex_1().text_color(t.foreground).child("Settings"))
+      .child(div().flex_none().text_size(11).text_color(t.dim).child("ctrl+,"));
+    return v_flex().size_full().min_h(0).bg(t.chrome).text_size(13)
+      .child(v_flex().id("rail").flex_1().min_h(0).overflow_y_scroll().pb(12)
+        .children(this.items().map(row))
+        .when(Boolean(this.error), (el) => el.child(div().px(16).py(8).text_size(11.5).text_color(t.danger).child(this.error ?? ""))))
+      .child(div().flex_none().border_t(1).border_color(t.border).child(gear));
   }
 }

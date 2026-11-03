@@ -32,6 +32,8 @@ const comms = {
   nextEvent: () => new Promise(() => {}), nextCommand: () => new Promise(() => {}), theme: () => ({}),
   shared: (key) => state[key], setShared: (key, value) => { state[key] = value; }, run(c) { ran.push(c); }, open() {},
   focusMain() {}, mark() {}, toast(m) { toasts.push(m); }, keys: () => ({}), status: () => ({}),
+  fonts: () => ["Alpha Mono", "Beta Sans"], settings: () => state.settingsFile ?? {}, logTail: () => state.log ?? [],
+  setting(key, value) { calls.push({ method: "setting", params: { key, value } }); return true; },
 };
 const modules = { comms, "gpui-kit": { View: class {}, div: element, svg: element } };
 export async function load(name) {
