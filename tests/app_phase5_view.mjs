@@ -1,5 +1,5 @@
 // Phase 5: Calendar, Cases and Tasks as the Console's (AS-CONF-14..16), run in the shipped views.
-// Usage: node --experimental-vm-modules app_phase5_view.mjs join|fold|reply|task-enter|undo|grid
+// Usage: node --experimental-vm-modules app_phase5_view.mjs join|fold|reply|task-stale|task-enter|undo|grid
 import { answers, calls, cx, input, load, ran, settle, state, tasks, toasts } from "./app_view_kit.mjs";
 
 const kase = process.argv[2];
@@ -32,6 +32,22 @@ if (kase === "join") { // D95: o toasts the link; Ctrl+click opens it
     await settle();
     out.reply = c.reply?.thread; out.text = c.text.value(); out.to = c.to.value(); out.unfolded = !c.toggled.has("t1");
   }
+} else if (kase === "task-stale") { // a Task's Draft never takes the pane from the row Jeremy selected
+  const Today = await load("today"), Task = await load("task");
+  state.page = "today";
+  const today = make(Today, { data: null, cases: {}, at: 0 });
+  answers["today.page"] = { threads: [], tasks: [{ id: "k1", kind: "email", person: "Ana", group: "overdue", day: 1 }],
+    drafts: [{ id: "d-reply", thread_id: "t-reply", subject: "Re: Introduction" }], paused: [], unattended: [] };
+  today.load(cx); await settle();                         // arrives on the Task
+  answers["task.pane"] = { draft: { id: "d-task", thread_id: null } };
+  const task = make(Task, { pane: null, context: [] });
+  task.loadContext = () => {};
+  task.load(cx, true); await settle();                    // task.show: its New Thread Draft takes the pane
+  out.shown = [state.draft, state.detail];
+  today.move(1, cx);                                      // then the Reply Draft row below it
+  out.selected = [state.draft, state.detail, state.task ?? null];
+  task.load(cx); await settle();                          // a change arrives: the Task view reloads
+  out.after = [state.draft, state.detail];
 } else if (kase === "task-enter") { // D110
   const Task = await load("task");
   answers["thread.view"] = { view: { thread: { f: { status: "TODO", status_detail: "NEW_REPLY" } } } };

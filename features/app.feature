@@ -299,6 +299,12 @@ Feature: App
     When Jeremy skips it with x
     Then the toast offers z undo, z would restore it, and the next Task is selected
 
+  @AS-CONF-16 @FR-CONF-10
+  Scenario: A Task's Draft stays out of the pane once another row is selected
+    Given Today with an email Task whose New Thread Draft was shown
+    When Jeremy selects a Reply Draft row and then the inbox changes
+    Then the pane keeps the Reply Draft he selected
+
   @AS-CONF-17 @FR-CONF-10
   Scenario: Archiving a used Sequence explains itself and can be undone
     Given a Sequence in the App with three live Enrollments
