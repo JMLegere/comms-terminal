@@ -468,9 +468,15 @@ impl AppWindow {
 }
 
 impl Render for AppWindow {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         use crate::theme::color;
         self.renders += 1;
+        // Views fit their content to it: the Thread page hides its properties column when narrow, as the Console's.
+        let width = serde_json::json!(f32::from(window.viewport_size().width).round());
+        if host::shared("width") != width {
+            host::set_shared("width", width);
+            host::request(host::Request::Refresh); // views re-render with the new width
+        }
         let page = host::shared("page");
         let page = page.as_str().unwrap_or("threads");
         let rail = if host::shared("focus").as_str() == Some("rail") { " rail" } else { "" };

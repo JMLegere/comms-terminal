@@ -124,7 +124,7 @@ export default class Status extends View {
         .child(div().text_color(s.online ? t.muted : t.danger).child(s.online ? "Online" : `Read-only · ${s.problem ?? "offline"}`)))
       .child(h_flex().flex_1().min_w(0).overflow_hidden().gap(14).items_center()
         .children(groups.flatMap((g, i) => [...(i ? [div().text_color(t.dim).child("·")] : []), ...g.map(key)])))
-      .child(h_flex().flex_none().gap(8).items_center().children(parts))
+      .child(h_flex().flex_shrink(1).min_w(0).overflow_hidden().gap(8).items_center().children(parts)) // clips when narrow; Service stays
       .child(h_flex().flex_none().gap(10).items_center().text_color(t.muted)
         .child(h_flex().gap(4).items_center().child(svg("icons/server.svg").size(12)).child(s.service ?? "This machine"))
         .child(h_flex().gap(4).items_center().child(svg("icons/git-branch.svg").size(12)).child(s.service_build ? `Service ${s.service_build}` : "Service ?"))

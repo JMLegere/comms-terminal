@@ -721,7 +721,7 @@ export default class Thread extends View {
       const r = email ? rcpt(m) : null;
       const files = (m.attachments ?? []).filter((a) => !a.inline);
       return row(`m-${m.id}`, gutter(m.who, false), v_flex().flex_1().min_w(0).max_w(830).px(16).py(10).gap(6).bg(t.raised ?? t.selected)
-        .child(h_flex().id(`mh-${m.id}`).gap(8).cursor_pointer().on_click((_e, cx) => toggle(m, cx))
+        .child(h_flex().id(`mh-${m.id}`).gap_x(8).flex_wrap().cursor_pointer().on_click((_e, cx) => toggle(m, cx))
           .child(div().font_semibold().text_color(t.foreground).child(m.who ?? ""))
           .child(div().text_size(12).text_color(t.dim).child(meta)))
         .when(Boolean(r), (el) => el.child(div().id(`to-${m.id}`).text_size(12).text_color(t.dim).cursor_pointer()
@@ -771,7 +771,9 @@ export default class Thread extends View {
         .when(th.status === "SNOOZED" && Boolean(end), (el) => el.child(div().text_color(t.dim).child(`· ${left(end)}`))))
       .when(Boolean(v.link && plat), (el) => el.child(div().id("open-link").text_size(12).text_color(t.dim).cursor_pointer()
         .on_click(() => open(v.link)).child(`${I[plat[1]] ?? ""} ${plat[2] ? `open in ${plat[0]}` : "join the meeting"} ${I.open} (o)`)))
-      .when(v.channel?.kind === "meeting", (el) => el.child(div().text_size(12).text_color(t.dim).child(`${I.calendar} i respond`)));
+      .when(v.channel?.kind === "meeting", (el) => el.child(div().text_size(12).text_color(t.dim).child(`${I.calendar} i respond`)))
+      .when(narrow(), (el) => el.child(div().text_color("#928374")
+        .child([v.person?.name ?? "", v.where ?? "", th.case_id ? v.case ?? "" : "no case (l)"].filter(Boolean).join(" · "))));
   }
 
   /** The properties column: Status, people, Organizations, Case, channel, related Threads, Context (details_markup). */
@@ -840,7 +842,7 @@ export default class Thread extends View {
     const r = this.reply;
     const v = this.view;
     if (!(PLATFORM[v?.channel?.platform]?.[2] ?? true)) return null; // a Meeting Thread takes no reply
-    const keys = div().flex_none().text_color("#a89984").child("r reply · a reply all");
+    const keys = div().flex_shrink(1).min_w(0).truncate().text_color("#a89984").child("r reply · a reply all");
     const card = v_flex().ml(66).mr(20).mb(14).px(14).py(10).gap(8).rounded(4).border(1).border_color(r ? t.accent : t.border).bg(t.background);
     const note = (d) => d?.send_error ? `Scheduled send failed · ${d.send_error}` : d?.send_at ? `${I.time} Sends ${stamp(d.send_at)}` : "";
     if (!r) {
@@ -854,7 +856,7 @@ export default class Thread extends View {
             .child(div().flex_none().text_color(t.yellow ?? t.status_needs_next).child(`${I.edited} Draft`))
             .when(Boolean(n), (e) => e.child(div().flex_none().text_color(n.startsWith("Scheduled send failed") ? t.danger : t.accent).child(n)))
             .child(div().flex_1().min_w(0).truncate().text_color(t.foreground).child(first.slice(0, 80) + (body.length > first.slice(0, 80).length ? "…" : ""))))
-          .when(!drafts.length, (el) => el.child(div().flex_1().text_color(t.dim).child(`${I.reply} Leave a reply…`)))
+          .when(!drafts.length, (el) => el.child(div().flex_1().min_w(0).truncate().text_color(t.dim).child(`${I.reply} Leave a reply…`)))
           .child(keys));
     }
     const e = r.envelope;
@@ -915,8 +917,14 @@ export default class Thread extends View {
           .child(v_flex().px(20).pb(10).gap(8).children(this.timeline(v, t)))
           .when(!this.reply && Boolean(this.staged?.length), (el) => el.child(div().ml(66).mb(14).child(this.files(this.staged, t, "Reply files")))))
         .when(Boolean(this.replyBox(t)), (el) => el.child(this.replyBox(t))))
-      .child(this.props(v, t));
+      .when(!narrow(), (el) => el.child(this.props(v, t)));
   }
+}
+
+/** The Console hides the properties column below 84 columns (ThreadView.on_resize); here, when the Thread pane (the
+ * window less the rail and the list) is under 660 px. ponytail: assumes the shipped 248 px rail and 460 px list. */
+export function narrow(width = shared("width")) {
+  return typeof width === "number" && width - 248 - 460 - 30 < 660;
 }
 
 /** One Context source's answer as lines, as the Console's attio_markup, tana_markup and linear_markup. */
