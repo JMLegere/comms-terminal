@@ -35,6 +35,44 @@ if (kase === "rowkeys") { // a Case header under two Statuses (here "No case") k
   pane.command("send", cx); pane.command("save", cx);
   await settle();
   out.pane_calls = calls.slice(before);
+} else if (kase === "prompt") { // the Console's Ask: the prompt is the box's placeholder
+  const Overlay = await load("overlay");
+  const o = new Overlay();
+  o.init({}, cx);
+  state.picker = { title: "New case title", options: [], reply: "thread.case-named", prompt: "What is this about?" };
+  const before = o.input;
+  o.open(cx);                                             // overlay.open
+  out.placeholder = o.input.placeholder;
+  const open = before;
+  out.fresh = o.input !== open;
+  o.input.set_value("Seed Round");
+  o.choose(undefined, cx);
+  out.ran = ran.splice(0);
+} else if (kase === "complete") { // → takes a To/Cc completion, as a shell's suggestion; Tab does not
+  const Thread = await load("thread");
+  const t = make(Thread, { ghost: { cc: ["ana@example.test, ben@example.test", "ana@example.test, ben@example.test"] } });
+  const cc = input(); cc.set_value("ana@example.test, ben@exa");
+  out.tab = t.accept("cc", cc, "tab", cx);
+  out.right = t.accept("cc", cc, "right", cx);
+  out.value = cc.value();
+  out.again = t.accept("cc", cc, "right", cx);            // taken: → moves on as usual
+} else if (kase === "pin") { // a Thread opens at its newest entries; Jeremy's own scroll ends that
+  const Thread = await load("thread");
+  const after = cx.timer.after;
+  cx.timer.after = (_ms, f) => f(cx);                    // timers fire at once here
+  state.thread = "thread-8";
+  answers["thread.view"] = { view: { thread: { f: { id: "thread-8", status: "TODO" } }, messages: [] }, drafts: [] };
+  const t = make(Thread, { bodies: {}, view: null, loaded: null });
+  t.load(cx); await settle();
+  out.opened = ran.filter((c) => c === "app.scroll_end").length;
+  ran.length = 0;
+  t.command("scroll_up", cx);
+  t.pin("thread-8");
+  out.after_scroll = ran.filter((c) => c === "app.scroll_end").length;
+  ran.length = 0;
+  t.load(cx); await settle();                             // a reload of the same Thread keeps Jeremy's place
+  out.reload = ran.filter((c) => c === "app.scroll_end").length;
+  cx.timer.after = after;
 } else if (kase === "early") { // NFR-APP-1: a reply key pressed while the Thread still loads acts once it arrives
   const Thread = await load("thread");
   state.thread = "thread-7";

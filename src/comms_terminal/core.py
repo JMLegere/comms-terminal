@@ -335,7 +335,8 @@ def _draft(core, db, draft_id):
         views = draft_history(db, d["kind"], d["connection_id"], d["to"] or "")
         history = None if views is None else [{"id": v["thread"].id, "title": v["thread"].title,
                                                 "status": v["thread"].status, "detail": v["thread"].status_detail,
-                                                "messages": [{k: m[k] for k in ("who", "at", "content")} for m in v["messages"]]}
+                                                "messages": [{k: m[k] for k in ("who", "at", "content")} | _text(m, v)
+                                                             for m in v["messages"]]}
                                                for v in views]
         note = "Choose an exact recipient." if views is None else "No captured match · prior contact unknown." if not views \
             else "Captured local history"
@@ -764,6 +765,15 @@ def _connections(core, db):
 def _channels(core, db, connection_id):
     """One Connection's channel rules."""
     return inbox.channel_rules(db, connection_id)
+
+
+def _text(m, view) -> dict:
+    """A message's text body as the Console shows it: `shown`, and the quoted or signature text folded behind •••
+    (`trimmed`); both empty for a deleted message."""
+    if m["content"] is None:
+        return {"shown": "", "trimmed": ""}
+    body = render.from_slack(m["content"]) if view["channel"]["platform"] == "slack" else render.from_text(m["content"])
+    return {"shown": render.plain(body.text), "trimmed": render.plain(body.trimmed)}
 
 
 def _shared(core, name, fn, db):

@@ -81,7 +81,10 @@ export default class Case extends View {
         this.c = { ...c, id };
         const at = c.cards.findIndex((k) => k.id === keep);
         this.sel = at >= 0 ? at : Math.max(0, Math.min(this.sel, c.cards.length - 1));
-        if (fresh) { this.toggled = new Set(); this.opened = {}; this.onDesc = false; this.loadContext(id, c, cx); }
+        if (fresh) {
+          this.toggled = new Set(); this.opened = {}; this.onDesc = false; this.loadContext(id, c, cx);
+          cx.timer.after(60, () => { if (shared("case") === id) run("app.scroll_end"); }); // opens at its newest Activity
+        }
         this.error = null;
         this.pickThread();
         if (shared("focus") === "detail" && shared("detail_view") === "case") this.target(cx);

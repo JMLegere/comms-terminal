@@ -277,5 +277,9 @@
     "v": "thread.react",
     "i": "thread.respond",
     "delete": "thread.unstage"
+  },
+  "view:overlay": {
+    "tab": "overlay.tab",
+    "shift-tab": "overlay.tab"
   }
 }

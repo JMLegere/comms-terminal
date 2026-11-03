@@ -882,6 +882,69 @@ def task_opens(app):
     assert app.phase5 == {"reply": ["nav.todo", "thread.show", "thread.open_reply"], "thread": "t9", "fresh": ["draft.edit"]}
 
 
+@given("a reply box whose Cc offers a completion")
+def cc_completion(app):
+    pass
+
+
+@when("Jeremy presses → at the end of the field")
+def press_right(app):
+    app.phase4 = phase4_view("complete")
+
+
+@then("the Cc takes the completion, and Tab leaves it to element focus")
+def completion_taken(app):
+    assert app.phase4 == {"tab": False, "right": True, "value": "ana@example.test, ben@example.test", "again": False}
+
+
+@given("a Thread the App is about to open")
+def thread_to_open(app):
+    pass
+
+
+@when("it opens")
+def thread_opens(app):
+    app.phase4 = phase4_view("pin")
+
+
+@then("the Thread pane scrolls to its newest entries")
+def scrolled_to_newest(app):
+    assert app.phase4["opened"] >= 1
+
+
+@then("once Jeremy scrolls, or the Thread reloads, it stays where he is")
+def stays_put(app):
+    assert app.phase4["after_scroll"] == 0 and app.phase4["reload"] == 0
+
+
+@given("the App's New case title prompt")
+def new_case_prompt(app):
+    pass
+
+
+@when("Jeremy opens it and types a title")
+def open_prompt(app):
+    app.phase4 = phase4_view("prompt")
+
+
+@then(parsers.parse('"{hint}" is the box\'s placeholder, as in the Console'))
+def prompt_placeholder(app, hint):
+    assert app.phase4["placeholder"] == hint and app.phase4["fresh"]
+
+
+@then("Tab stays in the prompt")
+def tab_stays(app):
+    keys = json.loads((Path(__file__).resolve().parents[2] / "app/defaults/keys.json").read_text())
+    assert keys["view:overlay"] == {"tab": "overlay.tab", "shift-tab": "overlay.tab"}  # bound above the shell's Tab
+    view = (Path(__file__).resolve().parents[2] / "app/defaults/views/overlay/main.js").read_text()
+    assert 'key_context("View view=overlay")' in view
+
+
+@then("Enter creates the Case with the typed title")
+def prompt_enter(app):
+    assert app.phase4["ran"] == ['thread.case-named:{"value":null,"text":"Seed Round"}']
+
+
 @given("Today with an email Task whose New Thread Draft was shown")
 def task_draft_shown(app):
     pass

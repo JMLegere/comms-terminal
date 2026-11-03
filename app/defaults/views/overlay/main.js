@@ -2,30 +2,42 @@
 //   setShared("picker", { title, options: [{ value, label, hint }], reply: "thread.picked", prompt: "placeholder",
 //     body: [{ text, dim, strong, label }] });  // body: lines shown above the options, as a Console Pick body; a label sits dim before its text
 //   run("overlay.open");
-// Typing filters the options (or is the answer, with `prompt` and no options); ↑/↓ move, Enter chooses, Escape
-// cancels. The choice goes back as the command `<reply>:<JSON {value, text}>`.
+// Typing filters the options (or is the answer, with `prompt` and no options; the prompt is the box's placeholder,
+// as the Console's Ask); ↑/↓ move, Enter chooses, Escape cancels, Tab stays in the box (keys.json "view:overlay").
+// The choice goes back as the command `<reply>:<JSON {value, text}>`.
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
 import { nextCommand, theme, shared, setShared, run, focusMain, keys } from "comms";
 
 export default class Overlay extends View {
   init(_props, cx) {
-    this.input = InputState.new({ placeholder: "" });
+    this.input = this.field("");
     this.at = 0;
-    this.input.on("change", (_e, cx) => { this.at = 0; cx.notify(); });
-    this.input.on("submit", (_e, cx) => this.choose(this.shown()[this.at], cx));
     cx.spawn(async (cx) => {
       while (true) {
         const c = await nextCommand();
         if (c === "help") this.help();
         else if (c.startsWith("ran:")) run(JSON.parse(c.slice(4)).value);
-        if (c !== "open" && c !== "help") continue;
-        this.at = 0;
-        this.input.set_value(shared("picker")?.value ?? "");
-        this.input.focus();
-        cx.notify();
+        if (c === "open" || c === "help") this.open(cx);
       }
     });
+  }
+
+  open(cx) {
+    this.at = 0;
+    const placeholder = shared("picker")?.prompt ?? "";
+    if (placeholder !== this.placeholder) this.input = this.field(placeholder); // no setter: a new box per prompt
+    this.input.set_value(shared("picker")?.value ?? "");
+    this.input.focus();
+    cx.notify();
+  }
+
+  field(placeholder) {
+    this.placeholder = placeholder;
+    const input = InputState.new({ placeholder });
+    input.on("change", (_e, cx) => { this.at = 0; cx.notify(); });
+    input.on("submit", (_e, cx) => this.choose(this.shown()[this.at], cx));
+    return input;
   }
 
   /** ?: this page's keys, then the global ones; choosing one runs it. */
@@ -69,7 +81,7 @@ export default class Overlay extends View {
     this.at = Math.max(0, Math.min(this.at, options.length - 1));
     return div().size_full().flex().justify_center().pt(90).bg("#00000033")
       .on_mouse_down("left", (_e, cx) => this.cancel(cx))
-      .child(v_flex().id("picker").w(520).max_h(460).rounded(10).border(1).border_color(t.border).bg(t.background)
+      .child(v_flex().id("picker").key_context("View view=overlay").w(520).max_h(460).rounded(10).border(1).border_color(t.border).bg(t.background)
         .shadow_lg().overflow_hidden().text_size(13)
         .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
         .on_key_down((e, cx) => {
@@ -85,7 +97,6 @@ export default class Overlay extends View {
             .when(Boolean(line.label), (r) => r.child(div().w(84).flex_none().text_color(t.muted).child(line.label ?? "")))
             .child(div().flex_1().min_w(0).text_color(line.dim ? t.dim : t.foreground).when(Boolean(line.strong), (d) => d.font_semibold()).child(line.text ?? ""))))))
         .child(div().px(10).pb(8).child(Input.new(this.input)))
-        .when(Boolean(p.prompt && !options.length), (el) => el.child(div().px(14).pb(12).text_size(12).text_color(t.dim).child(p.prompt)))
         .child(v_flex().id("picker-options").flex_1().min_h(0).overflow_y_scroll().px(6).pb(6)
           .children(options.map((o, i) =>
             h_flex().id(`o-${i}`).h(30).px(8).gap(8).rounded(6).items_center().cursor_pointer()

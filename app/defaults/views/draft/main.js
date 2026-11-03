@@ -393,19 +393,26 @@ export default class Draft extends View {
     const note = (info.history_note ?? "").startsWith("No captured match") ? "none captured" : info.history_note;
     const prop = (icon, label, value) => v_flex().gap(1).child(div().text_color(t.muted).child(`${icon} ${label}`))
       .child(div().text_color(t.foreground).child(value));
+    // Each Thread as a Case card: its title and Status, one line per earlier message (who, when, first line), and
+    // the newest message in full with its quoted text folded behind ••• (core `shown`/`trimmed`).
     const history = (info.history ?? []).map((h, i) => {
       const g = GLYPH[h.detail] ?? ["·", "muted", h.detail];
       const msgs = h.messages ?? [];
-      return bar(`h-${i}`, v_flex().id(`h-${i}`)).gap(4)
+      const text = (m) => m.shown ?? m.content ?? "";
+      const line = (m) => h_flex().gap(6).text_size(12).min_w(0)
+        .child(div().flex_none().font_semibold().text_color(t.foreground).child(m.who ?? ""))
+        .child(div().flex_none().text_color(t.muted).child(m.at ? stamp(m.at) : ""));
+      return bar(`h-${i}`, v_flex().id(`h-${i}`)).gap(6).p(10).rounded(6).border(1).border_color(t.border)
         .child(h_flex().gap(8).items_center().cursor_pointer()
           .on_click(() => this.openThread(h))
-          .child(div().font_semibold().text_color(t.blue).child(h.title ?? ""))
-          .child(div().text_color(t[g[1]] ?? t.muted).child(`${g[0]} ${g[2]}`)))
-        .children(msgs.map((m, j) => v_flex().pl(8).gap(2)
-          .child(h_flex().gap(6).text_size(12).child(div().font_semibold().text_color(t.foreground).child(m.who ?? ""))
-            .child(div().text_color(t.muted).child(m.at ? stamp(m.at) : "")))
-          .when(j === msgs.length - 1 && Boolean(m.content), (e) => e.child(div().text_size(12.5).text_color(t.foreground)
-            .child((m.content ?? "").split("\n").slice(0, 12).join("\n"))))));
+          .child(div().flex_1().min_w(0).truncate().font_semibold().text_color(t.blue).child(h.title ?? ""))
+          .child(div().flex_none().text_color(t[g[1]] ?? t.muted).child(`${g[0]} ${g[2]}`)))
+        .children(msgs.map((m, j) => j < msgs.length - 1
+          ? line(m).child(div().flex_1().min_w(0).truncate().text_color(t.muted).child(text(m).split("\n").find((s) => s.trim()) ?? ""))
+          : v_flex().gap(4).child(line(m))
+            .child(div().text_size(12.5).line_height(1.5).text_color(m.content == null ? t.muted : t.foreground)
+              .child(m.content == null ? "message deleted" : text(m)))
+            .when(Boolean(m.trimmed), (e) => e.child(div().text_color(t.muted).child("•••")))));
     });
     const editor = v_flex().flex_none().gap(8).px(16).py(12).border_t(1).border_color(t.border)
       .on_key_down((ev, cx) => {

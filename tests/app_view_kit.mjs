@@ -14,11 +14,12 @@ function element() {
 }
 const widget = { new: element };
 // An input's state: holds its text and its handlers, so a test can type, blur and read back.
-export function input() {
+export function input(options = {}) {
   const handlers = {};
   let text = "";
   const self = new Proxy({}, { get(_t, name) {
     if (name === "value") return () => text;
+    if (name === "placeholder") return options.placeholder; // what the box shows while empty
     if (name === "set_value") return (v) => { text = v; };
     if (name === "on") return (event, h) => { (handlers[event] ??= []).push(h); return true; };
     if (name === "fire") return (event, cx) => (handlers[event] ?? []).forEach((h) => h({}, cx));
