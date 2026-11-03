@@ -1,5 +1,5 @@
 // Phase 3: the Threads list as the Console's (AS-CONF-7, AS-CONF-8, D28, D32), run in the shipped view.
-// Usage: node --experimental-vm-modules app_phase3_view.mjs groups|case|advance|ages
+// Usage: node --experimental-vm-modules app_phase3_view.mjs groups|case|advance|today-advance|ages
 import { answers, cx, load, ran, settle, state, tasks } from "./app_view_kit.mjs";
 
 const Threads = await load("threads");
@@ -34,6 +34,18 @@ if (process.argv[2] === "groups") {
   view.pick("row-a"); state.thread = "a";
   view.command("advance", cx);                            // s on a: the cursor moves on
   out.items = await show([row("b", "CREATED"), row("c", "CREATED"), row("a", "IN_PROGRESS")]);
+  out.thread = state.thread;
+} else if (process.argv[2] === "today-advance") { // D32 on Today: s moves on, as after Done
+  const Today = await load("today");
+  const today = Object.assign(Object.create(Today.prototype), { data: null, cases: {}, at: 0 });
+  state.page = "today";
+  const page = (threads) => ({ threads, tasks: [], drafts: [], paused: [], unattended: [] });
+  answers["today.page"] = page([row("a", "CREATED"), row("b", "CREATED"), row("c", "CREATED")]);
+  today.load(cx); await settle();
+  out.first = state.thread;
+  today.command("advance", cx);                           // s on a: the cursor moves on
+  answers["today.page"] = page([row("b", "CREATED"), row("c", "CREATED"), row("a", "IN_PROGRESS")]);
+  today.load(cx); await settle();
   out.thread = state.thread;
 } else { // D27, D28: the Console's when() and left()
   const { when, left } = Threads.ns, now = Date.parse("2026-11-03T12:00:00Z"), at = (secs) => new Date(now - secs * 1000).toISOString();

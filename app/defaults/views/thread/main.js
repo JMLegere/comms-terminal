@@ -272,7 +272,7 @@ export default class Thread extends View {
       }
       case "status-picked":
         if (answer.value === "UNIGNORE") return this.act(dc("Unignore"), "Un-ignored: back in Todo.", cx);
-        run("threads.advance"); // the queue moves on, as after Done (D32)
+        run("threads.advance"); run("today.advance"); // the queue moves on, as after Done (D32)
         return this.act(dc("MarkTodo", { detail: answer.value }), `Marked ${DETAIL[answer.value]}.`, cx);
       case "snooze": return id && this.pick("Pause for later", snoozeOptions(), "snooze-picked");
       case "snooze-picked":

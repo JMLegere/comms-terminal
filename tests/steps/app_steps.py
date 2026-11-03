@@ -653,6 +653,16 @@ def change_status(app):
     app.phase3 = phase3_view("advance")
 
 
+@given("three Todo Threads on the App's Today with the first selected")
+def three_threads_on_today(app):
+    pass
+
+
+@when("Jeremy changes its Status detail with s on Today")
+def change_status_on_today(app):
+    app.phase3 = phase3_view("today-advance")
+
+
 @then("the selection moves to the Thread below it")
 def moved_on(app):
     assert app.phase3["thread"] == "b"
