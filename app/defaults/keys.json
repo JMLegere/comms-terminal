@@ -27,7 +27,8 @@
     "k": "nav.up",
     "down": "nav.down",
     "up": "nav.up",
-    "enter": "nav.enter"
+    "enter": "nav.enter",
+    "tab": "nav.tab"
   },
   "page:threads": {
     "j": "threads.next",

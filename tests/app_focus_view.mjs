@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { cx, load, ran, state, toasts } from "./app_view_kit.mjs";
 
 const make = (View, fields) => Object.assign(Object.create(View.prototype), fields);
-const out = {};
+const out = {}, run_log = [];
 const Today = await load("today"), Thread = await load("thread"), Nav = await load("nav");
 
 // AS-EF-6: a key the focused row does not take says what that row takes.
@@ -48,4 +48,19 @@ nav.command("focus_left", cx);
 out.rail = [state.focus, state.target?.col];
 nav.command("back", cx);
 out.rail_back = state.focus;
+// Phase 2: the Thread's properties are an inner column; a new page focuses its first item.
+thread.links = [{ text: "Ana", go: () => run_log.push("open Ana") }, { text: "acme.test", go: () => run_log.push("open acme") }];
+state.focus = "detail";
+thread.command("right", cx);
+thread.command("next", cx);
+out.props = [state.subcol, state.target?.label];
+thread.command("enter", cx);
+thread.command("left", cx);
+out.props_left = [state.subcol ?? null, run_log];
+state.detail_view = "thread"; state.subcol = "props"; ran.splice(0);
+nav.command("back", cx);
+out.nav_left = ran.splice(0);
+state.push = { page: "person", person: "person-1" };
+nav.command("push", cx);
+out.push = [state.focus, ran.filter((c) => c === "person.focus_entry")];
 console.log(JSON.stringify(out));

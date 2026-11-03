@@ -19,3 +19,7 @@ def test_element_focus_moves_names_and_explains_keys():
     assert out["back"] == ["list", ["today.focus_entry"]]
     assert out["rail"] == ["rail", "rail"]
     assert out["rail_back"] == "list"
+    assert out["props"] == ["props", "Link · acme.test"]
+    assert out["props_left"] == [None, ["open acme"]]
+    assert out["nav_left"] == ["thread.left"]
+    assert out["push"] == ["detail", ["person.focus_entry"]]
