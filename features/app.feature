@@ -300,6 +300,12 @@ Feature: App
     Then the toast offers z undo, z would restore it, and the next Task is selected
 
   @AS-CONF-7 @FR-CONF-9
+  Scenario: → takes an address completion in the reply box
+    Given a reply box whose Cc offers a completion
+    When Jeremy presses → at the end of the field
+    Then the Cc takes the completion, and Tab leaves it to element focus
+
+  @AS-CONF-7 @FR-CONF-9
   Scenario: A Thread opens at its newest entries
     Given a Thread the App is about to open
     When it opens

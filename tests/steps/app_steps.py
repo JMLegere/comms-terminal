@@ -882,6 +882,21 @@ def task_opens(app):
     assert app.phase5 == {"reply": ["nav.todo", "thread.show", "thread.open_reply"], "thread": "t9", "fresh": ["draft.edit"]}
 
 
+@given("a reply box whose Cc offers a completion")
+def cc_completion(app):
+    pass
+
+
+@when("Jeremy presses → at the end of the field")
+def press_right(app):
+    app.phase4 = phase4_view("complete")
+
+
+@then("the Cc takes the completion, and Tab leaves it to element focus")
+def completion_taken(app):
+    assert app.phase4 == {"tab": False, "right": True, "value": "ana@example.test, ben@example.test", "again": False}
+
+
 @given("a Thread the App is about to open")
 def thread_to_open(app):
     pass

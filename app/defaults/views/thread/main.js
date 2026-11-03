@@ -603,7 +603,8 @@ export default class Thread extends View {
     });
   }
 
-  /** To/Cc completion from local addresses (address.complete); Tab takes it. */
+  /** To/Cc completion from local addresses (address.complete); → at the end of the field takes it, as a shell's
+   * suggestion (the input passes → on only there; Tab belongs to element focus). */
   complete(field, cx) {
     const state = field === "to" ? this.to : this.cc, value = state.value();
     const n = (this.typed = (this.typed ?? 0) + 1);
@@ -615,6 +616,16 @@ export default class Thread extends View {
         cx.notify();
       }).catch(() => {});
     });
+  }
+
+  /** →: the field takes its completion. True when it did. */
+  accept(name, state, keystroke, cx) {
+    const hit = this.ghost?.[name];
+    if (keystroke !== "right" || !hit) return false;
+    state.set_value(hit[1]);
+    this.ghost = { ...this.ghost, [name]: null };
+    cx.notify();
+    return true;
   }
 
   autosave(cx) {
@@ -967,16 +978,9 @@ export default class Thread extends View {
     const label = (text) => div().w(64).flex_none().text_color(t.dim).child(text);
     const field = (text, el) => h_flex().gap(8).items_center().text_size(12).child(label(text)).child(div().flex_1().min_w(0).child(el));
     const address = (name, state) => v_flex().flex_1().min_w(0)
-      .on_key_down((ev, cx) => {
-        const hit = this.ghost?.[name];
-        if (ev.keystroke !== "tab" || !hit) return;
-        state.set_value(hit[1]);
-        this.ghost = { ...this.ghost, [name]: null };
-        cx.stop_propagation();
-        cx.notify();
-      })
+      .on_key_down((ev, cx) => { if (this.accept(name, state, ev.keystroke, cx)) cx.stop_propagation(); })
       .child(Input.new(state))
-      .when(Boolean(this.ghost?.[name]), (el) => el.child(div().text_size(11).text_color(t.dim).child(`Tab: ${this.ghost[name]?.[0] ?? ""}`)));
+      .when(Boolean(this.ghost?.[name]), (el) => el.child(div().text_size(11).text_color(t.dim).child(`→ ${this.ghost[name]?.[0] ?? ""}`)));
     const mode = (m, text) => div().id(`mode-${m}`).px(6).rounded(3).cursor_pointer().on_click((_e, cx) => this.setMode(m, cx))
       .when(r.mode === m, (el) => el.bg(t.selected).font_semibold().text_color(t.strong ?? t.foreground)).when(r.mode !== m, (el) => el.text_color(t.dim)).child(text);
     const subject = (v?.thread?.f?.title ?? "");

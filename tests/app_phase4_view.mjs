@@ -48,6 +48,14 @@ if (kase === "rowkeys") { // a Case header under two Statuses (here "No case") k
   o.input.set_value("Seed Round");
   o.choose(undefined, cx);
   out.ran = ran.splice(0);
+} else if (kase === "complete") { // → takes a To/Cc completion, as a shell's suggestion; Tab does not
+  const Thread = await load("thread");
+  const t = make(Thread, { ghost: { cc: ["ana@example.test, ben@example.test", "ana@example.test, ben@example.test"] } });
+  const cc = input(); cc.set_value("ana@example.test, ben@exa");
+  out.tab = t.accept("cc", cc, "tab", cx);
+  out.right = t.accept("cc", cc, "right", cx);
+  out.value = cc.value();
+  out.again = t.accept("cc", cc, "right", cx);            // taken: → moves on as usual
 } else if (kase === "pin") { // a Thread opens at its newest entries; Jeremy's own scroll ends that
   const Thread = await load("thread");
   const after = cx.timer.after;
