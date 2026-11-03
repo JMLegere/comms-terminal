@@ -22,9 +22,10 @@ import queue
 import shlex
 import socketserver
 import threading
+import time
 import urllib.request
 import uuid
-from concurrent.futures import Future
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime
 from importlib import resources
 from pathlib import Path
@@ -84,7 +85,7 @@ def _shell(core, db):
     from collections import Counter
     from . import calendar as cal, clock, gcal
     from .tui import PLATFORMS, build_version, conn_name, health_ok, rail_share
-    t = inbox.today(db)
+    t = _shared(core, "today", inbox.today, db)
     now = clock.local()
     current, nxt = cal.now_and_next(db, now)
     short = lambda e: e["title"] if len(e["title"]) <= 24 else e["title"][:23] + "…"  # noqa: E731
@@ -119,7 +120,7 @@ def _today(core, db):
     """Today: Todo Threads, due Tasks, the Drafts not shown through them (each with `recipient`, as drafts.list),
     Paused Enrollments (each with `finishing`, the label of the reason it finishes as, or null) and Unattended
     Organizations."""
-    t = inbox.today(db)
+    t = dict(_shared(core, "today", inbox.today, db))
     t["drafts"] = [d | {"recipient": inbox.recipient_names(db, d["to"] or "", d["kind"])} for d in t["drafts"]]
     t["paused"] = [e | {"finishing": sequences.REASON_LABEL[e["reason"]] if e["reason"] else None} for e in t["paused"]]
     return t
@@ -765,6 +766,22 @@ def _channels(core, db, connection_id):
     return inbox.channel_rules(db, connection_id)
 
 
+def _shared(core, name, fn, db):
+    """A value several queries of one refresh read (Today's for today.page and shell.summary), computed once per
+    event with Core._answer's answers. Readers must not change it."""
+    answers = getattr(core, "answers", None)
+    if answers is None:  # a bare caller, not a Core
+        return fn(db)
+    key = ("shared", name, _minute())
+    if key not in answers:
+        answers[key] = fn(db)
+    return answers[key]
+
+
+def _minute() -> int:
+    return int(time.time() // 60)
+
+
 def _plain_dates(v):
     """Dates (a Pipeline's math has them) as YYYY-MM-DD: remote.encode tags datetimes only."""
     from datetime import date, datetime
@@ -816,6 +833,7 @@ class Core:
         self.jobs = queue.Queue()
         self.worker = threading.Thread(target=self._work, daemon=True)
         self.lock, self.seq, self.subscribers = threading.Lock(), 0, []
+        self.answers, self.answers_seq = {}, 0  # query answers since event `answers_seq` (_answer)
         self.proxies = {m: remote.proxy(remote_, mod, m) for m, mod in remote.MODULES.items()} if remote_ else None
         self.worker.start()
         self.db = self.call_from_thread(inbox.connect, db_path)
@@ -939,7 +957,7 @@ class Core:
         if method in QUERIES:
             fn, spec, _ = QUERIES[method]
             _require(params, spec)
-            return remote.encode(_plain_dates(self.call_from_thread(fn, self, self.db, **params)))
+            return self.call_from_thread(self._answer, method, fn, params)
         if method in ("message.body", "message.load_images"):
             raw = self._raw(params.get("raw"))
             return render.safe_html(raw, fetch=fetch_image if method == "message.load_images" else None)
@@ -954,6 +972,17 @@ class Core:
                 raise ApiError(-32602, f"expected params {sorted(spec)}, got {sorted(params)}")
             return fn(self, **params)
         raise ApiError(-32601, f"no method {method}")
+
+    def _answer(self, method, fn, params):
+        """A query's answer, on the worker. The Views reload together after each event and several ask the same
+        query, so an answer is kept until the next event (or the next minute: Today's groups and "now/next" move
+        with the clock) and computed once."""
+        key = (method, json.dumps(params, sort_keys=True), _minute())
+        if self.answers_seq != self.seq:
+            self.answers, self.answers_seq = {}, self.seq
+        if key not in self.answers:
+            self.answers[key] = remote.encode(_plain_dates(fn(self, self.db, **params)))
+        return self.answers[key]
 
     def command(self, name: str, params: dict, origin: str):
         if name not in writers.WRITERS:
@@ -970,9 +999,12 @@ class Core:
         target = getattr(self.proxies[module], fn) if self.proxies else real
 
         def run():
-            result = target(self.db, **kwargs)
-            if self.proxies is None:
-                self.db.commit()
+            try:
+                result = target(self.db, **kwargs)
+                if self.proxies is None:
+                    self.db.commit()
+            finally:
+                self.answers = {}  # a query run before this write's event must not get an answer from before it
             return result
         result = self.call_from_thread(run)
         self.publish("rows", {"changed": None, "cause": name})
@@ -1080,6 +1112,9 @@ SERVICE = {  # method -> (Core method, {param: (json type, required)}, summary)
     "upload": (Core.upload, {"owner_kind": ("string", True), "owner_id": ("string", True), "path": ("string", True)},
                "Stage a file from this machine on a Draft or Thread."),
 }
+# Calls that wait on the Service or a remote server, or render a large body without the copy: each connection
+# answers them on their own threads, so its other calls never queue behind them. Everything else keeps its order.
+NETWORK = set(SERVICE) | {"message.body", "message.load_images"}
 
 
 def _require(params: dict, spec: dict):
@@ -1181,6 +1216,8 @@ def serve(core: Core, path: Path) -> _Server:
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     path.parent.chmod(0o700)
     path.unlink(missing_ok=True)
+    # ponytail: one pool for every connection; per-source limits if Attio or Tana start refusing parallel lookups
+    network = ThreadPoolExecutor(max_workers=8, thread_name_prefix="core-network")
     old = os.umask(0o177)
     try:
         class Handler(socketserver.StreamRequestHandler):
@@ -1191,11 +1228,19 @@ def serve(core: Core, path: Path) -> _Server:
                     with lock:
                         self.wfile.write(json.dumps(message).encode() + b"\n")
                         self.wfile.flush()
+                def answer_later(req):
+                    answer = core.handle(req, write)
+                    if answer is not None:
+                        write(answer)
                 for line in self.rfile:
                     try:
                         req = json.loads(line)
                     except ValueError:
                         write({"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "parse error"}})
+                        continue
+                    if isinstance(req, dict) and req.get("method") in NETWORK:
+                        # Answered by id when the Service replies; calls after it are not held up (NFR-APP-1).
+                        network.submit(answer_later, req)
                         continue
                     answer = core.handle(req, write) if isinstance(req, dict) else \
                         {"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "invalid request"}}

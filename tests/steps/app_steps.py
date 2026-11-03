@@ -966,3 +966,107 @@ def finish_undo(app):
     assert f["toast"] == "Finished Bench: Canceled. Its unsent Task Drafts are gone.  z undo"
     assert f["steps"] == [["sequences.restore_finish", {"undo": [{"undo": 1}]}]]
 
+
+
+# --- NFR-1: a slow Context source never holds up Jeremy's next action ---
+
+@given("a Context source that takes 2 seconds to answer")
+def slow_context(laptop, monkeypatch):
+    def stub(socket, source):
+        def fetch(emails, domains):
+            time.sleep(2)
+            return None
+        return fetch
+    monkeypatch.setattr(remote, "socket_context", stub)
+
+
+@when("the App asks for the Thread's context and then marks it Done, on one Local API connection")
+def context_then_done(laptop, tmp_path):
+    import socket
+    path = tmp_path / "run" / "core.sock"
+    server = core.serve(laptop.core, path)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    s = socket.socket(socket.AF_UNIX)
+    s.connect(str(path))
+    f = s.makefile("rwb")
+    try:
+        start = time.monotonic()
+        for req in ({"id": 1, "method": "context", "params": {"origin": "view", "source": "attio",
+                                                            "emails": ["ana@example.test"], "domains": []}},
+                    {"id": 2, "method": "command.inbox.act",
+                     "params": {"origin": "view", "thread_id": laptop.tid, "action": remote.encode(inbox.Done())}}):
+            f.write(json.dumps({"jsonrpc": "2.0", **req}).encode() + b"\n")
+        f.flush()
+        laptop.arrived = {}
+        while len(laptop.arrived) < 2:
+            answer = json.loads(f.readline())
+            laptop.arrived[answer["id"]] = (time.monotonic() - start, answer)
+    finally:
+        s.close()
+        server.shutdown()
+        server.server_close()
+
+
+@then(parsers.parse("the Done answer arrives within {seconds:f} seconds, before the context answer"))
+def done_first(laptop, seconds):
+    (done_at, done), (context_at, _) = laptop.arrived[2], laptop.arrived[1]
+    assert "result" in done, done
+    assert done_at < seconds and done_at < context_at, laptop.arrived
+
+
+@then(parsers.parse('the laptop copy\'s Thread has Status "{status}"'))
+def copy_status(laptop, status):
+    assert laptop.core.call_from_thread(inbox.get_thread, laptop.core.db, laptop.tid).status == status
+
+
+# --- NFR-1: one reload wave computes each query once ---
+
+@given("a laptop copy with Threads, Tasks and Events")
+def laptop_copy(laptop):
+    pass
+
+
+@when("the Views reload after a write and two of them ask the same query")
+def reload_twice(laptop, monkeypatch):
+    fn, spec, summary = core.QUERIES["shell.summary"]
+    laptop.computed = []
+
+    def counted(c, db, **params):
+        laptop.computed.append(1)
+        return fn(c, db, **params)
+    monkeypatch.setitem(core.QUERIES, "shell.summary", (counted, spec, summary))
+    monkeypatch.setattr(core, "_minute", lambda: 0)
+    call(laptop, "command.inbox.act", thread_id=laptop.tid, action=remote.encode(inbox.Done()))
+    answers = [call(laptop, "shell.summary") for _ in range(2)]
+    assert answers[0] == answers[1] and "result" in answers[0], answers
+
+
+@then("the Local core computes that query once")
+def computed_once(laptop):
+    assert len(laptop.computed) == 1
+    call(laptop, "command.inbox.create_case", title="Next write")
+    assert "result" in call(laptop, "shell.summary")
+    assert len(laptop.computed) == 2  # the next write's event makes it compute again
+
+
+# --- NFR-1: a reply key pressed while the Thread loads ---
+
+@given("a Thread the App is still loading")
+def thread_loading(app):
+    pass
+
+
+@when("Jeremy presses r before it arrives")
+def r_before_load(app):
+    app.phase4 = phase4_view("early")
+
+
+@then("the reply box opens to the sender once the Thread arrives")
+def opens_on_arrival(app):
+    assert app.phase4["before"] is None
+    assert app.phase4["after_load"] == ["sender", "thread-7"]
+
+
+@then("a reply key left from a Thread he moved away from opens nothing")
+def stale_key_ignored(app):
+    assert app.phase4["after_move"] is None

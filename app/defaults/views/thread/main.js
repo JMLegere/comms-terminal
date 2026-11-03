@@ -190,11 +190,18 @@ export default class Thread extends View {
         this.cases = answer.cases ?? [];
         this.drafts = answer.drafts ?? [];
         this.error = null;
-        if (this.loaded !== id) { this.loaded = id; this.extras(id, cx); }
-        if (this.wantReply === id) { this.wantReply = null; this.open("all", cx); } // Drafts' Enter (D69)
-        // Bodies wait until the selection rests, so holding j or k never waits on them.
+        if (this.loaded !== id) { this.loaded = id; this.extrasFor = null; this.related = null; this.ctx = {}; this.reactions = {}; }
+        if (this.wantReply && this.wantReply !== id) this.wantReply = this.wantMode = null; // moved on before it loaded
+        if (this.wantReply === id) { // Drafts' Enter (D69), or r/a pressed before the Thread loaded
+          const mode = this.wantMode ?? "all";
+          this.wantReply = this.wantMode = null;
+          this.open(mode, cx);
+        }
+        // Bodies and the Service lookups (Context sources, related Threads, reactions) wait until the selection
+        // rests, so holding j or k never queues them.
         cx.timer.after(150, (cx) => {
           if (this.id() !== id) return;
+          if (this.extrasFor !== id) { this.extrasFor = id; this.extras(id, cx); }
           for (const m of this.view?.messages ?? []) if (m.raw && !this.bodies[m.id]) this.body(m, false, cx);
         });
       } catch (e) {
@@ -502,7 +509,12 @@ export default class Thread extends View {
 
   open(mode, cx) {
     const id = this.id();
-    if (!id || !this.view) return;
+    if (!id) return;
+    if ((this.view?.thread?.f ?? this.view?.thread)?.id !== id || this.loaded !== id) { // still loading: open on arrival
+      this.wantReply = id;
+      this.wantMode = mode;
+      return;
+    }
     if (!(PLATFORM[this.view.channel?.platform]?.[2] ?? true)) return toast("This thread takes no replies.", "warning");
     if (this.reply?.thread === id) return this.text.focus();
     const texts = new Set((this.drafts ?? []).map((d) => d.body.trim()));

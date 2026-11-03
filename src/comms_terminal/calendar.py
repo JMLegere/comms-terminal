@@ -141,7 +141,7 @@ def _calendars(db):
                 series.add(r["uid"])
         deleted = {(r["uid"], r["recurrence_id"]): r["deleted_at"]
                    for r in db.execute("SELECT uid, recurrence_id, deleted_at FROM events WHERE deleted_at IS NOT NULL")}
-        _cache.update(key=key, value=(live, gone, series, deleted))
+        _cache.update(key=key, value=(live, gone, series, deleted), expanded={})
     return _cache["value"]
 
 
@@ -184,16 +184,23 @@ def _occurrence(o, mine: set[str], series: set[str], deleted: dict) -> dict:
 
 def expand(db, start: date, end: date, deleted: bool = True) -> list[dict]:
     """Every occurrence that overlaps the local days [start, end), in start order; Deleted Events too unless
-    `deleted` is False."""
+    `deleted` is False. Kept until the stored Events change: Today and the status bar ask for the same year on
+    every refresh, and expanding it is most of their cost."""
     live, gone, series, marks = _calendars(db)
     mine = me(db)
-    found = [(o, {}) for o in recurring_ical_events.of(live).between(start, end)]
-    if deleted:
-        found += [(o, marks) for o in recurring_ical_events.of(gone).between(start, end)]
-    out = [_occurrence(o, mine, series, m) for o, m in found]
-    if not deleted:
-        out = [e for e in out if not e["deleted_at"]]
-    return sorted(out, key=lambda e: (not e["all_day"], clock.local(e["start"])))
+    kept = _cache["expanded"]
+    key = (start, end, deleted, frozenset(mine))
+    if key not in kept:
+        if len(kept) >= 8:  # ponytail: drop all at 8 ranges; an LRU if paging the Calendar ever thrashes it
+            kept.clear()
+        found = [(o, {}) for o in recurring_ical_events.of(live).between(start, end)]
+        if deleted:
+            found += [(o, marks) for o in recurring_ical_events.of(gone).between(start, end)]
+        out = [_occurrence(o, mine, series, m) for o, m in found]
+        if not deleted:
+            out = [e for e in out if not e["deleted_at"]]
+        kept[key] = sorted(out, key=lambda e: (not e["all_day"], clock.local(e["start"])))
+    return list(kept[key])  # callers read the occurrences and never change them
 
 
 def current(db, event: dict) -> dict | None:

@@ -1,5 +1,5 @@
 // Phase 4: Drafts and Today as the Console's (AS-CONF-12, AS-CONF-13, AS-APP-11 replies), run in the shipped views.
-// Usage: node --experimental-vm-modules app_phase4_view.mjs order|d69|d75|keys|unattended|reply:<To|Body|>
+// Usage: node --experimental-vm-modules app_phase4_view.mjs order|d69|early|d75|keys|unattended|reply:<To|Body|>
 import { answers, calls, cx, input, load, ran, settle, state, tasks, toasts } from "./app_view_kit.mjs";
 
 const [kase, arg] = (process.argv[2] ?? "").split(":");
@@ -35,6 +35,22 @@ if (kase === "rowkeys") { // a Case header under two Statuses (here "No case") k
   pane.command("send", cx); pane.command("save", cx);
   await settle();
   out.pane_calls = calls.slice(before);
+} else if (kase === "early") { // NFR-APP-1: a reply key pressed while the Thread still loads acts once it arrives
+  const Thread = await load("thread");
+  state.thread = "thread-7";
+  answers["thread.view"] = { view: { thread: { f: { id: "thread-7", status: "TODO" } }, messages: [] }, drafts: [] };
+  const t = make(Thread, { bodies: {}, view: { thread: { f: { id: "thread-6" } } }, loaded: "thread-6" });
+  t.openDraft = (mode, key) => { out.opened = [mode, key]; };
+  t.command("reply_sender", cx);
+  out.before = out.opened ?? null;
+  t.load(cx);
+  await settle();
+  out.after_load = out.opened ?? null;
+  out.opened = undefined; // pressed on another Thread, then moved on before it loaded: nothing opens here
+  t.wantReply = "thread-5"; t.wantMode = "all";
+  t.load(cx);
+  await settle();
+  out.after_move = out.opened ?? null;
 } else if (kase === "d75") {
   const Draft = await load("draft");
   const field = (v) => { const f = input(); f.set_value(v); return f; };
