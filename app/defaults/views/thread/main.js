@@ -157,6 +157,11 @@ export default class Thread extends View {
     this.to = InputState.new({ placeholder: "recipients, comma-separated" });
     this.cc = InputState.new({ placeholder: "optional" });
     this.text.on("change", (_e, cx) => this.autosave(cx));
+    // Typing (element focus): while a reply field has the keyboard, the bar says so and how to leave.
+    for (const [f, name] of [[this.text, "reply"], [this.to, "To"], [this.cc, "Cc"]]) {
+      f.on("focus", () => setShared("typing", name));
+      f.on("blur", () => { if (shared("typing") === name) setShared("typing", null); });
+    }
     this.to.on("change", (_e, cx) => this.complete("to", cx));
     this.cc.on("change", (_e, cx) => this.complete("cc", cx));
     this.load(cx);
@@ -365,6 +370,21 @@ export default class Thread extends View {
         return cx.notify();
       }
       case "scroll_down": case "scroll_up": return run(`app.${name}`); // space/pgdn/pgup: a page of messages (D55)
+      // Element focus: → or Enter from the list lands on the newest message; j/k walk the messages; Enter folds one.
+      case "focus_entry": return this.focusMsg(-1, cx);
+      case "next": case "prev": {
+        const st = this.msgState();
+        st.lines = true; // every message has a row while the keyboard walks them
+        return this.focusMsg((st.mi ?? (v?.messages ?? []).length - 1) + (name === "next" ? 1 : -1), cx);
+      }
+      case "enter": {
+        const st = this.msgState(), m = (v?.messages ?? [])[st.mi ?? -1];
+        if (!m) return this.focusMsg(-1, cx);
+        const opened = defaultOpen(v.messages), i = st.mi, nid = m.native_id;
+        if (st.open.has(nid) || (opened.has(i) && !st.closed.has(nid))) { st.open.delete(nid); st.closed.add(nid); }
+        else { st.closed.delete(nid); st.open.add(nid); }
+        return cx.notify();
+      }
       case "draft-chosen": return this.openDraft(this.pendingMode ?? "all", +answer.value || answer.value, cx);
     }
   }
@@ -585,6 +605,21 @@ export default class Thread extends View {
     this.save(cx);
     this.reply = null;
     focusMain();
+    setShared("typing", null);
+    setShared("focus", "detail"); // esc leaves typing: the reply box's owner, the Thread's newest message, takes the focus
+    this.focusMsg(-1, cx);
+    cx.notify();
+  }
+
+  /** Element focus in the Thread: message `i` (−1: the newest) takes the focus, and the bar names it. */
+  focusMsg(i, cx) {
+    const msgs = this.view?.messages ?? [];
+    if (!msgs.length) return;
+    const st = this.msgState();
+    st.mi = Math.max(0, Math.min(msgs.length - 1, i < 0 ? msgs.length - 1 : i));
+    const m = msgs[st.mi];
+    setShared("target", { col: "detail", label: `Message · ${m.who ?? ""} · ${when(m.at)}`,
+      keys: [["enter", "fold"], ["e", "done"], ["r", "reply"], ["a", "reply all"], ["s", "status"], ["g", "snooze"], ["esc", "list"]] });
     cx.notify();
   }
 
@@ -692,8 +727,13 @@ export default class Thread extends View {
     const email = ["gmail", "fastmail"].includes(v.channel?.platform);
     const opened = defaultOpen(msgs);
     const isOpen = (i) => st.open.has(msgs[i].native_id) || (opened.has(i) && !st.closed.has(msgs[i].native_id));
+    const focused = shared("focus") === "detail" ? msgs[st.mi ?? -1] : null;
     const toggle = (m, cx) => {
       const i = msgs.indexOf(m), nid = m.native_id;
+      st.mi = i; // a click focuses the message and takes the keys from any text field
+      setShared("focus", "detail");
+      focusMain();
+      this.focusMsg(i, cx);
       if (isOpen(i)) { st.open.delete(nid); st.closed.add(nid); } else { st.closed.delete(nid); st.open.add(nid); }
       cx.notify();
     };
@@ -702,10 +742,12 @@ export default class Thread extends View {
       return div().w(36).flex_none().h(18).rounded(3).flex().items_center().justify_center().text_size(11).font_semibold()
         .bg(faded ? "#a89984" : b.color).text_color("#f9f5d7").child(b.ini);
     };
-    const row = (key, g, content) => h_flex().id(key).gap(10).items_start().child(g ?? div().w(36).flex_none()).child(content);
+    // The path (Logseq bullet threading): the focused message's row carries the full accent bar.
+    const row = (key, g, content, m) => h_flex().id(key).gap(10).items_start().border_l(3).pl(2)
+      .border_color(m && m === focused ? t.accent : t.background).child(g ?? div().w(36).flex_none()).child(content);
     const collapsed = (m) => row(`c-${m.id}`, gutter(m.who, true),
       div().id(`cl-${m.id}`).flex_1().min_w(0).truncate().cursor_pointer().text_color("#a89984").on_click((_e, cx) => toggle(m, cx))
-        .child(`${when(m.at).padEnd(5)} ${m.deleted ? "message deleted" : (m.shown ?? m.content ?? "").replace(/\s+/g, " ").trim()}`));
+        .child(`${when(m.at).padEnd(5)} ${m.deleted ? "message deleted" : (m.shown ?? m.content ?? "").replace(/\s+/g, " ").trim()}`), m);
     const name = (a) => (a.toLowerCase() === me ? "me" : a);
     const short = (as) => as.slice(0, 2).map(name).join(", ") + (as.length > 2 ? ` +${as.length - 2}` : "");
     const rcpt = (m) => {
@@ -728,7 +770,7 @@ export default class Thread extends View {
           .on_click((_e, cx) => { st.to.has(m.native_id) ? st.to.delete(m.native_id) : st.to.add(m.native_id); cx.notify(); }).child(r ?? "")))
         .child(this.content(m, t))
         .when(Boolean(files.length) && !m.deleted, (el) => el.child(this.files(files, t)))
-        .when(Boolean(this.chips(m, t)), (el) => el.child(this.chips(m, t))));
+        .when(Boolean(this.chips(m, t)), (el) => el.child(this.chips(m, t))), m);
     };
     const audit = (e, n) => {
       const until = (() => { try { return JSON.parse(e.data ?? "{}").until; } catch { return null; } })();
@@ -764,7 +806,8 @@ export default class Thread extends View {
     const g = GLYPH[th.status_detail] ?? ["·", "dim", th.status_detail ?? ""];
     const end = th.follow_up_at ?? th.snoozed_until;
     const plat = PLATFORM[v.channel?.platform];
-    return v_flex().px(20).pt(14).pb(8).gap(2)
+    // The path: while a message has the focus, the Thread header carries a thin bar as its ancestor.
+    return v_flex().px(20).pt(14).pb(8).gap(2).border_l(shared("focus") === "detail" ? 1 : 0).border_color(t.accent)
       .child(div().w_full().text_size(16).font_semibold().text_color(t.blue ?? t.accent).child(th.title ?? ""))
       .child(h_flex().gap(8).items_center()
         .child(div().text_color(t[g[1]] ?? t.dim).child(`${g[0]} ${g[2]}`))

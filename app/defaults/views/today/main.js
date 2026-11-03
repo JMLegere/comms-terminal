@@ -7,7 +7,7 @@
 // row: any other row clears the shared Thread, so a key never reaches a Thread that is not on screen (D87).
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, v_virtual_list, VirtualListScrollHandle } from "gpui-base";
-import { call, nextEvent, nextCommand, theme, shared, setShared, run, toast } from "comms";
+import { call, nextEvent, nextCommand, theme, shared, setShared, run, toast, focusMain } from "comms";
 
 const GLYPH = { // Status detail: glyph, colour token, label (as threads/main.js)
   CREATED: ["\u{f0674}", "status_needs_first", "Needs first response"], NEW_REPLY: ["\u{f173e}", "status_needs_next", "Needs next response"],
@@ -35,6 +35,11 @@ const ROUTE = {
   unattended: {},
 };
 const KEYS = [...new Set(Object.values(ROUTE).flatMap(Object.keys))];
+const NAME = { threads: "Thread", tasks: "Task", drafts: "Draft", paused: "Paused", unattended: "Unattended" };
+/** "thread.reply_sender" → "reply": a command as the bar and the dead-key toast name it. */
+export const verb = (command) => command.split(".")[1].replace("reply_sender", "reply").replace(/_/g, " ");
+/** The keys a row kind takes, as [key, label] pairs, for the bar and the dead-key toast. */
+export const keysOf = (kind) => Object.entries(ROUTE[kind] ?? {}).filter(([k]) => k.length === 1).map(([k, c]) => [k, verb(c)]);
 
 /** Compact age, as the Console's when(): now, 5m, 3h, 2d, then a date. */
 export function when(iso, now = Date.now()) {
@@ -179,6 +184,17 @@ export default class Today extends View {
     }
     const items = this.panes()[row.kind];
     this.scrolls?.[row.kind]?.scroll_to_item(Math.max(0, items.findIndex((it) => it.key === row.key)), "center");
+    this.target();
+  }
+
+  /** The bar's line for the focused row (element focus): what it is and the keys it takes. */
+  target() {
+    const row = this.rows()[this.at];
+    if (!row || shared("page") !== "today" || shared("focus") === "detail") return;
+    const r = row.r ?? {};
+    const what = { threads: r.title, tasks: r.person ?? r.title, drafts: r.subject ?? r.title, paused: r.person,
+      unattended: r.name ?? r.domain }[row.kind];
+    setShared("target", { col: "list", label: `${NAME[row.kind]} · ${what ?? ""}`, keys: [["enter", "open"], ...keysOf(row.kind)] });
   }
 
   enter(cx) {
@@ -189,7 +205,7 @@ export default class Today extends View {
     switch (row.kind) {
       case "threads":
         if (row.caseHeader) return row.caseHeader.id && push({ page: "case", case: row.caseHeader.id });
-        if (r) { setShared("focus", "detail"); cx.notify(); }
+        if (r) run("nav.focus_right"); // into the Thread: its newest message takes the focus
         return;
       case "tasks": return run("task.open");
       case "drafts":
@@ -205,10 +221,12 @@ export default class Today extends View {
     if (c === "next" || c === "prev") return this.move(c === "next" ? 1 : -1, cx);
     if (c === "tab") return this.nextPane(cx);
     if (c === "enter") return this.enter(cx);
-    if (KEYS.includes(c)) { // a key goes to the row's own kind, else nowhere
+    if (c === "focus_entry") return this.target();
+    if (KEYS.includes(c)) { // a key goes to the row's own kind; one it does not take says what that row takes
       const kind = this.rows()[this.at]?.kind;
       const to = kind && ROUTE[kind][c];
-      if (to) run(to);
+      if (to) return run(to);
+      if (kind) toast(`${c}: ${NAME[kind]} rows take ${keysOf(kind).map(([k, l]) => `${k} ${l}`).join(" · ") || "enter"}`);
     }
   }
 
@@ -218,6 +236,7 @@ export default class Today extends View {
     const counts = Object.fromEntries(PANES.map((k) => [k, panes[k].filter((it) => it.row).length]));
     const shown = PANES.filter((k) => counts[k]);
     const sel = this.rows()[this.at]?.key;
+    const focusHere = (shared("focus") ?? "list") === "list";
     const pill = (text, color) => div().flex_none().px(6).rounded(4).bg(color).text_color(t.background).font_semibold().child(text);
     const title = {
       threads: [pill(`${I.TODO} threads · ${counts.threads}`, t.blue)],
@@ -234,7 +253,11 @@ export default class Today extends View {
     const line = (it) => {
       const el = h_flex().id(it.key).h(26).pl(8 + 14 * (it.depth ?? 0)).pr(8).gap(8).rounded(4).items_center()
         .when(Boolean(it.pick), (e) => e.cursor_pointer().hover((s) => s.bg(t.hover)))
-        .when(it.key === sel, (e) => e.bg(t.selected));
+        // The path (Logseq bullet threading): the focused row has a full bar and highlight; while the focus is
+        // further in (the Thread), the row keeps a thin bar as its ancestor.
+        .border_l(3).border_color(it.key === sel ? t.accent : t.background)
+        .when(it.key === sel && focusHere, (e) => e.bg(t.selected))
+        .when(it.key === sel && !focusHere, (e) => e.border_l(1));
       if (it.groupHeader) return el.child(div().w(16)).child(div().font_semibold().text_color(t.muted).child(it.groupHeader));
       if (it.statusHeader) {
         const h = it.statusHeader;
@@ -299,7 +322,12 @@ export default class Today extends View {
               const it = items.find((x) => x.key === key);
               if (it?.caseHeader?.id) { setShared("push", { page: "case", case: it.caseHeader.id }); return run("nav.push"); }
               const at = this.rows().findIndex((x) => x.key === key);
-              if (at >= 0) { this.at = at; this.select(cx); cx.notify(); }
+              if (at < 0) return;
+              this.at = at;
+              setShared("focus", "list"); // a click focuses the row and takes the keys from any text field
+              focusMain();
+              this.select(cx);
+              cx.notify();
             })));
     };
     const d = this.data ?? {};

@@ -26,6 +26,17 @@ const TOASTS: &str = "toasts"; // timed notifications, bottom right, as the Cons
 /// The exit code that asks the launcher to install the Service's build (tui.UPDATE_EXIT).
 pub const UPDATE_EXIT: i32 = 75;
 
+/// A plain key nothing took, outside a text field, says so (element focus: no silent keys).
+fn dead_key(ev: &gpui::KeystrokeEvent) {
+    let k = &ev.keystroke;
+    let plain = k.key_char.as_deref().is_some_and(|c| !c.trim().is_empty())
+        && !k.modifiers.control && !k.modifiers.alt && !k.modifiers.platform;
+    let typing = ev.context_stack.iter().any(|c| c.contains("Input"));
+    if ev.action.is_none() && plain && !typing {
+        host::toast(&format!("{} does nothing here · ? lists the keys", k.unparse()));
+    }
+}
+
 /// One log line per key: the key (a letter typed into a field is "<text>"), the command its binding ran (none: typed
 /// text or handled inside a view), the focused element's key contexts, the page, pane focus, shown Thread and
 /// whether the window is active.
@@ -116,6 +127,7 @@ impl AppWindow {
         // Every key goes in the log once: one that matched a binding here, with the command it ran; any other (typed
         // text, or a key a view handles itself, as Esc in the reply box) from the root's capture_key_down (render).
         let key_log = cx.observe_keystrokes(|_, ev, window, _| {
+            dead_key(ev);
             if let Some(a) = &ev.action {
                 let action = a.as_any().downcast_ref::<ShellAction>().map_or_else(|| a.name().to_string(), |s| s.id().to_string());
                 log_key(&ev.keystroke, Some(action), window);
@@ -345,6 +357,10 @@ impl AppWindow {
         };
         let mut bindings = vec![KeyBinding::new(ESCAPE_HATCH, ShellAction::new("app.reset"), None)];
         if let Ok(Value::Object(sections)) = keys {
+            // Later bindings win at the same depth: the "detail" and "rail" sections come after the pages, so j/k in
+            // the detail column reach its view (element focus) while the page's letter keys still apply there.
+            let mut sections: Vec<(String, Value)> = sections.into_iter().collect();
+            sections.sort_by_key(|(s, _)| matches!(s.as_str(), "detail" | "rail"));
             for (section, map) in sections {
                 // Plain keys stay quiet while a text field has the keyboard; `always` keys (ctrl-enter, escape) do not.
                 let context = match section.as_str() {
@@ -352,6 +368,7 @@ impl AppWindow {
                     "global" => Some("!Input".to_owned()),
                     // The rail's own keys while it has the focus; the page's keys wait until focus leaves it.
                     "rail" => Some("rail && !Input".to_owned()),
+                    "detail" => Some("detail && !Input".to_owned()),
                     s => s
                         .strip_prefix("page:")
                         .map(|p| format!("page == {p} && !Input && !rail"))
@@ -501,8 +518,8 @@ impl AppWindow {
         }
         if node.card {
             // The focused pane's border turns blue, as the Console's does (← → move the focus).
-            let focused = host::shared("focus").as_str() == Some(node.id.as_str());
-            el = el.rounded(px(10.)).border_1().border_color(color(if focused { "accent" } else { "border" })).bg(color("background")).overflow_hidden();
+            // Elements have the focus, not panes: the focused element and its path carry accent bars in their views.
+            el = el.rounded(px(10.)).border_1().border_color(color("border")).bg(color("background")).overflow_hidden();
         }
         if node.padding > 0. {
             el = el.p(px(node.padding));
@@ -544,7 +561,15 @@ impl Render for AppWindow {
         }
         let page = host::shared("page");
         let page = page.as_str().unwrap_or("threads");
-        let rail = if host::shared("focus").as_str() == Some("rail") { " rail" } else { "" };
+        let rail = match host::shared("focus").as_str() { Some("rail") => " rail", Some("detail") => " detail", _ => "" };
+        // The view in each column on this page, for nav (← →, j/k in the detail column); "" when hidden.
+        let (page_now, detail_now) = (host::shared("page"), host::shared("detail"));
+        for block in ["list", "detail"] {
+            let view = self.layout.find(block).and_then(|n| n.view_on(page_now.as_str(), detail_now.as_str())).unwrap_or("");
+            if host::shared(&format!("{block}_view")).as_str() != Some(view) {
+                host::set_shared(&format!("{block}_view"), Value::String(view.to_owned()));
+            }
+        }
         let mut root = div()
             .key_context(format!("Page page={page}{rail}").as_str())
             .relative()
