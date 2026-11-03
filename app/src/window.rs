@@ -40,6 +40,8 @@ pub struct AppWindow {
     focus: FocusHandle,
     problem: Option<String>,
     keys_installed: bool,
+    /// The widgets' own bindings (a text field's backspace, enter, arrows), kept across keys.json reloads.
+    base_keys: Option<Vec<KeyBinding>>,
     renders: u64,
 }
 
@@ -76,7 +78,7 @@ impl AppWindow {
             Ok(node) => (node, None),
             Err(e) => (shipped_layout(), Some(e)),
         };
-        let mut this = AppWindow { home, runtime, layout, copies: HashMap::new(), focus, problem, keys_installed: false, renders: 0 };
+        let mut this = AppWindow { home, runtime, layout, copies: HashMap::new(), focus, problem, keys_installed: false, base_keys: None, renders: 0 };
         this.install_keys(cx);
         this.load_views(window, cx);
 
@@ -319,7 +321,10 @@ impl AppWindow {
                 }
             }
         }
+        // Clearing drops the widgets' bindings too (text fields lost backspace and enter), so put them back first.
+        let base = self.base_keys.get_or_insert_with(|| cx.key_bindings().borrow().bindings().cloned().collect()).clone();
         cx.clear_key_bindings();
+        cx.bind_keys(base);
         cx.bind_keys(bindings);
         self.keys_installed = true;
     }
