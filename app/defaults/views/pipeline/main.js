@@ -4,10 +4,11 @@
 // its header with count and conversion, the Constraint's marked ◀; each card's name, Value or red "no Value", days
 // in Stage, roll-up, last message), and the WEEKLY REVIEW with its legend. Talent shows the board only. j/k move
 // in a column, ←/→ between Stages; Enter opens the Organization; s and v set its Stage and Value in this Pipeline;
-// y copies the Pipeline math for an agent.
+// y copies the Pipeline math for an agent. Element focus: the selected card is the detail column's element; it names
+// itself in the bar and carries the path's accent bar.
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { call, nextEvent, nextCommand, theme, shared, setShared, run, toast } from "comms";
+import { call, nextEvent, nextCommand, theme, shared, setShared, run, toast, focusMain } from "comms";
 
 const GREY = { "#928374": "muted", "#a89984": "dim", "#7c6f64": "muted" };
 
@@ -55,15 +56,28 @@ export default class Pipeline extends View {
     const c = this.b?.columns?.[this.col];
     if (c) this.row = Math.max(0, Math.min(this.row, c.cards.length - 1));
     const card = this.card();
-    if (!card || shared("page") !== "pipeline") return;
+    if (shared("page") !== "pipeline") return;
+    this.target();
+    if (!card) return;
     setShared("organization", { id: card.org.id, domain: card.org.domain });
     run("organization.show");
+  }
+
+  /** The bar's line for the focused card (element focus): its Organization, or its empty Stage, and the keys it takes. */
+  target() {
+    const c = this.b?.columns?.[this.col], card = this.card();
+    if (!c || shared("page") !== "pipeline" || shared("focus") !== "detail") return;
+    setShared("target", card
+      ? { col: "detail", label: `Organization · ${card.org.name ?? card.org.domain ?? ""}`,
+        keys: [["enter", "open"], ["s", "stage"], ...(this.b.board_only ? [] : [["v", "value"]]), ["←→", "Stages"]] }
+      : { col: "detail", label: `Stage · ${c.stage ?? ""}`, keys: [["←→", "Stages"]] });
   }
 
   command(c, cx) {
     const cols = this.b?.columns ?? [];
     switch (c) {
       case "show": return this.load(cx);
+      case "focus_entry": this.target(); return cx.notify();
       case "next": case "prev": this.row += c === "next" ? 1 : -1; this.row = Math.max(0, this.row); break;
       case "next_column": case "prev_column": this.col = Math.max(0, Math.min(cols.length - 1, this.col + (c === "next_column" ? 1 : -1))); break;
       case "enter": {
@@ -94,11 +108,22 @@ export default class Pipeline extends View {
       : div().h(10)));
     const box = (title, body, red) => v_flex().p(10).gap(2).rounded(6).border(1).border_color(red ? t.red : t.border)
       .child(div().pb(4).font_semibold().text_color(red ? t.red : t.foreground).child(title)).children(body);
+    const focusHere = shared("focus") === "detail";
     const board = h_flex().id("board").gap(6).items_start().overflow_x_scroll().children(b.columns.map((c, i) => v_flex().w(170).flex_none().gap(4)
       .child(v_flex().pb(4).border_b(1).border_color(t.border).children(segs(c.head)))
       .children(c.cards.length ? c.cards.map((k, j) => v_flex().id(`k-${i}-${j}`).p(6).rounded(4).cursor_pointer()
-        .when(i === this.col && j === this.row, (e) => e.bg(t.selected)).hover((s) => s.bg(t.hover))
-        .on_click((_e, cx) => { this.col = i; this.row = j; this.select(); cx.notify(); })
+        .hover((s) => s.bg(t.hover))
+        // The path (Logseq bullet threading): the focused card has a full bar and highlight.
+        .border_l(3).border_color(i === this.col && j === this.row ? t.accent : t.background)
+        .when(i === this.col && j === this.row && focusHere, (e) => e.bg(t.selected))
+        .when(i === this.col && j === this.row && !focusHere, (e) => e.border_l(1))
+        .on_click((_e, cx) => { // a click focuses the card and takes the keys from any text field
+          this.col = i; this.row = j;
+          setShared("focus", "detail");
+          focusMain();
+          this.select();
+          cx.notify();
+        })
         .children(segs(k.lines))) : [div().px(6).text_color(t.dim).child("·")])));
     const title = `ORGANIZATIONS  ·  each Stage${b.board_only ? "" : ", how many move on"}  ·  enter opens · s Stage${b.board_only ? "" : " · v Value"} · ←/→`;
     const cell = (ss, w) => div().w(w).flex_none().children(segs([ss]));

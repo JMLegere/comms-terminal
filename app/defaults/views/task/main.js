@@ -2,10 +2,11 @@
 // Task (call script and voicemail, LinkedIn move, letter, If paths, Action, Enroll, flags with their guidance), the
 // hint line, and the properties column (task, enrollment, next, person, organization) with its Context sections.
 // An email Task with a New Thread Draft shows the Draft editor in place; Enter (open) focuses it, and on a Reply
-// Draft opens its Thread's reply box (D110).
+// Draft opens its Thread's reply box (D110). Element focus: the Task is the detail column's one element; j/k scroll
+// it a page (its guidance and properties are lines, not a list), Enter opens it as above.
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { call, nextEvent, nextCommand, theme, shared, setShared, run, toast, open } from "comms";
+import { call, nextEvent, nextCommand, theme, shared, setShared, run, toast, open, focusMain } from "comms";
 
 const SOURCES = ["attio", "tana", "linear"];
 
@@ -38,7 +39,9 @@ export default class Task extends View {
       while (true) {
         const c = await nextCommand();
         if (c === "show") this.load(cx);
-        if (c === "open") this.open(cx);
+        if (c === "open" || c === "enter") this.open(cx);
+        if (c === "focus_entry") this.target(cx);
+        if (c === "next" || c === "prev") run(`app.scroll_${c === "next" ? "down" : "up"}`); // no elements to walk: a page
       }
     });
   }
@@ -62,6 +65,8 @@ export default class Task extends View {
           run("draft.show");
         }
         if (fresh) this.loadContext(id, pane, cx);
+        // A Task loaded while the focus is on it names itself (not once the Draft editor took its place).
+        if (shared("focus") === "detail" && shared("detail_view") === "task" && shared("detail") !== "draft") this.target(cx);
       } catch (e) {
         this.pane = null;
         this.error = /no due Task/.test(String(e)) ? "This Task is no longer due." : String(e);
@@ -75,6 +80,16 @@ export default class Task extends View {
     for (const source of SOURCES) call("context.section", { source, emails: pane.emails ?? [], domains: pane.domains ?? [] })
       .then((section) => { if (section && shared("task") === id) { this.context = [...this.context, section]; cx.notify(); } })
       .catch(() => {});
+  }
+
+  /** The bar's line while the Task has the focus (element focus): "Task · Day N · Kind · Person" and its keys. */
+  target(cx) {
+    const p = this.pane;
+    if (!p) return;
+    const label = (p.head ?? []).flat().map((seg) => seg[0]).join("");
+    setShared("target", { col: "detail", label: `Task · ${label}`,
+      keys: [["enter", "open"], ["e", "done"], ["x", "skip"], ["p", "person"], ["y", "copy"], ["j", "scroll"], ["esc", "list"]] });
+    cx?.notify();
   }
 
   open(cx) {
@@ -100,8 +115,11 @@ export default class Task extends View {
     const p = this.pane;
     const root = v_flex().size_full().min_h(0).bg(t.background).text_size(13);
     if (!p) return root.child(div().p(24).text_color(t.muted).child(this.error ?? "No Task selected."));
+    // A click on the Task focuses it and takes the keys from any text field; the bar marks it while focused.
+    const focus = (_e, cx) => { setShared("focus", "detail"); focusMain(); this.target(cx); };
     return root.child(h_flex().flex_1().min_h(0).items_start()
-      .child(v_flex().flex_1().min_w(0).h_full()
+      .child(v_flex().id("task-main").flex_1().min_w(0).h_full().border_l(3)
+        .border_color(shared("focus") === "detail" ? t.accent : t.background).on_click(focus)
         .child(v_flex().id("task-timeline").flex_1().min_h(0).overflow_y_scroll().px(20).py(14).gap(2)
           .children(segLines(t, p.head, "h")).child(div().h(10)).children(segLines(t, p.body, "b")))
         .child(div().flex_none().px(20).py(8).border_t(1).border_color(t.border).text_size(11.5).text_color(t.muted).child(p.hint ?? "")))

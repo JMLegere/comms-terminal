@@ -156,6 +156,7 @@
     "k": "channels.prev",
     "down": "channels.next",
     "up": "channels.prev",
+    "enter": "channels.enter",
     "a": "connection.add",
     "x": "connection.delete",
     "shift-j": "connection.next",

@@ -5,7 +5,7 @@
 // Thread when the reply target was skipped, p opens the Person, / filters by kind or Sequence, y copies for an agent.
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, v_virtual_list, VirtualListScrollHandle } from "gpui-base";
-import { call, nextEvent, nextCommand, theme, shared, setShared, run, toast } from "comms";
+import { call, nextEvent, nextCommand, theme, shared, setShared, run, toast, focusMain, keys } from "comms";
 
 export const KIND = { email: "Email", call: "Call", linkedin: "LinkedIn", letter: "Letter", action: "Action", if: "If" }; // KIND_LABEL
 const I = { email: "\u{f01f0}", call: "\u{f0df0}", linkedin: "\u{f033b}", letter: "\u{f0d8c}", action: "\u{f027b}", if: "\u{f0641}",
@@ -59,6 +59,19 @@ export default class Tasks extends View {
     run("task.show");
     const at = this.items?.findIndex((it) => it.key === id) ?? -1;
     if (at >= 0) this.scroll.scroll_to_item(at, "center");
+    this.target();
+  }
+
+  /** The bar's line for the focused row (element focus): the Task and the keys its page binds for it. */
+  target() {
+    if (shared("page") !== "tasks" || shared("focus") === "detail") return;
+    const t = this.rows.find((x) => x.id === shared("task"));
+    if (!t) return;
+    const takes = (c) => (c !== "tasks.pick_first" && c !== "tasks.pick_second") || (t.kind === "if" && t.condition === "jeremy_picks");
+    const bound = Object.entries((keys() ?? {})["page:tasks"] ?? {})
+      .filter(([k, c]) => k.length === 1 && c.startsWith("tasks.") && !/\.(next|prev)$/.test(c) && takes(c))
+      .map(([k, c]) => [k, c === "tasks.pick_first" ? t.true_label : c === "tasks.pick_second" ? t.false_label : c.split(".")[1].replace(/_/g, " ")]);
+    setShared("target", { col: "list", label: `Task · ${t.person ?? ""} · Day ${t.day} ${KIND[t.kind] ?? t.kind}`, keys: [["enter", "open"], ...bound] });
   }
 
   /** The Task below, else the one above: selected once this one leaves (the Console's _next_after). */
@@ -89,6 +102,7 @@ export default class Tasks extends View {
     const t = rows[i];
     switch (name) {
       case "show": return this.load(cx);
+      case "focus_entry": return this.target();
       case "next": case "prev": {
         const row = rows[Math.max(0, Math.min(rows.length - 1, i + (name === "next" ? 1 : -1)))];
         return row && this.select(row.id);
@@ -141,6 +155,7 @@ export default class Tasks extends View {
     const t = theme();
     const rows = this.shown();
     const selected = shared("task");
+    const focusHere = (shared("focus") ?? "list") === "list";
     const items = [];
     let group = null;
     for (const r of rows) {
@@ -151,8 +166,12 @@ export default class Tasks extends View {
     const f = this.filter;
     const title = !f ? "due" : f.startsWith("seq:") ? (this.rows.find((r) => r.sequence_id === f.slice(4))?.sequence ?? "") : (KIND[f] ?? f).toLowerCase();
     const header = (it) => h_flex().h(26).px(8).items_center().child(div().w(16)).child(div().font_semibold().text_color(t.muted).child(it.header));
-    const row = (r) => h_flex().h(26).px(8).gap(8).rounded(4).items_center().cursor_pointer()
-      .when(r.id === selected, (el) => el.bg(t.selected)).hover((s) => s.bg(t.hover))
+    // The path (Logseq bullet threading): full bar and highlight on the focused row, a thin bar while the focus is
+    // further in (the Task).
+    const row = (r) => h_flex().h(26).px(8).gap(8).rounded(4).items_center().cursor_pointer().hover((s) => s.bg(t.hover))
+      .border_l(3).border_color(r.id === selected ? t.accent : t.background)
+      .when(r.id === selected && focusHere, (el) => el.bg(t.selected))
+      .when(r.id === selected && !focusHere, (el) => el.border_l(1))
       .child(div().w(16).flex_none().text_color(t.foreground).child(I[r.kind] ?? ""))
       .when(Boolean(r.flag), (el) => el.child(div().flex_none().text_color(t.red).child(I.warn)))
       .child(div().w(160).flex_none().truncate().font_semibold().text_color(t.strong ?? t.foreground).child(r.person ?? ""))
@@ -169,7 +188,13 @@ export default class Tasks extends View {
       .child(div().flex_1().min_h(0).px(4).py(4).child(
         v_virtual_list("tasks", items.length, 26, (i) => items[i].key,
           (range) => items.slice(range.start, range.end).map((it) => (it.header ? header(it) : row(it.task))))
-          .size_full().track_scroll(this.scroll).on_item_click((key) => !key.startsWith("g-") && this.select(key))))
+          .size_full().track_scroll(this.scroll).on_item_click((key, cx) => {
+            if (key.startsWith("g-")) return; // a group header is blank space
+            setShared("focus", "list"); // a click focuses the row and takes the keys from any text field
+            focusMain();
+            this.select(key);
+            cx.notify();
+          })))
       .when(rows.length > 0, (el) => el.child(div().flex_none().px(12).py(6).border_t(1).border_color(t.border).text_size(11.5)
         .text_color(t.muted).child(`${rows.length} due · / filters by kind or Sequence`)));
   }

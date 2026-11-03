@@ -6,9 +6,11 @@
 //   restore, x delete (an unused one), each undoable.
 //   Steps: Enter edits the Step; n adds a Step after it (an Action asks what it does, an If what it checks); x deletes
 //   it (z undoes); J/K move it; esc goes back to the Sequences.
+// Element focus: the cursor's Sequence or Step is the list column's element; it names itself in the bar and carries
+// the path's accent bar (the Sequence keeps a thin bar while its Steps, or the detail column, have the focus).
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { call, nextEvent, nextCommand, theme, shared, setShared, run, toast } from "comms";
+import { call, nextEvent, nextCommand, theme, shared, setShared, run, toast, focusMain } from "comms";
 
 const KIND = { email: "Email", call: "Call", linkedin: "LinkedIn", letter: "Letter", action: "Action", if: "If" }; // KIND_LABEL
 const ICON = { email: "\u{f01f0}", call: "\u{f0df0}", linkedin: "\u{f033b}", letter: "\u{f0d8c}", action: "\u{f027b}", if: "\u{f0641}",
@@ -76,6 +78,24 @@ export default class Sequences extends View {
     setShared("sequence", this.page?.sequence?.id ?? null);
     setShared("step", shared("seq_pane") === "steps" ? this.page?.outline?.[this.at]?.step?.id ?? null : null);
     run("sequence.show");
+    this.target();
+  }
+
+  /** The bar's line for the focused Sequence or Step (element focus): what it is and the keys it takes. */
+  target() {
+    if (shared("page") !== "sequences" || shared("focus") === "detail") return;
+    if (shared("seq_pane") === "steps") {
+      const l = this.page?.outline?.[this.at], st = l?.step;
+      return setShared("target", st
+        ? { col: "list", label: `Step · ${st.position} ${l.label ?? ""}`,
+          keys: [["enter", "edit"], ["n", "add after"], ["x", "delete"], ["J/K", "move"], ["esc", "Sequences"]] }
+        : { col: "list", label: `Path · ${l?.label ?? ""}`, keys: [["n", "add to path"], ["esc", "Sequences"]] });
+    }
+    const it = this.items().find((x) => x.key === this.hi), q = it?.q;
+    setShared("target", q
+      ? { col: "list", label: `Sequence · ${q.name}`, keys: [["enter", "Steps"], ["n", "new"], ["R", "rename"], ["w", "use when"],
+        ["f", "sends from"], ["a", q.archived_at ? "restore" : "archive"], ["x", "delete"]] }
+      : { col: "list", label: `Archived · ${it?.archived ?? 0}`, keys: [["enter", this.showArchived ? "fold" : "unfold"], ["n", "new"]] });
   }
 
   pick(title, options, reply, prompt, value, body) {
@@ -103,6 +123,7 @@ export default class Sequences extends View {
     const lines = this.page?.outline ?? [], line = lines[this.at], st = line?.step;
     switch (name) {
       case "show": return this.load(cx);
+      case "focus_entry": this.target(); return cx.notify();
       case "next": case "prev": {
         const by = name === "next" ? 1 : -1;
         if (steps) { this.at = Math.max(0, Math.min(lines.length - 1, this.at + by)); this.side(); return cx.notify(); }
@@ -111,13 +132,13 @@ export default class Sequences extends View {
       }
       case "enter":
         if (steps) return st && run("sequence.edit");
-        if (its[here]?.archived !== undefined) { this.showArchived = !this.showArchived; return cx.notify(); }
+        if (its[here]?.archived !== undefined) { this.showArchived = !this.showArchived; this.target(); return cx.notify(); }
         if (!q) return;
         setShared("seq_pane", "steps");
         this.side();
         return cx.notify();
-      case "escape":
-        if (!steps) return run("nav.back");
+      case "escape": // from the detail column or the Sequences, nav steps back (a column, then a page)
+        if (!steps || (shared("focus") ?? "list") !== "list") return run("nav.back");
         setShared("seq_pane", "seqs");
         this.side();
         return cx.notify();
@@ -239,11 +260,23 @@ export default class Sequences extends View {
     const its = this.items();
     const active = this.rows.filter((q) => !q.archived_at).length, archived = this.rows.length - active;
     const pill = (text) => div().flex_none().px(6).rounded(4).bg(t.blue).text_color(t.background).font_semibold().child(text);
-    const pane = (on) => v_flex().rounded(6).border(1).border_color(on ? t.accent : t.border).min_h(0);
+    const listFocus = (shared("focus") ?? "list") === "list";
+    // Elements have the focus, not panes: the path's bars show which row the keys act on.
+    const pane = () => v_flex().rounded(6).border(1).border_color(t.border).min_h(0);
+    // The path (Logseq bullet threading): the focused row has a full bar and highlight; while the focus is further in
+    // (its Steps, or the detail column), the row keeps a thin bar as an ancestor.
+    const path = (el, on, here) => el.border_l(3).border_color(on ? t.accent : t.background)
+      .when(on && here, (e) => e.bg(t.selected)).when(on && !here, (e) => e.border_l(1));
     const seqRow = (it) => {
-      const el = h_flex().id(`q-${it.key}`).h(26).px(8).gap(8).rounded(4).items_center().cursor_pointer()
-        .when(it.key === this.hi, (e) => e.bg(t.selected)).hover((s) => s.bg(t.hover))
-        .on_click((_e, cx) => { this.hi = it.key; setShared("seq_pane", "seqs"); cx.spawn(async (cx) => this.loadSteps(cx)); });
+      const el = path(h_flex().id(`q-${it.key}`).h(26).px(8).gap(8).rounded(4).items_center().cursor_pointer()
+        .hover((s) => s.bg(t.hover)), it.key === this.hi, listFocus && !steps)
+        .on_click((_e, cx) => { // a click focuses the row and takes the keys from any text field
+          this.hi = it.key;
+          setShared("seq_pane", "seqs");
+          setShared("focus", "list");
+          focusMain();
+          cx.spawn(async (cx) => this.loadSteps(cx));
+        });
       if (it.archived !== undefined) return el.child(div().w(16).text_color(t.muted).child(this.showArchived ? "\u{f0140}" : "\u{f0142}"))
         .child(div().text_color(t.muted).child(`Archived · ${it.archived}`));
       const q = it.q;
@@ -256,9 +289,16 @@ export default class Sequences extends View {
     };
     const lines = this.page?.outline ?? [];
     const stepRow = (l, n) => {
-      const el = h_flex().id(`s-${n}`).h(26).pr(8).gap(8).rounded(4).items_center().cursor_pointer()
-        .when(steps && n === this.at, (e) => e.bg(t.selected)).hover((s) => s.bg(t.hover))
-        .on_click((_e, cx) => { this.at = n; setShared("seq_pane", "steps"); this.side(); cx.notify(); });
+      const el = path(h_flex().id(`s-${n}`).h(26).pr(8).gap(8).rounded(4).items_center().cursor_pointer()
+        .hover((s) => s.bg(t.hover)), steps && n === this.at, listFocus)
+        .on_click((_e, cx) => { // a click focuses the Step and takes the keys from any text field
+          this.at = n;
+          setShared("seq_pane", "steps");
+          setShared("focus", "list");
+          focusMain();
+          this.side();
+          cx.notify();
+        });
       const pad = 8 + 14 * (l.depth ?? 0);
       if (!l.step) return el.pl(pad).child(div().font_semibold().text_color(t.muted).child(l.label ?? ""));
       const s = l.step;
@@ -275,11 +315,11 @@ export default class Sequences extends View {
     const q = this.page?.sequence;
     return v_flex().size_full().min_h(0).gap(6).p(2).bg(t.background).text_size(13)
       .when(Boolean(this.error), (el) => el.child(div().p(12).text_color(t.danger).child(this.error ?? "")))
-      .child(pane(!steps).flex_none().max_h(300)
+      .child(pane().flex_none().max_h(300)
         .child(h_flex().h(26).px(8).gap(8).items_center().child(pill(`${ICON.sequence} sequences`))
           .child(div().text_color(t.muted).child(`${active} active · ${archived} archived`)))
         .child(v_flex().id("seqs").min_h(0).overflow_y_scroll().px(2).pb(4).children(its.map(seqRow))))
-      .child(pane(steps).flex_1()
+      .child(pane().flex_1()
         .child(h_flex().h(26).px(8).gap(8).items_center().child(pill(`${ICON.sequence} steps${q ? ` · ${q.name}` : ""}`)))
         .child(v_flex().id("steps").flex_1().min_h(0).overflow_y_scroll().px(2).children(lines.map(stepRow)))
         .when(Boolean(q), (e) => e.child(div().flex_none().px(8).py(4).border_t(1).border_color(t.border).text_size(11.5).text_color(t.muted)

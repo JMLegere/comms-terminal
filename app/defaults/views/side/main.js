@@ -1,5 +1,7 @@
 // The right pane for a Today Paused or Unattended row, as the Console's show_side: the Person with their Sequence
-// section, or the Organization with its Pipeline section (D89). Shared "side" names the row: {kind, id}.
+// section, or the Organization with its Pipeline section (D89). Shared "side" names the row: {kind, id}. Element
+// focus: the Person or Organization is the pane's one element; it names itself in the bar, j/k scroll it and Enter
+// opens its page, as Enter on its Today row does.
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { call, nextCommand, theme, shared, setShared, run, open } from "comms";
@@ -27,8 +29,27 @@ export default class Side extends View {
     this.lines = [];
     this.load(cx);
     cx.spawn(async (cx) => {
-      while (true) if ((await nextCommand()) === "show") this.load(cx);
+      while (true) this.command(await nextCommand(), cx);
     });
+  }
+
+  command(c, cx) {
+    switch (c) {
+      case "show": return this.load(cx);
+      case "focus_entry": this.target(); return cx.notify();
+      case "next": case "prev": return run(c === "next" ? "app.scroll_down" : "app.scroll_up");
+      case "enter": return run("today.enter"); // the row's own page: the Person or the Organization
+    }
+  }
+
+  /** The bar's line for the pane's Person or Organization (element focus): its name and the keys it takes. */
+  target() {
+    const s = shared("side");
+    if (!s || shared("page") !== "today" || shared("focus") !== "detail") return;
+    const name = this.lines?.[0]?.[0]?.[0] ?? "";
+    setShared("target", s.kind === "paused"
+      ? { col: "detail", label: `Person · ${name}`, keys: [["enter", "open"], ["r", "resume"], ["f", "finish"], ["j/k", "scroll"], ["esc", "list"]] }
+      : { col: "detail", label: `Organization · ${name}`, keys: [["enter", "open"], ["j/k", "scroll"], ["esc", "list"]] });
   }
 
   load(cx) {
@@ -40,6 +61,7 @@ export default class Side extends View {
         if (JSON.stringify(shared("side")) !== JSON.stringify(s)) return; // shared() hands back a copy
         this.lines = lines;
         this.error = null;
+        this.target();
       } catch (e) {
         this.error = String(e);
       }
