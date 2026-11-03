@@ -185,7 +185,7 @@ def add_parsers(sub):
     es = en.add_subparsers(dest="enrollment_cmd", required=True)
     x = es.add_parser("list", help="live Enrollments: id, Person, Sequence, state, how it is finishing")
     x.add_argument("person", nargs="?", help="only this Person (id, email address, or exact name)")
-    x = es.add_parser("resume", help="resume a Paused Enrollment; its next Task is due now")
+    x = es.add_parser("resume", help="resume a Paused Enrollment; its Tasks keep their due dates")
     x.add_argument("id")
     x = es.add_parser("start", help="put a running Enrollment on the agreed date: its Due Task comes due that day")
     x.add_argument("id")
@@ -511,7 +511,7 @@ def enrollment_cmd(db, a) -> str:
         raise ValueError(f"no Enrollment {a.id}")
     if c == "resume":
         sequences.resume(db, a.id)
-        return f"Resumed {e['name']}: the next Task is due now.\n"
+        return f"Resumed {e['name']}: each Task keeps its due date.\n"
     if c == "start":
         day = sequences.parse_start(a.date, clock.now())
         if day is None:

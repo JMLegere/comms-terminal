@@ -4816,7 +4816,7 @@ def pick_task(app, person_id: int, choice: int):
 def resume_enrollment(app, person_id: int):
     def go(e):
         sequences.resume(app.db, e["id"])
-        app.notify(f"Resumed {e['sequence']}: the next Task is due now, under Tasks.")
+        app.notify(f"Resumed {e['sequence']}: each Task keeps its due date.")
         app.main.refresh_all()
     pick_enrollment(app, person_id, ("PAUSED",), go)
 

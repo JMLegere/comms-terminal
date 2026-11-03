@@ -116,6 +116,12 @@ def ingest_reply(outreach, address, day):
                                              title="Re: Pilot"))
 
 
+@when(parsers.parse("Resume is called on {day}"))
+def resume(outreach, day):
+    outreach.now = DAYS[day] + timedelta(hours=2)
+    sequences.resume(outreach.db, outreach.enrollment, outreach.now)
+
+
 @then(parsers.parse('the Enrollment has State "{state}"'))
 def enrollment_state(outreach, state):
     assert outreach.db.execute("SELECT state FROM enrollments WHERE id = ?", (outreach.enrollment,)).fetchone()[0] == state

@@ -204,7 +204,7 @@ export default class Person extends View {
         });
       }
       case "resume": return this.pickEnrollment(live, ["PAUSED"], (e) => cx.spawn(async () =>
-        this.write("sequences.resume", { enrollment_id: e.id }, `Resumed ${e.sequence}: the next Task is due now, under Tasks.`)));
+        this.write("sequences.resume", { enrollment_id: e.id }, `Resumed ${e.sequence}: each Task keeps its due date.`)));
       case "finish": return this.pickEnrollment(live, ["ACTIVE", "PAUSED", "FINISHING"], (e) => {
         this.finishing = e;
         cx.spawn(async () => {
