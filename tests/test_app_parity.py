@@ -50,7 +50,7 @@ APP = {
     ("CasePage", "describe"): "case.describe",
     ("TasksPage", "down"): "tasks.next", ("TasksPage", "up"): "tasks.prev", ("TasksPage", "done"): "tasks.done",
     ("TasksPage", "skip"): "tasks.skip", ("TasksPage", "new_thread"): "tasks.new_thread",
-    ("TasksPage", "filter"): "tasks.filter", ("TasksPage", "person"): "tasks.person", ("TasksPage", "copy"): "tasks.copy",
+    ("TasksPage", "person"): "tasks.person", ("TasksPage", "copy"): "tasks.copy",
     ("TasksPage", "pick(1)"): "tasks.pick_first", ("TasksPage", "pick(0)"): "tasks.pick_second",
     ("SequencesTable", "new_sequence"): "sequences.new", ("SequencesTable", "archive"): "sequences.archive",
     ("SequencesTable", "delete_sequence"): "sequences.delete", ("SequencesTable", "rename"): "sequences.rename",
@@ -101,6 +101,7 @@ WHY = {
     ("CasePage", "scroll(1)"): SCROLLS, ("CasePage", "scroll(-1)"): SCROLLS,
     ("DescriptionBox", "save"): "The description prompt saves on Enter",
     ("MainScreen", "app.quit"): "Close the window; the Local core keeps running (FR-2)",
+    ("TasksPage", "filter"): "The Palette (/) replaced the Tasks filter (FR-BAR-4)",
 }
 
 

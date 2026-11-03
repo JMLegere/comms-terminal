@@ -79,6 +79,7 @@ export default class Case extends View {
         const keep = this.c?.cards?.[this.sel]?.id;
         const fresh = this.c?.id !== id;
         this.c = { ...c, id };
+        setShared("crumb", c.title ?? null); // the Breadcrumb's name for this page
         const at = c.cards.findIndex((k) => k.id === keep);
         this.sel = at >= 0 ? at : Math.max(0, Math.min(this.sel, c.cards.length - 1));
         if (fresh) {

@@ -317,6 +317,11 @@ impl AppWindow {
             "app.edit_keys" => return cx.open_with_system(&self.home.join("keys.json")),
             "app.update" => return prepare_update(),
             "app.restart" => std::process::exit(UPDATE_EXIT), // the launcher opens the App again
+            // The top bar's window controls and drag (FR-BAR-2): niri draws no title bar, so the App draws its own.
+            "app.minimize" => return window.minimize_window(),
+            "app.maximize" => return window.zoom_window(),
+            "app.close" => return window.remove_window(),
+            "app.move" => return window.start_window_move(),
             _ => {}
         }
         // scroll_end: far enough that the pane under the Thread column stops at its newest entries.

@@ -57,7 +57,7 @@ def test_every_query_answers_on_the_demo_data(demo_core):
     values = {"view": "Todo", "thread_id": first("SELECT id FROM threads"), "case_id": first("SELECT id FROM cases"),
               "draft_id": first("SELECT id FROM composition_drafts"), "sequence_id": first("SELECT id FROM sequences"),
               "person_id": first("SELECT id FROM persons"), "domain": first("SELECT domain FROM organizations"),
-              "name": "revenue", "text": "a", "connection_id": first("SELECT id FROM connections"),
+              "name": "revenue", "text": "a", "commands": [], "recent": [], "connection_id": first("SELECT id FROM connections"),
               "start": "2026-01-01", "end": "2026-12-31", "mode": "all", "organization_id": "", "org_id": first("SELECT id FROM organizations"),
               "task_id": first("SELECT id FROM tasks WHERE state = 'DUE'"), "since": "2000-01-01",
               "enrollment_id": first("SELECT id FROM enrollments"),

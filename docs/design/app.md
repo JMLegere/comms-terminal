@@ -24,7 +24,7 @@ Status: **Draft for Jeremy's review** (2026-10-31; Phases 3–5 built 2026-11-01
 
 References, in Jeremy's words "slick, sexy and beautiful": Linear (dense, quiet chrome, keyboard first), Plain (the Status model, the Thread layout), Superhuman (speed, one thing at a time), and `herdr-app` (sidebar plus work area, no title bar).
 
-- **Structure.** Herdr's organisation and hierarchy (Jeremy, 2026-10-31; kept by L0 and D18, "i like the app shell"): a 248 px `chrome` sidebar (brand 46 px, then the rail with section labels), a 42 px top bar, and the work area on the `canvas` with 8 px padding and gap holding the page's cards, each with a 30 px header; a 28 px status bar. The bars carry what the Console's one bottom bar carries (D9): the mode block (`TODO`, `TODAY › THREADS`, `… › PERSON`), `READ-ONLY`, the page's keys grouped move · reply · triage · organize · general and clickable, the `now`/`next` Event, Todo and Snoozed counts, each Connection's and Context source's health, and the installed build. Which bar holds which item is settled at the Phase 2 screenshot gate.
+- **Structure.** Herdr's organisation and hierarchy (Jeremy, 2026-10-31; kept by L0 and D18, "i like the app shell"): a 248 px `chrome` sidebar (brand 46 px, then the rail with section labels), a 42 px top bar, and the work area on the `canvas` with 8 px padding and gap holding the page's cards, each with a 30 px header; a 28 px bottom bar. The bars follow `.agents/discovery/2026-11-03-app-bars.md` (D151): the top bar holds the **Breadcrumb** (the rail page with Today's pane or the Status view, then each full page opened on top by name; earlier levels click back; long paths fold their middle to `…`) and the window controls minimize, maximize and close, drawn by the App because niri draws no title bar; the empty bar drags the window and a double-click maximizes it. The bottom bar holds **Problems** on the left only while they last (read-only with its reason, a broken Connection or "N Connections broken" past two, Google Calendar broken, "N saving"), and on the right what keys act on (the focused element and at most four of its keys, or "typing in <field> · esc leaves"), the `now`/`next` Event and `/ search`. Counts stay in the rail; the App and Service builds are in Settings › Service & updates. When the window narrows the Events clip first, then the keys; Problems and `/ search` stay.
 - **Theme.** One ships: `gruvbox-material-light`, matching the Console's palette, as Jeremy asked ("the same light colour theme that the tui has"): background `#f9f5d7`, canvas `#f5edca`, chrome `#f3eac7`, selected `#eee0b7`, border `#ebdbb2`, text `#654735`, accent `#45707a`. The dark `gruvbox` theme is removed (D19).
 - **Semantic tokens.** Views use tokens only, never raw colours: `background`, `surface`, `surface-raised`, `border`, `text`, `text-muted`, `accent`, `selection`, `focus`, and one token per Status detail (`status-needs-first`, `status-needs-next`, `status-investigating`, `status-reply-draft`, `status-waiting`, `status-done`, `status-ignored`). They use the Console's Status colours (`docs/design/console.md` §2), and colour never carries meaning alone.
 - **Type.** The UI font is `settings.json` `ui_font` (shipped: `JetBrainsMono Nerd Font Mono`) at 13 px for lists and 14 px for message bodies; section labels are 11.5 px in `dim`. Sizes: 11.5, 12, 13, 14 and 18 (the Thread title).
@@ -48,7 +48,8 @@ The default layout is `main`: a sidebar (rail) on the left and the work area on 
 - **Edits survive leaving.** Leaving a Step editor by Escape or by moving away saves it, as the Console does (D119). A Person merge keeps the Person the Console keeps and shows the Console's preview before it merges (D137).
 - **Undo**: the Console's one app-wide undo (D10–D12): every change the Console offers to undo is undoable in the App, its toast ends with `z undo`, and `z` undoes it from any page. Deletes happen at once and offer undo, with no confirmation picker (D71, D149).
 - **Overlay**: one picker and prompt drawn over the window for every view (the Console's Pick and Ask): type to filter, ↑/↓, Enter, Escape. `?` opens it as a key palette for the page.
-- **Status bar**: online, or read-only with the reason (`core.status`); toasts from the Local core's events.
+- **Palette** (D151): `/` (and ctrl-shift-p, also from a text field) opens the overlay as one ranked list of the page's commands, named with their key, and the copy's People, Organizations, Cases, Sequences, Connections, Threads, Drafts, message text and Events. The Local core's `search` ranks them: a name match before other fields and message text, exact or prefix before a typo (one edit from five letters, two from eight), recent picks higher; ties go to a command, then a Person. Empty, it shows recent picks, then the commands. Enter runs the command or opens the record (a full page on top; a Thread, Draft or Sequence on its page). The Tasks filter is gone.
+- **Toasts** from the Local core's events show bottom right.
 
 ## 4. Keys
 
@@ -83,7 +84,7 @@ Jeremy accepted these in the App-versus-Console review (`App-Console-Review-Deci
 | D17 | "Update ready" read-only reason; the App relaunches itself after an update. |
 | D20 | Interface files, Panels, live reload, `.error` files and the escape-key reset. |
 | D21 | The brand row. |
-| D22 | The status bar names the Service, its build and the writes still saving. |
+| D22 | The status bar names the Service, its build and the writes still saving. Superseded by D151: the builds moved to Settings; writes saving stays as a Problem. |
 | D23 | Threads grouped by Status detail in every view. Jeremy's 2026-11-02 qualification: the Console's Case header rows stay inside the groups, and headers do not fold. |
 | D30 | "Nothing in Todo." |
 | D43 | HTML bodies rendered natively, remote images held back behind "Load images". |
@@ -113,5 +114,6 @@ Jeremy accepted these in the App-versus-Console review (`App-Console-Review-Deci
 | D140 | Block and Person toasts. |
 | D143 | Channels lists every Connection with its health; the right pane shows its rules. |
 | D147 | The key palette's help content. |
+| D151 | App bars and Palette (discovery `.agents/discovery/2026-11-03-app-bars.md`, approved 2026-11-03): Breadcrumb and window controls in the top bar; Problems, focused keys, `now`/`next` and `/ search` in the bottom bar; `/` and ctrl-shift-p open the Palette; the Tasks filter is removed. Supersedes the bar layout of D9 and conformance decision #23. |
 
 Native equivalents Jeremy chose for terminal-only Console behaviours (2026-11-02): body links open with Ctrl+click instead of Ctrl+Shift+click; `ctrl+o` opens the system file picker instead of the Workbox file tree or upload link.

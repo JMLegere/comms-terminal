@@ -48,6 +48,7 @@ export default class Event extends View {
         const fresh = this.page?.key !== e.id;
         this.page = { ...page, key: e.id };
         this.error = null;
+        setShared("crumb", e.title ?? null); // the Breadcrumb's name for this page
         this.target();
         if (fresh) {
           this.context = [];

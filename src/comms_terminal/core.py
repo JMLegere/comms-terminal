@@ -109,6 +109,24 @@ def _shell(core, db):
             "calendar_broken": bool(cal.broken(db)), **events, "build": build_version()}
 
 
+@query("search", text="string", commands="array", recent="array")
+def _search(core, db, text, commands, recent):
+    """The Palette's rows (FR-BAR-5): the App's `commands` ([{id, label, key, group}]) and the copy's People,
+    Organizations, Cases, Sequences, Connections, Threads, Drafts, Messages and Events, ranked in one list with
+    typos forgiven; `recent` holds the ids of recent picks, newest first. The index is rebuilt after the copy
+    changes."""
+    from . import search
+    seq = getattr(core, "seq", None)
+    kept = getattr(core, "search_index", None)
+    # ponytail: a full rebuild (~0.8 s on 5,000 records) on the first search after any event; patch the index per
+    # change if that lag shows while typing.
+    if kept is None or kept[0] != seq or seq is None:
+        kept = (seq, search.build(db))
+        if core is not None:
+            core.search_index = kept
+    return search.search(kept[1], text, commands, recent)
+
+
 @query("sequences.pauses_since", since="string")
 def _pauses(core, db, since):
     """Enrollments paused after `since` (ISO time), for the pause toast (FR-SEQ-20)."""
