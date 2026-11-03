@@ -83,6 +83,14 @@ Then add a block for it to `layouts/main.json`: `{ "id": "todo-count", "type": "
   shown: `threads`, `today`, `drafts`, …), `view` (the Status view), `detail` (Today's row kind), and the selection
   of each page: `thread`, `draft`, `case`, `person`, `organization` (`{id, domain}`), `task`, `sequence`,
   `connection`, `event`, `pipeline`.
+- Element focus: one element (a row, message, link, field) takes the keys; columns are only layout.
+  `shared("focus")` is its column (`rail`, `list`, `detail`; `list_view` and `detail_view` name the views there).
+  A view whose element has the focus names it with `setShared("target", { col, label: "<Kind> · <name>",
+  keys: [[key, label], …] })`; the bar shows it. While a field has the keyboard, set `shared("typing")` to its name
+  (from the input's `focus` and `blur`). A click on an element sets `focus` and calls `focusMain()`. The focus
+  entering a column runs `<view>.focus_entry`; in the detail column j/k, Enter and Tab run `<view>.next`, `prev`,
+  `enter`, `tab`. Draw the focused element with a full accent bar (`border_l(3)`, accent) and its ancestor row
+  with a thin one.
 - A picker or prompt: `setShared("picker", { title, options: [{ value, label, hint }], reply: "<view>.<command>",
   prompt, value })` then `run("overlay.open")`; the choice comes back to that view's `nextCommand()` as
   `<command>:<JSON {value, text}>`.
