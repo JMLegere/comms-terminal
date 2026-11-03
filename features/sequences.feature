@@ -42,6 +42,18 @@ Feature: Sequences
     And Due Tasks on Monday are empty
     And Send Draft refuses the email Task's Draft with "Enrollment is Paused"
 
+  @AS-SEQ-5 @FR-SEQ-13
+  Scenario: Resume keeps each waiting Task's due date
+    Given "Dana Roy" is enrolled in "Secret Sequence" on Monday
+    When Send Draft sends the email Task's Draft on Monday
+    And Ingest receives a new email from "dana@harbourline.example" on Monday
+    And Resume is called on Monday
+    Then the Enrollment has State "ACTIVE"
+    And Due Tasks on Monday are empty
+    And Due Tasks on Wednesday are:
+      | Person   | Kind | Group   | Day |
+      | Dana Roy | call | overdue | 2   |
+
   @AS-SEQ-8 @FR-SEQ-6 @FR-SEQ-14
   Scenario: An Unsubscribed Person cannot be enrolled again
     Given "Dana Roy" is enrolled in "Secret Sequence" on Monday

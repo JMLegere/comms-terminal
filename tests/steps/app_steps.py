@@ -984,7 +984,7 @@ def press_r_f(app):
 def resume_finish(app, title):
     r = app.phase6["resume"]
     assert r["picker"] is None and r["write"] == {"enrollment_id": "e1"}
-    assert r["toast"] == "Resumed Warm intro: the next Task is due now, under Tasks."
+    assert r["toast"] == "Resumed Warm intro: each Task keeps its due date."
     assert app.phase6["which"] == {"title": title, "options": ["Warm intro · Active", "Bench · Finishing"]}
     assert app.phase6["reasons"] == {"title": "Finish Bench", "options": ["CANCELED", "UNSUBSCRIBED"]}
 

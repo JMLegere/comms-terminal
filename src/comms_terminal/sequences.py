@@ -1219,7 +1219,8 @@ def pause_person(db, person_id: int, at: datetime, why: str) -> int:
 
 @writer("write")
 def resume(db, enrollment_id: int, now: datetime | None = None) -> None:
-    """Paused to Active, or back to Finishing when it was paused there; the next Task is due at once (FR-SEQ-13)."""
+    """Paused to Active, or back to Finishing when it was paused there; each Task keeps its due date, so a Step's
+    wait still holds (FR-SEQ-13)."""
     now = now or clock.now()
     with db:
         _tx(db)
@@ -1228,11 +1229,8 @@ def resume(db, enrollment_id: int, now: datetime | None = None) -> None:
             raise Refused("Only a Paused Enrollment resumes.")
         db.execute("UPDATE enrollments SET state = CASE WHEN reason IS NULL THEN 'ACTIVE' ELSE 'FINISHING' END,"
                    " paused_at = NULL, pause_reason = NULL WHERE id = ?", (enrollment_id,))
-        if db.execute("SELECT 1 FROM tasks WHERE enrollment_id = ? AND state = 'DUE'", (enrollment_id,)).fetchone():
-            db.execute("UPDATE tasks SET due_at = ? WHERE enrollment_id = ? AND state = 'DUE' AND due_at > ?",
-                       (clock.iso(now), enrollment_id, clock.iso(now)))
-        else:
-            _next_task(db, db.execute("SELECT * FROM enrollments WHERE id = ?", (enrollment_id,)).fetchone(), now, due=now)
+        if not db.execute("SELECT 1 FROM tasks WHERE enrollment_id = ? AND state = 'DUE'", (enrollment_id,)).fetchone():
+            _next_task(db, db.execute("SELECT * FROM enrollments WHERE id = ?", (enrollment_id,)).fetchone(), now)
         materialize(db, now)
 
 
