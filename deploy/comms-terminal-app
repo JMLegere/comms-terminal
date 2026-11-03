@@ -6,6 +6,7 @@
 # $DATA and outlives the window; an update stops it so the new one starts. The App quits with 75 when the Service reports a new build: update, open again.
 #   comms-terminal-app-launch            update if needed, then open the App
 #   comms-terminal-app-launch --install  install main's desktop entry and launcher, then update
+#   comms-terminal-app-launch --prepare  install the Service's build and return (the App runs it while it stays open)
 # --install keeps COMMS_TERMINAL_REPO and COMMS_TERMINAL_SSH (the ssh arguments that reach your Service; Jeremy's
 # Oracle when unset) in $DATA/env, so the desktop entry, which starts without them, finds the same ones.
 set -eu
@@ -75,13 +76,31 @@ update() {
         uv tool install -q --reinstall --python 3.12 "$src"
     cargo build -q --release --manifest-path "$src/app/Cargo.toml"
     install -m 755 "$CARGO_TARGET_DIR/release/comms-terminal-app" "$DATA/bin/comms-terminal-app"
+    # The installed launcher follows the build too: the running one keeps its old copy, the next start reads the new.
+    if [ -f "$INSTALLED" ]; then
+        git -C "$REPO" show "$rev:deploy/comms-terminal-app" > "$INSTALLED.new" && chmod 755 "$INSTALLED.new" && mv "$INSTALLED.new" "$INSTALLED"
+    fi
     stop_core
     echo "$short" > "$DATA/installed-build"
 }
 
-export COMMS_TERMINAL_CORE="[\"$DATA/bin/comms-terminal\", \"--db\", \"$DATA/inbox.db\", \"--remote\", \"$SSH_ARGS\"]"
-while :; do
+LAUNCHER="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")" INSTALLED="$HOME/.local/bin/comms-terminal-app-launch"
+if [ "${1:-}" = "--prepare" ]; then
     update
+    exit 0
+fi
+# One launcher at a time: a second start (the window seemed gone while an update built) leaves the first one be.
+if [ -f "$DATA/launch.pid" ] && kill -0 "$(cat "$DATA/launch.pid")" 2>/dev/null; then
+    echo "Comms Terminal App is already open or updating." >&2
+    exit 0
+fi
+echo $$ > "$DATA/launch.pid"
+
+export COMMS_TERMINAL_CORE="[\"$DATA/bin/comms-terminal\", \"--db\", \"$DATA/inbox.db\", \"--remote\", \"$SSH_ARGS\"]"
+export COMMS_TERMINAL_APP_PREPARE="$LAUNCHER"
+while :; do
+    # In its own process, so a failed build stops only the update: the installed build still opens.
+    "$LAUNCHER" --prepare || [ -x "$DATA/bin/comms-terminal-app" ] || exit 1
     rc=0
     "$DATA/bin/comms-terminal-app" || rc=$?
     [ "$rc" -eq 75 ] && continue

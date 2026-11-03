@@ -26,6 +26,24 @@ const TOASTS: &str = "toasts"; // timed notifications, bottom right, as the Cons
 /// The exit code that asks the launcher to install the Service's build (tui.UPDATE_EXIT).
 pub const UPDATE_EXIT: i32 = 75;
 
+/// Builds the Service's version in the background with the launcher's `--prepare`
+/// (`COMMS_TERMINAL_APP_PREPARE`), then quits with 75; the App stays usable while it builds. Without a launcher (a
+/// dev run) it quits at once, as before. Runs once; a failed build leaves the App open on its current version.
+fn prepare_update() {
+    static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    let Some(prepare) = std::env::var_os("COMMS_TERMINAL_APP_PREPARE") else { std::process::exit(UPDATE_EXIT) };
+    std::thread::spawn(move || {
+        let built = std::process::Command::new(&prepare).arg("--prepare").status().is_ok_and(|s| s.success());
+        if built {
+            std::process::exit(UPDATE_EXIT);
+        }
+        eprintln!("comms-terminal-app: the update did not build; staying on this version until the next start");
+    });
+}
+
 struct Copy {
     root: Option<Entity<ShellRoot>>,
     error: Option<String>,
@@ -94,10 +112,10 @@ impl AppWindow {
                 if status {
                     host::set_status(event["data"].clone());
                 }
-                // The Service runs another build (AS-9): once no write is on its way, quit with 75 so
-                // deploy/comms-terminal-app installs that build and opens the App again, as the Console does.
+                // The Service runs another build (AS-9): once no write is on its way, install it while the App
+                // stays open (the launcher's --prepare), then quit with 75 so the launcher reopens the new build.
                 if event["kind"] == "update" && host::status()["pending"].as_u64().unwrap_or(0) == 0 {
-                    std::process::exit(UPDATE_EXIT);
+                    prepare_update();
                 }
                 host::broadcast(&event); // views that care render themselves
                 if status {
