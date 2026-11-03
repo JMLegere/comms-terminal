@@ -1,4 +1,7 @@
 {
+  "always": {
+    "ctrl-shift-p": "overlay.palette"
+  },
   "global": {
     "ctrl-o": "app.attach",
     "1": "nav.today",
@@ -15,6 +18,7 @@
     "?": "overlay.help",
     "shift-?": "overlay.help",
     "shift-/": "overlay.help",
+    "/": "overlay.palette",
     "u": "nav.back",
     "escape": "nav.back",
     "left": "nav.focus_left",
@@ -178,8 +182,7 @@
     "y": "tasks.copy",
     "1": "tasks.pick_first",
     "2": "tasks.pick_second",
-    "enter": "task.open",
-    "/": "tasks.filter"
+    "enter": "task.open"
   },
   "page:sequences": {
     "j": "sequences.next",

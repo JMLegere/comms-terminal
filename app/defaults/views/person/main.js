@@ -76,6 +76,7 @@ export default class Person extends View {
         }
         this.page = page;
         this.error = null;
+        setShared("crumb", page.person?.name ?? null); // the Breadcrumb's name for this page
         this.target(); // a pushed page loads after its focus_entry
       } catch (e) {
         this.page = null;

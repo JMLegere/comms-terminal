@@ -33,6 +33,7 @@ export default class Connection extends View {
           call("channels.list", { connection_id: id })]);
         if (shared("connection") !== id) return;
         this.conn = page;
+        setShared("crumb", (page.lines?.[0] ?? []).map((g) => g[0]).join("").trim() || null); // the Breadcrumb's name
         this.rules = page.slack === id ? rules : [];
         this.at = Math.min(this.at, Math.max(rules.length - 1, 0));
         this.error = null;

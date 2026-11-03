@@ -3110,6 +3110,48 @@
    }
   },
   {
+   "name": "search",
+   "summary": "The Palette's rows (FR-BAR-5): the App's `commands` ([{id, label, key, group}]) and the copy's People, Organizations, Cases, Sequences, Connections, Threads, Drafts, Messages and Events, ranked in one list with typos forgiven; `recent` holds the ids of recent picks, newest first. The index is rebuilt after the copy changes.",
+   "params": [
+    {
+     "name": "text",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
+    {
+     "name": "commands",
+     "required": true,
+     "schema": {
+      "type": "array"
+     }
+    },
+    {
+     "name": "recent",
+     "required": true,
+     "schema": {
+      "type": "array"
+     }
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
    "name": "send.draft",
    "summary": "Send a Draft now (Jeremy only).",
    "x-panel": false,

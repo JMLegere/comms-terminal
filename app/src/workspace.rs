@@ -31,6 +31,9 @@ const DEFAULTS: &[(&str, &str, bool)] = &[
     ("icons/square-pen.svg", include_str!("../defaults/icons/square-pen.svg"), true),
     ("icons/square.svg", include_str!("../defaults/icons/square.svg"), true),
     ("icons/x.svg", include_str!("../defaults/icons/x.svg"), true),
+    ("icons/win-min.svg", include_str!("../defaults/icons/win-min.svg"), true), // herdr-app mods/tabs (Apache-2.0)
+    ("icons/win-max.svg", include_str!("../defaults/icons/win-max.svg"), true), // herdr-app mods/tabs (Apache-2.0)
+    ("icons/win-close.svg", include_str!("../defaults/icons/win-close.svg"), true), // herdr-app mods/tabs (Apache-2.0)
     ("views/threads/main.js", include_str!("../defaults/views/threads/main.js"), true),
     ("views/thread/main.js", include_str!("../defaults/views/thread/main.js"), true),
     ("views/status/main.js", include_str!("../defaults/views/status/main.js"), true),
@@ -128,6 +131,7 @@ const PREVIOUS: &[(&str, u64)] = &[
     ("keys.json", 0x2f488345fba78d9d),
     ("keys.json", 0x8628f3383aace4af),
     ("keys.json", 0x515d848d3bd681db),
+    ("keys.json", 0xb4f6fe76e1ac3b7d),
 ];
 
 fn fnv(bytes: &[u8]) -> u64 {

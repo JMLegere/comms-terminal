@@ -76,6 +76,7 @@ export default class Organization extends View {
         const fresh = this.page?.domain !== page.domain;
         this.page = page;
         this.error = null;
+        setShared("crumb", page.org?.name ?? org.domain); // the Breadcrumb's name for this page
         if (fresh) {
           this.at = 0;
           this.links = [];

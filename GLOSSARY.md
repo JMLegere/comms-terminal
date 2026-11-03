@@ -434,6 +434,18 @@ _Avoid_: Service API (the Service's own routes), Protocol
 Who made a Local API call: a view (the App's built-in screens, on Jeremy's input) or a Panel. Panels cannot send, complete Tasks, undo or Respond.
 _Avoid_: Caller, Source
 
+**Palette**:
+The App's one search input, opened with `/` or ctrl-shift-p: a single ranked list of the commands the page takes, by name with their key, and the laptop copy's People, Organizations, Cases, Sequences, Connections, Threads, Drafts, message text and Events, with typos forgiven.
+_Avoid_: Omnisearch, Command menu, Command palette
+
+**Breadcrumb**:
+The App's top bar path: the rail page (with Today's pane or the Status view), then each full page opened on top, by name. Earlier levels click back.
+_Avoid_: Title, Tab, Mode block
+
+**Problem**:
+A state shown on the left of the App's bottom bar while it lasts: read-only or offline, a broken Connection, Google Calendar broken, writes still saving.
+_Avoid_: Alert, Error, Status (Status is a Thread's)
+
 **Interface files**:
 The files that set the App's layout, keys, settings, themes and Panels, with an `AGENTS.md` that explains them to agents. Edits apply while the App runs.
 _Avoid_: Config, Preferences

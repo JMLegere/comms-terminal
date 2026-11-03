@@ -91,6 +91,7 @@ export default class Nav extends View {
   }
 
   command(c, cx) {
+    if (c.startsWith("crumb:")) return this.crumb(Number(c.slice(6)), cx);
     const items = this.items().filter((i) => i.id).map((i) => i.id);
     switch (c) {
       case "back": return this.back(cx);
@@ -99,6 +100,7 @@ export default class Nav extends View {
         return view && run(`${view}.${c === "down" ? "next" : c === "up" ? "prev" : c}`);
       }
       case "push": return this.push(shared("push"));
+      case "jump": return this.jump(shared("jump"));
       case "undo": return this.undo(cx);
       case "focus_left": case "focus_right": return this.focus(c === "focus_left" ? -1 : 1, cx);
       case "next": case "prev": {
@@ -166,6 +168,7 @@ export default class Nav extends View {
     else entry = { page: item };
     entry.detail = null;
     setShared("stack", [entry]);
+    setShared("crumb", null);
     setShared("focus", NOLIST.has(entry.page) ? "detail" : "list");
     setShared("target", null); // the new page's element names itself once it loads
     setShared("subcol", null);
@@ -178,13 +181,41 @@ export default class Nav extends View {
   push(entry) {
     if (!entry?.page) return;
     const stack = [...(shared("stack") ?? [])];
-    stack[stack.length - 1] = this.snapshot();
+    // The Breadcrumb keeps each full page's name, as its view published it (shared "crumb").
+    stack[stack.length - 1] = { ...this.snapshot(), title: stack[stack.length - 1]?.title ?? (stack.length > 1 ? shared("crumb") : null) };
     stack.push({ detail: null, ...entry });
+    setShared("crumb", entry.title ?? null);
     setShared("stack", stack);
     setShared("focus", "detail");
     setShared("subcol", null);
     this.show(stack[stack.length - 1]);
     run(`${entry.page}.focus_entry`); // a new page: its first item takes the focus (esc returns to the link)
+  }
+
+  /** A Breadcrumb level's click (FR-BAR-1): back to that page, the pages above it closed. */
+  crumb(at, cx) {
+    const stack = [...(shared("stack") ?? [])];
+    if (!(at >= 0 && at < stack.length - 1)) return;
+    stack.length = at + 1;
+    setShared("stack", stack);
+    setShared("focus", NOLIST.has(stack[at].page) ? "detail" : "list");
+    setShared("subcol", null);
+    this.show(stack[at]);
+    cx?.notify();
+  }
+
+  /** A record the Palette chose (FR-BAR-5): a full page opens on top; any other page opens as a rail pick would,
+   * with the record selected (its Thread, Draft or Sequence). */
+  jump(entry) {
+    if (!entry?.page) return;
+    if (FULL.has(entry.page)) return this.push(entry);
+    const { title: _title, ...keys } = entry;
+    setShared("stack", [{ detail: null, ...keys }]);
+    setShared("focus", NOLIST.has(entry.page) ? "detail" : "list");
+    setShared("target", null);
+    setShared("subcol", null);
+    this.hi = null;
+    this.show(keys);
   }
 
   /** esc: back a column (detail → list, rail → the page), then back a page. */
