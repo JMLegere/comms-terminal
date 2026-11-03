@@ -26,6 +26,20 @@ const TOASTS: &str = "toasts"; // timed notifications, bottom right, as the Cons
 /// The exit code that asks the launcher to install the Service's build (tui.UPDATE_EXIT).
 pub const UPDATE_EXIT: i32 = 75;
 
+/// One log line per key: the key (a letter typed into a field is "<text>"), the command its binding ran (none: typed
+/// text or handled inside a view), the focused element's key contexts, the page, pane focus, shown Thread and
+/// whether the window is active.
+fn log_key(keystroke: &gpui::Keystroke, action: Option<String>, window: &Window) {
+    let contexts: Vec<String> = window.context_stack().iter().map(|c| format!("{c:?}")).collect();
+    let typing = contexts.iter().any(|c| c.starts_with("Input"));
+    let text = keystroke.key_char.is_some() && !keystroke.modifiers.control && !keystroke.modifiers.alt && !keystroke.modifiers.platform;
+    let key = if typing && text && action.is_none() { "<text>".to_owned() } else { keystroke.unparse() };
+    crate::log::write("key", serde_json::json!({
+        "key": key, "action": action, "contexts": contexts, "page": host::shared("page"), "focus": host::shared("focus"),
+        "thread": host::shared("thread"), "active": window.is_window_active(),
+    }));
+}
+
 /// Builds the Service's version in the background with the launcher's `--prepare`
 /// (`COMMS_TERMINAL_APP_PREPARE`), then quits with 75; the App stays usable while it builds. Without a launcher (a
 /// dev run) it quits at once, as before. Runs once; a failed build leaves the App open on its current version.
@@ -60,6 +74,7 @@ pub struct AppWindow {
     keys_installed: bool,
     /// The widgets' own bindings (a text field's backspace, enter, arrows), kept across keys.json reloads.
     base_keys: Option<Vec<KeyBinding>>,
+    _key_log: gpui::Subscription,
     renders: u64,
 }
 
@@ -96,7 +111,20 @@ impl AppWindow {
             Ok(node) => (node, None),
             Err(e) => (shipped_layout(), Some(e)),
         };
-        let mut this = AppWindow { home, runtime, layout, copies: HashMap::new(), focus, problem, keys_installed: false, base_keys: None, renders: 0 };
+        crate::log::open(&home);
+        crate::log::write("start", serde_json::json!({"version": env!("CARGO_PKG_VERSION"), "pid": std::process::id()}));
+        // Every key goes in the log once: one that matched a binding here, with the command it ran; any other (typed
+        // text, or a key a view handles itself, as Esc in the reply box) from the root's capture_key_down (render).
+        let key_log = cx.observe_keystrokes(|_, ev, window, _| {
+            if let Some(a) = &ev.action {
+                let action = a.as_any().downcast_ref::<ShellAction>().map_or_else(|| a.name().to_string(), |s| s.id().to_string());
+                log_key(&ev.keystroke, Some(action), window);
+            }
+        });
+        let mut this = AppWindow {
+            home, runtime, layout, copies: HashMap::new(), focus, problem, keys_installed: false, base_keys: None,
+            _key_log: key_log, renders: 0,
+        };
         this.install_keys(cx);
         this.load_views(window, cx);
 
@@ -110,7 +138,14 @@ impl AppWindow {
             while let Ok(event) = events.recv().await {
                 let status = event["kind"] == "status";
                 if status {
+                    let (was, now) = (host::status(), &event["data"]);
+                    if was["online"] != now["online"] || was["problem"] != now["problem"] {
+                        crate::log::write("status", serde_json::json!({"online": now["online"], "problem": now["problem"]}));
+                    }
                     host::set_status(event["data"].clone());
+                }
+                if event["kind"] == "update" {
+                    crate::log::write("update", event["data"].clone());
                 }
                 // The Service runs another build (AS-9): once no write is on its way, install it while the App
                 // stays open (the launcher's --prepare), then quit with 75 so the launcher reopens the new build.
@@ -148,7 +183,10 @@ impl AppWindow {
         prepare_policy(&self.home, name, origin, rx);
         match self.runtime.try_load(&dir, window, cx) {
             Ok(root) => copy.root = Some(root),
-            Err(e) => copy.error = Some(format!("{e:#}")),
+            Err(e) => {
+                crate::log::write("error", serde_json::json!({"view": name, "error": format!("{e:#}")}));
+                copy.error = Some(format!("{e:#}"));
+            }
         }
         copy
     }
@@ -173,6 +211,7 @@ impl AppWindow {
 
     /// One control-socket request: shot, status, do, raise, probe.
     fn control(&mut self, cmd: Value, reply: std::sync::mpsc::Sender<Value>, window: &mut Window, cx: &mut Context<Self>) {
+        crate::log::write("control", serde_json::json!({"verbs": cmd.as_object().map(|o| o.keys().cloned().collect::<Vec<_>>())}));
         if let Some(path) = cmd.get("shot").and_then(Value::as_str) {
             let path = PathBuf::from(path);
             let answer = match crate::control::save_shot(window, &path) {
@@ -189,7 +228,7 @@ impl AppWindow {
             let m = self.runtime.read_metrics();
             let _ = reply.send(serde_json::json!({
                 "core": host::status(), "layout": self.layout.views(), "views": copies, "problem": self.problem,
-                "home": self.home,
+                "home": self.home, "log": crate::log::path(&self.home),
                 "metrics": {"window_renders": self.renders, "script_renders": m.script_renders(),
                             "materializations": m.materializations(), "frame_script_calls": m.frame_script_calls()},
             }));
@@ -245,6 +284,9 @@ impl AppWindow {
 
     /// `app.reset`, or `<view>.<command>` to that view's `nextCommand()`.
     fn run(&mut self, command: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let view = command.split_once('.').map_or("", |(v, _)| v);
+        let to = if view == "app" || self.copies.contains_key(view) { "sent" } else { "no such view" };
+        crate::log::write("run", serde_json::json!({"command": command, "to": to}));
         if command == "app.reset" {
             return self.reset(window, cx);
         }
@@ -513,6 +555,7 @@ impl Render for AppWindow {
             .text_color(color("foreground"))
             .text_size(px(13.))
             .track_focus(&self.focus)
+            .capture_key_down(|ev, window, _| log_key(&ev.keystroke, None, window))
             .on_action(cx.listener(|this, action: &ShellAction, window, cx| this.run(action.id(), window, cx)))
             .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| this.attach(paths, cx)))
             .child(div().flex_1().min_h_0().flex().child(self.render_node(&self.layout, true)));

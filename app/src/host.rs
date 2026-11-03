@@ -178,6 +178,7 @@ pub fn module(origin: &'static str, commands: async_channel::Receiver<String>) -
             let message = args.string(0)?.to_owned();
             let severity = args.get(1).map(from_host).and_then(|v| v.as_str().map(str::to_owned)).unwrap_or("information".into());
             let timeout = args.get(2).map(from_host).and_then(|v| v.as_f64()); // seconds shown; the toasts view's default otherwise
+            crate::log::write("toast", json!({"message": message, "severity": severity}));
             broadcast(&json!({"kind": "toast", "data": {"message": message, "severity": severity, "timeout": timeout}}));
             Ok(HostValue::Null)
         })
