@@ -15,6 +15,7 @@ pub struct Node {
     pub size: Size,
     pub view: Option<String>,
     /// `"pages": {"drafts": "drafts", …}`: the view shown while `shared("page")` names that page; `view` otherwise.
+    /// `null` hides the block on that page, so a full page (a Person, say) takes the room.
     pub pages: Vec<(String, String)>,
     pub children: Vec<Node>,
     /// Look, in herdr-app's terms: a theme token behind the node, one bordered side (or all, for a card),
@@ -54,7 +55,10 @@ pub fn parse(v: &Value) -> Result<Node, String> {
         None => Vec::new(),
         Some(Value::Object(m)) => m
             .iter()
-            .map(|(page, view)| view.as_str().map(|v| (page.clone(), v.to_owned())).ok_or_else(|| format!("{id}: pages.{page} must name a view")))
+            .map(|(page, view)| match view {
+                Value::Null => Ok((page.clone(), String::new())),
+                _ => view.as_str().map(|v| (page.clone(), v.to_owned())).ok_or_else(|| format!("{id}: pages.{page} must name a view or be null")),
+            })
             .collect::<Result<Vec<_>, _>>()?,
         Some(_) => return Err(format!("{id}: pages must map page names to views")),
     };
@@ -96,7 +100,7 @@ impl Node {
 
     fn collect(&self, out: &mut Vec<String>) {
         for v in self.view.iter().chain(self.pages.iter().map(|(_, v)| v)) {
-            if !out.contains(v) {
+            if !v.is_empty() && !out.contains(v) {
                 out.push(v.clone());
             }
         }
@@ -132,6 +136,9 @@ mod tests {
         assert_eq!(node.view_on(Some("today"), Some("task")), Some("task"));
         assert_eq!(node.view_on(Some("drafts"), Some("task")), Some("threads"));
         assert_eq!(node.views(), ["threads", "thread", "task"]);
+        let hides = parse(&json!({"id": "x", "view": "threads", "pages": {"person": null}})).unwrap();
+        assert_eq!(hides.view_on(Some("person"), None), Some(""));
+        assert_eq!(hides.views(), ["threads"]);
     }
 
     #[test]

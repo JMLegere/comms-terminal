@@ -63,10 +63,15 @@
                 "cases": "cases",
                 "tasks": "tasks",
                 "sequences": "sequences",
-                "pipeline": "pipeline",
+                "pipeline": null,
                 "people": "people",
                 "organizations": "organizations",
-                "channels": "channels"
+                "channels": "channels",
+                "person": null,
+                "organization": null,
+                "connection": null,
+                "event": null,
+                "case": null
               }
             },
             {
@@ -76,19 +81,25 @@
               "card": true,
               "pages": {
                 "today": "thread",
-                "calendar": "event",
+                "calendar": "day",
                 "drafts": "draft",
                 "cases": "case",
                 "tasks": "task",
                 "sequences": "sequence",
-                "pipeline": "organization",
+                "pipeline": "pipeline",
                 "people": "person",
                 "organizations": "organization",
                 "channels": "connection",
                 "today:task": "task",
+                "tasks:draft": "draft",
                 "today:draft": "draft",
-                "today:paused": "person",
-                "today:unattended": "organization"
+                "today:paused": "side",
+                "today:unattended": "side",
+                "person": "person",
+                "organization": "organization",
+                "connection": "connection",
+                "event": "event",
+                "case": "case"
               }
             }
           ]

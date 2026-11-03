@@ -87,14 +87,15 @@ Feature: App
     When Jeremy presses Ctrl Enter and chooses Send now in the Draft editor
     Then the App calls "<method>" with the edited Draft contents
 
+    # A Reply Draft edits and sends in its Thread's reply box (D69).
     Examples:
       | kind             | method     |
       | Reply Draft      | send.reply |
       | New Thread Draft | send.draft |
 
   @AS-APP-11 @FR-APP-6
-  Scenario Outline: A Reply Draft in the App refuses missing text or recipients
-    Given an App Reply Draft editor with empty "<field>"
+  Scenario Outline: A reply in the App refuses missing text or recipients
+    Given an App reply box with empty "<field>"
     When Jeremy presses Ctrl Enter and chooses Send now in the Draft editor
     Then the App refuses the send with "<error>"
 
@@ -108,3 +109,187 @@ Feature: App
     Given the released Local API document
     When a released method loses a parameter
     Then the compatibility check fails
+
+  @AS-CONF-1 @FR-CONF-1
+  Scenario Outline: On Today, a Thread key acts only on a selected Thread row
+    Given Today in the App with a Thread row selected, then a "<row>" row
+    When Jeremy presses the Thread key for "<command>"
+    Then the App makes no call against the earlier Thread
+
+    Examples:
+      | row        | command      |
+      | Task       | done         |
+      | Task       | ignore       |
+      | Draft      | ignore       |
+      | Draft      | reply_sender |
+      | Paused     | reply_sender |
+      | Paused     | forward      |
+      | Unattended | done         |
+
+  @AS-CONF-1 @FR-CONF-1
+  Scenario: On Today, a Thread key still acts on a selected Thread row
+    Given Today in the App with a Thread row selected, then a "Thread" row
+    When Jeremy presses the Thread key for "done"
+    Then the App marks that Thread Done
+
+  @AS-CONF-2 @FR-CONF-2
+  Scenario: A Draft whose send outcome is unknown stays read-only
+    Given an App Draft whose send outcome is unknown
+    When Jeremy types in its body, then presses ctrl-s and esc
+    Then the body still shows the stored text
+    And the App saves nothing
+
+  @AS-CONF-3 @FR-CONF-3
+  Scenario: Leaving a Step's editor saves it, as the Console
+    Given a Step open in the App's Step editor
+    When Jeremy changes its subject and leaves the field, then presses esc with a bad gap, then with a good one
+    Then leaving the field saves the new subject
+    And the bad gap is refused with "Not saved: Gap is a whole number of business days, 0 or more." and the editor stays open
+    And esc with a good gap saves it and closes the editor
+
+  @AS-CONF-4 @FR-CONF-4
+  Scenario: Merging People shows the merged Person before it merges
+    Given Ana Ng selected on the App's People page
+    When Jeremy presses g, picks Ben Ode, then accepts the preview
+    Then the picker asks "Merge Ana Ng into"
+    And the preview says "Ana Ng joins Ben Ode:" before any merge
+    And the merge keeps Ben Ode and drops Ana Ng
+
+  @AS-CONF-6 @FR-CONF-5
+  Scenario: Deleting a Draft, a Sequence or a Step asks nothing and z puts it back
+    Given a Draft, an unused Sequence and a Step in the App
+    When Jeremy deletes each one and presses z after each
+    Then no confirmation picker opens
+    And each delete toast ends with "z undo" and z restores what was deleted
+
+  @AS-CONF-5 @FR-CONF-6
+  Scenario: The App keeps the Console's page stack
+    Given the App on Threads › Todo with a Thread selected
+    When Jeremy opens the Thread's Person, then goes back twice, then picks People in the rail
+    Then the Person opens as a full page on top of Todo
+    And going back returns to Todo with the same Thread, and goes no further
+    And the rail pick starts a new stack
+
+  @AS-CONF-6 @FR-CONF-7
+  Scenario: One undo puts back the last change, once
+    Given the App with a Thread selected
+    When Jeremy marks it Done, then presses z twice
+    Then the Done toast ends with "z undo"
+    And the first z restores the Thread and says "Undone: back to how it was."
+    And the second z says "Nothing to undo."
+
+  @AS-CONF-7 @FR-CONF-11 @FR-CONF-9
+  Scenario: The Threads list groups and marks Threads as the Console does
+    Given Todo in the App with a ready Reply Draft, a saved reply that is not ready, and Threads with and without a Case
+    When the Threads list shows them
+    Then Status headers come in the legend's order, with "No case" and Case headers inside them
+    And the saved reply that is not ready stays under "Needs next response"
+
+  @AS-CONF-8 @FR-CONF-9
+  Scenario: Enter on a Case header opens the Case
+    Given a Case header selected in the App's Threads list
+    When Jeremy presses Enter
+    Then the Case opens as a full page on the stack
+
+  @AS-CONF-7 @FR-CONF-9
+  Scenario: After s, the selection moves on to the next Thread
+    Given three Todo Threads in the App with the first selected
+    When Jeremy changes its Status detail with s
+    Then the selection moves to the Thread below it
+
+  @AS-CONF-7 @FR-CONF-9
+  Scenario: Ages and countdowns read as the Console's
+    Given the App's Threads list
+    When it shows ages and snooze countdowns
+    Then ages read "now", "1m", "3h", "2d", "Oct 12" and countdowns read "5m24s", "3h0m5s", "now", "—"
+
+  @AS-CONF-12 @FR-CONF-10
+  Scenario: The Drafts list keeps the Console's order and status words
+    Given App Drafts that failed to send, are unsent, need an edit and are scheduled
+    When the Drafts list shows them
+    Then failed sends come first, then unsent, then scheduled by send time
+    And their status words read "failed", "saved", "edit me" and the weekday they send
+
+  @AS-CONF-12 @FR-CONF-10
+  Scenario: Enter on a Reply Draft opens its Thread's reply box
+    Given a Reply Draft selected in the App's Drafts list
+    When Jeremy presses Enter on it
+    Then its Thread opens in its Status view with the reply box open
+    And Ctrl Enter in the Draft pane sends nothing
+
+  @AS-CONF-12 @FR-CONF-10
+  Scenario: Ctrl Enter refuses an incomplete Draft before the send menu
+    Given a New Thread Draft in the App with no subject
+    When Jeremy presses Ctrl Enter
+    Then the editor says "Not sent · Add a subject." and no send menu opens
+    And a complete Draft's send menu lists its Connection, From, To and Subject
+
+  @AS-CONF-13 @FR-CONF-10
+  Scenario: A key on Today acts on its row's own list
+    Given Today in the App with a Thread, a Task, a Draft and a Paused Enrollment
+    When Jeremy presses x and r on each row and tab from the Thread
+    Then x ignores the Thread, skips the Task and deletes the Draft, r resumes the Paused Enrollment, and tab moves to the Task
+
+  @AS-CONF-13 @FR-CONF-10
+  Scenario: Today's Unattended rows name their Stages, and All clear says what comes next
+    Given Today in the App with an Unattended Organization in two Stages
+    When Today shows it, and later shows nothing
+    Then its row reads "Proposal · Intro" and All clear reads "Next wake · Mon 02 Nov 09:00"
+
+  @AS-CONF-14 @FR-CONF-10
+  Scenario: The Calendar is one scrolling grid of week rows split by month
+    Given the App's Calendar around the turn of a month
+    When it lays out its weeks
+    Then a separator row starts each month and splits the week it falls in, and cells read "1 Nov" and "3 today"
+
+  @AS-CONF-14 @FR-CONF-10
+  Scenario: o on an Event toasts its join link
+    Given an Event with a join link in the App's day pane and on its Event page
+    When Jeremy presses o in each
+    Then each toasts the link, which opens on Ctrl+click, and nothing opens at once
+
+  @AS-CONF-15 @FR-CONF-10
+  Scenario: Enter folds a Case card and the Thread keys act on the selected card
+    Given a Case page in the App with two Thread cards
+    When Jeremy moves to the second card and presses Enter twice
+    Then the Thread keys act on the second card's Thread, and the card folds and unfolds
+
+  @AS-CONF-15 @FR-CONF-10
+  Scenario: r on a Case card opens its reply row in place
+    Given a folded Case card whose Thread has a saved reply
+    When Jeremy presses a on it
+    Then the card unfolds with its reply row open on the saved words, To filled from the Thread
+
+  @AS-CONF-16 @FR-CONF-10
+  Scenario: Enter on an email Task opens its Draft where it is edited
+    Given email Tasks in the App with a Reply Draft and with a New Thread Draft
+    When Jeremy presses Enter on each
+    Then the Reply Draft opens in its Thread's reply box and the New Thread Draft's editor takes the keyboard
+
+  @AS-CONF-16 @FR-CONF-10
+  Scenario: Skipping a Task can be undone and the next Task is selected
+    Given two due Tasks in the App with the first selected
+    When Jeremy skips it with x
+    Then the toast offers z undo, z would restore it, and the next Task is selected
+
+  @AS-CONF-17 @FR-CONF-10
+  Scenario: Archiving a used Sequence explains itself and can be undone
+    Given a Sequence in the App with three live Enrollments
+    When Jeremy presses a and cancels the live Enrollments
+    Then the picker explains archiving and offers to cancel the 3 live Enrollments or let them finish
+    And the toast says "Archived Warm intro: 3 Enrollments Canceled." and z restores it
+
+  @AS-CONF-18 @FR-CONF-10
+  Scenario: s on an Organization offers its Pipeline's Stages with the current one marked
+    Given an Organization in the App at Commit in Revenue only
+    When Jeremy presses s and picks Onboarding
+    Then the picker marks "▸ Commit  (current)" and offers the other Pipelines
+    And the toast says "Acme → Onboarding." and z undoes it
+
+  @AS-CONF-19 @FR-CONF-10
+  Scenario: Resume and finish act on the one Enrollment, or ask which
+    Given a Person in the App with one Paused Enrollment, and a Person with an Active and a Finishing one
+    When Jeremy presses r on the first and f on the second
+    Then the Paused one resumes at once, f asks "Which Enrollment?", and a Finishing one offers only Canceled and Unsubscribed
+    And finishing can be undone with z
+

@@ -59,7 +59,11 @@ def test_every_query_answers_on_the_demo_data(demo_core):
               "person_id": first("SELECT id FROM persons"), "domain": first("SELECT domain FROM organizations"),
               "name": "revenue", "text": "a", "connection_id": first("SELECT id FROM connections"),
               "start": "2026-01-01", "end": "2026-12-31", "mode": "all", "organization_id": "", "org_id": first("SELECT id FROM organizations"),
-              "task_id": first("SELECT id FROM tasks WHERE state = 'DUE'")}
+              "task_id": first("SELECT id FROM tasks WHERE state = 'DUE'"), "since": "2000-01-01",
+              "enrollment_id": first("SELECT id FROM enrollments"),
+              "keep": first("SELECT id FROM persons"), "value": "a", "kind": "email", "drop": first("SELECT id FROM persons ORDER BY id DESC"),
+              "id": first("SELECT id FROM organizations"), "uid": "no-such-event", "step_id": first("SELECT id FROM sequence_steps"), "fields": {}, "body": "", "voicemail": "",  # today.side: kind "email" reads as an Organization row
+              "values": {"connection_id": None, "kind": "email", "sender": "", "to": "", "cc": "", "subject": "", "body": ""}}
     answered = 0
     for name, (_, spec, summary) in core.QUERIES.items():
         assert summary, name
@@ -69,7 +73,7 @@ def test_every_query_answers_on_the_demo_data(demo_core):
         assert "result" in answer, (name, answer)
         json.dumps(answer)  # plain JSON all the way down
         answered += 1
-    assert answered >= len(core.QUERIES) - 3
+    assert answered >= len(core.QUERIES) - 6  # the demo data has no Sequence Steps, Enrollments or due Tasks
 
 
 def test_a_pipeline_with_a_target_answers_with_its_dates_as_text(demo_core):
@@ -249,3 +253,46 @@ def test_the_socket_is_private_and_carries_calls_and_events(demo_core, tmp_path)
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_context_asks_the_service_and_says_why_a_source_failed(monkeypatch):
+    """AS-CONF-11: the App's Context sources come through the Service, as the Console's ContextSection."""
+    from types import SimpleNamespace
+
+    from comms_terminal import remote
+    asked = []
+
+    def stub(socket, source):
+        def fetch(emails, domains):
+            asked.append((socket, source, emails, domains))
+            if source == "linear":
+                raise remote.ReplyError("Linear refused")
+            return None if source == "tana" else {"people": [], "companies": [], "tasks": []}
+        return fetch
+    monkeypatch.setattr(remote, "socket_context", stub)
+    fake = SimpleNamespace(_socket=lambda: "/run/svc.sock")
+    assert core.Core.context(fake, "attio", ["a@x.test"], ["x.test"]) == {"answer": {"people": [], "companies": [], "tasks": []}, "error": None}
+    assert core.Core.context(fake, "tana", ["a@x.test"], []) == {"answer": None, "error": None}
+    assert core.Core.context(fake, "linear", [], ["x.test"]) == {"answer": None, "error": "Linear refused"}
+    assert asked[0] == ("/run/svc.sock", "attio", ["a@x.test"], ["x.test"])
+    assert core.Core.context(SimpleNamespace(_socket=lambda: None), "attio", [], []) == {"answer": None, "error": None}
+
+
+def test_drafts_answer_with_names_problems_and_the_editor_details(demo_core):
+    """Phase 4 (D67, D73, D75, D89): the Drafts list names recipients; draft.view carries the editor's labels and
+    Captured history; draft.problem is the Console's pre-check; today.side fills a Paused row's pane."""
+    db = inbox.connect(demo_core.db_path)
+    conn = db.execute("SELECT id, self_id FROM connections WHERE platform IN ('gmail', 'fastmail')").fetchone()
+    d = inbox.save_draft(db, dict(connection_id=conn[0], kind="email", sender=conn[1] or "", to="nobody@example.test",
+                                  cc="", subject="", body="Hi"))
+    row = next(r for r in call(demo_core, "drafts.list")["result"] if r["id"] == d["id"])
+    assert row["recipient"] == "nobody@example.test"
+    view = call(demo_core, "draft.view", draft_id=d["id"])["result"]
+    assert view["connection"].endswith(conn[1] or "") and view["channel"] == "email" and view["new_title"] == "New email"
+    assert view["history"] == [] and view["history_note"] == "No captured match · prior contact unknown."
+    assert any(c["id"] == conn[0] for c in view["connections"])
+    assert call(demo_core, "draft.problem", values=view["draft"])["result"] == "Add a subject"
+    person = db.execute("SELECT id, display_name FROM persons").fetchone()
+    lines = call(demo_core, "today.side", kind="paused", id=str(person[0]))["result"]
+    assert lines[0] == [[person[1], None, True, None]]
+    assert lines[-1][0][0] == "r resume · f finish · enter opens the Person"

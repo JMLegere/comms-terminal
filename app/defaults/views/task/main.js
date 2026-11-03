@@ -1,14 +1,35 @@
-// One due Task: what to do, for whom, from which Sequence Step, and its brief. An email Task's Draft opens with
-// Enter (or the button) in Drafts, where ctrl-enter sends it and so completes the Task.
-import { View, div, svg } from "gpui-kit";
+// One due Task, as the Console's TaskPane (FR-SEQ-16, D109): "Day N · Kind · Person", what to do for this kind of
+// Task (call script and voicemail, LinkedIn move, letter, If paths, Action, Enroll, flags with their guidance), the
+// hint line, and the properties column (task, enrollment, next, person, organization) with its Context sections.
+// An email Task with a New Thread Draft shows the Draft editor in place; Enter (open) focuses it, and on a Reply
+// Draft opens its Thread's reply box (D110).
+import { View, div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { call, nextEvent, nextCommand, theme, shared, setShared, run, toast } from "comms";
+import { call, nextEvent, nextCommand, theme, shared, setShared, run, toast, open } from "comms";
 
-const KIND = { email: "Email", call: "Call", linkedin: "LinkedIn", task: "Task", action: "Action", if: "If", sms: "SMS" };
+const SOURCES = ["attio", "tana", "linear"];
+
+/** Console segment lines ([text, colour, bold, link]) as rows; a blank line keeps its height. A person or org link
+ * opens that page on the stack; a URL opens on Ctrl+click (Cmd+click on macOS), as message links do (D44). */
+export function segLines(t, lines, key = "s", orgs = {}) {
+  const GREY = { "#928374": "muted", "#a89984": "dim", "#7c6f64": "muted" };
+  const color = (hex) => (hex ? t[GREY[hex]] ?? hex : t.foreground);
+  const follow = (link, ev) => {
+    const push = (entry) => { setShared("push", entry); run("nav.push"); };
+    if (link.startsWith("person:")) push({ page: "person", person: link.slice(7) });
+    else if (link.startsWith("org:")) push({ page: "organization", organization: { domain: link.slice(4), id: orgs[link.slice(4)] ?? null } });
+    else if (ev?.modifiers?.control || ev?.modifiers?.platform) open(link);
+  };
+  return (lines ?? []).map((segs, r) => (segs.length ? h_flex().w_full().gap(0).flex_wrap()
+    .children(segs.map(([text, hex, bold, link], i) => div().min_w(0).text_color(link ? t.blue : color(hex)).when(Boolean(bold), (d) => d.font_semibold())
+      .when(Boolean(link), (d) => d.id(`${key}-${r}-${i}`).cursor_pointer().on_click((ev) => follow(link, ev))).child(text)))
+    : div().h(10)));
+}
 
 export default class Task extends View {
   init(_props, cx) {
-    this.task = null;
+    this.pane = null;
+    this.context = [];
     this.load(cx);
     cx.spawn(async (cx) => {
       while (true) if ((await nextEvent()).kind === "rows" && shared("task")) this.load(cx);
@@ -17,7 +38,7 @@ export default class Task extends View {
       while (true) {
         const c = await nextCommand();
         if (c === "show") this.load(cx);
-        if (c === "open") this.open();
+        if (c === "open") this.open(cx);
       }
     });
   }
@@ -25,49 +46,69 @@ export default class Task extends View {
   load(cx) {
     const id = shared("task");
     if (!id) {
-      this.task = null;
+      this.pane = null;
       return cx.notify();
     }
     cx.spawn(async (cx) => {
       try {
-        const [all, text] = await Promise.all([call("tasks.list"), call("task.markdown", { task_id: id }).catch(() => "")]);
+        const pane = await call("task.pane", { task_id: id });
         if (shared("task") !== id) return;
-        this.task = all.find((t) => t.id === id) ?? null;
-        this.text = text;
-        this.error = this.task ? null : "This Task is no longer due.";
+        const fresh = this.pane?.id !== id;
+        this.pane = { ...pane, id };
+        this.error = null;
+        if (pane.draft && !pane.draft.thread_id) { // a New Thread Draft: the real Draft editor, in place
+          setShared("draft", pane.draft.id);
+          setShared("detail", "draft");
+          run("draft.show");
+        }
+        if (fresh) this.loadContext(id, pane, cx);
       } catch (e) {
-        this.error = String(e);
+        this.pane = null;
+        this.error = /no due Task/.test(String(e)) ? "This Task is no longer due." : String(e);
       }
       cx.notify();
     });
   }
 
-  open() {
-    const t = this.task;
-    if (!t?.draft_id) return toast("This Task has no Draft.");
-    setShared("draft", t.draft_id);
-    setShared("page", "drafts");
-    run("draft.show");
-    run("draft.edit");
+  loadContext(id, pane, cx) {
+    this.context = [];
+    for (const source of SOURCES) call("context.section", { source, emails: pane.emails ?? [], domains: pane.domains ?? [] })
+      .then((section) => { if (section && shared("task") === id) { this.context = [...this.context, section]; cx.notify(); } })
+      .catch(() => {});
+  }
+
+  open(cx) {
+    const d = this.pane?.draft;
+    if (!d) return toast("This Task has no Draft.");
+    if (!d.thread_id) return run("draft.edit");
+    cx.spawn(async () => {
+      try {
+        const th = (await call("thread.view", { thread_id: d.thread_id })).view.thread, v = th?.f ?? th;
+        const view = v.status_detail === "IGNORED" ? "ignored" : { TODO: "todo", SNOOZED: "snoozed", DONE: "done" }[v.status] ?? "todo";
+        setShared("thread", d.thread_id);
+        run(`nav.${view}`);
+        run("thread.show");
+        run("thread.open_reply");
+      } catch (e) {
+        toast(String(e), "error");
+      }
+    });
   }
 
   render() {
     const t = theme();
-    const task = this.task;
-    const pane = v_flex().size_full().min_h(0).bg(t.background).text_size(13);
-    if (!task) return pane.child(div().p(24).text_color(t.dim).child(this.error ?? "No Task selected"));
-    return pane
-      .child(h_flex().h(30).flex_none().px(12).gap(8).items_center().border_b(1).border_color(t.border).text_size(12).text_color(t.muted)
-        .child(svg("icons/list-checks.svg").size(13).text_color(t.accent))
-        .child(div().font_medium().text_color(t.foreground).child(`${KIND[task.kind] ?? task.kind} Task`))
-        .child(div().flex_1().truncate().text_color(t.dim).child(`· ${task.sequence} · step ${task.position} of ${task.steps}`)))
-      .child(v_flex().id("task").flex_1().min_h(0).overflow_y_scroll().px(24).py(18).gap(10)
-        .child(div().text_size(18).font_semibold().text_color(t.strong ?? t.foreground).child(task.person ?? ""))
-        .when(Boolean(task.organization), (el) => el.child(div().text_color(t.muted).child(String(task.organization?.name ?? task.organization))))
-        .when(task.kind === "if" && task.condition === "jeremy_picks", (el) => el.child(div().text_color(t.accent)
-          .child(`1 ${task.true_label} · 2 ${task.false_label}`)))
-        .when(Boolean(task.draft_id), (el) => el.child(div().id("open-draft").px(10).py(4).rounded(6).bg(t.selected).text_color(t.accent)
-          .cursor_pointer().on_click(() => this.open()).child("Open its Draft · Enter")))
-        .child(div().text_size(12.5).line_height(1.5).text_color(t.foreground).child(this.text ?? "")));
+    const p = this.pane;
+    const root = v_flex().size_full().min_h(0).bg(t.background).text_size(13);
+    if (!p) return root.child(div().p(24).text_color(t.muted).child(this.error ?? "No Task selected."));
+    return root.child(h_flex().flex_1().min_h(0).items_start()
+      .child(v_flex().flex_1().min_w(0).h_full()
+        .child(v_flex().id("task-timeline").flex_1().min_h(0).overflow_y_scroll().px(20).py(14).gap(2)
+          .children(segLines(t, p.head, "h")).child(div().h(10)).children(segLines(t, p.body, "b")))
+        .child(div().flex_none().px(20).py(8).border_t(1).border_color(t.border).text_size(11.5).text_color(t.muted).child(p.hint ?? "")))
+      .child(v_flex().id("task-props").w(300).flex_none().h_full().overflow_y_scroll().px(16).py(14).gap(2).border_l(1)
+        .border_color(t.border).text_size(12.5)
+        .children(segLines(t, p.props, "p"))
+        .children(this.context.map((c) => v_flex().mt(12).p(8).gap(2).rounded(6).border(1).border_color(t.border)
+          .child(div().text_color(t.muted).child(c.title)).children(segLines(t, c.lines, `c${c.title}`))))));
   }
 }

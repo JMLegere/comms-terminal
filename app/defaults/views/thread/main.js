@@ -1,6 +1,7 @@
-// The selected Thread: a pane header (where it is), its title, its messages, and its reply box. An email with an
-// HTML part shows it through MessageBody (litehtml; nothing is fetched until "Load images"); other messages show
-// their text. Attachments and links open with one click; files dropped on the window go on this Thread's reply.
+// The selected Thread, as the Console's ThreadView (ADR 0014): conversation and reply box on the left, properties,
+// related Threads and Context sources on the right. Messages collapse Gmail-style; Status and Case changes sit
+// between them. An email with an HTML part shows it through MessageBody (litehtml; nothing is fetched until
+// "Load images"); other messages show their text. Attachments and links open with one click; files dropped on the window go on this Thread's reply.
 // Every Thread key of the Console lands here as a command (keys.json: "thread.done", …), whichever page shows the
 // Thread: Done, Snooze, Ignore, Status, Case, block, Person, link, copy, forward, react, Respond, reply and undo.
 import { View, div, svg } from "gpui-kit";
@@ -8,9 +9,31 @@ import { v_flex, h_flex, InputState, Input, TextareaState, Textarea } from "gpui
 import { MessageBody } from "gpui-component";
 import { call, nextEvent, nextCommand, theme, shared, setShared, mark, open, run, focusMain, toast } from "comms";
 
-const PLATFORM = { gmail: "file-text", fastmail: "file-text", email: "file-text", slack: "layers", quo: "square-pen", gcal: "clock" };
-const DETAIL = { CREATED: "Needs first response", NEW_REPLY: "Needs next response", IN_PROGRESS: "Investigating" };
-const REACTIONS = [["+1", "👍 +1"], ["pray", "🙏 pray"], ["eyes", "👀 eyes"]];
+// Status detail: Nerd Font glyph (icons.py), colour token, label (inbox.DETAIL_LABEL).
+const GLYPH = {
+  CREATED: ["\u{f0674}", "status_needs_first", "Needs first response"],
+  NEW_REPLY: ["\u{f173e}", "status_needs_next", "Needs next response"],
+  IN_PROGRESS: ["\u{f0349}", "status_investigating", "Investigating"],
+  REPLY_DRAFT: ["\u{f048a}", "status_reply_draft", "Reply Draft"],
+  WAITING_FOR_CUSTOMER: ["\u{f051f}", "status_waiting", "Waiting for them"],
+  WAITING_FOR_DURATION: ["\u{f03e6}", "status_waiting", "Paused for later"],
+  WAITING_INDEFINITELY: ["\u{f03e6}", "status_waiting", "Paused for later"],
+  DONE_MANUALLY_SET: ["\u{f012c}", "status_done", "Done"],
+  IGNORED: ["\u{f06d1}", "status_ignored", "Ignored"],
+};
+const DETAIL = { CREATED: GLYPH.CREATED[2], NEW_REPLY: GLYPH.NEW_REPLY[2], IN_PROGRESS: GLYPH.IN_PROGRESS[2] };
+const I = { deleted: "\u{f09e7}", edited: "\u{f0cb6}", open: "\u{f03cc}", status: "\u{f0996}", person: "\u{f0013}",
+  people: "\u{f000f}", organization: "\u{f01d7}", case: "\u{f0814}", channel: "\u{f0423}", calendar: "\u{f0b67}",
+  attachment: "\u{f03e2}", blocked: "\u{f00ad}", email: "\u{f01f0}", phone: "\u{f011c}", reply: "\u{f045a}",
+  time: "\u{f0150}", summary: "\u{f09ed}", broken: "\u{f0028}", google: "\u{f02ad}", fastmail: "\u{f1870}", slack: "\u{f04b1}",
+  meeting: "\u{f0ed8}", TODO: "\u{f0766}" };
+const PLATFORM = { gmail: ["Gmail", "google", true], fastmail: ["Fastmail", "fastmail", true], slack: ["Slack", "slack", true],
+  quo: ["Quo", "phone", true], gcal: ["Google Calendar", "calendar", false] }; // title, glyph, takes replies
+const REACTIONS = [["+1", "👍", "Like"], ["pray", "🙏", "Thanks"], ["eyes", "👀", "Looking"]];
+const EMOJI = Object.fromEntries(REACTIONS.map(([n, e]) => [n, e]));
+const GUTTER = ["#4c7a5d", "#945e80", "#c35e0a", "#b47109", "#6c782e", "#c14a4a"];
+const CAUSE = { action: "you", reply: "you wrote", message: "they wrote", edit: "they edited", delete: "they deleted a message",
+  call: "a call", meeting: "a meeting", reopen: "import", blocked: "blocked sender", undo: "undone" };
 const ANSWERS = { accept: "Accepted", maybe: "Maybe", decline: "Declined" };
 const dc = (name, f = {}) => ({ $dc: name, f });
 const dt = (iso) => ({ $dt: iso });
@@ -19,7 +42,79 @@ const pad = (n) => String(n).padStart(2, "0");
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 // The script engine has no Intl, so dates are spelled out here, in local time.
-const stamp = (iso) => { const d = new Date(iso); return `${DAYS[d.getDay()]} ${MONTHS[d.getMonth()]} ${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+const stamp = (iso) => { const d = new Date(iso); return `${DAYS[d.getDay()]} ${MONTHS[d.getMonth()]} ${d.getDate()}, ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+const dayTime = (t) => `${DAYS[t.getDay()]} ${pad(t.getHours())}:${pad(t.getMinutes())}`; // %a %H:%M
+const fullDate = (iso) => { const d = new Date(iso); return `${DAYS[d.getDay()]} ${MONTHS[d.getMonth()]} ${d.getDate()} ${d.getFullYear()}, ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+/** The Console's when(): now, 5m, 3h, 2d, then a date. */
+export function when(iso, now = Date.now()) {
+  if (!iso) return "";
+  const t = new Date(iso), secs = (now - t) / 1000;
+  if (secs < 60) return "now";
+  if (secs < 3600) return `${Math.floor(secs / 60)}m`;
+  if (secs < 86400) return `${Math.floor(secs / 3600)}h`;
+  if (secs < 7 * 86400) return `${Math.floor(secs / 86400)}d`;
+  return `${MONTHS[t.getMonth()]} ${t.getDate()}`;
+}
+const ago = (iso) => { const a = when(iso); return a === "now" ? "just now" : `${a} ago`; };
+/** Time left until a snooze ends, as the Console's left(). */
+function left(iso) {
+  if (!iso) return "—";
+  const secs = Math.floor((new Date(iso) - Date.now()) / 1000);
+  if (secs <= 0) return "now";
+  const parts = [[Math.floor(secs / 86400), "d"], [Math.floor(secs % 86400 / 3600), "h"], [Math.floor(secs % 3600 / 60), "m"], [secs % 60, "s"]];
+  while (parts[0][0] === 0) parts.shift();
+  return parts.map(([n, u]) => `${n}${u}`).join("");
+}
+/** md5 of a string as a BigInt-free integer mod n: the Console picks a gutter colour by int(md5, 16) % 6. */
+function md5mod(str, n) {
+  const k = [], r = [7, 12, 17, 22, 5, 9, 14, 20, 4, 11, 16, 23, 6, 10, 15, 21];
+  for (let i = 0; i < 64; i++) k[i] = Math.floor(Math.abs(Math.sin(i + 1)) * 2 ** 32) >>> 0;
+  const bytes = [];
+  for (const ch of str) { // UTF-8, by hand: the script engine may have no TextEncoder
+    const c = ch.codePointAt(0);
+    if (c < 0x80) bytes.push(c);
+    else if (c < 0x800) bytes.push(0xc0 | c >> 6, 0x80 | c & 63);
+    else if (c < 0x10000) bytes.push(0xe0 | c >> 12, 0x80 | c >> 6 & 63, 0x80 | c & 63);
+    else bytes.push(0xf0 | c >> 18, 0x80 | c >> 12 & 63, 0x80 | c >> 6 & 63, 0x80 | c & 63);
+  }
+  const len = bytes.length * 8;
+  bytes.push(0x80);
+  while (bytes.length % 64 !== 56) bytes.push(0);
+  for (let i = 0; i < 8; i++) bytes.push(i < 4 ? (len >>> (8 * i)) & 255 : 0);
+  let [a0, b0, c0, d0] = [0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476];
+  for (let o = 0; o < bytes.length; o += 64) {
+    const m = [];
+    for (let i = 0; i < 16; i++) m[i] = bytes[o + 4 * i] | bytes[o + 4 * i + 1] << 8 | bytes[o + 4 * i + 2] << 16 | bytes[o + 4 * i + 3] << 24;
+    let [a, b, c, d] = [a0, b0, c0, d0];
+    for (let i = 0; i < 64; i++) {
+      const [f, g] = i < 16 ? [(b & c) | (~b & d), i] : i < 32 ? [(d & b) | (~d & c), (5 * i + 1) % 16]
+        : i < 48 ? [b ^ c ^ d, (3 * i + 5) % 16] : [c ^ (b | ~d), (7 * i) % 16];
+      const x = (a + f + k[i] + m[g]) | 0, s = r[(i >> 4) * 4 + (i % 4)];
+      [a, d, c] = [d, c, b];
+      b = (b + ((x << s) | (x >>> (32 - s)))) | 0;
+    }
+    [a0, b0, c0, d0] = [(a0 + a) | 0, (b0 + b) | 0, (c0 + c) | 0, (d0 + d) | 0];
+  }
+  // The digest's bytes, read as one big-endian number, mod n: fold byte by byte.
+  let rem = 0;
+  for (const w of [a0, b0, c0, d0]) for (let i = 0; i < 4; i++) rem = (rem * 256 + ((w >>> (8 * i)) & 255)) % n;
+  return rem;
+}
+/** The gutter's initials badge, as the Console's badge(): Me for Jeremy, else the first two words' initials. */
+function badge(who) {
+  const words = (who ?? "").split(/[\s@._-]+/).filter(Boolean);
+  return { ini: who === "You" ? "Me" : (words.slice(0, 2).map((w) => w[0]).join("") || "?").toUpperCase(),
+    color: who === "You" ? "#45707a" : GUTTER[md5mod(who ?? "", GUTTER.length)] };
+}
+/** Gmail's unread, approximated: everything after Jeremy's last message, and the newest. */
+function defaultOpen(msgs) {
+  let last = -1;
+  msgs.forEach((m, i) => { if (m.who === "You") last = i; });
+  const out = new Set();
+  for (let i = last + 1; i < msgs.length; i++) out.add(i);
+  if (msgs.length) out.add(msgs.length - 1);
+  return out;
+}
 
 /** A time typed as 14:30 (the next one) or 2026-10-20 09:00, as the Console's parse_time reads it. */
 function parseTime(text) {
@@ -46,17 +141,24 @@ function snoozeOptions() {
   return [...out, { value: "typed", label: "Pick a time…" }];
 }
 
+/** Say what changed and offer z to put it back, as the Console's offer_undo; `steps` are the calls that undo it. */
+export function offerUndo(message, steps) {
+  if (steps) setShared("undo", { message, steps });
+  toast(steps ? `${message}  z undo` : message);
+}
+
 export default class Thread extends View {
   init(_props, cx) {
     this.view = null;
     this.bodies = {}; // message id -> { html, remote, loaded } from message.body
-    this.undo = null; // { message, snap, block } for the last Thread action
     this.reply = null; // { thread, mode, envelope } while the reply box is open
     this.text = TextareaState.new({ placeholder: "Write a reply…", rows: 6 });
     this.text.set_auto_grow(4, 16);
     this.to = InputState.new({ placeholder: "recipients, comma-separated" });
     this.cc = InputState.new({ placeholder: "optional" });
     this.text.on("change", (_e, cx) => this.autosave(cx));
+    this.to.on("change", (_e, cx) => this.complete("to", cx));
+    this.cc.on("change", (_e, cx) => this.complete("cc", cx));
     this.load(cx);
     cx.spawn(async (cx) => {
       while (true) if ((await nextEvent()).kind === "rows") this.load(cx);
@@ -86,7 +188,10 @@ export default class Thread extends View {
         this.senders = answer.senders ?? [];
         this.replyDraft = answer.reply_draft;
         this.cases = answer.cases ?? [];
+        this.drafts = answer.drafts ?? [];
         this.error = null;
+        if (this.loaded !== id) { this.loaded = id; this.extras(id, cx); }
+        if (this.wantReply === id) { this.wantReply = null; this.open("all", cx); } // Drafts' Enter (D69)
         // Bodies wait until the selection rests, so holding j or k never waits on them.
         cx.timer.after(150, (cx) => {
           if (this.id() !== id) return;
@@ -122,8 +227,8 @@ export default class Thread extends View {
     if (!id) return;
     cx.spawn(async (cx) => {
       const snap = await call("thread.snapshot", { thread_id: id }).catch(() => null);
-      if ((await this.write("inbox.act", { thread_id: id, action }, message, cx)) !== undefined && snap)
-        this.undo = { message, snap };
+      if ((await this.write("inbox.act", { thread_id: id, action }, null, cx)) === undefined) return;
+      offerUndo(message, snap && [["inbox.restore", { snap }]]);
     });
   }
 
@@ -134,6 +239,7 @@ export default class Thread extends View {
     const v = this.view;
     const thread = v?.thread?.f ?? v?.thread ?? {};
     const id = this.id();
+    if (!id && name !== "show") return; // no Thread on screen: a Thread key does nothing (D87)
     switch (name) {
       case "show": return this.load(cx);
       case "images":
@@ -147,12 +253,13 @@ export default class Thread extends View {
       case "status": {
         if (!id) return;
         const options = ["IN_PROGRESS", "CREATED", "NEW_REPLY"].filter((d) => d !== thread.status_detail)
-          .map((d) => ({ value: d, label: DETAIL[d] }));
-        if (thread.status_detail === "IGNORED") options.push({ value: "UNIGNORE", label: "Un-ignore" });
+          .map((d) => ({ value: d, label: `${GLYPH[d][0]} ${DETAIL[d]}` }));
+        if (thread.status_detail === "IGNORED") options.push({ value: "UNIGNORE", label: `${I.TODO} Un-ignore` });
         return this.pick("Change status", options, "status-picked");
       }
       case "status-picked":
         if (answer.value === "UNIGNORE") return this.act(dc("Unignore"), "Un-ignored: back in Todo.", cx);
+        run("threads.advance"); // the queue moves on, as after Done (D32)
         return this.act(dc("MarkTodo", { detail: answer.value }), `Marked ${DETAIL[answer.value]}.`, cx);
       case "snooze": return id && this.pick("Pause for later", snoozeOptions(), "snooze-picked");
       case "snooze-picked":
@@ -186,9 +293,7 @@ export default class Thread extends View {
       case "block-picked": return this.block(this.senders[answer.value], false, cx);
       case "person":
         if (!v?.person) return toast("No other person in this thread yet: only your own messages.");
-        setShared("person", v.person.id);
-        setShared("page", "people");
-        return run("person.show");
+        setShared("push", { page: "person", person: v.person.id }); return run("nav.push");
       case "link":
         if (!id) return;
         return cx.spawn(async () => {
@@ -224,7 +329,6 @@ export default class Thread extends View {
             toast(`Not answered · ${e}`, "error");
           }
         });
-      case "undo": return this.restore(cx);
       case "unstage": {
         const files = this.staged ?? [];
         if (!files.length) return toast("No files staged here.");
@@ -242,16 +346,31 @@ export default class Thread extends View {
         });
       case "reply_all": case "reply_sender":
         return this.open(name === "reply_sender" ? "sender" : "all", cx);
+      case "open_reply": { // a Reply Draft's Thread, from Drafts or Today: its reply box opens once it has loaded
+        const id = this.id();
+        if ((this.view?.thread?.f ?? this.view?.thread)?.id === id && this.loaded === id) return this.open("all", cx);
+        this.wantReply = id;
+        return;
+      }
       case "send": return this.send(cx);
       case "send-picked": return this.sendPicked(answer.value, cx);
       case "save": return this.save(cx, "Saved.");
       case "close": return this.close(cx);
+      case "expand_all": case "collapse_all": { // ; and :, as the Console's expand_all
+        const st = this.msgState();
+        const all = (v?.messages ?? []).map((m) => m.native_id);
+        st.open = new Set(name === "expand_all" ? all : []);
+        st.closed = new Set(name === "expand_all" ? [] : all);
+        st.lines = name === "expand_all";
+        return cx.notify();
+      }
+      case "scroll_down": case "scroll_up": return run(`app.${name}`); // space/pgdn/pgup: a page of messages (D55)
+      case "draft-chosen": return this.openDraft(this.pendingMode ?? "all", +answer.value || answer.value, cx);
     }
   }
 
   snooze(t, cx) {
-    const when = stamp(t.toISOString());
-    this.act(dc("Snooze", { until: dt(t.toISOString()) }), `Paused until ${when}. It returns to Todo then, or when they write.`, cx);
+    this.act(dc("Snooze", { until: dt(t.toISOString()) }), `Paused until ${dayTime(t)}. It returns to Todo then, or when they write.`, cx);
   }
 
   /** Block also Ignores the Thread when the sender is its only one; a block alone changes only new Threads. */
@@ -267,18 +386,7 @@ export default class Thread extends View {
         await this.write("inbox.act", { thread_id: id, action: dc("Ignore") }, null, cx);
         message = `Blocked ${s.value} and ignored this thread: new threads from them go straight to Ignored.`;
       } else message = `Blocked ${s.value}: new threads from them go straight to Ignored.`;
-      toast(message);
-      this.undo = { message, snap, block: s };
-    });
-  }
-
-  restore(cx) {
-    const u = this.undo;
-    if (!u) return toast("Nothing to undo.");
-    this.undo = null;
-    cx.spawn(async (cx) => {
-      if (u.block) await this.write("inbox.block", { kind: u.block.kind, value: u.block.value, blocked: u.block.blocked }, null, cx);
-      if (u.snap) await this.write("inbox.restore", { snap: u.snap }, `Undone: ${u.message}`, cx);
+      offerUndo(message, [["inbox.block", { kind: s.kind, value: s.value, blocked: s.blocked }], ...(snap ? [["inbox.restore", { snap }]] : [])]);
     });
   }
 
@@ -293,8 +401,7 @@ export default class Thread extends View {
         await this.write("inbox.stage", { sha: a.sha, name: a.name, type: a.type, size: a.size, draft_id: draft.id }, null, cx);
       const missing = f.files.filter((a) => !a.sha).length;
       setShared("draft", draft.id);
-      setShared("page", "drafts");
-      run("draft.show");
+      run("nav.drafts");
       toast("Forward draft ready: add a recipient." + (f.files.length ? ` ${f.files.length - missing} files attached.` : "")
         + (missing ? ` ${missing} not copied: open them from the message.` : ""));
     });
@@ -312,7 +419,7 @@ export default class Thread extends View {
         if (r?.outcome !== "ready") return toast(`Reactions unavailable · ${r?.error ?? r?.outcome}`, "error");
         const mine = new Set((r.groups ?? []).filter((g) => g.mine).map((g) => g.name));
         this.reacting = { target, revision: r.revision, mine };
-        this.pick("React", REACTIONS.map(([value, label]) => ({ value, label, hint: mine.has(value) ? "yours · remove" : "" })), "react-picked");
+        this.pick("React", REACTIONS.map(([value, emoji, label]) => ({ value, label: `${emoji} ${label}`, hint: mine.has(value) ? "yours · remove" : "" })), "react-picked");
       } catch (e) {
         toast(`Reactions unavailable · ${e}`, "error");
       }
@@ -334,24 +441,125 @@ export default class Thread extends View {
     });
   }
 
+  // --- what loads beside the Thread: related Threads, Context sources, Slack reactions ---
+
+  /** Messages' open/closed state for the Thread on screen, as the Console's new_message_state. */
+  msgState() {
+    const id = this.id();
+    if (this.ms?.id !== id) this.ms = { id, open: new Set(), closed: new Set(), trim: new Set(), to: new Set(), lines: false };
+    return this.ms;
+  }
+
+  extras(id, cx) {
+    const v = this.view;
+    this.related = null;
+    this.ctx = {};
+    this.reactions = {};
+    // Other Threads with the Person, then with each Organization (related_markup).
+    cx.spawn(async (cx) => {
+      const p = v?.person;
+      if (!p) return;
+      const seen = new Set([id]);
+      const plain = (o) => o?.f ?? o;
+      const mine = [...(p.threads ?? [])].map(plain).reverse().filter((o) => !seen.has(o.id));
+      mine.forEach((o) => seen.add(o.id));
+      const out = [{ kind: "person", id: p.id, title: `other threads with ${p.name}`, threads: mine }];
+      for (const domain of p.organizations ?? []) {
+        const org = await call("organization.page", { domain }).catch(() => null);
+        const theirs = [...(org?.threads ?? [])].map(plain).reverse().filter((o) => !seen.has(o.id));
+        theirs.forEach((o) => seen.add(o.id));
+        out.push({ kind: "organization", id: domain, title: `other threads with ${domain}`, threads: theirs });
+      }
+      if (this.id() === id) { this.related = out; cx.notify(); }
+    });
+    // Context sources for the people on this Thread (thread_addresses).
+    const people = v?.people?.length ? v.people : v?.person ? [v.person] : [];
+    const emails = [...new Set([...people.flatMap((q) => (q.identities ?? []).filter((x) => x.kind === "email").map((x) => x.value)),
+      ...(v?.others ?? []).filter((a) => a.includes("@"))])].sort();
+    const domains = [...new Set([...(v?.organizations ?? []), ...people.flatMap((q) => q.organizations ?? [])])].sort();
+    if (emails.length || domains.length) for (const source of ["attio", "tana", "linear"]) {
+      this.ctx[source] = { loading: true };
+      call("context", { source, emails, domains }).then((r) => {
+        if (this.id() !== id) return;
+        this.ctx[source] = r ?? { answer: null, error: null };
+        const st = r?.error ?? (r?.answer ? "ok" : null);
+        if (st || (shared("context_state") ?? {})[source]) setShared("context_state", { ...(shared("context_state") ?? {}), [source]: st });
+        cx.notify();
+      }).catch(() => { this.ctx[source] = { answer: null, error: null }; cx.notify(); });
+    }
+    // Reaction totals for the open Slack messages (FR-R), read once per showing.
+    if (v?.channel?.platform === "slack") {
+      const opened = defaultOpen(v.messages ?? []);
+      (v.messages ?? []).filter((m, i) => opened.has(i) && !m.deleted && m.data?.ts).slice(-20).forEach((m) => {
+        call("slack.reactions", { payload: { op: "read", thread_id: id, message_id: m.id, connection_id: v.channel.connection_id } })
+          .then((r) => { if (this.id() === id && r?.outcome === "ready") { this.reactions[m.id] = r.groups ?? []; cx.notify(); } })
+          .catch(() => {});
+      });
+    }
+  }
+
   // --- the reply box ---
 
   open(mode, cx) {
     const id = this.id();
     if (!id || !this.view) return;
+    if (!(PLATFORM[this.view.channel?.platform]?.[2] ?? true)) return toast("This thread takes no replies.", "warning");
+    if (this.reply?.thread === id) return this.text.focus();
+    const texts = new Set((this.drafts ?? []).map((d) => d.body.trim()));
+    if (texts.size > 1) { // merged aliases each kept a reply: choose one, as the Console's "Choose draft"
+      this.pendingMode = mode;
+      return this.pick("Choose draft", this.drafts.map((d) => ({ value: String(d.thread_id),
+        label: `Thread ${d.thread_id} · ${d.body.trim().split("\n")[0].slice(0, 80)}` })), "draft-chosen");
+    }
+    this.openDraft(mode, this.drafts?.[0]?.thread_id ?? id, cx);
+  }
+
+  openDraft(mode, key, cx) {
+    const id = this.id();
     cx.spawn(async (cx) => {
       const e = await call("reply.envelope", { thread_id: id, mode }).catch((err) => toast(String(err), "error"));
       if (!e) return;
       if (!e.takes_replies) return toast("This thread takes no replies.", "warning");
-      const fresh = this.reply?.thread !== id;
-      this.reply = { thread: id, mode, envelope: e };
-      if (fresh) this.text.set_value(this.replyDraft?.body ?? "");
-      if (e.email) {
-        this.to.set_value((fresh && this.replyDraft?.to) || e.to.join(", "));
-        this.cc.set_value((fresh && this.replyDraft?.cc) || e.cc.join(", "));
-      }
+      const draft = (this.drafts ?? []).find((d) => d.thread_id === key) ?? this.replyDraft;
+      this.reply = { thread: id, key, mode, envelope: e };
+      this.ghost = {};
+      this.text.set_value(draft?.body ?? "");
+      if (e.email) this.fill(e, draft);
       this.text.focus();
       cx.notify();
+    });
+  }
+
+  fill(e, draft) {
+    this.to.set_value(draft?.to || e.to.join(", "));
+    this.cc.set_value(draft?.cc || e.cc.join(", "));
+  }
+
+  /** Reply / Reply all refill To and Cc, as the Console's set_mode. */
+  setMode(mode, cx) {
+    const r = this.reply;
+    if (!r || r.mode === mode) return;
+    cx.spawn(async (cx) => {
+      const e = await call("reply.envelope", { thread_id: r.thread, mode }).catch((err) => toast(String(err), "error"));
+      if (!e || this.reply !== r) return;
+      Object.assign(r, { mode, envelope: e });
+      this.to.set_value(e.to.join(", "));
+      this.cc.set_value(e.cc.join(", "));
+      cx.notify();
+    });
+  }
+
+  /** To/Cc completion from local addresses (address.complete); Tab takes it. */
+  complete(field, cx) {
+    const state = field === "to" ? this.to : this.cc, value = state.value();
+    const n = (this.typed = (this.typed ?? 0) + 1);
+    cx.timer.after(150, (cx) => {
+      if (n !== this.typed) return;
+      call("address.complete", { value, kind: "email" }).then((hit) => {
+        if (state.value() !== value) return;
+        this.ghost = { ...(this.ghost ?? {}), [field]: hit };
+        cx.notify();
+      }).catch(() => {});
     });
   }
 
@@ -366,9 +574,9 @@ export default class Thread extends View {
 
   save(cx, message) {
     if (!this.reply) return;
-    const id = this.reply.thread, body = this.text.value();
+    const key = this.reply.key ?? this.reply.thread, body = this.text.value();
     cx.spawn(async (cx) => {
-      await this.write("inbox.save_reply_draft", { thread_id: id, body }, message, cx);
+      await this.write("inbox.save_reply_draft", { thread_id: key, body }, message, cx);
     });
   }
 
@@ -406,6 +614,7 @@ export default class Thread extends View {
         try {
           await call("send.reply", { thread_id: r.thread, text, to, cc });
           toast("Sent.");
+          setShared("undo", null); // a sent message cannot be unsent
           this.reply = null;
           this.text.set_value("");
           focusMain();
@@ -436,11 +645,17 @@ export default class Thread extends View {
   }
 
   content(m, t) {
-    if (m.deleted) return div().text_color(t.dim).child("(deleted)");
+    if (m.deleted) return div().italic().text_color(t.dim).child(`${I.deleted} message deleted`);
     const b = this.bodies[m.id];
-    const text = div().text_size(13.5).line_height(1.5).text_color(t.foreground).child(m.content ?? "");
-    if (!m.raw || !b || b.none) return text;
-    if (!b.html) return text.text_color(t.dim);
+    const text = div().text_size(13.5).line_height(1.5).text_color(t.foreground).child(m.shown ?? m.content ?? "");
+    const st = this.msgState();
+    const trim = Boolean(m.trimmed) && (!m.raw || !b?.html);
+    const folded = trim ? v_flex().gap(6).child(text) // Trimmed content folds behind ••• (D38)
+      .child(div().id(`trim-${m.id}`).px(4).bg(t.chrome).text_color(t.dim).cursor_pointer()
+        .on_click((_e, cx) => { st.trim.has(m.native_id) ? st.trim.delete(m.native_id) : st.trim.add(m.native_id); cx.notify(); }).child(" ••• "))
+      .when(st.trim.has(m.native_id), (el) => el.child(div().text_size(13.5).line_height(1.5).text_color(t.muted).child(m.trimmed))) : text;
+    if (!m.raw || !b || b.none) return folded;
+    if (!b.html) return folded;
     return v_flex().gap(6)
       .when(b.remote > 0 && !b.loaded, (el) => el.child(h_flex().gap(8).text_size(11.5).text_color(t.muted)
         .child(div().child(`${b.remote} remote image${b.remote === 1 ? "" : "s"} held back`))
@@ -449,53 +664,238 @@ export default class Thread extends View {
       .child(div().rounded(6).bg("#ffffff").p(8).child(MessageBody(`${m.id}:${b.loaded ? 1 : 0}`, b.html)));
   }
 
+  /** Attachment chips: each opens its stored copy, or the message in its service; "not copied" while it is not. */
   files(items, t, label) {
     if (!items?.length) return null;
     return h_flex().flex_wrap().gap(6).items_center().text_size(12)
-      .child(div().text_color(t.dim).child(label))
+      .when(Boolean(label), (el) => el.child(div().text_color(t.dim).child(label)))
       .children(items.map((a, i) =>
-        h_flex().id(`${label}-${i}-${a.name}`).gap(4).px(8).py(2).rounded(6).border(1).border_color(t.border)
+        h_flex().id(`${label ?? "f"}-${i}-${a.name}`).gap(4).px(8).py(2).rounded(6).border(1).border_color(t.border)
           .text_color(a.url ? t.accent : t.muted).when(Boolean(a.url), (el) => el.cursor_pointer().on_click(() => open(a.url)))
-          .child(svg("icons/file-text.svg").size(12))
-          .child(div().child(a.name ?? "file"))));
+          .child(div().child(`${I.attachment} ${a.name ?? "file"}`))
+          .when(a.state === "pending" || a.state === "failed", (el) => el.child(div().text_color(t.dim).child("· not copied")))));
+  }
+
+  /** Reaction chips under a Slack message: emoji, everyone's count, ✓ and a blue edge when one is Jeremy's. */
+  chips(m, t) {
+    const groups = this.reactions?.[m.id];
+    if (!groups?.length) return null;
+    return h_flex().gap(6).flex_wrap().text_size(12).children(groups.map((g) =>
+      div().px(6).rounded(4).border(1).border_color(g.mine ? t.accent : t.dim).bg(t.selected).text_color(t.muted)
+        .child(`${EMOJI[g.name] ?? `:${g.name}:`} ${g.count}${g.mine ? " ✓" : ""}`)));
+  }
+
+  /** The timeline: open messages as cards, older ones as faded one-line rows, audit entries between (message_widgets). */
+  timeline(v, t) {
+    const msgs = v.messages ?? [], st = this.msgState();
+    const me = (v.channel?.external_id ?? "").toLowerCase();
+    const email = ["gmail", "fastmail"].includes(v.channel?.platform);
+    const opened = defaultOpen(msgs);
+    const isOpen = (i) => st.open.has(msgs[i].native_id) || (opened.has(i) && !st.closed.has(msgs[i].native_id));
+    const toggle = (m, cx) => {
+      const i = msgs.indexOf(m), nid = m.native_id;
+      if (isOpen(i)) { st.open.delete(nid); st.closed.add(nid); } else { st.closed.delete(nid); st.open.add(nid); }
+      cx.notify();
+    };
+    const gutter = (who, faded) => {
+      const b = badge(who);
+      return div().w(36).flex_none().h(18).rounded(3).flex().items_center().justify_center().text_size(11).font_semibold()
+        .bg(faded ? "#a89984" : b.color).text_color("#f9f5d7").child(b.ini);
+    };
+    const row = (key, g, content) => h_flex().id(key).gap(10).items_start().child(g ?? div().w(36).flex_none()).child(content);
+    const collapsed = (m) => row(`c-${m.id}`, gutter(m.who, true),
+      div().id(`cl-${m.id}`).flex_1().min_w(0).truncate().cursor_pointer().text_color("#a89984").on_click((_e, cx) => toggle(m, cx))
+        .child(`${when(m.at).padEnd(5)} ${m.deleted ? "message deleted" : (m.shown ?? m.content ?? "").replace(/\s+/g, " ").trim()}`));
+    const name = (a) => (a.toLowerCase() === me ? "me" : a);
+    const short = (as) => as.slice(0, 2).map(name).join(", ") + (as.length > 2 ? ` +${as.length - 2}` : "");
+    const rcpt = (m) => {
+      if (!m.to?.length && !m.cc?.length) return null;
+      if (!st.to.has(m.native_id)) return `to ${short(m.to ?? [])}${m.cc?.length ? `, cc ${short(m.cc)}` : ""}`;
+      const rows = [["from", m.who !== "You" || m.from ? m.from || me : me], ...(m.to?.length ? [["to", m.to.join(", ")]] : []),
+        ...(m.cc?.length ? [["cc", m.cc.join(", ")]] : []), ["date", fullDate(m.at)]];
+      return rows.map(([k, x]) => `${k.padStart(4)}  ${x}`).join("\n");
+    };
+    const card = (m) => {
+      const recent = Date.now() - new Date(m.at) < 7 * 86400e3;
+      const meta = stamp(m.at) + (recent ? ` · ${ago(m.at)}` : "") + (m.edited ? `  ${I.edited} edited` : "");
+      const r = email ? rcpt(m) : null;
+      const files = (m.attachments ?? []).filter((a) => !a.inline);
+      return row(`m-${m.id}`, gutter(m.who, false), v_flex().flex_1().min_w(0).max_w(830).px(16).py(10).gap(6).bg(t.raised ?? t.selected)
+        .child(h_flex().id(`mh-${m.id}`).gap(8).cursor_pointer().on_click((_e, cx) => toggle(m, cx))
+          .child(div().font_semibold().text_color(t.foreground).child(m.who ?? ""))
+          .child(div().text_size(12).text_color(t.dim).child(meta)))
+        .when(Boolean(r), (el) => el.child(div().id(`to-${m.id}`).text_size(12).text_color(t.dim).cursor_pointer()
+          .on_click((_e, cx) => { st.to.has(m.native_id) ? st.to.delete(m.native_id) : st.to.add(m.native_id); cx.notify(); }).child(r ?? "")))
+        .child(this.content(m, t))
+        .when(Boolean(files.length) && !m.deleted, (el) => el.child(this.files(files, t)))
+        .when(Boolean(this.chips(m, t)), (el) => el.child(this.chips(m, t))));
+    };
+    const audit = (e, n) => {
+      const until = (() => { try { return JSON.parse(e.data ?? "{}").until; } catch { return null; } })();
+      let what;
+      if (e.kind === "CASE") what = `${I.case} ` + (e.case_id ? `Case · ${e.case_title}` : "Removed from its Case");
+      else { const g = GLYPH[e.new_detail] ?? ["·", "dim", e.new_detail]; what = `${g[0]} ${g[2]}` + (until ? ` until ${stamp(until)}` : ""); }
+      let why = CAUSE[e.cause] ?? e.cause;
+      if (e.cause === "woke") why = e.old_detail === "WAITING_FOR_CUSTOMER" ? "no reply in 4 days" : "snooze ended";
+      return row(`a-${n}`, null, div().text_size(12).text_color("#a89984").child(`${when(e.occurred_at).padEnd(5)} ${what} · ${why}`));
+    };
+    const log = (v.audit ?? []).map((e) => [new Date(e.occurred_at), e]), at = msgs.map((m) => new Date(m.at));
+    const out = [];
+    let i = 0, k = 0;
+    while (i < msgs.length || k < log.length) {
+      if (k < log.length && (i === msgs.length || log[k][0] < at[i])) { out.push(audit(log[k][1], k)); k++; continue; }
+      if (isOpen(i)) { out.push(card(msgs[i])); i++; continue; }
+      let j = i;
+      while (j < msgs.length && !isOpen(j) && (k === log.length || log[k][0] >= at[j])) j++;
+      const run = msgs.slice(i, j);
+      if (run.length >= 4 && !st.lines) out.push(collapsed(run[0]),
+        row(`more-${i}`, null, div().id(`more-${i}`).px(4).bg(t.chrome).text_color(t.dim).cursor_pointer()
+          .on_click((_e, cx) => { st.lines = true; cx.notify(); }).child(` ${run.length - 2} older messages `)),
+        collapsed(run.at(-1)));
+      else out.push(...run.map(collapsed));
+      i = j;
+    }
+    return out;
+  }
+
+  /** The header: title, Status with its countdown, the service link (o), and "i respond" on a Meeting (thread_head). */
+  head(v, t) {
+    const th = v.thread?.f ?? v.thread ?? {};
+    const g = GLYPH[th.status_detail] ?? ["·", "dim", th.status_detail ?? ""];
+    const end = th.follow_up_at ?? th.snoozed_until;
+    const plat = PLATFORM[v.channel?.platform];
+    return v_flex().px(20).pt(14).pb(8).gap(2)
+      .child(div().w_full().text_size(16).font_semibold().text_color(t.blue ?? t.accent).child(th.title ?? ""))
+      .child(h_flex().gap(8).items_center()
+        .child(div().text_color(t[g[1]] ?? t.dim).child(`${g[0]} ${g[2]}`))
+        .when(th.status === "SNOOZED" && Boolean(end), (el) => el.child(div().text_color(t.dim).child(`· ${left(end)}`))))
+      .when(Boolean(v.link && plat), (el) => el.child(div().id("open-link").text_size(12).text_color(t.dim).cursor_pointer()
+        .on_click(() => open(v.link)).child(`${I[plat[1]] ?? ""} ${plat[2] ? `open in ${plat[0]}` : "join the meeting"} ${I.open} (o)`)))
+      .when(v.channel?.kind === "meeting", (el) => el.child(div().text_size(12).text_color(t.dim).child(`${I.calendar} i respond`)));
+  }
+
+  /** The properties column: Status, people, Organizations, Case, channel, related Threads, Context (details_markup). */
+  props(v, t) {
+    const th = v.thread?.f ?? v.thread ?? {};
+    const head = (icon, text) => div().pt(10).text_size(12).text_color(t.dim).child(`${I[icon] ?? ""} ${text}`);
+    const link = (id, text, go) => div().id(id).truncate().underline().cursor_pointer().on_click(go).child(text);
+    const push = (entry) => () => { setShared("push", entry); run("nav.push"); };
+    const g = GLYPH[th.status_detail] ?? ["·", "dim", ""];
+    const end = th.follow_up_at ?? th.snoozed_until;
+    const people = v.people?.length ? v.people : v.person ? [v.person] : [], others = v.others ?? [];
+    const known = new Set(people.flatMap((q) => q.organizations ?? []));
+    const orgs = v.organizations?.length ? v.organizations : [...known].sort();
+    const col = v_flex().w(300).flex_none().h_full().min_h(0).overflow_y_scroll().id("props").px(16).pb(16).bg(t.chrome)
+      .border_l(1).border_color(t.border).text_size(12.5)
+      .child(head("status", "status"))
+      .child(h_flex().gap(6).child(div().text_color(t[g[1]] ?? t.dim).child(`${g[0]} ${g[2]}`))
+        .when(th.status === "SNOOZED" && Boolean(end), (el) => el.child(div().text_color(t.dim).child(`· ${left(end)}`))))
+      .when(th.status === "SNOOZED" && Boolean(end), (el) => el.child(div().text_color(t.dim).child(`until ${stamp(end)}`)));
+    if (people.length || others.length) {
+      col.child(head("person", people.length + others.length > 1 ? "people" : "person"));
+      for (const q of people) {
+        const ident = (q.identities ?? []).find((x) => x.kind === "email") ?? q.identities?.[0];
+        const blocked = (q.identities ?? []).some((x) => x.blocked);
+        col.child(h_flex().gap(6).min_w(0)
+          .when(blocked, (el) => el.child(div().text_color(t.danger).child(I.blocked)))
+          .child(link(`p-${q.id}`, q.name, push({ page: "person", person: q.id })).font_semibold())
+          .when(Boolean(ident && ident.value !== q.name), (el) => el.child(div().truncate().text_color(t.dim).child(ident.value))));
+      }
+      for (const a of others) col.child(div().truncate().text_color(t.dim).child(`${a.includes("@") ? I.email : I.phone} ${a}`));
+      col.child(head("organization", orgs.length > 1 ? "organizations" : "organization"));
+      if (!orgs.length) col.child(div().text_color(t.dim).child("none"));
+      for (const o of orgs) col.child(known.has(o) ? link(`o-${o}`, o, push({ page: "organization", organization: { domain: o } }))
+        : div().truncate().text_color(t.dim).child(o));
+    }
+    col.child(head("case", "case")).child(th.case_id ? link("case", v.case ?? "", push({ page: "case", case: th.case_id }))
+      : h_flex().gap(4).child(div().text_color(t.dim).child("none ·"))
+        .child(link("add-case", "add to a case", (_e, cx) => this.command("case", cx))).child(div().text_color(t.dim).child("(l)")));
+    col.child(head("channel", "channel")).child(div().truncate().child(v.where ?? ""));
+    for (const sec of this.related ?? []) {
+      col.child(head(sec.kind, sec.title));
+      if (!sec.threads.length) col.child(div().text_color(t.dim).child("none"));
+      for (const o of sec.threads.slice(0, 6)) {
+        const og = GLYPH[o.status_detail] ?? ["·", "dim"];
+        col.child(h_flex().gap(6).min_w(0).child(div().flex_none().text_color(t[og[1]] ?? t.dim).child(og[0]))
+          .child(link(`r-${o.id}`, o.title, () => { setShared("thread", o.id); run("thread.show"); })));
+      }
+      if (sec.threads.length > 6) col.child(link(`more-${sec.id}`, `${sec.threads.length - 6} more…`,
+        push(sec.kind === "person" ? { page: "person", person: sec.id } : { page: "organization", organization: { domain: sec.id } })).text_color(t.dim));
+    }
+    for (const [source, title] of [["attio", "Attio"], ["tana", "Tana"], ["linear", "Linear"]]) {
+      const c = this.ctx?.[source];
+      if (!c || (!c.loading && !c.answer && !c.error)) continue; // not connected: hidden, as the Console
+      col.child(v_flex().mt(12).p(8).gap(2).rounded(4).border(1).border_color(t.border)
+        .child(div().text_size(11.5).text_color(t.dim).child(title.toLowerCase()))
+        .children(contextLines(source, c, title).map((l, n) => div().id(`${source}-${n}`)
+          .text_color(l.error ? t.danger : l.dim ? t.dim : t.foreground).when(Boolean(l.bold), (e) => e.font_semibold())
+          .when(Boolean(l.head), (e) => e.pt(4).text_size(11).font_semibold().text_color("#7c6f64"))
+          .when(Boolean(l.indent), (e) => e.pl(12))
+          .when(Boolean(l.url), (e) => e.underline().cursor_pointer().on_click(() => open(l.url))).child(l.text))));
+    }
+    return col;
   }
 
   replyBox(t) {
     const r = this.reply;
-    const key = (k, label) => h_flex().gap(4).items_center()
-      .child(div().px(4).rounded(3).bg(t.raised ?? t.selected).text_color(t.accent).child(k)).child(div().child(label));
-    const card = v_flex().mx(20).mb(14).px(14).py(10).gap(8).rounded(10).border(1).border_color(r ? t.accent : t.border).bg(t.background);
+    const v = this.view;
+    if (!(PLATFORM[v?.channel?.platform]?.[2] ?? true)) return null; // a Meeting Thread takes no reply
+    const keys = div().flex_none().text_color("#a89984").child("r reply · a reply all");
+    const card = v_flex().ml(66).mr(20).mb(14).px(14).py(10).gap(8).rounded(4).border(1).border_color(r ? t.accent : t.border).bg(t.background);
+    const note = (d) => d?.send_error ? `Scheduled send failed · ${d.send_error}` : d?.send_at ? `${I.time} Sends ${stamp(d.send_at)}` : "";
     if (!r) {
-      const draft = (this.replyDraft?.body ?? "").trim();
+      const drafts = this.drafts ?? [];
+      const d = drafts[0], body = (d?.body ?? "").trim(), first = body.split("\n")[0] ?? "";
+      const n = note(d);
       return card.id("reply-idle").cursor_pointer().on_click((_e, cx) => this.open("all", cx))
-        .child(h_flex().gap(10).items_center().text_size(12.5)
-          .child(div().flex_1().min_w(0).truncate().text_color(draft ? t.foreground : t.dim)
-            .child(draft ? `Draft · ${draft.split("\n")[0]}` : "Leave a reply…"))
-          .when(Boolean(this.replyDraft?.send_at), (el) => el.child(div().text_size(11).text_color(t.accent).child(`Sends ${stamp(this.replyDraft.send_at)}`)))
-          .child(h_flex().gap(10).text_size(11).text_color(t.dim).child(key("r", "reply")).child(key("a", "reply all"))));
+        .child(h_flex().gap(8).items_center().text_size(12.5).min_w(0)
+          .when(drafts.length > 1, (el) => el.child(div().flex_1().text_color(t.yellow ?? t.status_needs_next).child(`${I.edited} ${drafts.length} saved drafts`)))
+          .when(drafts.length === 1, (el) => el
+            .child(div().flex_none().text_color(t.yellow ?? t.status_needs_next).child(`${I.edited} Draft`))
+            .when(Boolean(n), (e) => e.child(div().flex_none().text_color(n.startsWith("Scheduled send failed") ? t.danger : t.accent).child(n)))
+            .child(div().flex_1().min_w(0).truncate().text_color(t.foreground).child(first.slice(0, 80) + (body.length > first.slice(0, 80).length ? "…" : ""))))
+          .when(!drafts.length, (el) => el.child(div().flex_1().text_color(t.dim).child(`${I.reply} Leave a reply…`)))
+          .child(keys));
     }
     const e = r.envelope;
-    const field = (label, el) => h_flex().gap(8).items_center().text_size(12)
-      .child(div().w(52).flex_none().text_color(t.dim).child(label)).child(div().flex_1().min_w(0).child(el));
+    const label = (text) => div().w(64).flex_none().text_color(t.dim).child(text);
+    const field = (text, el) => h_flex().gap(8).items_center().text_size(12).child(label(text)).child(div().flex_1().min_w(0).child(el));
+    const address = (name, state) => v_flex().flex_1().min_w(0)
+      .on_key_down((ev, cx) => {
+        const hit = this.ghost?.[name];
+        if (ev.keystroke !== "tab" || !hit) return;
+        state.set_value(hit[1]);
+        this.ghost = { ...this.ghost, [name]: null };
+        cx.stop_propagation();
+        cx.notify();
+      })
+      .child(Input.new(state))
+      .when(Boolean(this.ghost?.[name]), (el) => el.child(div().text_size(11).text_color(t.dim).child(`Tab: ${this.ghost[name]?.[0] ?? ""}`)));
+    const mode = (m, text) => div().id(`mode-${m}`).px(6).rounded(3).cursor_pointer().on_click((_e, cx) => this.setMode(m, cx))
+      .when(r.mode === m, (el) => el.bg(t.selected).font_semibold().text_color(t.strong ?? t.foreground)).when(r.mode !== m, (el) => el.text_color(t.dim)).child(text);
+    const subject = (v?.thread?.f?.title ?? "");
+    const n = note((this.drafts ?? []).find((d) => d.thread_id === r.key) ?? this.replyDraft);
     return card.id("reply-open")
       .on_key_down((ev, cx) => {
         if (ev.keystroke === "escape") this.close(cx);
         else if (ev.keystroke === "ctrl-enter") this.send(cx);
         else if (ev.keystroke === "ctrl-s") this.save(cx, "Saved.");
+        else if (ev.keystroke === "ctrl-o") run("app.attach"); // the system file picker (D63)
         else return;
         cx.stop_propagation();
       })
-      .child(field("From", div().text_color(t.muted).child(e.email ? e.from : `${e.where} · in thread`)))
+      .when(e.email, (el) => el.child(h_flex().gap(4).text_size(12).child(mode("sender", `${I.reply} reply`)).child(mode("all", `${I.people} reply all`))))
       .when(e.email, (el) => el
-        .child(field("To", Input.new(this.to)))
-        .child(field("Cc", Input.new(this.cc)))
-        .child(field("Subject", div().text_color(t.muted).child(e.subject))))
+        .child(field("From", div().text_color(t.muted).child(v?.channel?.external_id ?? e.from ?? "")))
+        .child(h_flex().gap(8).items_start().text_size(12).child(label("To")).child(address("to", this.to)))
+        .child(h_flex().gap(8).items_start().text_size(12).child(label("Cc")).child(address("cc", this.cc)))
+        .child(field("Subject", div().text_color(t.muted).child(/^re:/i.test(subject) ? subject : `Re: ${subject}`))))
+      .when(!e.email, (el) => el.child(field("To", h_flex().gap(4).child(div().text_color(t.muted).child(e.where ?? v?.where ?? ""))
+        .child(div().text_color(t.dim).child("· in thread")))))
       .child(Textarea.new(this.text))
       .when(Boolean(this.staged?.length), (el) => el.child(this.files(this.staged, t, "Reply files")))
-      .child(h_flex().gap(12).text_size(11).text_color(t.dim)
-        .when(Boolean(this.replyDraft?.send_at), (el) => el.child(div().text_color(t.accent).child(`Sends ${stamp(this.replyDraft.send_at)}`)))
-        .child(key("ctrl-enter", "send")).child(key("esc", "close (keeps draft)"))
-        .when(e.sends_files, (el) => el.child(div().child("drop files to attach"))));
+      .child(div().text_size(11).text_color(t.dim)
+        .child((n ? `${n} · ` : "") + "ctrl+enter send · " + (e.sends_files ? "ctrl+o attach · " : "") + "esc close (keeps draft)"));
   }
 
   render() {
@@ -506,34 +906,74 @@ export default class Thread extends View {
       this.shown = thread.id;
       mark("shown");
     }
-    const pane = v_flex().size_full().min_h(0).bg(t.background).text_size(13);
+    const pane = h_flex().size_full().min_h(0).bg(t.background).text_size(13);
     if (!v) return pane.child(div().p(24).text_color(t.dim).child(this.error ?? "No Thread selected"));
-    const messages = v.messages ?? [];
-    const person = v.person?.name;
     return pane
-      .child(h_flex().h(30).flex_none().px(12).gap(8).items_center().border_b(1).border_color(t.border).text_size(12).text_color(t.muted)
-        .child(svg(`icons/${PLATFORM[v.channel?.platform] ?? "file-text"}.svg`).size(13).text_color(t.accent))
-        .child(div().font_medium().text_color(t.foreground).child(person ?? v.channel?.name ?? ""))
-        .child(div().flex_1().truncate().text_color(t.dim).child(`· ${v.where ?? ""}`))
-        .when(Boolean(this.undo), (el) => el.child(div().text_size(11).text_color(t.dim).child("z undo"))))
-      .child(v_flex().id("messages").flex_1().min_h(0).overflow_y_scroll()
-        .child(v_flex().px(28).pt(22).pb(14).gap(6)
-          .child(div().text_size(18).font_semibold().text_color(t.strong ?? t.foreground).child(thread.title ?? ""))
-          .child(h_flex().gap(8).text_size(12).text_color(t.muted)
-            .child(div().child(`${messages.length} message${messages.length === 1 ? "" : "s"}`))
-            .when(Boolean(v.case?.title), (el) => el.child(div().text_color(t.dim).child(`· ${v.case?.title}`)))))
-        .children(messages.map((m) =>
-          v_flex().id(`m-${m.id}`).mx(20).mb(10).px(16).py(12).gap(8).rounded(10).border(1).border_color(t.border).bg(t.background)
-            .child(h_flex().gap(8).items_center()
-              .child(div().size(22).rounded(11).flex_none().flex().items_center().justify_center().bg(t.selected)
-                .text_size(11).font_semibold().text_color(t.strong ?? t.foreground).child((m.who ?? "?").slice(0, 1).toUpperCase()))
-              .child(div().flex_1().font_medium().text_color(t.foreground).child(m.who ?? ""))
-              .child(div().text_size(11).text_color(t.dim).child((m.at ?? "").slice(0, 16).replace("T", " "))))
-            .child(this.content(m, t))
-            .when(Boolean(m.attachments?.filter((a) => !a.inline).length), (el) =>
-              el.child(this.files(m.attachments.filter((a) => !a.inline), t, "Attachments")))))
-        .when(!this.reply && Boolean(this.staged?.length), (el) =>
-          el.child(div().mx(20).mb(14).child(this.files(this.staged, t, "Reply files"))))
-        .child(this.replyBox(t)));
+      .child(v_flex().flex_1().min_w(0).h_full().min_h(0)
+        .child(v_flex().id("messages").flex_1().min_h(0).overflow_y_scroll()
+          .child(this.head(v, t))
+          .child(v_flex().px(20).pb(10).gap(8).children(this.timeline(v, t)))
+          .when(!this.reply && Boolean(this.staged?.length), (el) => el.child(div().ml(66).mb(14).child(this.files(this.staged, t, "Reply files")))))
+        .when(Boolean(this.replyBox(t)), (el) => el.child(this.replyBox(t))))
+      .child(this.props(v, t));
   }
+}
+
+/** One Context source's answer as lines, as the Console's attio_markup, tana_markup and linear_markup. */
+export function contextLines(source, c, title) {
+  if (c.error) return [{ text: `${I.broken} ${title} unavailable: ${c.error}`, error: true }];
+  if (c.loading || !c.answer) return [{ text: "loading…", dim: true }];
+  const a = c.answer, out = [];
+  const cut = (s, n = 140) => (s.length <= n ? s : s.slice(0, n - 1).trimEnd() + "…");
+  if (source === "attio") {
+    const LABEL = { Description: "about", "Primary location": "location", "Foundation date": "founded", "Last interaction": "last contact",
+      "Next interaction": "next contact", "Connection strength": "connection", "Strongest connection": "closest teammate", "Job title": "role" };
+    for (const [key, label] of [["people", "people"], ["companies", "companies"]]) {
+      if (a[key]?.length) out.push({ text: label.toUpperCase(), head: true });
+      for (const r of a[key] ?? []) {
+        out.push({ text: r.title || "untitled", bold: true, url: r.url });
+        for (const [k, v] of r.fields ?? []) {
+          const url = v.startsWith("http") ? v : null;
+          out.push({ text: LABEL[k] ?? k.toLowerCase(), dim: true, indent: true }, { text: url ? v.replace(/^https?:\/\/(www\.)?/, "") : cut(v), indent: true, url });
+        }
+      }
+    }
+    if (a.tasks?.length) out.push({ text: "OPEN TASKS", head: true });
+    for (const tk of a.tasks ?? []) {
+      out.push({ text: tk.title, url: tk.url });
+      const facts = [tk.due ? `due ${tk.due}` : "", (tk.assignees ?? []).join(", ")].filter(Boolean).join(" · ");
+      if (facts) out.push({ text: facts, dim: true, indent: true });
+    }
+    return out.length ? out : [{ text: "nothing in Attio", dim: true }];
+  }
+  if (source === "tana") {
+    for (const [key, label] of [["people", "people"], ["organizations", "organizations"], ["deals", "deals"], ["threats", "threats"],
+      ["opportunities", "opportunities"], ["tasks", "tasks"]]) {
+      if (a[key]?.length) out.push({ text: label.toUpperCase(), head: true }, ...a[key].map((r) => ({ text: `· ${r.title || "untitled"}`, url: r.url })));
+    }
+    if (a.meetings?.length) out.push({ text: "MEETINGS", head: true });
+    for (const m of a.meetings ?? []) {
+      out.push({ text: `${m.upcoming ? "next · " : ""}${stamp(m.start)}`, dim: true }, { text: m.title || "untitled", bold: true, url: m.url });
+      if (m.summary) out.push({ text: `${I.summary} ${cut(m.summary)}`, dim: true, url: m.summary_url });
+      const groups = {};
+      for (const d of m.linked ?? []) (groups[d.type] ??= []).push(d);
+      for (const [kind, docs] of Object.entries(groups))
+        out.push({ text: kind + (docs.length > 3 ? ` +${docs.length - 3}` : ""), dim: true }, ...docs.slice(0, 3).map((d) => ({ text: `· ${d.title || "untitled"}`, url: d.url })));
+    }
+    return out.length ? out : [{ text: "nothing in Tana", dim: true }];
+  }
+  for (const issue of a.issues ?? []) {
+    const url = /^https:\/\/linear\.app\//.test(issue.url ?? "") ? issue.url : null;
+    out.push({ text: [issue.identifier, issue.title].filter(Boolean).join(" · ") || "untitled", bold: true, url });
+    for (const [label, value] of [["state", issue.state], ["priority", issue.priority], ["assignee", issue.assignee], ["project", issue.project],
+      ["updated", issue.updated ? when(issue.updated) || issue.updated : ""]]) if (value) out.push({ text: `${label} · ${value}`, dim: true, indent: true });
+    if (issue.reasons?.length) out.push({ text: "WHY MATCHED", head: true }, ...issue.reasons.map((x) => ({ text: x, dim: true, indent: true })));
+    if (issue.requests?.length) out.push({ text: "CUSTOMER REQUESTS", head: true });
+    for (const q of issue.requests ?? []) {
+      if (q.customer) out.push({ text: `customer · ${q.customer}`, dim: true, indent: true });
+      out.push({ text: q.text, indent: true });
+    }
+    if (url) out.push({ text: "Open in Linear", url });
+  }
+  return out.length ? out : [{ text: "no matching open issues in Linear", dim: true }];
 }

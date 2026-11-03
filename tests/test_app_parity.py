@@ -15,8 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULTS = ROOT / "app" / "defaults"
 THREAD = "<module>"  # THREAD_KEYS: the module-level Thread keys every Thread page shares
 
-NO_STACK = "No page stack: the rail and keys 1–0 reach every page, and Escape leaves a text field"
-SCROLLS = "Panes scroll with the wheel or trackpad"
+SCROLLS = "Panes scroll with the wheel or trackpad"  # the Thread takes space/pgdn/pgup (D55); other pages are Phase 5 and 6
 
 APP = {
     (THREAD, "reply('sender')"): "thread.reply_sender", (THREAD, "reply('all')"): "thread.reply_all",
@@ -31,9 +30,11 @@ APP = {
     ("DraftView", "page('copy')"): "drafts.copy",
     ("DraftsPage", "down"): "drafts.next", ("DraftsPage", "up"): "drafts.prev", ("DraftsPage", "new"): "drafts.new",
     ("DraftsPage", "delete"): "drafts.delete", ("DraftsPage", "copy"): "drafts.copy",
+    ("DraftsPage", "send"): "draft.send", ("DraftsPage", "save"): "draft.save",  # from the list too (D78)
+    ("PausedPage", "resume"): "today.r", ("PausedPage", "finish"): "today.f", ("TodayPage", "next_list"): "today.tab",
     ("TablePage", "down"): "people.next", ("TablePage", "up"): "people.prev",
     ("PeoplePage", "merge"): "people.merge", ("PeoplePage", "enroll"): "person.enroll",
-    ("CasesPage", "new_case"): "cases.new",
+    ("CasesPage", "new_case"): "cases.new", ("PeoplePage", "collapse_all"): "people.collapse_all",
     ("OrganizationPage", "stage"): "organization.stage", ("OrganizationPage", "value"): "organization.value",
     ("OrganizationPage", "people"): "organization.people",
     ("BoardColumn", "cursor_down"): "pipeline.next", ("BoardColumn", "cursor_up"): "pipeline.prev",
@@ -45,7 +46,7 @@ APP = {
     ("PersonPage", "finish"): "person.finish", ("PersonPage", "organizations"): "person.organizations",
     ("PersonPage", "pick(1)"): "person.pick_first", ("PersonPage", "pick(0)"): "person.pick_second",
     ("ChannelsPage", "add"): "connection.add", ("ChannelsPage", "delete"): "connection.delete",
-    ("CasePage", "down"): "case.next", ("CasePage", "up"): "case.prev", ("CasePage", "toggle"): "case.open",
+    ("CasePage", "down"): "case.next", ("CasePage", "up"): "case.prev", ("CasePage", "toggle"): "case.toggle",
     ("CasePage", "describe"): "case.describe",
     ("TasksPage", "down"): "tasks.next", ("TasksPage", "up"): "tasks.prev", ("TasksPage", "done"): "tasks.done",
     ("TasksPage", "skip"): "tasks.skip", ("TasksPage", "new_thread"): "tasks.new_thread",
@@ -54,20 +55,29 @@ APP = {
     ("SequencesTable", "new_sequence"): "sequences.new", ("SequencesTable", "archive"): "sequences.archive",
     ("SequencesTable", "delete_sequence"): "sequences.delete", ("SequencesTable", "rename"): "sequences.rename",
     ("SequencesTable", "describe"): "sequences.describe", ("SequencesTable", "sends_from"): "sequences.sends_from",
-    ("StepsTable", "edit"): "sequence.edit", ("StepsTable", "new_step"): "sequence.new_step",
-    ("StepsTable", "delete_step"): "sequence.delete_step", ("StepsTable", "move(1)"): "sequence.move_down",
-    ("StepsTable", "move(-1)"): "sequence.move_up",
+    ("StepsTable", "edit"): "sequences.enter", ("StepsTable", "new_step"): "sequences.new",
+    ("StepsTable", "delete_step"): "sequences.delete", ("StepsTable", "move(1)"): "sequences.move_down",
+    ("StepsTable", "move(-1)"): "sequences.move_up", ("StepsTable", "sequences"): "sequences.escape",
+    ("SequencesTable", "steps"): "sequences.enter",
     ("SequencesPage", "down"): "sequences.next", ("SequencesPage", "up"): "sequences.prev",
     ("MonthGrid", "move(-1)"): "calendar.prev_day", ("MonthGrid", "move(1)"): "calendar.next_day",
     ("MonthGrid", "move(7)"): "calendar.next_week", ("MonthGrid", "move(-7)"): "calendar.prev_week",
     ("MonthGrid", "month(-1)"): "calendar.prev_month", ("MonthGrid", "month(1)"): "calendar.next_month",
     ("MonthGrid", "today"): "calendar.today",
-    ("DayList", "cursor_down"): "calendar.next", ("DayList", "cursor_up"): "calendar.prev", ("DayList", "join"): "event.join",
+    ("DayList", "cursor_down"): "calendar.next_week", ("DayList", "cursor_up"): "calendar.prev_week",  # j/k in the day pane
+    ("DayList", "join"): "day.join", ("MonthGrid", "day_pane"): "calendar.tab", ("DayList", "grid"): "calendar.tab",
+    ("EventPage", "scroll(1)"): "event.scroll_down", ("EventPage", "scroll(-1)"): "event.scroll_up",
     ("EventPage", "join"): "event.join", ("EventPage", "respond"): "event.respond",
-    ("MainScreen", "app.undo"): "thread.undo", ("MainScreen", "app.help"): "overlay.help",
+    ("MainScreen", "app.undo"): "nav.undo", ("MainScreen", "app.help"): "overlay.help",
+    ("ThreadsPage", "scroll_thread(1)"): "thread.scroll_down", ("ThreadsPage", "scroll_thread(-1)"): "thread.scroll_up",
+    ("MainScreen", "app.expand_all(True)"): "thread.expand_all", ("MainScreen", "app.expand_all(False)"): "thread.collapse_all",
     ("MainScreen", "go('today')"): "nav.today", ("MainScreen", "go('drafts')"): "nav.drafts",
     ("MainScreen", "go('people')"): "nav.people", ("MainScreen", "go('organizations')"): "nav.organizations",
     ("MainScreen", "go('cases:0')"): "nav.cases", ("MainScreen", "go('channels')"): "nav.channels",
+    ("TablePage", "back"): "nav.back", ("PersonPage", "back"): "nav.back", ("ConnectionPage", "back"): "nav.back",
+    ("CasePage", "back"): "nav.back", ("MonthGrid", "back"): "calendar.escape", ("EventPage", "back"): "nav.back",
+    ("MainScreen", "back"): "nav.back",
+    ("MainScreen", "focus_pane(-1)"): "nav.focus_left", ("MainScreen", "focus_pane(1)"): "nav.focus_right",
 }
 
 TYPED = {  # (view, keystroke as the view's script compares it)
@@ -77,37 +87,20 @@ TYPED = {  # (view, keystroke as the view's script compares it)
     ("ReplyBox", "close"): ("thread", "escape"),
     ("DraftView", "send"): ("draft", "ctrl-enter"), ("DraftView", "save"): ("draft", "ctrl-s"),
     ("DraftView", "close"): ("draft", "escape"),
-    ("DraftsPage", "send"): ("draft", "ctrl-enter"), ("DraftsPage", "save"): ("draft", "ctrl-s"),
     ("DescriptionBox", "cancel"): ("overlay", "escape"),
     ("StepEditor", "save"): ("sequence", "ctrl-s"), ("StepEditor", "close"): ("sequence", "escape"),
 }
 
 WHY = {
     (THREAD, "refresh_reactions"): "v reads Jeremy's Slack reactions fresh each time it opens",
-    ("ThreadsPage", "scroll_thread(1)"): SCROLLS, ("ThreadsPage", "scroll_thread(-1)"): SCROLLS,
     ("AddressInput", "accept_completion"): "To and Cc take typed addresses; completion is not built in the App yet",
     ("ReplyBox", "attach"): "Files attach by dropping them on the window (FR-10)",
     ("DraftView", "attach"): "Files attach by dropping them on the window (FR-10)",
-    ("DraftConnection", "choose"): "A new Draft picks its Connection when n starts it",
-    ("TablePage", "back"): NO_STACK, ("PersonPage", "back"): NO_STACK, ("ConnectionPage", "back"): NO_STACK,
-    ("CasePage", "back"): NO_STACK, ("MonthGrid", "back"): NO_STACK, ("EventPage", "back"): NO_STACK,
-    ("StepsTable", "sequences"): NO_STACK, ("MainScreen", "back"): NO_STACK,
-    ("PeoplePage", "collapse_all"): "The App's People list is one flat, filterable list",
+    ("DraftConnection", "choose"): "A click on the editor's Conn. row picks the Connection; the row takes no keyboard focus",
     ("PipelinePage", "scroll(1)"): SCROLLS, ("PipelinePage", "scroll(-1)"): SCROLLS,
     ("CasePage", "scroll(1)"): SCROLLS, ("CasePage", "scroll(-1)"): SCROLLS,
-    ("EventPage", "scroll(1)"): SCROLLS, ("EventPage", "scroll(-1)"): SCROLLS,
     ("DescriptionBox", "save"): "The description prompt saves on Enter",
-    ("SequencesTable", "steps"): "A Sequence's Steps show beside the list as soon as it is selected",
-    ("PausedPage", "resume"): "Paused Enrollments show on Today; their Person page resumes them (r)",
-    ("PausedPage", "finish"): "Paused Enrollments show on Today; their Person page finishes them (f)",
-    ("TodayPage", "next_list"): "j/k run on from one Today list into the next",
-    ("MonthGrid", "day_pane"): "The chosen day's Events show under the month; n/p pick one",
-    ("DayList", "grid"): "The month and the day's Events share one pane",
     ("MainScreen", "app.quit"): "Close the window; the Local core keeps running (FR-2)",
-    ("MainScreen", "focus_pane(-1)"): "No pane focus: each page's keys reach its list and its detail",
-    ("MainScreen", "focus_pane(1)"): "No pane focus: each page's keys reach its list and its detail",
-    ("MainScreen", "app.expand_all(True)"): "The App shows every message expanded",
-    ("MainScreen", "app.expand_all(False)"): "The App shows every message expanded",
 }
 
 
@@ -152,3 +145,15 @@ def test_each_mapped_command_is_bound_and_handled():
 def test_each_typed_key_is_in_its_view():
     for console, (view, keystroke) in TYPED.items():
         assert f'"{keystroke}"' in view_source(view), f"views/{view} does not read {keystroke!r} ({console})"
+
+
+def test_rejected_app_differences_are_removed():
+    """PT-CONF-1: the dark theme, list filter fields, header folding and delete confirmations are gone (FR-CONF-5)."""
+    views = ROOT / "app" / "defaults" / "views"
+    assert not (ROOT / "app" / "defaults" / "themes" / "gruvbox.json").exists()
+    assert "gruvbox" not in (ROOT / "app" / "defaults" / "AGENTS.md").read_text()
+    for name in ("people", "organizations"):
+        assert "InputState" not in (views / name / "main.js").read_text(), name
+    assert "folded" not in (views / "threads" / "main.js").read_text()
+    for name in ("drafts", "sequences"):
+        assert "delete-picked" not in (views / name / "main.js").read_text(), name

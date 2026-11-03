@@ -48,6 +48,8 @@ const DEFAULTS: &[(&str, &str, bool)] = &[
     ("views/channels/main.js", include_str!("../defaults/views/channels/main.js"), true),
     ("views/connection/main.js", include_str!("../defaults/views/connection/main.js"), true),
     ("views/draft/main.js", include_str!("../defaults/views/draft/main.js"), true),
+    ("views/side/main.js", include_str!("../defaults/views/side/main.js"), true),
+    ("views/day/main.js", include_str!("../defaults/views/day/main.js"), true),
     ("views/drafts/main.js", include_str!("../defaults/views/drafts/main.js"), true),
     ("views/event/main.js", include_str!("../defaults/views/event/main.js"), true),
     ("views/organization/main.js", include_str!("../defaults/views/organization/main.js"), true),
@@ -61,10 +63,14 @@ const DEFAULTS: &[(&str, &str, bool)] = &[
     ("views/task/main.js", include_str!("../defaults/views/task/main.js"), true),
     ("views/tasks/main.js", include_str!("../defaults/views/tasks/main.js"), true),
     ("views/today/main.js", include_str!("../defaults/views/today/main.js"), true),
+    ("icons/mail.svg", include_str!("../defaults/icons/mail.svg"), true),
+    ("icons/phone.svg", include_str!("../defaults/icons/phone.svg"), true),
+    ("icons/message-square.svg", include_str!("../defaults/icons/message-square.svg"), true),
+    ("icons/circle-x.svg", include_str!("../defaults/icons/circle-x.svg"), true),
+    ("views/toasts/main.js", include_str!("../defaults/views/toasts/main.js"), true),
     ("layouts/main.json", include_str!("../defaults/layouts/main.json"), false),
     ("keys.json", include_str!("../defaults/keys.json"), false),
     ("settings.json", include_str!("../defaults/settings.json"), false),
-    ("themes/gruvbox.json", include_str!("../defaults/themes/gruvbox.json"), false),
     ("themes/gruvbox-material-light.json", include_str!("../defaults/themes/gruvbox-material-light.json"), false),
 ];
 
@@ -80,12 +86,25 @@ pub fn home() -> PathBuf {
 
 /// Writes the shipped files. A file whose contents already match is left alone, so an editor watching the folder
 /// is not woken on every start.
+///
+/// A file Jeremy may edit (layout, keys, settings, theme) is written when missing, or replaced when it still equals
+/// an earlier shipped version (`PREVIOUS`). An edited one is kept, and the new shipped version lands beside it as
+/// `<file>.shipped` to compare and copy from.
 pub fn write(home: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(home.join("panels"))?;
     for (path, contents, always) in DEFAULTS {
-        let file = home.join(path);
-        if file.exists() && (!always || std::fs::read_to_string(&file).is_ok_and(|now| now == *contents)) {
+        let mut file = home.join(path);
+        let now = std::fs::read(&file).ok();
+        if now.as_deref() == Some(contents.as_bytes()) {
             continue;
+        }
+        if let (Some(now), false) = (&now, *always) {
+            if !PREVIOUS.contains(&(*path, fnv(now))) {
+                file = home.join(format!("{path}.shipped"));
+                if std::fs::read(&file).ok().as_deref() == Some(contents.as_bytes()) {
+                    continue;
+                }
+            }
         }
         if let Some(parent) = file.parent() {
             std::fs::create_dir_all(parent)?;
@@ -93,6 +112,20 @@ pub fn write(home: &Path) -> std::io::Result<()> {
         std::fs::write(&file, contents)?;
     }
     Ok(())
+}
+
+/// FNV-1a hashes of every earlier shipped version of the files Jeremy may edit. Add the old hash here whenever one of
+/// those shipped files changes, so installed Apps take the new version.
+const PREVIOUS: &[(&str, u64)] = &[
+    ("layouts/main.json", 0xb363995d330f6414),
+    ("layouts/main.json", 0x4e2034e653395857),
+    ("keys.json", 0x1f4eb1ede7a5640e),
+    ("keys.json", 0xb41b1cc21ba85367),
+    ("keys.json", 0x425cfe7966802582),
+];
+
+fn fnv(bytes: &[u8]) -> u64 {
+    bytes.iter().fold(0xcbf29ce484222325, |h, b| (h ^ *b as u64).wrapping_mul(0x100000001b3))
 }
 
 /// The shipped default of an Interface file, for restoring it (the escape key) or falling back to it.
@@ -145,6 +178,28 @@ mod tests {
         std::fs::write(home.join("keys.json"), shipped("keys.json").unwrap()).unwrap();
         assert!(read_json(&home, "keys.json").unwrap()["global"].is_object());
         assert!(!home.join("keys.error").exists());
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    /// An earlier shipped keys.json is replaced; an edited one is kept with the new version beside it.
+    #[test]
+    fn an_old_shipped_file_updates_and_an_edited_one_stays() {
+        let home = std::env::temp_dir().join(format!("ct-app-write-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).unwrap();
+        let old = std::process::Command::new("git").args(["show", "05a23eb:app/defaults/keys.json"]).output().map(|o| o.stdout).unwrap_or_default();
+        if !old.is_empty() {
+            std::fs::write(home.join("keys.json"), &old).unwrap();
+            write(&home).unwrap();
+            assert_eq!(std::fs::read_to_string(home.join("keys.json")).unwrap(), shipped("keys.json").unwrap());
+        }
+        std::fs::write(home.join("keys.json"), "{\"global\": {}}").unwrap();
+        write(&home).unwrap();
+        assert_eq!(std::fs::read_to_string(home.join("keys.json")).unwrap(), "{\"global\": {}}");
+        assert_eq!(std::fs::read_to_string(home.join("keys.json.shipped")).unwrap(), shipped("keys.json").unwrap());
+        for (path, contents, always) in DEFAULTS {
+            assert!(*always || !PREVIOUS.contains(&(*path, fnv(contents.as_bytes()))), "{path} is listed as an old version");
+        }
         std::fs::remove_dir_all(&home).unwrap();
     }
 }

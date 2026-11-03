@@ -22,6 +22,7 @@ use crate::workspace;
 pub const ESCAPE_HATCH: &str = "ctrl-alt-shift-escape";
 /// The view drawn over the whole window while `shared("picker")` is set: pickers and prompts for every view.
 const OVERLAY: &str = "overlay";
+const TOASTS: &str = "toasts"; // timed notifications, bottom right, as the Console's
 /// The exit code that asks the launcher to install the Service's build (tui.UPDATE_EXIT).
 pub const UPDATE_EXIT: i32 = 75;
 
@@ -108,7 +109,7 @@ impl AppWindow {
     }
 
     fn load_views(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        for name in self.layout.views().into_iter().chain([OVERLAY.to_owned()]) {
+        for name in self.layout.views().into_iter().chain([OVERLAY.to_owned(), TOASTS.to_owned()]) {
             if self.copies.contains_key(&name) {
                 continue;
             }
@@ -227,6 +228,12 @@ impl AppWindow {
         if command == "app.reset" {
             return self.reset(window, cx);
         }
+        if command == "app.attach" {
+            return self.pick_files(cx);
+        }
+        if let Some(step) = match command { "app.scroll_down" => Some(1.), "app.scroll_up" => Some(-1.), _ => None } {
+            return scroll_thread(step, window, cx);
+        }
         if let Some((view, cmd)) = command.split_once('.') {
             if let Some(copy) = self.copies.get(view) {
                 let _ = copy.commands.try_send(cmd.to_string());
@@ -281,9 +288,11 @@ impl AppWindow {
                 let context = match section.as_str() {
                     "always" => None,
                     "global" => Some("!Input".to_owned()),
+                    // The rail's own keys while it has the focus; the page's keys wait until focus leaves it.
+                    "rail" => Some("rail && !Input".to_owned()),
                     s => s
                         .strip_prefix("page:")
-                        .map(|p| format!("page == {p} && !Input"))
+                        .map(|p| format!("page == {p} && !Input && !rail"))
                         .or_else(|| s.strip_prefix("view:").map(|v| format!("view == {v}"))),
                 };
                 if section != "always" && context.is_none() {
@@ -400,6 +409,12 @@ impl AppWindow {
     /// a column.
     fn render_node(&self, node: &Node, row: bool) -> AnyElement {
         use crate::theme::color;
+        if node.kind == Kind::Block {
+            let (page, detail) = (host::shared("page"), host::shared("detail"));
+            if node.view_on(page.as_str(), detail.as_str()) == Some("") {
+                return div().into_any_element(); // hidden on this page: a full page takes the room
+            }
+        }
         let mut el = div().relative().min_w_0().min_h_0();
         el = match node.size {
             Size::Px(n) if row => el.flex_none().w(px(n)).h_full(),
@@ -420,7 +435,9 @@ impl AppWindow {
             .border_color(color(token));
         }
         if node.card {
-            el = el.rounded(px(10.)).border_1().border_color(color("border")).bg(color("background")).overflow_hidden();
+            // The focused pane's border turns blue, as the Console's does (← → move the focus).
+            let focused = host::shared("focus").as_str() == Some(node.id.as_str());
+            el = el.rounded(px(10.)).border_1().border_color(color(if focused { "accent" } else { "border" })).bg(color("background")).overflow_hidden();
         }
         if node.padding > 0. {
             el = el.p(px(node.padding));
@@ -456,8 +473,9 @@ impl Render for AppWindow {
         self.renders += 1;
         let page = host::shared("page");
         let page = page.as_str().unwrap_or("threads");
+        let rail = if host::shared("focus").as_str() == Some("rail") { " rail" } else { "" };
         let mut root = div()
-            .key_context(format!("Page page={page}").as_str())
+            .key_context(format!("Page page={page}{rail}").as_str())
             .relative()
             .size_full()
             .flex()
@@ -469,6 +487,11 @@ impl Render for AppWindow {
             .on_action(cx.listener(|this, action: &ShellAction, window, cx| this.run(action.id(), window, cx)))
             .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| this.attach(paths, cx)))
             .child(div().flex_1().min_h_0().flex().child(self.render_node(&self.layout, true)));
+        if host::shared("toasts").as_u64().unwrap_or(0) > 0 {
+            if let Some(Copy { root: Some(toasts), .. }) = self.copies.get(TOASTS) {
+                root = root.child(div().absolute().right(px(12.)).bottom(px(36.)).w(px(440.)).h(px(320.)).child(toasts.clone()));
+            }
+        }
         if !host::shared("picker").is_null() {
             if let Some(Copy { root: Some(overlay), .. }) = self.copies.get(OVERLAY) {
                 root = root.child(div().absolute().inset_0().child(overlay.clone()));
@@ -492,12 +515,27 @@ impl AppWindow {
     /// Thread's reply (FR-10): the core stages each through the Service's upload page, and the view shows them
     /// when its rows change.
     fn attach(&mut self, paths: &ExternalPaths, cx: &mut Context<Self>) {
+        self.stage(paths.paths().to_vec(), cx);
+    }
+
+    /// ctrl+o (D63): the system file picker; the chosen files are staged as dropped ones are.
+    fn pick_files(&mut self, cx: &mut Context<Self>) {
+        let picked = cx.prompt_for_paths(gpui::PathPromptOptions { files: true, directories: false, multiple: true, prompt: None });
+        cx.spawn(async move |this, cx| {
+            if let Ok(Ok(Some(paths))) = picked.await {
+                let _ = this.update(cx, |this, cx| this.stage(paths, cx));
+            }
+        })
+        .detach();
+    }
+
+    fn stage(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
         let on_draft = host::shared("page") == "drafts" || (host::shared("page") == "today" && host::shared("detail") == "draft");
         let (kind, owner) = if on_draft { ("draft", host::shared("draft")) } else { ("thread", host::shared("thread")) };
         let (Some(owner), Some(core)) = (owner.as_str().map(str::to_owned), host::core()) else {
             return toast("Select a Thread or Draft first: dropped files go on its reply.", "warning");
         };
-        let paths: Vec<PathBuf> = paths.paths().iter().filter(|p| p.is_file()).cloned().collect();
+        let paths: Vec<PathBuf> = paths.into_iter().filter(|p| p.is_file()).collect();
         cx.background_spawn(async move {
             for path in paths {
                 let params = serde_json::json!({"origin": "view", "owner_kind": kind, "owner_id": owner, "path": path});
@@ -509,6 +547,21 @@ impl AppWindow {
         })
         .detach();
     }
+}
+
+/// space / pgdn / pgup (D55): a page of the Thread's messages, as the Console's scroll_thread. GPUI keeps a plain
+/// scroll area's offset to itself, so this sends the wheel event a trackpad would, over the messages column.
+// ponytail: the point assumes the shipped layout (Thread pane on the right, properties column 300 px); find the
+// pane's bounds if Interface files move it.
+fn scroll_thread(step: f32, window: &mut Window, cx: &mut Context<AppWindow>) {
+    let size = window.viewport_size();
+    let event = gpui::ScrollWheelEvent {
+        position: gpui::point(size.width - px(480.), size.height * 0.5),
+        delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), -size.height * 0.8 * step)),
+        modifiers: gpui::Modifiers::default(),
+        touch_phase: gpui::TouchPhase::Moved,
+    };
+    window.dispatch_event(gpui::PlatformInput::ScrollWheel(event), cx);
 }
 
 /// A toast in the views, as the core's own toasts arrive.

@@ -1,15 +1,53 @@
-// One Organization: its Pipeline Stages and Values (s sets a Stage, v a Value, each in a picked Pipeline), its
-// People and their Threads, and its Stage and Value history. Clicking a Person opens them in People.
-import { View, div, svg } from "gpui-kit";
+// One Organization, as the Console's OrganizationPage (D131–D134): its Threads (glyph, title, Status; a click opens
+// one where it lives), and beside them its Pipeline section (each Pipeline's Stage and days, Value, Now, recent
+// changes) and People with their identities, then Context. s sets a Stage (in its one Pipeline, else pick one; the
+// current Stage marked, the other Pipelines one step away), v a Value ("90k" works), p adds or removes People; each
+// is undoable (z). On the Pipeline page the Pipeline is already chosen.
+import { View, div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { call, nextEvent, nextCommand, theme, shared, setShared, run, toast } from "comms";
+import { call, nextEvent, nextCommand, theme, shared, setShared, run, toast, open } from "comms";
 
+const GLYPH = {
+  CREATED: ["\u{f0674}", "status_needs_first", "Needs first response"], NEW_REPLY: ["\u{f173e}", "status_needs_next", "Needs next response"],
+  IN_PROGRESS: ["\u{f0349}", "status_investigating", "Investigating"], REPLY_DRAFT: ["\u{f048a}", "status_reply_draft", "Reply Draft"],
+  WAITING_FOR_CUSTOMER: ["\u{f051f}", "status_waiting", "Waiting for them"], WAITING_FOR_DURATION: ["\u{f03e6}", "status_waiting", "Paused for later"],
+  WAITING_INDEFINITELY: ["\u{f03e6}", "status_waiting", "Paused for later"], DONE_MANUALLY_SET: ["\u{f012c}", "status_done", "Done"],
+  IGNORED: ["\u{f06d1}", "status_ignored", "Ignored"],
+};
+const PIPE_ICON = { REVENUE: "\u{f0116}", FUNDRAISING: "\u{f1890}", TALENT: "\u{f0849}" };
+const SOURCES = ["attio", "tana", "linear"];
 const grouped = (x) => String(Math.round(x)).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
-const VIEW = { TODO: "Todo", SNOOZED: "Snoozed", DONE: "Done", IGNORED: "Ignored" };
+const offerUndo = (message, steps) => { setShared("undo", { message, steps }); toast(`${message}  z undo`); };
+const viewOf = (t) => (t.status_detail === "IGNORED" ? "ignored" : { TODO: "todo", SNOOZED: "snoozed", DONE: "done" }[t.status] ?? "todo");
+
+/** Console segment lines ([text, colour, bold, link]); person and org links open their page; a URL opens on
+ * Ctrl+click (Cmd+click on macOS). */
+export function segLines(t, lines, key = "s", orgs = {}) {
+  const GREY = { "#928374": "muted", "#a89984": "dim", "#7c6f64": "muted" };
+  const color = (hex) => (hex ? t[GREY[hex]] ?? hex : t.foreground);
+  const follow = (link, ev) => {
+    const push = (entry) => { setShared("push", entry); run("nav.push"); };
+    if (link.startsWith("person:")) push({ page: "person", person: link.slice(7) });
+    else if (link.startsWith("org:")) push({ page: "organization", organization: { domain: link.slice(4), id: orgs[link.slice(4)] ?? null } });
+    else if (ev?.modifiers?.control || ev?.modifiers?.platform) open(link);
+  };
+  return (lines ?? []).map((segs, r) => (segs.length ? h_flex().w_full().gap(0).flex_wrap()
+    .children(segs.map(([text, hex, bold, link], i) => div().min_w(0).text_color(link ? t.blue : color(hex)).when(Boolean(bold), (d) => d.font_semibold())
+      .when(Boolean(link), (d) => d.id(`${key}-${r}-${i}`).cursor_pointer().on_click((ev) => follow(link, ev))).child(text)))
+    : div().h(10)));
+}
+
+/** s's options for one Pipeline: its Stages, the current one marked, then the other Pipelines (the Console's set_org_stage). */
+export function stageOptions(st, p) {
+  const now = st.current?.[p];
+  return [...st.all[p].map((s) => ({ value: s, label: `${s === now ? "▸ " : "  "}${s}${s === now ? "  (current)" : ""}` })),
+    ...Object.keys(st.all).filter((q) => q !== p).map((q) => ({ value: `pipeline:${q}`, label: `  ${st.names[q]}…` }))];
+}
 
 export default class Organization extends View {
   init(_props, cx) {
     this.page = null;
+    this.context = [];
     this.load(cx);
     cx.spawn(async (cx) => {
       while (true) if ((await nextEvent()).kind === "rows" && shared("organization")) this.load(cx);
@@ -21,20 +59,19 @@ export default class Organization extends View {
 
   load(cx) {
     const org = shared("organization");
-    if (!org?.domain) {
-      this.page = null;
-      return cx.notify();
-    }
+    if (!org?.domain) { this.page = null; return cx.notify(); }
     cx.spawn(async (cx) => {
       try {
-        const [page, list, history, stages] = await Promise.all([call("organization.page", { domain: org.domain }),
-          call("organizations.list"), call("organization.history", { org_id: org.id }), this.stages ? this.stages : call("pipeline.stages")]);
-        if (shared("organization")?.id !== org.id) return;
+        const page = await call("organization.page", { domain: org.domain });
+        if (shared("organization")?.domain !== org.domain) return;
+        const fresh = this.page?.domain !== page.domain;
         this.page = page;
-        this.state = list.states?.[org.id] ?? {};
-        this.history = history ?? [];
-        this.stages = stages;
         this.error = null;
+        if (fresh) {
+          this.context = [];
+          for (const source of SOURCES) call("context.section", { source, emails: page.emails ?? [], domains: [page.domain] })
+            .then((s) => { if (s && shared("organization")?.domain === org.domain) { this.context = [...this.context, s]; cx.notify(); } }).catch(() => {});
+        }
       } catch (e) {
         this.page = null;
         this.error = String(e);
@@ -48,99 +85,117 @@ export default class Organization extends View {
     run("overlay.open");
   }
 
+  /** The Pipeline to act in: the Pipeline page's, else the one it holds a Stage in, else Jeremy picks (choose_pipeline). */
+  choose(what, then) {
+    const st = this.page.stages, o = this.page.org;
+    if (shared("page") === "pipeline") return then((shared("pipeline") ?? "revenue").toUpperCase());
+    if (st.held.length === 1) return then(st.held[0]);
+    this.then = then;
+    this.pick(`${what} · ${o.name}`, Object.keys(st.all).map((p) => ({ value: p, label: `${PIPE_ICON[p] ?? ""} ${st.names[p]}` })), "pipeline-picked");
+  }
+
+  stagePick(p) {
+    this.pipeline = p;
+    this.pick(`Stage · ${this.page.org.name} (${this.page.stages.names[p]})`, stageOptions(this.page.stages, p), "stage-picked");
+  }
+
+  async write(method, params, message, undo) {
+    try {
+      const r = await call(`command.${method}`, params);
+      if (undo && r != null) offerUndo(message, undo(r));
+      else if (message && r !== null) toast(message);
+      return r;
+    } catch (e) {
+      toast(`Not changed: ${String(e).replace(/^(Error|Refused): /, "")}`, "error");
+      return undefined;
+    }
+  }
+
   command(c, cx) {
     const at = c.indexOf(":");
     const name = at < 0 ? c : c.slice(0, at);
     const answer = at < 0 ? null : JSON.parse(c.slice(at + 1));
-    const org = shared("organization");
-    const pipelines = Object.entries(this.stages ?? {});
-    // On a Pipeline page the Pipeline is already chosen.
-    const chosen = shared("page") === "pipeline" ? (shared("pipeline") ?? "revenue").toUpperCase() : null;
+    const pg = this.page, o = pg?.org;
+    if (name === "show") return this.load(cx);
+    if (!o) return;
     switch (name) {
-      case "show": return this.load(cx);
-      case "stage": case "value":
-        if (!org || !pipelines.length) return;
-        this.doing = name;
-        if (chosen) return this.command(`pipeline-picked:${JSON.stringify({ value: chosen })}`, cx);
-        return this.pick(`${name === "stage" ? "Stage" : "Value"} in which Pipeline?`,
-          pipelines.map(([p, d]) => ({ value: p, label: d.name, hint: this.state?.[p]?.stage ?? "" })), "pipeline-picked");
-      case "pipeline-picked": {
-        this.pipeline = answer.value;
-        const d = this.stages[answer.value];
-        if (this.doing === "stage") return this.pick(`${d.name} Stage · ${org.domain}`, d.stages.map((s) => ({ value: s, label: s,
-          hint: d.paying.includes(s) ? "paying" : d.ending.includes(s) ? "ending" : "" })), "stage-picked");
-        return this.pick(`${d.name} Value (CAD) · ${org.domain}`, [], "value-typed", "a number, such as 85000; empty clears it");
-      }
+      case "stage": return this.choose("Stage", (p) => this.stagePick(p));
+      case "value": return this.choose("Value", (p) => {
+        this.pipeline = p;
+        this.pick(`${pg.stages.names[p]} Value · ${o.name}`, [], "value-typed", p === "REVENUE" ? "CAD, next 12 months, e.g. 90k" : "CAD cheque, e.g. 250k");
+      });
+      case "pipeline-picked": return this.then?.(answer.value);
       case "stage-picked":
+        if (answer.value.startsWith("pipeline:")) return this.stagePick(answer.value.slice(9));
+        return cx.spawn(async () => this.write("pipeline.set_stage", { org_id: o.id, pipeline: this.pipeline, stage: answer.value },
+          `${o.name} → ${answer.value}.`, (entry) => [["pipeline.undo", { entry_id: entry }]]));
+      case "value-typed":
+        if (answer.text == null) return;
         return cx.spawn(async () => {
-          try {
-            await call("command.pipeline.set_stage", { org_id: org.id, pipeline: this.pipeline, stage: answer.value });
-            toast(`${org.domain}: ${answer.value}.`);
-          } catch (e) {
-            toast(String(e), "error");
-          }
+          const amount = await call("amount.parse", { text: answer.text }).catch(() => null);
+          await this.write("pipeline.set_value", { org_id: o.id, pipeline: this.pipeline, value: answer.text },
+            `${o.name}: ${pg.stages.names[this.pipeline]} Value CAD ${grouped(amount ?? 0)}.`, (entry) => [["pipeline.undo", { entry_id: entry }]]);
         });
-      case "value-typed": {
-        const text = answer.text.replace(/[,$\s]/g, "");
-        if (text && !/^\d+$/.test(text)) return toast(`Not set: ${answer.text} is not a whole number.`, "error");
-        return cx.spawn(async () => {
-          try {
-            await call("command.pipeline.set_value", { org_id: org.id, pipeline: this.pipeline, value: text ? +text : null });
-            toast(text ? `${org.domain}: CAD ${grouped(+text)}.` : `${org.domain}: Value cleared.`);
-          } catch (e) {
-            toast(String(e), "error");
-          }
+      case "people":
+        return this.pick(`People · ${pg.domain}`, [{ value: "add", label: "+ add a Person…" },
+          ...(pg.people ?? []).map((p) => ({ value: p.id, label: `− remove ${p.name}` }))], "people-picked");
+      case "people-picked": {
+        if (answer.value === "add") return this.pick(`Add a Person to ${pg.domain}`, [], "people-typed", "email address, phone number, or name");
+        const p = (pg.people ?? []).find((x) => x.id === answer.value);
+        return p && this.member(p.id, p.name, false, cx);
+      }
+      case "people-typed":
+        if (!answer.text) return;
+        return cx.spawn(async (cx) => {
+          const matches = await call("people.find", { text: answer.text }).catch(() => []);
+          if (!matches.length) return toast(`No Person matches ${answer.text}. Add the address to a Person first.`, "error");
+          if (matches.length === 1) return this.member(matches[0][0], matches[0][1], true, cx);
+          this.matches = matches;
+          this.pick(`Add to ${pg.domain}`, matches.map(([id, n]) => ({ value: id, label: n })), "people-chosen");
         });
+      case "people-chosen": {
+        const m = (this.matches ?? []).find(([id]) => id === answer.value);
+        return m && this.member(m[0], m[1], true, cx);
       }
-      case "people": {
-        const people = this.page?.people ?? [];
-        if (!people.length) return toast("Nobody at this Organization yet.");
-        return this.pick(`People · ${org.domain}`, people.map((p) => ({ value: p.id, label: p.name })), "person-picked");
-      }
-      case "person-picked":
-        setShared("person", answer.value);
-        setShared("page", "people");
-        return run("person.show");
     }
+  }
+
+  /** Membership: add or remove a Person; z puts back what was before (the Console's set_member). */
+  member(personId, name, member, cx) {
+    const domain = this.page.domain;
+    cx.spawn(async () => {
+      try {
+        const before = await call("command.inbox.set_membership", { person_id: personId, domain, member });
+        offerUndo(member ? `Added ${name} to ${domain}.` : `Removed ${name} from ${domain}.`,
+          [["inbox.set_membership", { person_id: personId, domain, member: before ?? null }]]);
+      } catch (e) {
+        toast(/FreeMail/.test(String(e)) ? `Not added: ${domain} is a free-mail or incomplete domain, never an Organization.` : String(e), "error");
+      }
+    });
   }
 
   render() {
     const t = theme();
-    const p = this.page;
-    const org = shared("organization");
+    const pg = this.page;
     const pane = v_flex().size_full().min_h(0).bg(t.background).text_size(13);
-    if (!p) return pane.child(div().p(24).text_color(t.dim).child(this.error ?? "No Organization selected"));
-    const label = (text) => div().pt(6).text_size(11.5).font_medium().text_color(t.dim).child(text);
-    const threads = (p.threads ?? []).map((x) => x.f ?? x);
-    return pane
-      .child(h_flex().h(30).flex_none().px(12).gap(8).items_center().border_b(1).border_color(t.border).text_size(12).text_color(t.muted)
-        .child(svg("icons/building-2.svg").size(13).text_color(t.accent))
-        .child(div().font_medium().text_color(t.foreground).child("Organization"))
-        .child(div().flex_1())
-        .child(div().text_size(11).text_color(t.dim).child("s stage · v value · p people")))
-      .child(v_flex().id("organization").flex_1().min_h(0).overflow_y_scroll().px(24).py(18).gap(8)
-        .child(div().text_size(18).font_semibold().text_color(t.strong ?? t.foreground).child(org?.domain ?? p.domain ?? ""))
-        .child(label("Pipelines"))
-        .children(Object.entries(this.stages ?? {}).map(([code, d]) => {
-          const s = this.state?.[code];
-          return h_flex().gap(10).text_size(12.5)
-            .child(div().w(100).flex_none().text_color(t.dim).child(d.name))
-            .child(div().flex_1().text_color(s ? t.foreground : t.dim).child(s ? s.stage : "—"))
-            .child(div().text_color(t.muted).child(s?.value != null ? `CAD ${grouped(s.value)}` : ""));
-        }))
-        .child(label("People"))
-        .child(v_flex().gap(2).children((p.people ?? []).map((person) =>
-          div().id(`p-${person.id}`).cursor_pointer().truncate().text_color(t.foreground).hover((s) => s.text_color(t.accent))
-            .on_click(() => { setShared("person", person.id); setShared("page", "people"); run("person.show"); })
-            .child(`${person.name}${(person.identities ?? []).length ? ` · ${person.identities[0].value}` : ""}`))))
-        .child(label("Threads"))
-        .child(v_flex().gap(2).children(threads.map((th) =>
-          div().id(`t-${th.id}`).truncate().cursor_pointer().text_color(t.foreground).hover((s) => s.text_color(t.accent))
-            .on_click(() => { setShared("thread", th.id); setShared("view", VIEW[th.status] ?? "Todo"); setShared("page", "threads"); run("threads.reload"); })
-            .child(th.title ?? ""))))
-        .when(Boolean(this.history?.length), (el) => el.child(label("History"))
-          .child(v_flex().gap(2).text_size(12).children(this.history.slice(0, 20).map((h) =>
-            h_flex().gap(10).child(div().w(110).flex_none().text_color(t.dim).child(String(h.at?.$dt ?? h.at ?? "").slice(0, 10)))
-              .child(div().flex_1().text_color(t.muted).child(`${this.stages?.[h.pipeline]?.name ?? h.pipeline} ${h.kind.toLowerCase()}: ${h.old ?? "—"} → ${h.new ?? "—"}`)))))));
+    if (!pg) return pane.child(div().p(24).text_color(t.muted).child(this.error ?? "No Organization selected"));
+    const threads = (pg.threads ?? []).map((x) => x.f ?? x);
+    return pane.child(h_flex().flex_1().min_h(0).items_start()
+      .child(v_flex().id("org-threads").flex_1().min_w(0).h_full().overflow_y_scroll().px(16).py(12).gap(0)
+        .child(div().pb(6).font_semibold().text_color(t.blue).child(`\u{f01d7} organization · ${pg.domain}`))
+        .when(!threads.length, (e) => e.child(div().text_color(t.muted).child("No threads here.")))
+        .children(threads.map((th) => {
+          const g = GLYPH[th.status_detail] ?? ["·", "muted", ""];
+          return h_flex().id(`t-${th.id}`).h(26).px(8).gap(8).rounded(4).items_center().cursor_pointer().hover((s) => s.bg(t.hover))
+            .on_click(() => { setShared("thread", th.id); run(`nav.${viewOf(th)}`); run("thread.show"); })
+            .child(div().w(16).flex_none().text_color(t[g[1]] ?? t.muted).child(g[0]))
+            .child(div().flex_1().min_w(0).truncate().text_color(t.foreground).child(th.title ?? ""))
+            .child(div().flex_none().text_color(t[g[1]] ?? t.muted).child(g[2]));
+        })))
+      .child(v_flex().id("org-side").w(320).flex_none().h_full().overflow_y_scroll().px(16).py(12).gap(2).border_l(1)
+        .border_color(t.border).text_size(12.5)
+        .children(segLines(t, pg.side, "o"))
+        .children(this.context.map((s) => v_flex().mt(12).p(8).gap(2).rounded(6).border(1).border_color(t.border)
+          .child(div().text_color(t.muted).child(s.title)).children(segLines(t, s.lines, `c${s.title}`))))));
   }
 }

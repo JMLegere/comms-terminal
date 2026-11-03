@@ -4182,6 +4182,23 @@ class ChannelsPage(TablePage):
 
 
 
+def connection_markup(c) -> str:
+    """A Connection page: its name and health, the Platform's guidance for that state, account, when connected,
+    the last health check and the problem."""
+    p = PLATFORMS.get(c["platform"])
+    ok = health_ok(c)
+    state = (f"[#6c782e]{ICON['ok']} OK[/]" if ok else
+             f"[#c14a4a]{ICON['broken']} {'BROKEN' if p else 'UNAVAILABLE'}[/]")
+    description = (p.healthy if ok else p.broken) if p else (
+        f"This client does not support the {escape(c['platform'])} platform. "
+        "Update Comms Terminal to use this connection.")
+    detail = problem(c) or "None."
+    return (f"[b]{conn_icon(c)} {escape(conn_name(c))}[/]  {state}\n{description}\n\n"
+            f"[#928374]account[/]\n{escape(c['external_id'])}\n\n"
+            f"[#928374]connected[/]\n{stamp(c['connected_at'])}\n\n"
+            f"[#928374]last health check[/]\n{stamp(c['probed_at']) or 'Never.'}\n\n[#928374]problem[/]\n{escape(detail)}")
+
+
 class ConnectionPage(Page):
     @property
     def RAIL(self):
@@ -4203,19 +4220,7 @@ class ConnectionPage(Page):
 
     def refresh_data(self):
         c = next(c for c in inbox.connections(self.app.db) if c["id"] == self.connection_id)
-        p = PLATFORMS.get(c["platform"])
-        ok = health_ok(c)
-        state = (f"[#6c782e]{ICON['ok']} OK[/]" if ok else
-                 f"[#c14a4a]{ICON['broken']} {'BROKEN' if p else 'UNAVAILABLE'}[/]")
-        description = (p.healthy if ok else p.broken) if p else (
-            f"This client does not support the {escape(c['platform'])} platform. "
-            "Update Comms Terminal to use this connection.")
-        detail = problem(c) or "None."
-        self.query_one("#conn").update(
-            f"[b]{conn_icon(c)} {escape(conn_name(c))}[/]  {state}\n{description}\n\n"
-            f"[#928374]account[/]\n{escape(c['external_id'])}\n\n"
-            f"[#928374]connected[/]\n{stamp(c['connected_at'])}\n\n"
-            f"[#928374]last health check[/]\n{stamp(c['probed_at']) or 'Never.'}\n\n[#928374]problem[/]\n{escape(detail)}")
+        self.query_one("#conn").update(connection_markup(c))
 
     def action_back(self):
         self.app.main.back()
@@ -4862,6 +4867,67 @@ def task_markdown(db, t: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+def task_pane_markup(db, t: dict) -> list[str]:
+    """The Task pane's body (FR-SEQ-16) as Console markup, one block per Static: what to do for this kind of Task."""
+    values = sequences.person_fill(db, t["person_id"])
+    text = lambda s: escape(sequences.fill(s or "", values)[0])  # noqa: E731
+    phone = db.execute("SELECT value FROM identities WHERE person_id = ? AND kind = 'phone' ORDER BY id LIMIT 1",
+                       (t["person_id"],)).fetchone()
+    out = []
+    if t["kind"] == "call":
+        out.append(f"[b]{escape(phone[0]) if phone else '[#c14a4a]no phone[/]'}[/]   "
+                   f"[#928374]{ICON['call']} dial in Quo · the call appears in their Thread[/]")
+        out.append(f"\n[#928374]{ICON['summary']} script[/]\n{text(t['body']) or '[#928374]none[/]'}")
+        if t["voicemail"]:
+            out.append(f"\n[#928374]{ICON['summary']} voicemail[/]\n{text(t['voicemail'])}")
+    elif t["kind"] == "linkedin":
+        out.append(f"[b]{(t['linkedin_move'] or 'connect').title()}[/]   [#928374]{ICON['linkedin']} on their LinkedIn profile[/]")
+        out.append(f"\n[#928374]{ICON['summary']} note[/]\n{text(t['body']) or '[#928374]none[/]'}")
+        out.append("\n[#928374]LinkedIn replies do not reach Inbox. If they reply there, pause on their Person page.[/]")
+    elif t["kind"] == "letter":
+        out.append(f"[#928374]{ICON['letter']} letter[/]\n{text(t['body'])}")
+    elif t["kind"] == "if":
+        out.append(f"[b]{escape(t['subject'] or 'You pick')}[/]")
+        out.append(f"\n[b #45707a]1[/] {escape(t['true_label'])}    [b #45707a]2[/] {escape(t['false_label'])}")
+        if t["body"]:
+            out.append(f"\n[#928374]{ICON['summary']} note[/]\n{text(t['body'])}")
+    elif t["kind"] == "action" and t["action_kind"] != "enroll":
+        out.append(f"[b]{escape(sequences.ACTION_LABEL[t['action_kind']])}[/]")
+        if t["flag"]:
+            out.append(f"[#c14a4a]{ICON['warn']} Waiting for you: {escape(t['flag'])}. e marks it done, x skips.[/]")
+    elif t["action_kind"] == "enroll":
+        out.append(f"[b]Enroll in {escape(t['enroll_sequence'] or 'no Sequence')}[/]")
+        if t["flag"]:
+            out.append(f"[#c14a4a]{ICON['warn']} Waiting for you: {escape(t['flag'])}. e enrolls them anyway, x skips.[/]")
+        if t["body"]:
+            out.append(f"\n[#928374]{ICON['summary']} note[/]\n{text(t['body'])}")
+    elif t["flag"] == "reply target skipped":
+        out.append(f"[#c14a4a]{ICON['warn']} Reply target skipped[/]")
+        out.append("[#c14a4a]This Task replies in an earlier email's Thread, but that email was skipped. "
+                   "Choose: n start a new Thread, or x skip this Task.[/]")
+        out.append(f"\n[#928374]{ICON['summary']} text[/]\n{text(t['body'])}")
+    elif t["flag"] == "reply Draft already there":
+        out.append(f"[#c14a4a]{ICON['warn']} The Thread already has a reply Draft[/]")
+        out.append("[#928374]It was left as it is. Open the Thread (enter) to send it, or x skip this Task.[/]")
+        out.append(f"\n[#928374]{ICON['summary']} this Step's text[/]\n{text(t['body'])}")
+    elif t["thread_id"] or t["draft_id"]:
+        out.append(f"[#928374]{ICON['reply']} reply in the Thread · enter opens its reply box to edit and send[/]")
+        out.append(f"\n{text(t['body'])}")
+    else:
+        out.append(f"[#c14a4a]{ICON['warn']} {escape(t['flag'] or 'No Draft yet')}[/]")
+    return out
+
+
+def task_hint(t: dict) -> str:
+    if t["kind"] == "email":
+        return "n new Thread · x skip · p person" if t["flag"] == "reply target skipped" else "enter open Thread · x skip · p person"
+    if t["kind"] == "if":
+        return f"1 {t['true_label']} · 2 {t['false_label']} · x skip · p person"
+    if t["action_kind"] == "enroll":
+        return "e enroll · next · x skip · next · p person"
+    return "e done · next · x skip · next · p person · y copy for agent"
+
+
 class TaskPane(Horizontal):
     """A non-email Task, or an email Task waiting for Jeremy, laid out like the Thread pane (FR-SEQ-16)."""
 
@@ -4871,67 +4937,18 @@ class TaskPane(Horizontal):
 
     def compose(self):
         t = self.item
-        values = sequences.person_fill(self.app.db, t["person_id"])
-        text = lambda s: escape(sequences.fill(s or "", values)[0])  # noqa: E731
-        phone = self.app.db.execute("SELECT value FROM identities WHERE person_id = ? AND kind = 'phone' ORDER BY id LIMIT 1",
-                                    (t["person_id"],)).fetchone()
         with Vertical(classes="convo"):
             with TextScroll(classes="timeline", can_focus=True):
                 yield Static(classes="thead")
-                if t["kind"] == "call":
-                    yield Static(f"[b]{escape(phone[0]) if phone else '[#c14a4a]no phone[/]'}[/]   "
-                                 f"[#928374]{ICON['call']} dial in Quo · the call appears in their Thread[/]")
-                    yield Static(f"\n[#928374]{ICON['summary']} script[/]\n{text(t['body']) or '[#928374]none[/]'}")
-                    if t["voicemail"]:
-                        yield Static(f"\n[#928374]{ICON['summary']} voicemail[/]\n{text(t['voicemail'])}")
-                elif t["kind"] == "linkedin":
-                    yield Static(f"[b]{(t['linkedin_move'] or 'connect').title()}[/]   [#928374]{ICON['linkedin']} on their LinkedIn profile[/]")
-                    yield Static(f"\n[#928374]{ICON['summary']} note[/]\n{text(t['body']) or '[#928374]none[/]'}")
-                    yield Static("\n[#928374]LinkedIn replies do not reach Inbox. If they reply there, pause on their Person page.[/]")
-                elif t["kind"] == "letter":
-                    yield Static(f"[#928374]{ICON['letter']} letter[/]\n{text(t['body'])}")
-                elif t["kind"] == "if":
-                    yield Static(f"[b]{escape(t['subject'] or 'You pick')}[/]")
-                    yield Static(f"\n[b #45707a]1[/] {escape(t['true_label'])}    [b #45707a]2[/] {escape(t['false_label'])}")
-                    if t["body"]:
-                        yield Static(f"\n[#928374]{ICON['summary']} note[/]\n{text(t['body'])}")
-                elif t["kind"] == "action" and t["action_kind"] != "enroll":
-                    yield Static(f"[b]{escape(sequences.ACTION_LABEL[t['action_kind']])}[/]")
-                    if t["flag"]:
-                        yield Static(f"[#c14a4a]{ICON['warn']} Waiting for you: {escape(t['flag'])}. e marks it done, x skips.[/]")
-                elif t["action_kind"] == "enroll":
-                    yield Static(f"[b]Enroll in {escape(t['enroll_sequence'] or 'no Sequence')}[/]")
-                    if t["flag"]:
-                        yield Static(f"[#c14a4a]{ICON['warn']} Waiting for you: {escape(t['flag'])}. e enrolls them anyway, x skips.[/]")
-                    if t["body"]:
-                        yield Static(f"\n[#928374]{ICON['summary']} note[/]\n{text(t['body'])}")
-                elif t["flag"] == "reply target skipped":
-                    yield Static(f"[#c14a4a]{ICON['warn']} Reply target skipped[/]")
-                    yield Static("[#c14a4a]This Task replies in an earlier email's Thread, but that email was skipped. "
-                                 "Choose: n start a new Thread, or x skip this Task.[/]")
-                    yield Static(f"\n[#928374]{ICON['summary']} text[/]\n{text(t['body'])}")
-                elif t["flag"] == "reply Draft already there":
-                    yield Static(f"[#c14a4a]{ICON['warn']} The Thread already has a reply Draft[/]")
-                    yield Static("[#928374]It was left as it is. Open the Thread (enter) to send it, or x skip this Task.[/]")
-                    yield Static(f"\n[#928374]{ICON['summary']} this Step's text[/]\n{text(t['body'])}")
-                elif t["thread_id"] or t["draft_id"]:
-                    yield Static(f"[#928374]{ICON['reply']} reply in the Thread · enter opens its reply box to edit and send[/]")
-                    yield Static(f"\n{text(t['body'])}")
-                else:
-                    yield Static(f"[#c14a4a]{ICON['warn']} {escape(t['flag'] or 'No Draft yet')}[/]")
+                for markup in task_pane_markup(self.app.db, t):
+                    yield Static(markup)
             yield Static(self.hint(), classes="replyhint")
         with TextScroll(classes="props", can_focus=False):
             yield Static(classes="detailtext")
             yield from context_sections()
 
     def hint(self):
-        if self.item["kind"] == "email":
-            return "n new Thread · x skip · p person" if self.item["flag"] == "reply target skipped" else "enter open Thread · x skip · p person"
-        if self.item["kind"] == "if":
-            return f"1 {self.item['true_label']} · 2 {self.item['false_label']} · x skip · p person"
-        if self.item["action_kind"] == "enroll":
-            return "e enroll · next · x skip · next · p person"
-        return "e done · next · x skip · next · p person · y copy for agent"
+        return task_hint(self.item)
 
     def on_mount(self):
         self.paint()
@@ -5268,6 +5285,21 @@ class StepsTable(ClickTable):
         self.screen.query_one(SequencesPage).move_step(delta)
 
 
+def sequence_props_markup(db, q) -> str:
+    """The Sequences page's side pane for one Sequence: size, edited, use when, archived, sends from, Enrollments, keys."""
+    conn = db.execute("SELECT * FROM connections WHERE id = ?", (q["connection_id"],)).fetchone()
+    size = f"{q['steps']} Steps · {q['days']} days" if q["steps"] else "no Steps yet"
+    enrolled = (f"{q['active']} active · {q['paused']} paused · {q['finished']} finished\n[#928374]{q['due_today']} Tasks due today[/]"
+                if q["used"] else "none\n[#928374]Enroll People from People (s) once it has Steps.[/]")
+    keys = "a restores it" if q["archived_at"] else "enter edits its Steps · w use when · f changes sends from · a archives"
+    return (
+        f"{props_head('sequence', 'sequence')}\n[b]{escape(q['name'])}[/]\n[#928374]{size} · edited {stamp(q['updated_at'])}[/]"
+        + (f"\nUse when: {escape(q['description'])}" if q["description"] else "\n[#928374]No use-when line: w adds one.[/]")
+        + (f"\n[#928374]{ICON['archive']} archived {stamp(q['archived_at'])}[/]" if q["archived_at"] else "") + "\n\n"
+        f"{props_head('connection', 'sends from')}\n{escape(connection_label(conn)) if conn else '[#c14a4a]no email Connection[/]'}\n\n"
+        f"{props_head('people', 'enrollments')}\n{enrolled}\n\n[#928374]{keys}[/]")
+
+
 class SequencesPage(Page):
     """Two stacked panes (Jeremy, 2026-10-16): every Sequence on top, the selected Sequence's Steps below; the side
     pane shows the selected Sequence, or the selected Step's editor once the Steps pane has focus (FR-SEQ-18)."""
@@ -5415,17 +5447,7 @@ class SequencesPage(Page):
             pane.mount(Static("[#928374]No Sequences yet. n makes one.[/]" if not self.rows or self.rows == [None]
                               else "[#928374]enter on Archived shows archived Sequences.[/]", classes="threadempty"))
             return
-        conn = self.app.db.execute("SELECT * FROM connections WHERE id = ?", (q["connection_id"],)).fetchone()
-        size = f"{q['steps']} Steps · {q['days']} days" if q["steps"] else "no Steps yet"
-        enrolled = (f"{q['active']} active · {q['paused']} paused · {q['finished']} finished\n[#928374]{q['due_today']} Tasks due today[/]"
-                    if q["used"] else "none\n[#928374]Enroll People from People (s) once it has Steps.[/]")
-        keys = "a restores it" if q["archived_at"] else "enter edits its Steps · w use when · f changes sends from · a archives"
-        pane.mount(Static(
-            f"{props_head('sequence', 'sequence')}\n[b]{escape(q['name'])}[/]\n[#928374]{size} · edited {stamp(q['updated_at'])}[/]"
-            + (f"\nUse when: {escape(q['description'])}" if q["description"] else "\n[#928374]No use-when line: w adds one.[/]")
-            + (f"\n[#928374]{ICON['archive']} archived {stamp(q['archived_at'])}[/]" if q["archived_at"] else "") + "\n\n"
-            f"{props_head('connection', 'sends from')}\n{escape(connection_label(conn)) if conn else '[#c14a4a]no email Connection[/]'}\n\n"
-            f"{props_head('people', 'enrollments')}\n{enrolled}\n\n[#928374]{keys}[/]", classes="threadempty"))
+        pane.mount(Static(sequence_props_markup(self.app.db, q), classes="threadempty"))
 
     def on_data_table_row_highlighted(self, event):
         event.stop()
@@ -5604,23 +5626,125 @@ class SequencesPage(Page):
         self.show_sequence(step_id=st["id"])
 
 
+STEP_FIELDS_BY_KIND = {"email": ("Gap", "Time", "Reply to", "Subject"), "call": ("Gap", "Time"),
+                       "linkedin": ("Gap", "Time", "Move"), "letter": ("Gap", "Time")}
+STEP_ACTION_FIELDS = {"set_stage": ("Gap", "Time", "Pipeline", "Stage"), "enroll": ("Gap", "Time", "Sequence"),
+                      "end_for_others": ("Gap", "Time"), "set_value": ("Gap", "Time", "Pipeline", "Value")}
+STEP_IF_FIELDS = {"end_reason": ("Gap", "Is", "Path 1", "Path 2"), "has_channel": ("Gap", "Is", "Path 1", "Path 2"),
+                  "stage": ("Gap", "Pipeline", "Stage", "Path 1", "Path 2"),
+                  "jeremy_picks": ("Gap", "Question", "Path 1", "Path 2")}
+STEP_BODY_LABEL = {"email": "body", "call": "script", "linkedin": "note", "letter": "letter", "action": "note", "if": "note"}
+
+
+def step_fields(st) -> tuple:
+    """The Step editor's fields for this kind of Step."""
+    if st["kind"] == "action":
+        return STEP_ACTION_FIELDS[st["action_kind"]]
+    if st["kind"] == "if":
+        return STEP_IF_FIELDS[st["condition"]]
+    return STEP_FIELDS_BY_KIND[st["kind"]]
+
+
+def step_placeholder(st, label) -> str:
+    return {"Gap": "business days after the previous Step",
+            "Time": "HH:MM, or empty for any time",
+            "Reply to": "an earlier email Step's number, or empty for a new Thread",
+            "Subject": "subject with {first_name} {last_name} {company}",
+            "Move": "connect, message, or engage",
+            "Pipeline": "Revenue, Fundraising, or Talent",
+            "Stage": "a Stage of that Pipeline",
+            "Value": "CAD, e.g. 90k",
+            "Question": "what you decide, e.g. Ready to sign?",
+            "Path 1": "label of the first path (yes)",
+            "Path 2": "label of the second path (no)",
+            "Is": "Goal met, Not Right Now, Lost, Completed"
+            if st["condition"] == "end_reason" else "email or phone",
+            "Sequence": "the Sequence to enroll them in, by name"}[label]
+
+
+def step_field_values(db, st) -> dict:
+    """Each Step editor field's text as stored."""
+    steps = {s["id"]: s for s in sequences.sequence_steps(db, st["sequence_id"])}
+    return {"Gap": str(st["gap_days"]), "Time": st["at_time"] or "", "Subject": st["subject"],
+            "Reply to": str(steps[st["reply_to_step_id"]]["position"]) if st["reply_to_step_id"] in steps else "",
+            "Move": st["linkedin_move"] or "connect",
+            "Pipeline": (st["pipeline"] or "").title(), "Stage": st["stage"] or "",
+            "Value": "" if st["value"] is None else str(st["value"]), "Question": st["subject"],
+            "Path 1": st["true_label"], "Path 2": st["false_label"],
+            "Is": ", ".join(sequences.REASON_LABEL.get(r.strip(), r) for r in st["operand"].split(",") if r.strip())
+            if st["condition"] == "end_reason" else st["operand"],
+            "Sequence": sequences.get_sequence(db, st["enroll_sequence_id"])["name"] if st["enroll_sequence_id"] else ""}
+
+
+def step_values(db, st, raw: dict, body: str, voicemail: str | None = None) -> dict:
+    """The Step editor's typed fields (by label) as save_step's values."""
+    get = raw.get
+    out = {"body": body}
+    if voicemail is not None:
+        out["voicemail"] = voicemail
+    if (gap := get("Gap")) is not None:
+        out["gap_days"] = int(gap) if gap.isdigit() else gap
+    if (at := get("Time")) is not None:
+        out["at_time"] = at
+    if (subject := get("Subject")) is not None:
+        out["subject"] = subject
+    if (move := get("Move")) is not None:
+        out["linkedin_move"] = move
+    if (p := get("Pipeline")) is not None:
+        out["pipeline"] = p.upper() or None
+    if (stage := get("Stage")) is not None:
+        out["stage"] = stage
+    if (value := get("Value")) is not None:
+        out["value"] = pipeline.parse_amount(value) if value else None
+    if (question := get("Question")) is not None:
+        out["subject"] = question
+    if (one := get("Path 1")) is not None:
+        out["true_label"] = one
+    if (two := get("Path 2")) is not None:
+        out["false_label"] = two
+    if (is_ := get("Is")) is not None:
+        if st["condition"] == "end_reason":
+            codes = {v.lower(): k for k, v in sequences.REASON_LABEL.items()}
+            out["operand"] = ",".join(codes.get(w.strip().lower(), w.strip().upper().replace(" ", "_"))
+                                      for w in is_.split(",") if w.strip())
+        else:
+            out["operand"] = is_.lower()
+    if (name := get("Sequence")) is not None:
+        found = db.execute("SELECT id FROM sequences WHERE lower(name) = lower(?) ORDER BY archived_at IS NOT NULL, id",
+                           (name,)).fetchone()
+        out["enroll_sequence_id"] = found[0] if found else name or None
+    if (reply := get("Reply to")) is not None:
+        steps = {str(s["position"]): s["id"] for s in sequences.sequence_steps(db, st["sequence_id"])}
+        out["reply_to_step_id"] = steps.get(reply) if reply else None
+    return out
+
+
+def step_markup(db, st) -> tuple[str, str, str]:
+    """The Step editor's heading, its problems, and a preview filled for an enrolled Person, as Console markup."""
+    problems = [m for sid, m in sequences.validate(db, st["sequence_id"]) if sid == st["id"]]
+    kind = sequences.ACTION_LABEL.get(st["action_kind"]) if st["kind"] == "action" else \
+        f"If · {sequences.CONDITION_LABEL[st['condition']]}" if st["kind"] == "if" else KIND_LABEL[st["kind"]]
+    head = f"[b #45707a]Step {st['position']} · {kind}[/]"
+    trouble = "\n".join(f"[#c14a4a]{ICON['warn']} {escape(m)}[/]" for m in problems)
+    who = db.execute("SELECT e.person_id, p.display_name FROM enrollments e JOIN persons p ON p.id = e.person_id"
+                     " WHERE e.sequence_id = ? ORDER BY e.state != 'ACTIVE', e.id DESC LIMIT 1",
+                     (st["sequence_id"],)).fetchone() or \
+        db.execute("SELECT id, display_name FROM persons ORDER BY id LIMIT 1").fetchone()
+    if who is None:
+        return head, trouble, ""
+    values = sequences.person_fill(db, who[0])
+    subject = sequences.fill(st["subject"], values)[0] if st["kind"] == "email" else ""
+    text = " ".join(sequences.fill(st["body"], values)[0].split())
+    return head, trouble, (f"\n[#928374]{ICON['person']} preview · {escape(who[1])}[/]\n"
+                           + (f"[b]{escape(subject)}[/]\n" if subject else "")
+                           + escape(text if len(text) <= 300 else text[:299] + "…"))
+
+
 class StepEditor(Vertical):
     """One Step's fields and text, with a preview for an enrolled Person (FR-SEQ-18); ctrl+s or leaving saves."""
     BINDINGS = [Binding("ctrl+s", "save", "save Step"), Binding("escape", "close", "back to Steps")]
-    FIELDS = {"email": ("Gap", "Time", "Reply to", "Subject"), "call": ("Gap", "Time"),
-              "linkedin": ("Gap", "Time", "Move"), "letter": ("Gap", "Time")}
-    ACTION_FIELDS = {"set_stage": ("Gap", "Time", "Pipeline", "Stage"), "enroll": ("Gap", "Time", "Sequence"),
-                     "end_for_others": ("Gap", "Time"), "set_value": ("Gap", "Time", "Pipeline", "Value")}
-    IF_FIELDS = {"end_reason": ("Gap", "Is", "Path 1", "Path 2"), "has_channel": ("Gap", "Is", "Path 1", "Path 2"),
-                 "stage": ("Gap", "Pipeline", "Stage", "Path 1", "Path 2"),
-                 "jeremy_picks": ("Gap", "Question", "Path 1", "Path 2")}
-
     def fields(self, st) -> tuple:
-        if st["kind"] == "action":
-            return self.ACTION_FIELDS[st["action_kind"]]
-        if st["kind"] == "if":
-            return self.IF_FIELDS[st["condition"]]
-        return self.FIELDS[st["kind"]]
+        return step_fields(st)
 
     def __init__(self, step_id: int):
         super().__init__(classes="stepeditor")
@@ -5629,16 +5753,7 @@ class StepEditor(Vertical):
     def compose(self):
         st = dict(self.app.db.execute("SELECT * FROM sequence_steps WHERE id = ?", (self.step_id,)).fetchone())
         self.step = st
-        steps = {s["id"]: s for s in sequences.sequence_steps(self.app.db, st["sequence_id"])}
-        values = {"Gap": str(st["gap_days"]), "Time": st["at_time"] or "", "Subject": st["subject"],
-                  "Reply to": str(steps[st["reply_to_step_id"]]["position"]) if st["reply_to_step_id"] in steps else "",
-                  "Move": st["linkedin_move"] or "connect",
-                  "Pipeline": (st["pipeline"] or "").title(), "Stage": st["stage"] or "",
-                  "Value": "" if st["value"] is None else str(st["value"]), "Question": st["subject"],
-                  "Path 1": st["true_label"], "Path 2": st["false_label"],
-                  "Is": ", ".join(sequences.REASON_LABEL.get(r.strip(), r) for r in st["operand"].split(",") if r.strip())
-                  if st["condition"] == "end_reason" else st["operand"],
-                  "Sequence": sequences.get_sequence(self.app.db, st["enroll_sequence_id"])["name"] if st["enroll_sequence_id"] else ""}
+        values = step_field_values(self.app.db, st)
         with TextScroll(classes="timeline", can_focus=False):
             yield Static(classes="thead")
             yield Static(classes="draftnotice problems")
@@ -5648,20 +5763,7 @@ class StepEditor(Vertical):
                 for label in self.fields(st):
                     with Horizontal(classes="field"):
                         yield Static(label, classes="flabel")
-                        yield Input(values[label], placeholder={"Gap": "business days after the previous Step",
-                                                                "Time": "HH:MM, or empty for any time",
-                                                                "Reply to": "an earlier email Step's number, or empty for a new Thread",
-                                                                "Subject": "subject with {first_name} {last_name} {company}",
-                                                                "Move": "connect, message, or engage",
-                                                                "Pipeline": "Revenue, Fundraising, or Talent",
-                                                                "Stage": "a Stage of that Pipeline",
-                                                                "Value": "CAD, e.g. 90k",
-                                                                "Question": "what you decide, e.g. Ready to sign?",
-                                                                "Path 1": "label of the first path (yes)",
-                                                                "Path 2": "label of the second path (no)",
-                                                                "Is": "Goal met, Not Right Now, Lost, Completed"
-                                                                if st["condition"] == "end_reason" else "email or phone",
-                                                                "Sequence": "the Sequence to enroll them in, by name"}[label],
+                        yield Input(values[label], placeholder=step_placeholder(st, label),
                                     classes="fvalue", id=f"f-{label.lower().replace(' ', '')}")
             label = {"email": "body", "call": "script", "linkedin": "note", "letter": "letter", "action": "note",
                      "if": "note"}[st["kind"]]
@@ -5678,45 +5780,9 @@ class StepEditor(Vertical):
         self.paint()
 
     def values(self) -> dict:
-        get = lambda i: self.query_one(f"#f-{i}").value.strip() if self.query(f"#f-{i}") else None  # noqa: E731
-        out = {"body": self.query_one("#f-body", TextArea).text}
-        if self.query("#f-voicemail"):
-            out["voicemail"] = self.query_one("#f-voicemail", TextArea).text
-        if (gap := get("gap")) is not None:
-            out["gap_days"] = int(gap) if gap.isdigit() else gap
-        if (at := get("time")) is not None:
-            out["at_time"] = at
-        if (subject := get("subject")) is not None:
-            out["subject"] = subject
-        if (move := get("move")) is not None:
-            out["linkedin_move"] = move
-        if (p := get("pipeline")) is not None:
-            out["pipeline"] = p.upper() or None
-        if (stage := get("stage")) is not None:
-            out["stage"] = stage
-        if (value := get("value")) is not None:
-            out["value"] = pipeline.parse_amount(value) if value else None
-        if (question := get("question")) is not None:
-            out["subject"] = question
-        if (one := get("path1")) is not None:
-            out["true_label"] = one
-        if (two := get("path2")) is not None:
-            out["false_label"] = two
-        if (is_ := get("is")) is not None:
-            if self.step["condition"] == "end_reason":
-                codes = {v.lower(): k for k, v in sequences.REASON_LABEL.items()}
-                out["operand"] = ",".join(codes.get(w.strip().lower(), w.strip().upper().replace(" ", "_"))
-                                          for w in is_.split(",") if w.strip())
-            else:
-                out["operand"] = is_.lower()
-        if (name := get("sequence")) is not None:
-            found = self.app.db.execute("SELECT id FROM sequences WHERE lower(name) = lower(?) ORDER BY archived_at IS NOT NULL, id",
-                                        (name,)).fetchone()
-            out["enroll_sequence_id"] = found[0] if found else name or None
-        if (reply := get("replyto")) is not None:
-            steps = {str(s["position"]): s["id"] for s in sequences.sequence_steps(self.app.db, self.step["sequence_id"])}
-            out["reply_to_step_id"] = steps.get(reply) if reply else None
-        return out
+        raw = {label: self.query_one(f"#f-{label.lower().replace(' ', '')}").value.strip() for label in self.fields(self.step)}
+        voice = self.query_one("#f-voicemail", TextArea).text if self.query("#f-voicemail") else None
+        return step_values(self.app.db, self.step, raw, self.query_one("#f-body", TextArea).text, voice)
 
     def save(self) -> bool:
         if not self.query("#f-body"):
@@ -5762,25 +5828,10 @@ class StepEditor(Vertical):
             self.save()
 
     def paint(self):
-        st = self.step
-        problems = [m for sid, m in sequences.validate(self.app.db, st["sequence_id"]) if sid == self.step_id]
-        kind = sequences.ACTION_LABEL.get(st["action_kind"]) if st["kind"] == "action" else \
-            f"If · {sequences.CONDITION_LABEL[st['condition']]}" if st["kind"] == "if" else KIND_LABEL[st["kind"]]
-        self.query_one(".thead").update(f"[b #45707a]Step {st['position']} · {kind}[/]\n")
-        self.query_one(".problems").update("\n".join(f"[#c14a4a]{ICON['warn']} {escape(m)}[/]" for m in problems))
-        who = self.app.db.execute("SELECT e.person_id, p.display_name FROM enrollments e JOIN persons p ON p.id = e.person_id"
-                                  " WHERE e.sequence_id = ? ORDER BY e.state != 'ACTIVE', e.id DESC LIMIT 1",
-                                  (st["sequence_id"],)).fetchone() or \
-            self.app.db.execute("SELECT id, display_name FROM persons ORDER BY id LIMIT 1").fetchone()
-        if who is None:
-            self.query_one(".preview").update("")
-            return
-        values = sequences.person_fill(self.app.db, who[0])
-        subject = sequences.fill(st["subject"], values)[0] if st["kind"] == "email" else ""
-        text = " ".join(sequences.fill(st["body"], values)[0].split())
-        self.query_one(".preview").update(
-            f"\n[#928374]{ICON['person']} preview · {escape(who[1])}[/]\n" + (f"[b]{escape(subject)}[/]\n" if subject else "")
-            + escape(text if len(text) <= 300 else text[:299] + "…"))
+        head, problems, preview = step_markup(self.app.db, self.step)
+        self.query_one(".thead").update(head + "\n")
+        self.query_one(".problems").update(problems)
+        self.query_one(".preview").update(preview)
 
 
 class UnattendedPage(TablePage):
@@ -6307,6 +6358,59 @@ class CalendarPage(Page):
             lists.first().show(grid.cursor, grid.by_day.get(grid.cursor, []))
 
 
+def event_markup(db, e: dict) -> tuple[str, list[str], list[str]]:
+    """An Event page's body as Console markup, with the attendees' emails (not Jeremy's) and their known
+    Organization domains for its Context sections."""
+    b = PALETTE
+    start, end = clock.local(e["start"]), clock.local(e["end"])
+    when = (f"{start:%a %b %-d} · all day" if e["all_day"] else f"{start:%a %b %-d} · {start:%H:%M}–{end:%H:%M}")
+    state = {"ACCEPTED": "Accepted", "TENTATIVE": "Tentative", "NEEDS-ACTION": "Unanswered",
+             "DECLINED": "Declined"}.get(e["state"], e["state"].title())
+    out = [f"[b {b['blue']}]{escape(e['title'])}[/]  [{b['grey1']}]\\[{state}][/]",
+           f"{when}" + (" · repeats" if e["repeats"] else ""),
+           f"[{b['grey1']}]{ICON['calendar']} [b]i[/] respond[/]"]
+    if e["location"]:
+        out.append(escape(e["location"]))
+    if e["join_url"]:
+        out.append(f"[{b['grey1']}]Join[/] [link='{render.target(e['join_url'])}']{escape(e['join_url'])}[/link]  [{b['grey1']}](o)[/]")
+    mine = cal.me(db)
+    if e["organizer"]:
+        out.append(f"[{b['grey1']}]Organizer[/] {event_who(db, e['organizer']['email'], e['organizer']['name'])}")
+    people = e["attendees"]
+    if people:
+        out.append(f"\n[{b['grey1']}]{ICON['people']} attendees ({len(people)})[/]")
+        answer = {"ACCEPTED": "Accepted", "TENTATIVE": "Maybe", "NEEDS-ACTION": "Unanswered", "DECLINED": "Declined"}
+        for a in people:
+            out.append(f"  {event_who(db, a['email'], a['name'])}  [{b['grey1']}]{answer.get(a['state'], a['state'].title())}[/]")
+    domains = sorted({inbox._org(a["email"].split("@")[1]) for a in people if a["email"] not in mine and "@" in a["email"]})
+    known = [r["domain"] for r in db.execute(f"SELECT domain FROM organizations WHERE domain IN ({','.join('?' * len(domains))})",
+                                                domains)] if domains else []
+    if known:
+        out.append(f"\n[{b['grey1']}]{ICON['organizations']} organizations[/]\n" + ", ".join(
+            f"[@click=app.open_org('{d}')][underline]{escape(d)}[/][/]" for d in known))
+    if e["description"]:
+        text, boiler = (e["description"].split("-::~", 1) + [""])[:2]  # Google's Meet/Zoom footer folds away
+        shown, trimmed = render.html_body(text) if "<" in text else render.text_body(text)
+        out.append(f"\n[{b['grey1']}]description[/]\n{shown}" + (f"\n[{b['grey1']}]•••[/]" if boiler or trimmed else ""))
+    emails = sorted({a["email"] for a in people if a["email"] not in mine})
+    return "\n".join(out), emails, known
+
+
+def event_who(db, email, name) -> str:
+    r = db.execute("SELECT person_id FROM identities WHERE kind = 'email' AND value = ? AND person_id IS NOT NULL",
+                   (email,)).fetchone()
+    name = "" if name.lower() == email else name
+    label = escape(name or email) + (" (you)" if email in cal.me(db) else "")
+    if r is None:
+        return f"{label}" + (f" [{PALETTE['grey1']}]{escape(email)}[/]" if name else "")
+    p = inbox.person_view(db, r[0])
+    open_ = [t for t in p["threads"] if t.status in ("TODO", "SNOOZED")]
+    extra = " · ".join(t for t in (f"{len(open_)} open Threads" if open_ else "",
+                                   "Case: " + ", ".join(p["cases"]) if p["cases"] else "") if t)
+    return (f"[@click=app.open_person({r[0]!r})][underline]{label}[/][/]"
+            + (f" [{PALETTE['grey1']}]{escape(extra)}[/]" if extra else ""))
+
+
 class EventPage(Page):
     """One Event: when, where, the join link, who comes with their answers (linked to People, Threads, Cases,
     Organizations), the description, and the Context sources' view of its people beside it."""
@@ -6348,54 +6452,12 @@ class EventPage(Page):
                                                f"[{b['grey1']}]Event unavailable · {reason}[/]")
             self.app.main.show_side("", tana=([], []))
             return
-        e = self.event
-        start, end = clock.local(e["start"]), clock.local(e["end"])
-        when = (f"{start:%a %b %-d} · all day" if e["all_day"] else f"{start:%a %b %-d} · {start:%H:%M}–{end:%H:%M}")
-        state = {"ACCEPTED": "Accepted", "TENTATIVE": "Tentative", "NEEDS-ACTION": "Unanswered",
-                 "DECLINED": "Declined"}.get(e["state"], e["state"].title())
-        out = [f"[b {b['blue']}]{escape(e['title'])}[/]  [{b['grey1']}]\\[{state}][/]",
-               f"{when}" + (" · repeats" if e["repeats"] else ""),
-               f"[{b['grey1']}]{ICON['calendar']} [b]i[/] respond[/]"]
-        if e["location"]:
-            out.append(escape(e["location"]))
-        if e["join_url"]:
-            out.append(f"[{b['grey1']}]Join[/] [link='{render.target(e['join_url'])}']{escape(e['join_url'])}[/link]  [{b['grey1']}](o)[/]")
-        mine = cal.me(db)
-        if e["organizer"]:
-            out.append(f"[{b['grey1']}]Organizer[/] {self.who(e['organizer']['email'], e['organizer']['name'])}")
-        people = e["attendees"]
-        if people:
-            out.append(f"\n[{b['grey1']}]{ICON['people']} attendees ({len(people)})[/]")
-            answer = {"ACCEPTED": "Accepted", "TENTATIVE": "Maybe", "NEEDS-ACTION": "Unanswered", "DECLINED": "Declined"}
-            for a in people:
-                out.append(f"  {self.who(a['email'], a['name'])}  [{b['grey1']}]{answer.get(a['state'], a['state'].title())}[/]")
-        domains = sorted({inbox._org(a["email"].split("@")[1]) for a in people if a["email"] not in mine and "@" in a["email"]})
-        known = [r["domain"] for r in db.execute(f"SELECT domain FROM organizations WHERE domain IN ({','.join('?' * len(domains))})",
-                                                    domains)] if domains else []
-        if known:
-            out.append(f"\n[{b['grey1']}]{ICON['organizations']} organizations[/]\n" + ", ".join(
-                f"[@click=app.open_org('{d}')][underline]{escape(d)}[/][/]" for d in known))
-        if e["description"]:
-            text, boiler = (e["description"].split("-::~", 1) + [""])[:2]  # Google's Meet/Zoom footer folds away
-            shown, trimmed = render.html_body(text) if "<" in text else render.text_body(text)
-            out.append(f"\n[{b['grey1']}]description[/]\n{shown}" + (f"\n[{b['grey1']}]•••[/]" if boiler or trimmed else ""))
-        self.query_one("#eventbody").update("\n".join(out))
-        emails = sorted({a["email"] for a in people if a["email"] not in mine})
+        markup, emails, known = event_markup(db, self.event)
+        self.query_one("#eventbody").update(markup)
         self.app.main.show_side("", tana=(emails, known))
 
     def who(self, email, name) -> str:
-        r = self.app.db.execute("SELECT person_id FROM identities WHERE kind = 'email' AND value = ? AND person_id IS NOT NULL",
-                                (email,)).fetchone()
-        name = "" if name.lower() == email else name
-        label = escape(name or email) + (" (you)" if email in cal.me(self.app.db) else "")
-        if r is None:
-            return f"{label}" + (f" [{PALETTE['grey1']}]{escape(email)}[/]" if name else "")
-        p = inbox.person_view(self.app.db, r[0])
-        open_ = [t for t in p["threads"] if t.status in ("TODO", "SNOOZED")]
-        extra = " · ".join(t for t in (f"{len(open_)} open Threads" if open_ else "",
-                                       "Case: " + ", ".join(p["cases"]) if p["cases"] else "") if t)
-        return (f"[@click=app.open_person({r[0]!r})][underline]{label}[/][/]"
-                + (f" [{PALETTE['grey1']}]{escape(extra)}[/]" if extra else ""))
+        return event_who(self.app.db, email, name)
 
     def action_respond(self):
         self.refresh_data()

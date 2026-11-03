@@ -1,15 +1,29 @@
-// People: every Person, with Todo Threads first. Type in the filter to narrow by name or address; j/k move and
-// the Person fills the right pane. g merges the selected Person into another.
-import { View, div, svg } from "gpui-kit";
-import { v_flex, h_flex, v_virtual_list, VirtualListScrollHandle, InputState, Input } from "gpui-base";
-import { call, nextEvent, nextCommand, theme, shared, setShared, run, focusMain, toast } from "comms";
+// People, as the Console's PeoplePage (D136): a header row per first letter (Enter folds it, c folds or opens all),
+// then one row per Person (name, address, Organizations, Blocked x/y, Todo); the cursor starts past the first header.
+// j/k move and the Person fills the right pane; Enter opens their page. g merges the selected Person into another
+// after a preview.
+import { View, div } from "gpui-kit";
+import { v_flex, h_flex, v_virtual_list, VirtualListScrollHandle } from "gpui-base";
+import { call, nextEvent, nextCommand, theme, shared, setShared, run, toast } from "comms";
+
+/** The letter a name files under: its first letter without accents (É is E), else # (the Console's initial). */
+export const initial = (name) => { const c = (name ?? "").trim().slice(0, 1).normalize("NFKD").replace(/[^\x00-\x7f]/g, "").toUpperCase(); return /[A-Z]/.test(c) ? c : "#"; };
+
+/** Header and Person rows, folded letters closed (the Console's rows). */
+export function items(people, folded) {
+  const groups = new Map();
+  for (const p of people) { const k = initial(p.name); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(p); }
+  const letters = [...groups.keys()].sort((a, b) => (a === "#") - (b === "#") || (a < b ? -1 : a > b ? 1 : 0));
+  return letters.flatMap((k) => [{ key: `L-${k}`, letter: k, n: groups.get(k).length },
+    ...(folded.has(k) ? [] : groups.get(k).map((p) => ({ key: p.id, p })))]);
+}
 
 export default class People extends View {
   init(_props, cx) {
     this.rows = [];
+    this.folded = new Set();
+    this.hi = null;
     this.scroll = VirtualListScrollHandle.new();
-    this.filter = InputState.new({ placeholder: "Filter people · / " });
-    this.filter.on("change", (_e, cx) => cx.notify());
     this.load(cx);
     cx.spawn(async (cx) => {
       while (true) if ((await nextEvent()).kind === "rows" && shared("page") === "people") this.load(cx);
@@ -20,16 +34,18 @@ export default class People extends View {
   }
 
   shown() {
-    const f = this.filter.value().trim().toLowerCase();
-    return f ? this.rows.filter((r) => `${r.name} ${r.address} ${(r.organizations ?? []).join(" ")}`.toLowerCase().includes(f)) : this.rows;
+    return this.rows;
   }
+
+  items() { return items(this.rows, this.folded); }
 
   load(cx) {
     cx.spawn(async (cx) => {
       try {
-        this.rows = (await call("people.list")).sort((a, b) => (b.todo - a.todo) || (b.threads - a.threads));
+        this.rows = (await call("people.list")) ?? [];
         this.error = null;
-        if (shared("page") === "people" && !shared("person")) this.select(this.shown()[0]?.id ?? null);
+        if (this.hi === null) { const it = this.items(); this.hi = it[1]?.key ?? it[0]?.key ?? null; } // past the first header
+        if (shared("page") === "people" && this.hi && !String(this.hi).startsWith("L-")) this.select(this.hi);
       } catch (e) {
         this.error = String(e);
       }
@@ -37,10 +53,10 @@ export default class People extends View {
     });
   }
 
-  select(id) {
-    setShared("person", id);
-    run("person.show");
-    const at = this.shown().findIndex((r) => r.id === id);
+  select(key) {
+    this.hi = key;
+    if (!String(key).startsWith("L-")) { setShared("person", key); run("person.show"); }
+    const at = this.items().findIndex((it) => it.key === key);
     if (at >= 0) this.scroll.scroll_to_item(at, "center");
   }
 
@@ -50,27 +66,62 @@ export default class People extends View {
     const answer = at < 0 ? null : JSON.parse(c.slice(at + 1));
     const rows = this.shown();
     const i = rows.findIndex((r) => r.id === shared("person"));
+    const its = this.items(), here = its.findIndex((it) => it.key === this.hi);
     switch (name) {
       case "show": return this.load(cx);
-      case "filter": return this.filter.focus();
       case "next": case "prev": {
-        const row = rows[Math.max(0, Math.min(rows.length - 1, i + (name === "next" ? 1 : -1)))];
-        return row && this.select(row.id);
+        const it = its[Math.max(0, Math.min(its.length - 1, here + (name === "next" ? 1 : -1)))];
+        if (it) this.select(it.key);
+        return cx.notify();
       }
-      case "merge": {
-        const keep = rows[i];
-        if (!keep) return;
-        setShared("picker", { title: `Merge into ${keep.name}: whose Identities move here?`, reply: "people.merge-picked",
-          options: this.rows.filter((r) => r.id !== keep.id).slice(0, 400).map((r) => ({ value: r.id, label: r.name, hint: r.address })) });
+      case "enter": { // a header folds; a Person opens their page
+        const it = its[here];
+        if (!it) return;
+        if (it.letter) { this.folded.has(it.letter) ? this.folded.delete(it.letter) : this.folded.add(it.letter); return cx.notify(); }
+        setShared("push", { page: "person", person: it.p.id });
+        return run("nav.push");
+      }
+      case "collapse_all": { // c: fold every letter, or open them all when all are folded
+        const all = new Set(this.rows.map((r) => initial(r.name)));
+        this.folded = this.folded.size === all.size ? new Set() : all;
+        const it = its[here];
+        this.hi = `L-${it?.letter ?? initial(it?.p?.name)}`;
+        return cx.notify();
+      }
+      case "merge": { // as the Console's PeoplePage.action_merge: the selected Person joins the one picked
+        const drop = rows[i];
+        if (!drop) return;
+        setShared("picker", { title: `Merge ${drop.name} into`, reply: "people.merge-picked",
+          options: this.rows.filter((r) => r.id !== drop.id).map((r) => ({ value: r.id, label: r.name, hint: r.address })) });
         return run("overlay.open");
       }
       case "merge-picked": {
-        const keep = rows[i], drop = this.rows.find((r) => r.id === answer.value);
+        const drop = rows[i], keep = this.rows.find((r) => r.id === answer.value);
         if (!keep || !drop) return;
         return cx.spawn(async () => {
+          try { // offer_merge: show the merged Person; merge only on Accept
+            const r = await call("people.merge_preview", { keep: keep.id, drop: drop.id });
+            this.merging = { keep, drop, name: r.name };
+            const n = r.threads;
+            setShared("picker", { title: "Merge people", reply: "people.merge-chosen",
+              body: [{ text: `${drop.name} joins ${keep.name}:`, dim: true }, { text: "" }, { text: r.name, strong: true },
+                ...r.identities.map((x) => ({ text: `  ${x.value}` })),
+                { text: `${r.organizations.join(", ") || "no organization"} · ${n} thread${n === 1 ? "" : "s"}, ${r.todo} todo`, dim: true }],
+              options: [{ value: "accept", label: "✓ Accept" }, { value: "cancel", label: "Cancel" }] });
+            run("overlay.open");
+          } catch (e) {
+            toast(String(e), "error");
+          }
+        });
+      }
+      case "merge-chosen": {
+        const m = this.merging;
+        this.merging = null;
+        if (!m || answer.value !== "accept") return;
+        return cx.spawn(async () => {
           try {
-            await call("command.inbox.merge_persons", { keep: keep.id, drop: drop.id });
-            toast(`Merged ${drop.name} into ${keep.name}.`);
+            await call("command.inbox.merge_persons", { keep: m.keep.id, drop: m.drop.id });
+            toast(`Merged into ${m.name}.`);
           } catch (e) {
             toast(String(e), "error");
           }
@@ -81,32 +132,29 @@ export default class People extends View {
 
   render() {
     const t = theme();
-    const selected = shared("person");
-    const rows = this.shown();
-    const row = (r) => {
-      const active = r.id === selected;
-      return v_flex().h(46).px(8).justify_center().rounded(8).gap(1).cursor_pointer()
-        .when(active, (el) => el.bg(t.selected)).hover((s) => s.bg(t.hover))
-        .child(h_flex().gap(9).items_center()
-          .child(div().flex_1().min_w(0).truncate().font_medium().text_color(r.blocked ? t.dim : t.foreground).child(r.name ?? ""))
-          .when(r.todo > 0, (el) => el.child(div().flex_none().text_size(11).text_color(t.status_needs_next).child(`${r.todo} todo`)))
-          .child(div().flex_none().text_size(11).text_color(t.dim).child(`${r.threads}`)))
-        .child(div().truncate().text_size(12).text_color(t.muted).child([r.address, ...(r.organizations ?? [])].filter(Boolean).join(" · ")));
+    const its = this.items();
+    const row = (it) => {
+      const el = h_flex().h(26).px(8).gap(8).rounded(4).items_center().cursor_pointer()
+        .when(it.key === this.hi, (e) => e.bg(t.selected)).hover((s) => s.bg(t.hover));
+      if (it.letter) return el.child(div().w(16).text_color(t.muted).child(this.folded.has(it.letter) ? "\u{f0142}" : "\u{f0140}"))
+        .child(div().w(150).font_semibold().text_color(t.blue).child(it.letter))
+        .child(div().text_color(t.muted).child(`${it.n} ${it.n === 1 ? "person" : "people"}`));
+      const p = it.p;
+      return el.child(div().w(16).flex_none().text_color(t.foreground).child("\u{f0013}"))
+        .child(div().w(150).flex_none().truncate().font_semibold().text_color(t.strong ?? t.foreground).child(p.name ?? ""))
+        .child(div().flex_1().min_w(0).truncate().text_color(t.muted).child(p.address ?? ""))
+        .child(div().w(110).flex_none().truncate().text_color(t.foreground).child((p.organizations ?? []).join(", ") || "—"))
+        .child(div().w(44).flex_none().text_color(p.blocked ? t.red : t.muted).child(p.blocked ? `\u{f00ad} ${p.blocked}/${p.identities}` : `0/${p.identities}`))
+        .child(div().w(40).flex_none().text_color(t.blue).child(p.todo ? `\u{f0766} ${p.todo}` : ""));
     };
     return v_flex().size_full().min_h(0).bg(t.background).text_size(13)
       .child(h_flex().h(30).flex_none().px(12).gap(8).items_center().border_b(1).border_color(t.border).text_size(12)
-        .child(svg("icons/users.svg").size(13).text_color(t.accent))
-        .child(div().font_medium().text_color(t.foreground).child("People"))
-        .child(div().flex_1().text_color(t.dim).child(`· ${rows.length}`))
-        .child(div().text_size(11).text_color(t.dim).child("g merge")))
-      .child(div().px(8).pt(8).on_key_down((ev, cx) => {
-        if (ev.keystroke === "escape" || ev.keystroke === "enter") { focusMain(); cx.stop_propagation(); }
-        else if (ev.keystroke === "down") { this.command("next", cx); cx.stop_propagation(); }
-        else if (ev.keystroke === "up") { this.command("prev", cx); cx.stop_propagation(); }
-      }).child(Input.new(this.filter)))
+        .child(div().text_color(t.accent).child("\u{f000f}"))
+        .child(div().font_medium().text_color(t.foreground).child("people")))
       .when(Boolean(this.error), (el) => el.child(div().p(12).text_size(12).text_color(t.danger).child(this.error ?? "")))
-      .child(div().flex_1().min_h(0).px(6).py(6).child(
-        v_virtual_list("people", rows.length, 46, (i) => rows[i].id, (range) => rows.slice(range.start, range.end).map(row))
-          .size_full().track_scroll(this.scroll).on_item_click((key) => this.select(key))));
+      .when(!this.error && !this.rows.length, (el) => el.child(div().p(16).text_color(t.muted).child("No people yet. Everyone who writes to you appears here.")))
+      .child(div().flex_1().min_h(0).px(4).py(4).child(
+        v_virtual_list("people", its.length, 26, (i) => String(its[i].key), (range) => its.slice(range.start, range.end).map(row))
+          .size_full().track_scroll(this.scroll).on_item_click((key, cx) => { this.select(key); cx.notify(); })));
   }
 }

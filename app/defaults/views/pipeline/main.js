@@ -1,19 +1,21 @@
-// One Pipeline (shared "pipeline": revenue, fundraising or talent): the verdict on its Target and its Bowtie
-// Stages (Revenue and Fundraising), then its Organizations by Stage. j/k move and the Organization fills the
-// right pane, where s and v set its Stage and Value in this Pipeline; y copies the board for an agent.
-import { View, div, svg } from "gpui-kit";
-import { v_flex, h_flex, v_virtual_list, VirtualListScrollHandle } from "gpui-base";
+// One Pipeline (shared "pipeline": revenue, fundraising or talent), as the Console's PipelinePage (D123–D128): full
+// width, action first. THIS WEEK (numbered actions with reasons) beside PROGRESS (verdict, gauge, Target, Projected,
+// Today, Coverage, Gap, Deadline, Customers), the CONSTRAINT in red, the ORGANIZATIONS board (a column per Stage,
+// its header with count and conversion, the Constraint's marked ◀; each card's name, Value or red "no Value", days
+// in Stage, roll-up, last message), and the WEEKLY REVIEW with its legend. Talent shows the board only. j/k move
+// in a column, ←/→ between Stages; Enter opens the Organization; s and v set its Stage and Value in this Pipeline;
+// y copies the Pipeline math for an agent.
+import { View, div } from "gpui-kit";
+import { v_flex, h_flex } from "gpui-base";
 import { call, nextEvent, nextCommand, theme, shared, setShared, run, toast } from "comms";
 
-const grouped = (x) => String(Math.round(x)).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
-const pct = (x) => (x == null ? "—" : `${Math.round(x * 100)}%`);
-const cad = (x) => (x == null ? "—" : `CAD ${grouped(x)}`);
+const GREY = { "#928374": "muted", "#a89984": "dim", "#7c6f64": "muted" };
 
 export default class Pipeline extends View {
   init(_props, cx) {
-    this.page = null;
-    this.orgs = [];
-    this.scroll = VirtualListScrollHandle.new();
+    this.b = null;
+    this.col = 0;
+    this.row = 0;
     this.load(cx);
     cx.spawn(async (cx) => {
       while (true) if ((await nextEvent()).kind === "rows" && shared("page") === "pipeline") this.load(cx);
@@ -23,25 +25,22 @@ export default class Pipeline extends View {
     });
   }
 
-  name() {
-    return shared("pipeline") ?? "revenue";
-  }
+  name() { return shared("pipeline") ?? "revenue"; }
 
   load(cx) {
     const name = this.name();
     cx.spawn(async (cx) => {
       try {
-        const [page, list, stages] = await Promise.all([call("pipeline.page", { name }), call("organizations.list"),
-          this.stages ? this.stages : call("pipeline.stages")]);
+        const b = await call("pipeline.board", { name });
         if (this.name() !== name) return;
-        this.stages = stages;
-        const code = name.toUpperCase(), order = stages[code].stages;
-        this.page = page;
-        this.orgs = list.organizations.filter((o) => list.states?.[o.id]?.[code])
-          .map((o) => ({ ...o, ...list.states[o.id][code] }))
-          .sort((a, b) => order.indexOf(a.stage) - order.indexOf(b.stage) || (b.value ?? 0) - (a.value ?? 0));
+        const fresh = this.b?.name !== b.name;
+        this.b = b;
+        if (fresh) { // start on the first Stage that holds an Organization, as the Console's focus_first
+          this.col = Math.max(0, b.columns.findIndex((c) => c.cards.length));
+          this.row = 0;
+        }
         this.error = null;
-        if (shared("page") === "pipeline" && !this.orgs.some((o) => o.id === shared("organization")?.id)) this.select(this.orgs[0]);
+        this.select();
       } catch (e) {
         this.error = String(e);
       }
@@ -49,69 +48,71 @@ export default class Pipeline extends View {
     });
   }
 
-  select(o) {
-    if (!o) return;
-    setShared("organization", { id: o.id, domain: o.domain });
+  card() { return this.b?.columns?.[this.col]?.cards?.[this.row]; }
+
+  /** The selected card's Organization is the one s and v act on (in the organization view, off screen). */
+  select() {
+    const c = this.b?.columns?.[this.col];
+    if (c) this.row = Math.max(0, Math.min(this.row, c.cards.length - 1));
+    const card = this.card();
+    if (!card || shared("page") !== "pipeline") return;
+    setShared("organization", { id: card.org.id, domain: card.org.domain });
     run("organization.show");
-    const at = this.items?.findIndex((it) => it.key === o.id) ?? -1;
-    if (at >= 0) this.scroll.scroll_to_item(at, "center");
   }
 
   command(c, cx) {
-    const i = this.orgs.findIndex((o) => o.id === shared("organization")?.id);
-    if (c === "show") return this.load(cx);
-    if (c === "next" || c === "prev") return this.select(this.orgs[Math.max(0, Math.min(this.orgs.length - 1, i + (c === "next" ? 1 : -1)))]);
-    if (c === "copy" && this.page) {
-      return cx.spawn(async (cx) => {
-        cx.write_to_clipboard(this.page.board);
-        toast("Copied the Pipeline board for an agent.");
-      });
+    const cols = this.b?.columns ?? [];
+    switch (c) {
+      case "show": return this.load(cx);
+      case "next": case "prev": this.row += c === "next" ? 1 : -1; this.row = Math.max(0, this.row); break;
+      case "next_column": case "prev_column": this.col = Math.max(0, Math.min(cols.length - 1, this.col + (c === "next_column" ? 1 : -1))); break;
+      case "enter": {
+        const card = this.card();
+        if (card) { setShared("push", { page: "organization", organization: { id: card.org.id, domain: card.org.domain } }); run("nav.push"); }
+        return;
+      }
+      case "copy":
+        if (!this.b) return;
+        return cx.spawn(async (cx) => {
+          cx.write_to_clipboard(this.b.copy);
+          toast(`Copied the ${this.b.name} Pipeline for an agent · ${this.b.copy.length} characters.`);
+        });
+      default: return;
     }
+    this.select();
+    cx.notify();
   }
 
   render() {
     const t = theme();
-    const p = this.page;
-    const code = this.name().toUpperCase();
-    const title = this.stages?.[code]?.name ?? this.name();
-    const m = p?.math, s = m?.summary;
-    const selected = shared("organization")?.id;
-    const items = [];
-    let stage = null;
-    for (const o of this.orgs) {
-      if (o.stage !== stage) items.push({ key: `h-${(stage = o.stage)}`, header: stage, count: this.orgs.filter((x) => x.stage === stage).length });
-      items.push({ key: o.id, org: o });
-    }
-    this.items = items;
-    const header = (it) => h_flex().h(30).px(8).pt(8).gap(6).items_center().text_size(11).font_medium()
-      .child(div().text_color(t.muted).child(it.header)).child(div().text_color(t.dim).child(String(it.count)));
-    const row = (o) => h_flex().h(34).px(8).gap(9).rounded(8).items_center().cursor_pointer()
-      .when(o.id === selected, (el) => el.bg(t.selected)).hover((st) => st.bg(t.hover))
-      .child(div().flex_1().min_w(0).truncate().text_color(t.foreground).child(o.domain ?? ""))
-      .child(div().flex_none().text_size(11.5).text_color(t.muted).child(o.value != null ? cad(o.value) : ""));
-    const verdict = p?.verdict;
-    return v_flex().size_full().min_h(0).bg(t.background).text_size(13)
-      .child(h_flex().h(30).flex_none().px(12).gap(8).items_center().border_b(1).border_color(t.border).text_size(12)
-        .child(svg("icons/trending-up.svg").size(13).text_color(t.accent))
-        .child(div().font_medium().text_color(t.foreground).child(title))
-        .child(div().flex_1().text_color(t.dim).child(`· ${this.orgs.length} organizations`))
-        .child(div().text_size(11).text_color(t.dim).child("y copy board")))
-      .when(Boolean(this.error), (el) => el.child(div().p(12).text_size(12).text_color(t.danger).child(this.error ?? "")))
-      .when(Boolean(s), (el) => el.child(v_flex().px(14).py(10).gap(4).border_b(1).border_color(t.border).text_size(12)
-        .child(h_flex().gap(8)
-          .child(div().font_medium().text_color(verdict?.[0] === "On track" ? t.status_done : verdict?.[0] === "Off track" ? t.danger : t.foreground)
-            .child(verdict?.[0] ?? "No Target"))
-          .child(div().flex_1().truncate().text_color(t.dim).child(verdict?.[1] ?? "set one with `comms-terminal pipeline target`")))
-        .child(div().text_color(t.muted).child([s.target ? `Target ${cad(s.target.amount)} by ${s.target.due}` : null,
-          `paying ${cad(s.paying)} (${s.paying_count})`, `weighted ${cad(s.weighted)}`, s.gap != null ? `gap ${cad(s.gap)}` : null]
-          .filter(Boolean).join(" · ")))
-        .child(h_flex().flex_wrap().gap(10).text_size(11.5).text_color(t.dim).children((m.stages ?? []).map((st) =>
-          div().text_color(st.constraint ? t.danger : t.dim).child(`${st.stage} ${pct(st.rate)}${st.constraint ? " · Constraint" : ""}`))))))
-      .when(!this.error && p && !this.orgs.length, (el) => el.child(div().p(16).text_color(t.dim).child(`No Organizations in ${title} yet.`)))
-      .child(div().flex_1().min_h(0).px(6).pb(8).child(
-        v_virtual_list("pipeline", items.length, items.map((it) => (it.header ? 30 : 34)), (i) => items[i].key,
-          (range) => items.slice(range.start, range.end).map((it) => (it.header ? header(it) : row(it.org))))
-          .size_full().track_scroll(this.scroll)
-          .on_item_click((key) => this.select(this.orgs.find((o) => o.id === key)))));
+    const b = this.b;
+    const root = v_flex().id("pipeline").size_full().min_h(0).overflow_y_scroll().bg(t.background).text_size(13).p(8).gap(8);
+    if (!b) return root.child(div().p(16).text_color(t.muted).child(this.error ?? ""));
+    const color = (hex) => (hex ? t[GREY[hex]] ?? hex : t.foreground);
+    const segs = (lines) => (lines ?? []).map((ss) => (ss.length ? h_flex().w_full().gap(0).flex_wrap()
+      .children(ss.map(([text, hex, bold]) => div().min_w(0).text_color(color(hex)).when(Boolean(bold), (d) => d.font_semibold()).child(text)))
+      : div().h(10)));
+    const box = (title, body, red) => v_flex().p(10).gap(2).rounded(6).border(1).border_color(red ? t.red : t.border)
+      .child(div().pb(4).font_semibold().text_color(red ? t.red : t.foreground).child(title)).children(body);
+    const board = h_flex().id("board").gap(6).items_start().overflow_x_scroll().children(b.columns.map((c, i) => v_flex().w(170).flex_none().gap(4)
+      .child(v_flex().pb(4).border_b(1).border_color(t.border).children(segs(c.head)))
+      .children(c.cards.length ? c.cards.map((k, j) => v_flex().id(`k-${i}-${j}`).p(6).rounded(4).cursor_pointer()
+        .when(i === this.col && j === this.row, (e) => e.bg(t.selected)).hover((s) => s.bg(t.hover))
+        .on_click((_e, cx) => { this.col = i; this.row = j; this.select(); cx.notify(); })
+        .children(segs(k.lines))) : [div().px(6).text_color(t.dim).child("·")])));
+    const title = `ORGANIZATIONS  ·  each Stage${b.board_only ? "" : ", how many move on"}  ·  enter opens · s Stage${b.board_only ? "" : " · v Value"} · ←/→`;
+    const cell = (ss, w) => div().w(w).flex_none().children(segs([ss]));
+    const widths = [130, 120, 150, 90, 110, 110, 100, 120, 80];
+    return root
+      .when(!b.board_only, (el) => el
+        .child(h_flex().gap(8).items_start()
+          .child(div().flex_1().min_w(0).child(box("THIS WEEK", segs(b.week))))
+          .child(div().flex_1().min_w(0).child(box("PROGRESS", segs(b.progress)))))
+        .child(box("CONSTRAINT", segs(b.constraint), true)))
+      .child(box(title, [board]))
+      .when(!b.board_only, (el) => el.child(box("WEEKLY REVIEW", [
+        h_flex().gap(0).children(b.weekly_head.map((h, i) => div().w(widths[i]).flex_none().font_semibold().text_color(t.muted).child(h))),
+        ...b.weekly.map((r) => h_flex().gap(0).children(r.map((ss, i) => cell(ss, widths[i])))),
+        div().pt(6).text_color(t.muted).child(b.legend)])));
   }
 }
