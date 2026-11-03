@@ -48,6 +48,23 @@ if (kase === "rowkeys") { // a Case header under two Statuses (here "No case") k
   o.input.set_value("Seed Round");
   o.choose(undefined, cx);
   out.ran = ran.splice(0);
+} else if (kase === "pin") { // a Thread opens at its newest entries; Jeremy's own scroll ends that
+  const Thread = await load("thread");
+  const after = cx.timer.after;
+  cx.timer.after = (_ms, f) => f(cx);                    // timers fire at once here
+  state.thread = "thread-8";
+  answers["thread.view"] = { view: { thread: { f: { id: "thread-8", status: "TODO" } }, messages: [] }, drafts: [] };
+  const t = make(Thread, { bodies: {}, view: null, loaded: null });
+  t.load(cx); await settle();
+  out.opened = ran.filter((c) => c === "app.scroll_end").length;
+  ran.length = 0;
+  t.command("scroll_up", cx);
+  t.pin("thread-8");
+  out.after_scroll = ran.filter((c) => c === "app.scroll_end").length;
+  ran.length = 0;
+  t.load(cx); await settle();                             // a reload of the same Thread keeps Jeremy's place
+  out.reload = ran.filter((c) => c === "app.scroll_end").length;
+  cx.timer.after = after;
 } else if (kase === "early") { // NFR-APP-1: a reply key pressed while the Thread still loads acts once it arrives
   const Thread = await load("thread");
   state.thread = "thread-7";

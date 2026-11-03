@@ -882,6 +882,26 @@ def task_opens(app):
     assert app.phase5 == {"reply": ["nav.todo", "thread.show", "thread.open_reply"], "thread": "t9", "fresh": ["draft.edit"]}
 
 
+@given("a Thread the App is about to open")
+def thread_to_open(app):
+    pass
+
+
+@when("it opens")
+def thread_opens(app):
+    app.phase4 = phase4_view("pin")
+
+
+@then("the Thread pane scrolls to its newest entries")
+def scrolled_to_newest(app):
+    assert app.phase4["opened"] >= 1
+
+
+@then("once Jeremy scrolls, or the Thread reloads, it stays where he is")
+def stays_put(app):
+    assert app.phase4["after_scroll"] == 0 and app.phase4["reload"] == 0
+
+
 @given("the App's New case title prompt")
 def new_case_prompt(app):
     pass

@@ -319,7 +319,13 @@ impl AppWindow {
             "app.restart" => std::process::exit(UPDATE_EXIT), // the launcher opens the App again
             _ => {}
         }
-        if let Some(step) = match command { "app.scroll_down" => Some(1.), "app.scroll_up" => Some(-1.), _ => None } {
+        // scroll_end: far enough that the pane under the Thread column stops at its newest entries.
+        if let Some(step) = match command {
+            "app.scroll_down" => Some(1.),
+            "app.scroll_up" => Some(-1.),
+            "app.scroll_end" => Some(1000.),
+            _ => None,
+        } {
             return scroll_thread(step, window, cx);
         }
         if let Some((view, cmd)) = command.split_once('.') {

@@ -300,6 +300,13 @@ Feature: App
     Then the toast offers z undo, z would restore it, and the next Task is selected
 
   @AS-CONF-7 @FR-CONF-9
+  Scenario: A Thread opens at its newest entries
+    Given a Thread the App is about to open
+    When it opens
+    Then the Thread pane scrolls to its newest entries
+    And once Jeremy scrolls, or the Thread reloads, it stays where he is
+
+  @AS-CONF-7 @FR-CONF-9
   Scenario: A prompt shows its hint inside its box and keeps Tab
     Given the App's New case title prompt
     When Jeremy opens it and types a title

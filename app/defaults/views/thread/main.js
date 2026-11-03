@@ -36,6 +36,7 @@ const CAUSE = { action: "you", reply: "you wrote", message: "they wrote", edit: 
   call: "a call", meeting: "a meeting", reopen: "import", blocked: "blocked sender", undo: "undone" };
 const ANSWERS = { accept: "Accepted", maybe: "Maybe", decline: "Declined" };
 const dc = (name, f = {}) => ({ $dc: name, f });
+const PIN_MS = 2500; // ponytail: a fixed window for late body layouts; follow layout events if one ever runs longer
 const dt = (iso) => ({ $dt: iso });
 const list = (s) => s.split(",").map((a) => a.trim()).filter(Boolean);
 const pad = (n) => String(n).padStart(2, "0");
@@ -183,6 +184,7 @@ export default class Thread extends View {
     if (this.reply && this.reply.thread !== id) this.close(cx);
     if (!id) {
       this.view = null;
+      this.loaded = null; // the next Thread shown, even this one again, opens afresh
       return cx.notify();
     }
     cx.spawn(async (cx) => {
@@ -196,7 +198,11 @@ export default class Thread extends View {
         this.cases = answer.cases ?? [];
         this.drafts = answer.drafts ?? [];
         this.error = null;
-        if (this.loaded !== id) { this.loaded = id; this.extrasFor = null; this.related = null; this.ctx = {}; this.reactions = {}; }
+        if (this.loaded !== id) {
+          this.loaded = id; this.extrasFor = null; this.related = null; this.ctx = {}; this.reactions = {};
+          this.pinUntil = Date.now() + PIN_MS; // a Thread opens at its newest entries, as the Console's
+          cx.timer.after(60, () => this.pin(id));
+        }
         if (this.wantReply && this.wantReply !== id) this.wantReply = this.wantMode = null; // moved on before it loaded
         if (this.wantReply === id) { // Drafts' Enter (D69), or r/a pressed before the Thread loaded
           const mode = this.wantMode ?? "all";
@@ -379,7 +385,7 @@ export default class Thread extends View {
         st.lines = name === "expand_all";
         return cx.notify();
       }
-      case "scroll_down": case "scroll_up": return run(`app.${name}`); // space/pgdn/pgup: a page of messages (D55)
+      case "scroll_down": case "scroll_up": this.pinUntil = 0; return run(`app.${name}`); // space/pgdn/pgup: a page of messages (D55)
       // Element focus: → or Enter from the list lands on the newest message; j/k walk the messages; Enter folds one.
       case "focus_entry": this.leaveProps(); return this.focusMsg(-1, cx);
       case "right": // into the properties column
@@ -544,6 +550,7 @@ export default class Thread extends View {
 
   open(mode, cx) {
     const id = this.id();
+    this.pinUntil = 0;
     if (!id) return;
     if ((this.view?.thread?.f ?? this.view?.thread)?.id !== id || this.loaded !== id) { // still loading: open on arrival
       this.wantReply = id;
@@ -704,8 +711,15 @@ export default class Thread extends View {
   }
 
   /** The message's HTML: safe (no remote images), or with them fetched by the core ("Load images"). */
+  /** While the Thread is newly open, keep it at its newest entries: HTML bodies arrive and lay out after it opens and
+   * grow the column above the end. Any scroll or reply of Jeremy's ends it (pinUntil = 0). */
+  pin(id) {
+    if (this.id() === id && Date.now() < (this.pinUntil ?? 0)) run("app.scroll_end");
+  }
+
   body(m, images, cx) {
     this.bodies[m.id] = { ...(this.bodies[m.id] ?? {}), loading: true };
+    const id = this.id();
     cx.spawn(async (cx) => {
       try {
         const answer = await call(images ? "message.load_images" : "message.body", { raw: m.raw });
@@ -714,6 +728,7 @@ export default class Thread extends View {
         this.bodies[m.id] = { none: true, error: String(e) };
       }
       cx.notify();
+      for (const ms of [60, 500]) cx.timer.after(ms, () => this.pin(id)); // after its layout, and after a slow one
     });
   }
 
