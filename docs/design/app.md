@@ -18,7 +18,7 @@ Status: **Draft for Jeremy's review** (2026-10-31; Phases 3–5 built 2026-11-01
 | `panels/<name>/` | Panel scripts | live |
 | `AGENTS.md`, type files | rewritten on every start; explain the above to agents | start |
 
-  An invalid file keeps the last good version and writes `<name>.error`. `ctrl-alt-shift-escape` always restores the default layout and keys. `comms-terminal-app check <panel>` loads a Panel once; `shot [file.png]` saves the last frame; `status` lists views and errors; `do <view>.<command>` runs a command; `probe [moves] [view]` measures Thread moves.
+  An invalid file keeps the last good version and writes `<name>.error`. `ctrl-alt-shift-escape` always restores the default layout and keys. `comms-terminal-app check <panel>` loads a Panel once; `shot [file.png]` saves the last frame; `status` lists views and errors; `do <view>.<command>` runs a command; `probe [moves] [view]` measures Thread moves. The App logs every key (with the command it ran, or none), command, toast, status change and view error to `<home>/data/log.jsonl`, keeping 24 to 48 hours (the day before in `log.1.jsonl`); text typed into a field is logged as `<text>`. `status` names the file.
 
 ## 2. Look
 
