@@ -65,6 +65,11 @@ pub fn shared(key: &str) -> Value {
     SHARED.with(|s| s.borrow().get(key).cloned().unwrap_or(Value::Null))
 }
 
+/// Sets a shared value from the host (the window's width before each render); views read it with `shared()`.
+pub fn set_shared(key: &str, value: Value) {
+    SHARED.with(|s| s.borrow_mut().insert(key.to_owned(), value));
+}
+
 pub fn status() -> Value {
     STATUS.with(|s| s.borrow().clone())
 }

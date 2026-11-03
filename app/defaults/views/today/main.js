@@ -22,7 +22,6 @@ const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const pad = (n) => String(n).padStart(2, "0");
 const PANES = ["threads", "tasks", "drafts", "paused", "unattended"];
-const CAP = { threads: 14, tasks: 9, drafts: 9, paused: 9, unattended: 9 }; // ponytail: rows, not ½/⅓ of the window
 const DETAIL = { threads: null, tasks: "task", drafts: "draft", paused: "paused", unattended: "unattended" };
 // What each key does on each kind of row (the Console's Today hands a key to the list that holds the cursor).
 const THREAD_KEYS = { r: "reply_sender", a: "reply_all", e: "done", g: "snooze", b: "block", m: "ignore", x: "ignore", l: "case",
@@ -288,9 +287,10 @@ export default class Today extends View {
     };
     const pane = (k) => {
       const items = panes[k];
-      const last = k === shown.at(-1);
-      return v_flex().id(`pane-${k}`).rounded(6).border(1).border_color(t.border).bg(t.background).min_h(0)
-        .when(last, (e) => e.flex_1()).when(!last, (e) => e.flex_none().flex_shrink(1).h(34 + 26 * Math.min(items.length, CAP[k])))
+      // Each pane asks for all its rows; when they do not all fit, each gives up room in proportion to its size, so
+      // the window never has empty space while a pane scrolls. Three rows always show.
+      return v_flex().id(`pane-${k}`).rounded(6).border(1).border_color(t.border).bg(t.background)
+        .flex_none().flex_shrink(1).h(34 + 26 * items.length).min_h(34 + 26 * Math.min(items.length, 3))
         .child(h_flex().h(26).flex_none().px(8).gap(8).items_center().text_size(12).children(title[k]))
         .child(div().flex_1().min_h(0).px(2).pb(4).child(
           v_virtual_list(`today-${k}`, items.length, 26, (i) => items[i].key, (range) => items.slice(range.start, range.end).map(line))
