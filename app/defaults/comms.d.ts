@@ -33,6 +33,14 @@ export function toast(message: string, severity?: "information" | "warning" | "e
 
 /** keys.json as it stands: { "global": { "j": "threads.next" }, "page:<name>": { … } }. */
 export function keys(): Record<string, Record<string, string>>;
+/** The installed font families (Settings › Look). */
+export function fonts(): string[];
+/** settings.json as an object. */
+export function settings(): Record<string, any>;
+/** Writes one settings.json key (null removes it); the App applies it at once. */
+export function setting(key: string, value: unknown): boolean;
+/** The newest `n` entries of the App's diagnostic log (`data/log.jsonl`), oldest first. */
+export function logTail(n?: number): Array<{ t: number; kind: string; [field: string]: any }>;
 
 /** Give the keyboard back to the window after a text field (Escape in a reply box, say), so plain keys act again. */
 export function focusMain(): void;

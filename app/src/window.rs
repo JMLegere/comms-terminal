@@ -23,6 +23,8 @@ pub const ESCAPE_HATCH: &str = "ctrl-alt-shift-escape";
 /// The view drawn over the whole window while `shared("picker")` is set: pickers and prompts for every view.
 const OVERLAY: &str = "overlay";
 const TOASTS: &str = "toasts"; // timed notifications, bottom right, as the Console's
+/// Settings, drawn over the whole window while `shared("settings")` is set (herdr-app's Settings window).
+const SETTINGS: &str = "settings";
 /// The exit code that asks the launcher to install the Service's build (tui.UPDATE_EXIT).
 pub const UPDATE_EXIT: i32 = 75;
 
@@ -123,6 +125,7 @@ impl AppWindow {
             Err(e) => (shipped_layout(), Some(e)),
         };
         crate::log::open(&home);
+        host::set_fonts(cx.text_system().all_font_names());
         crate::log::write("start", serde_json::json!({"version": env!("CARGO_PKG_VERSION"), "pid": std::process::id()}));
         // Every key goes in the log once: one that matched a binding here, with the command it ran; any other (typed
         // text, or a key a view handles itself, as Esc in the reply box) from the root's capture_key_down (render).
@@ -176,7 +179,7 @@ impl AppWindow {
     }
 
     fn load_views(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        for name in self.layout.views().into_iter().chain([OVERLAY.to_owned(), TOASTS.to_owned()]) {
+        for name in self.layout.views().into_iter().chain([OVERLAY.to_owned(), TOASTS.to_owned(), SETTINGS.to_owned()]) {
             if self.copies.contains_key(&name) {
                 continue;
             }
@@ -304,6 +307,17 @@ impl AppWindow {
         }
         if command == "app.attach" {
             return self.pick_files(cx);
+        }
+        // Settings' app actions (FR-SET-2..4): zoom writes settings.json, which the watcher applies at once.
+        let zoom = |z: f32| { let _ = host::write_setting("zoom", serde_json::json!((z * 20.).round() / 20.)); };
+        match command {
+            "app.zoom_in" => return zoom((crate::theme::zoom() + 0.1).min(2.0)),
+            "app.zoom_out" => return zoom((crate::theme::zoom() - 0.1).max(0.75)),
+            "app.zoom_reset" => { let _ = host::write_setting("zoom", Value::Null); return; }
+            "app.edit_keys" => return cx.open_with_system(&self.home.join("keys.json")),
+            "app.update" => return prepare_update(),
+            "app.restart" => std::process::exit(UPDATE_EXIT), // the launcher opens the App again
+            _ => {}
         }
         if let Some(step) = match command { "app.scroll_down" => Some(1.), "app.scroll_up" => Some(-1.), _ => None } {
             return scroll_thread(step, window, cx);
@@ -499,8 +513,8 @@ impl AppWindow {
         }
         let mut el = div().relative().min_w_0().min_h_0();
         el = match node.size {
-            Size::Px(n) if row => el.flex_none().w(px(n)).h_full(),
-            Size::Px(n) => el.flex_none().h(px(n)).w_full(),
+            Size::Px(n) if row => el.flex_none().w(px(n * crate::theme::zoom())).h_full(),
+            Size::Px(n) => el.flex_none().h(px(n * crate::theme::zoom())).w_full(),
             Size::Fill => el.flex_1(),
         };
         if let Some(token) = &node.background {
@@ -554,7 +568,8 @@ impl Render for AppWindow {
         use crate::theme::color;
         self.renders += 1;
         // Views fit their content to it: the Thread page hides its properties column when narrow, as the Console's.
-        let width = serde_json::json!(f32::from(window.viewport_size().width).round());
+        // In the units views write (zoom 1), so a zoomed App fits its narrow rules the same way.
+        let width = serde_json::json!((f32::from(window.viewport_size().width) / crate::theme::zoom()).round());
         if host::shared("width") != width {
             host::set_shared("width", width);
             host::request(host::Request::Refresh); // views re-render with the new width
@@ -578,7 +593,7 @@ impl Render for AppWindow {
             .flex_col()
             .bg(color("canvas"))
             .text_color(color("foreground"))
-            .text_size(px(13.))
+            .text_size(px(13. * crate::theme::zoom()))
             .track_focus(&self.focus)
             .capture_key_down(|ev, window, _| log_key(&ev.keystroke, None, window))
             .on_action(cx.listener(|this, action: &ShellAction, window, cx| this.run(action.id(), window, cx)))
@@ -587,6 +602,11 @@ impl Render for AppWindow {
         if host::shared("toasts").as_u64().unwrap_or(0) > 0 {
             if let Some(Copy { root: Some(toasts), .. }) = self.copies.get(TOASTS) {
                 root = root.child(div().absolute().right(px(12.)).bottom(px(36.)).w(px(440.)).h(px(320.)).child(toasts.clone()));
+            }
+        }
+        if !host::shared("settings").is_null() {
+            if let Some(Copy { root: Some(settings), .. }) = self.copies.get(SETTINGS) {
+                root = root.child(div().absolute().inset_0().child(settings.clone()));
             }
         }
         if !host::shared("picker").is_null() {

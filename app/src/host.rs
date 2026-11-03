@@ -15,6 +15,7 @@ pub const DECLARATIONS: &str = include_str!("../defaults/comms.d.ts");
 static CORE: OnceLock<Arc<Core>> = OnceLock::new();
 static REQUESTS: OnceLock<async_channel::Sender<Request>> = OnceLock::new();
 static LISTENERS: Mutex<Vec<async_channel::Sender<Value>>> = Mutex::new(Vec::new());
+static FONTS: OnceLock<Vec<String>> = OnceLock::new(); // installed font families, for Settings › Look
 /// Probe marks (`comms-terminal-app probe`): (name, when), kept only while a probe runs.
 pub static MARKS: Mutex<Option<Vec<(String, std::time::Instant)>>> = Mutex::new(None);
 
@@ -45,6 +46,40 @@ pub fn mark(name: &str) {
     if let Some(marks) = MARKS.lock().unwrap().as_mut() {
         marks.push((name.to_owned(), std::time::Instant::now()));
     }
+}
+
+/// The installed font families, captured once at start (Settings › Look lists them).
+pub fn set_fonts(mut fonts: Vec<String>) {
+    fonts.sort_unstable_by_key(|f| f.to_lowercase());
+    fonts.dedup();
+    let _ = FONTS.set(fonts);
+}
+
+/// Writes one key of `settings.json` (null removes it). The file watcher then reloads the look, so a change applies
+/// at once (Settings: no Save step, as herdr-app's).
+pub fn write_setting(key: &str, value: Value) -> Result<(), String> {
+    let home = crate::workspace::home();
+    let mut settings = crate::workspace::read_json(&home, "settings.json").unwrap_or_else(|_| json!({}));
+    let Some(map) = settings.as_object_mut() else { return Err("settings.json is not an object".into()) };
+    if value.is_null() {
+        map.remove(key);
+    } else {
+        map.insert(key.to_owned(), value);
+    }
+    let text = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
+    std::fs::write(home.join("settings.json"), text + "\n").map_err(|e| e.to_string())
+}
+
+/// The newest `n` diagnostic log entries (Settings › Diagnostics), oldest first; reads only the file's last 512 KiB.
+pub fn log_tail(n: usize) -> Vec<Value> {
+    use std::io::{Read, Seek, SeekFrom};
+    let Ok(mut file) = std::fs::File::open(crate::log::path(&crate::workspace::home())) else { return Vec::new() };
+    let len = file.metadata().map_or(0, |m| m.len());
+    let _ = file.seek(SeekFrom::Start(len.saturating_sub(512 * 1024)));
+    let mut text = String::new();
+    let _ = file.read_to_string(&mut text);
+    let lines: Vec<Value> = text.lines().filter_map(|l| serde_json::from_str(l).ok()).collect();
+    lines[lines.len().saturating_sub(n)..].to_vec()
 }
 
 pub fn install(core: Arc<Core>, requests: async_channel::Sender<Request>) {
@@ -187,6 +222,20 @@ pub fn module(origin: &'static str, commands: async_channel::Receiver<String>) -
             crate::log::write("toast", json!({"message": message, "severity": severity}));
             broadcast(&json!({"kind": "toast", "data": {"message": message, "severity": severity, "timeout": timeout}}));
             Ok(HostValue::Null)
+        })
+        .function("fonts", |_| Ok(to_host(&json!(FONTS.get().cloned().unwrap_or_default()))))
+        .function("setting", |args| {
+            let key = args.string(0)?.to_owned();
+            let value = args.get(1).map(from_host).unwrap_or(Value::Null);
+            write_setting(&key, value).map_err(|e| HostError::new(&e))?;
+            Ok(HostValue::Bool(true))
+        })
+        .function("settings", |_| {
+            Ok(to_host(&crate::workspace::read_json(&crate::workspace::home(), "settings.json").unwrap_or(Value::Null)))
+        })
+        .function("logTail", |args| {
+            let n = args.get(0).map(from_host).and_then(|v| v.as_u64()).unwrap_or(50) as usize;
+            Ok(to_host(&Value::Array(log_tail(n.min(5000)))))
         })
         .function("keys", |_| {
             let keys = crate::workspace::read_json(&crate::workspace::home(), "keys.json").unwrap_or(Value::Null);

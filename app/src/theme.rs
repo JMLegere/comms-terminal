@@ -9,6 +9,12 @@ use crate::{host, workspace};
 
 thread_local! {
     static FONT: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+    static ZOOM: std::cell::Cell<f32> = const { std::cell::Cell::new(1.0) };
+}
+
+/// The App's zoom (settings.json `zoom`, 0.75 to 2): every script pixel length and the host's own sizes scale by it.
+pub fn zoom() -> f32 {
+    ZOOM.with(|z| z.get())
 }
 
 /// The UI font settings.json names (herdr-app's `ui_font`), if any.
@@ -35,6 +41,9 @@ pub fn apply(home: &Path, cx: &mut gpui::App) {
         .unwrap_or(Value::Null);
     let settings = workspace::read_json(home, "settings.json").unwrap_or(Value::Null);
     FONT.with(|f| *f.borrow_mut() = settings.get("ui_font").and_then(Value::as_str).map(str::to_owned));
+    let zoom = settings.get("zoom").and_then(Value::as_f64).map_or(1.0, |z| (z as f32).clamp(0.75, 2.0));
+    ZOOM.with(|z| z.set(zoom));
+    gpui_shell::set_pixel_scale(zoom); // herdr-app's zoom: scripts write sizes as designed at 1
     host::set_theme(tokens.clone());
     let g = |k: &str| tokens.get(k).cloned().unwrap_or(Value::Null);
     let palette = json!({
