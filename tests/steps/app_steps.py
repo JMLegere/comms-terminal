@@ -882,6 +882,23 @@ def task_opens(app):
     assert app.phase5 == {"reply": ["nav.todo", "thread.show", "thread.open_reply"], "thread": "t9", "fresh": ["draft.edit"]}
 
 
+@given("Today with an email Task whose New Thread Draft was shown")
+def task_draft_shown(app):
+    pass
+
+
+@when("Jeremy selects a Reply Draft row and then the inbox changes")
+def select_reply_draft_then_change(app):
+    app.phase5 = phase5_view("task-stale")
+
+
+@then("the pane keeps the Reply Draft he selected")
+def pane_keeps_reply_draft(app):
+    assert app.phase5["shown"] == ["d-task", "draft"]
+    assert app.phase5["selected"] == ["d-reply", "draft", None]
+    assert app.phase5["after"] == ["d-reply", "draft"]
+
+
 @given("two due Tasks in the App with the first selected")
 def two_tasks(app):
     pass

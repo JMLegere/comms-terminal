@@ -31,14 +31,14 @@ export default class Task extends View {
   init(_props, cx) {
     this.pane = null;
     this.context = [];
-    this.load(cx);
+    this.load(cx, true);
     cx.spawn(async (cx) => {
       while (true) if ((await nextEvent()).kind === "rows" && shared("task")) this.load(cx);
     });
     cx.spawn(async (cx) => {
       while (true) {
         const c = await nextCommand();
-        if (c === "show") this.load(cx);
+        if (c === "show") this.load(cx, true);
         if (c === "open" || c === "enter") this.open(cx);
         if (c === "focus_entry") this.target(cx);
         if (c === "next" || c === "prev") run(`app.scroll_${c === "next" ? "down" : "up"}`); // no elements to walk: a page
@@ -46,7 +46,9 @@ export default class Task extends View {
     });
   }
 
-  load(cx) {
+  /** `shown`: the Task was just selected (task.show), so its New Thread Draft may take the pane. A reload after a
+   * change never does: by then the pane may hold a row Jeremy selected since. */
+  load(cx, shown = false) {
     const id = shared("task");
     if (!id) {
       this.pane = null;
@@ -59,7 +61,7 @@ export default class Task extends View {
         const fresh = this.pane?.id !== id;
         this.pane = { ...pane, id };
         this.error = null;
-        if (pane.draft && !pane.draft.thread_id) { // a New Thread Draft: the real Draft editor, in place
+        if (shown && pane.draft && !pane.draft.thread_id) { // a New Thread Draft: the real Draft editor, in place
           setShared("draft", pane.draft.id);
           setShared("detail", "draft");
           run("draft.show");

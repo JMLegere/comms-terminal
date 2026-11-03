@@ -184,7 +184,8 @@ export default class Today extends View {
     setShared("thread", row.kind === "threads" ? r?.id ?? null : null);
     setShared("detail", DETAIL[row.kind]);
     if (row.kind === "threads") run("thread.show");
-    if (row.kind === "tasks") { setShared("task", r.id); run("task.show"); run("tasks.show"); }
+    setShared("task", row.kind === "tasks" ? r.id : null); // as the Thread: a Task off screen never acts or reloads (D87)
+    if (row.kind === "tasks") { run("task.show"); run("tasks.show"); }
     if (row.kind === "drafts") { setShared("draft", r.id); run("draft.show"); }
     if (row.kind === "paused") { setShared("person", r.person_id); setShared("side", { kind: "paused", id: r.person_id }); run("person.show"); run("side.show"); }
     if (row.kind === "unattended") {
