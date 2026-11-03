@@ -7,8 +7,106 @@
  },
  "methods": [
   {
+   "name": "address.complete",
+   "summary": "The Console's To/Cc completion from local addresses: [ghost text, value Tab accepts], or null.",
+   "params": [
+    {
+     "name": "value",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
+    {
+     "name": "kind",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "amount.parse",
+   "summary": "A typed Value (90k, 1.5m, 85000) as a whole number of dollars, or null when it is not one.",
+   "params": [
+    {
+     "name": "text",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
    "name": "calendar.events",
    "summary": "Calendar Events overlapping the local days [start, end), both YYYY-MM-DD, in start order.",
+   "params": [
+    {
+     "name": "start",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
+    {
+     "name": "end",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "calendar.page",
+   "summary": "The Calendar on the local days [start, end), as the Console's CalendarPage: its `banner` (no provider yet, or the feed is broken and this is the copy as of its last good fetch) as segment lines, and per day (YYYY-MM-DD) the cell's Events (start and mark, title, colour), the `more` count, the Calendar Item `tally`, and the day pane's `items` with what each opens.",
    "params": [
     {
      "name": "start",
@@ -70,9 +168,65 @@
    }
   },
   {
+   "name": "case.view",
+   "summary": "One Case as the Console's CasePage lays it out: `head` and `props` as segment lines, the `description`, one `timeline` of Activity lines and Thread cards (each card after the line that last added its Thread), each card's messages with the Console's text body, and the `emails` and `domains` for its Context sections.",
+   "params": [
+    {
+     "name": "case_id",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
    "name": "cases.list",
    "summary": "Cases with their rolled-up Status.",
    "params": [
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "cases.view",
+   "summary": "One Case Status view's Cases (Todo oldest first, the others most recently changed), as the Console lists them.",
+   "params": [
+    {
+     "name": "view",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
     {
      "name": "origin",
      "required": false,
@@ -2078,9 +2232,123 @@
    }
   },
   {
+   "name": "connection.page",
+   "summary": "One Connection as the Console's ConnectionPage draws it (health, the Platform's guidance, account, connected, last check, problem), as segment lines; and the Slack Connection's id that channel rules belong to (or null).",
+   "params": [
+    {
+     "name": "connection_id",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
    "name": "connections.list",
    "summary": "Every Connection.",
    "params": [
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "context",
+   "summary": "A Context source's read-only answer (Attio, Tana, Linear) for these addresses and domains.",
+   "x-panel": false,
+   "params": [
+    {
+     "name": "source",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
+    {
+     "name": "emails",
+     "required": true,
+     "schema": {
+      "type": "array"
+     }
+    },
+    {
+     "name": "domains",
+     "required": true,
+     "schema": {
+      "type": "array"
+     }
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "context.section",
+   "summary": "A Context source's section (Attio, Tana, Linear) drawn as the Console draws it, or null.",
+   "x-panel": false,
+   "params": [
+    {
+     "name": "source",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
+    {
+     "name": "emails",
+     "required": true,
+     "schema": {
+      "type": "array"
+     }
+    },
+    {
+     "name": "domains",
+     "required": true,
+     "schema": {
+      "type": "array"
+     }
+    },
     {
      "name": "origin",
      "required": false,
@@ -2148,8 +2416,36 @@
    }
   },
   {
+   "name": "draft.problem",
+   "summary": "What a Draft's values still need before it can send (the Console's pre-check), or null when complete.",
+   "params": [
+    {
+     "name": "values",
+     "required": true,
+     "schema": {
+      "type": "object"
+     }
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
    "name": "draft.view",
-   "summary": "One Draft and the files staged on it.",
+   "summary": "One Draft and the files staged on it, with what the Console's editor shows beside it: its Connection label, sender and recipient labels, a Reply Draft's Thread title, its Captured history (null until To is exact), and the Connections it may send from.",
    "params": [
     {
      "name": "draft_id",
@@ -2177,7 +2473,7 @@
   },
   {
    "name": "drafts.list",
-   "summary": "Every Draft.",
+   "summary": "Every Draft, each with `recipient`: its To as People names, as the Console's Drafts list shows it.",
    "params": [
     {
      "name": "origin",
@@ -2209,6 +2505,97 @@
     },
     {
      "name": "organization_id",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "enroll.start",
+   "summary": "A typed start for an Enrollment (YYYY-MM-DD or a number of days) as YYYY-MM-DD, or null when it is neither.",
+   "params": [
+    {
+     "name": "text",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "enrollment.first_due",
+   "summary": "When an Enrollment's first Task is due, as the Console's enroll toast says it.",
+   "params": [
+    {
+     "name": "enrollment_id",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "event.page",
+   "summary": "One Event as the Console's EventPage draws it: `body` as segment lines (People and Organizations linked), its `join_url`, `uid`, `repeats` and `deleted`, and the `emails` and `domains` for its Context sections; or `available` false with the reason.",
+   "params": [
+    {
+     "name": "uid",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
+    {
+     "name": "id",
      "required": true,
      "schema": {
       "type": "string"
@@ -2338,7 +2725,7 @@
   },
   {
    "name": "organization.page",
-   "summary": "One Organization by its domain.",
+   "summary": "One Organization by its domain; and as the Console's OrganizationPage shows it: `side` (its Pipeline section and People with their identities) as segment lines, `org` (id, name, domain), `emails` for its Context sections, and `stages`: the Pipelines it holds a Stage in, its current Stage in each, every Pipeline's Stages and names.",
    "params": [
     {
      "name": "domain",
@@ -2408,7 +2795,7 @@
   },
   {
    "name": "people.find",
-   "summary": "People whose name or Identity matches `text`, as [id, name] pairs.",
+   "summary": "People matching an address, number or name, as [id, name] pairs (the Console's find_people).",
    "params": [
     {
      "name": "text",
@@ -2456,11 +2843,74 @@
    }
   },
   {
+   "name": "people.merge_preview",
+   "summary": "What merging `drop` into `keep` would make, without changing anything: name, Identities, Organizations, counts.",
+   "params": [
+    {
+     "name": "keep",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
+    {
+     "name": "drop",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
    "name": "person.page",
-   "summary": "One Person: Identities, Threads, Organizations and Enrollments.",
+   "summary": "One Person: Identities, Threads, Organizations and Enrollments; and as the Console's PersonPage draws it, the `head` and the `rest` (Sequence section, Organizations, Threads, Cases) as segment lines, the `orgs` ids for its links, and the `emails` and `domains` for its Context sections.",
    "params": [
     {
      "name": "person_id",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "pipeline.board",
+   "summary": "One Pipeline as the Console's PipelinePage lays it out: the THIS WEEK, PROGRESS and CONSTRAINT boxes, the ORGANIZATIONS board (a column per Stage, its header with count and conversion, the Constraint's marked; each card's Organization and lines), the WEEKLY REVIEW rows and legend, all as segment lines; `board_only` for Talent; and `copy`, the Markdown y copies for an agent.",
+   "params": [
+    {
+     "name": "name",
      "required": true,
      "schema": {
       "type": "string"
@@ -2775,7 +3225,7 @@
   },
   {
    "name": "sequence.page",
-   "summary": "One Sequence: its Steps, their outline, and what would stop it running.",
+   "summary": "One Sequence: its Steps, their outline (each Step row with the Console's `label`, \u21a9 `reply` Step number, `problem` flag and `what` summary), what would stop it running, and its side pane (`props`) as segment lines.",
    "params": [
     {
      "name": "sequence_id",
@@ -2804,6 +3254,55 @@
   {
    "name": "sequences.list",
    "summary": "Every Sequence.",
+   "params": [
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "sequences.pauses_since",
+   "summary": "Enrollments paused after `since` (ISO time), for the pause toast (FR-SEQ-20).",
+   "params": [
+    {
+     "name": "since",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "shell.summary",
+   "summary": "What the Console's rail and bottom bar show beyond rail.summary: Today, Drafts, Organizations and Channels counts, Case Status counts, Pipeline verdicts, Connection health, the Event now and next, and the build.",
    "params": [
     {
      "name": "origin",
@@ -2852,8 +3351,134 @@
    }
   },
   {
+   "name": "step.choices",
+   "summary": "What a new Action can do and what a new If can check, with their labels.",
+   "params": [
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "step.editor",
+   "summary": "One Step as the Console's StepEditor shows it: `head`, `problems` and `preview` as segment lines, its `fields` for this kind of Step as [label, text, placeholder], the body's label and text, the voicemail (a call), and whether it is an Enroll Action (its own hint).",
+   "params": [
+    {
+     "name": "step_id",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "step.values",
+   "summary": "The Step editor's typed fields (by label) as save_step's `values`, with `same` true when nothing changed; or `error`, the Console's \"Not saved\" reason. `voicemail` is \"\" for a Step without one.",
+   "params": [
+    {
+     "name": "step_id",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
+    {
+     "name": "fields",
+     "required": true,
+     "schema": {
+      "type": "object"
+     }
+    },
+    {
+     "name": "body",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
+    {
+     "name": "voicemail",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
    "name": "task.markdown",
    "summary": "One due Task as the Markdown `comms-terminal tasks` prints, for an agent.",
+   "params": [
+    {
+     "name": "task_id",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "task.pane",
+   "summary": "One due Task's pane as the Console's TaskPane draws it: `head`, `body` and `props` as segment lines, its `hint`, the Person's `emails` and Organization `domains` for its Context sections, and its `draft` (id and Thread: a New Thread Draft shows in the Draft editor in place, a Reply Draft opens its Thread's reply box).",
    "params": [
     {
      "name": "task_id",
@@ -2986,7 +3611,7 @@
   },
   {
    "name": "thread.view",
-   "summary": "One Thread: timeline, senders, its Reply Draft, files staged on it, and the Cases it may join.",
+   "summary": "One Thread: timeline, senders, its Reply Draft, files staged on it, the Cases it may join, and every saved reply Draft of the Thread and its merged aliases.",
    "params": [
     {
      "name": "thread_id",
@@ -3042,8 +3667,43 @@
   },
   {
    "name": "today.page",
-   "summary": "Today: Todo Threads by Case, due Tasks, and Drafts not shown through them.",
+   "summary": "Today: Todo Threads, due Tasks, the Drafts not shown through them (each with `recipient`, as drafts.list), Paused Enrollments (each with `finishing`, the label of the reason it finishes as, or null) and Unattended Organizations.",
    "params": [
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "today.side",
+   "summary": "The right pane for a Today Paused row (kind \"paused\", a Person id) or Unattended row (\"unattended\", an Organization id), as the Console fills it: lines of [text, colour or null, bold] segments.",
+   "params": [
+    {
+     "name": "kind",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
+    {
+     "name": "id",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
     {
      "name": "origin",
      "required": false,

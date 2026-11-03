@@ -1,49 +1,82 @@
-// One Case: its description (d edits it), its Threads, and its Activity feed. J/K pick a Thread, and the Thread
-// keys (e, g, m, l, s, r, …) act on it as they do in a Status view; Enter opens it in Threads.
-import { View, div, svg } from "gpui-kit";
-import { v_flex, h_flex } from "gpui-base";
-import { call, nextEvent, nextCommand, theme, shared, setShared, run, toast } from "comms";
+// One Case, as the Console's CasePage (D101–D106): title and rolled-up Status, the Description box (d edits it in
+// place, ctrl+enter saves with undo, esc cancels), one Activity timeline oldest first with each Thread's card after
+// the line that added it, and the properties column (Status counts, People, Organizations, Channels) with Context.
+// j/k select a card and the Thread keys act on it; Enter folds or unfolds it; r/a open its reply row in place.
+import { View, div } from "gpui-kit";
+import { v_flex, h_flex, TextareaState, Textarea, InputState, Input } from "gpui-base";
+import { call, nextEvent, nextCommand, theme, shared, setShared, run, toast, focusMain, open } from "comms";
 
-const DETAIL = { CREATED: ["Needs first response", "status_needs_first"], NEW_REPLY: ["Needs next response", "status_needs_next"],
-  IN_PROGRESS: ["Investigating", "status_investigating"], WAITING_FOR_CUSTOMER: ["Waiting for them", "status_waiting"],
-  WAITING_FOR_DURATION: ["Paused for later", "status_waiting"], DONE_MANUALLY_SET: ["Done", "status_done"],
-  DONE_AUTOMATICALLY_SET: ["Done", "status_done"], IGNORED: ["Ignored", "status_ignored"] };
-const FEED = { created: "Case created", added: "Thread added", removed: "Thread removed", description: "Description changed" };
-const VIEW = { TODO: "Todo", SNOOZED: "Snoozed", DONE: "Done", IGNORED: "Ignored" };
+const SOURCES = ["attio", "tana", "linear"];
+const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const pad = (n) => String(n).padStart(2, "0");
+const stamp = (iso) => { const d = new Date(iso); return `${DAYS[d.getDay()]} ${MONTHS[d.getMonth()]} ${d.getDate()}, ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+const list = (s) => s.split(",").map((x) => x.trim()).filter(Boolean);
+const offerUndo = (message, steps) => { setShared("undo", { message, steps }); toast(`${message}  z undo`); };
+export const DESCRIBE = "Add a description: what this Case is about, who is involved, what done looks like.  d edit";
+
+/** "N messages · last 2h" for a folded card, as the Console's. */
+export function folded(msgs, now = Date.now()) {
+  const last = msgs.at(-1)?.at, secs = last ? (now - new Date(last)) / 1000 : 0;
+  const ago = !last ? "never" : secs < 60 ? "now" : secs < 3600 ? `${Math.floor(secs / 60)}m` : secs < 86400 ? `${Math.floor(secs / 3600)}h`
+    : secs < 7 * 86400 ? `${Math.floor(secs / 86400)}d` : `${MONTHS[new Date(last).getMonth()]} ${new Date(last).getDate()}`;
+  return `${msgs.length} message${msgs.length === 1 ? "" : "s"} · last ${ago} · show`;
+}
+
+/** Console segment lines ([text, colour, bold, link]) as rows; a blank line keeps its height. A person or org link
+ * opens that page on the stack; a URL opens on Ctrl+click (Cmd+click on macOS), as message links do (D44). */
+export function segLines(t, lines, key = "s", orgs = {}) {
+  const GREY = { "#928374": "muted", "#a89984": "dim", "#7c6f64": "muted" };
+  const color = (hex) => (hex ? t[GREY[hex]] ?? hex : t.foreground);
+  const follow = (link, ev) => {
+    const push = (entry) => { setShared("push", entry); run("nav.push"); };
+    if (link.startsWith("person:")) push({ page: "person", person: link.slice(7) });
+    else if (link.startsWith("org:")) push({ page: "organization", organization: { domain: link.slice(4), id: orgs[link.slice(4)] ?? null } });
+    else if (ev?.modifiers?.control || ev?.modifiers?.platform) open(link);
+  };
+  return (lines ?? []).map((segs, r) => (segs.length ? h_flex().w_full().gap(0).flex_wrap()
+    .children(segs.map(([text, hex, bold, link], i) => div().min_w(0).text_color(link ? t.blue : color(hex)).when(Boolean(bold), (d) => d.font_semibold())
+      .when(Boolean(link), (d) => d.id(`${key}-${r}-${i}`).cursor_pointer().on_click((ev) => follow(link, ev))).child(text)))
+    : div().h(10)));
+}
 
 export default class Case extends View {
   init(_props, cx) {
-    this.page = null;
+    this.c = null;
+    this.sel = 0;
+    this.toggled = new Set(); // cards Enter folded
+    this.opened = {};         // per card, messages opened past the default
+    this.context = [];
+    this.desc = TextareaState.new({ placeholder: "What this Case is about, who is involved, what done looks like.", rows: 4 });
+    this.desc.set_auto_grow(3, 16);
+    this.text = TextareaState.new({ placeholder: "Leave a reply…", rows: 3 });
+    this.text.set_auto_grow(3, 16);
+    this.to = InputState.new({ placeholder: "recipients" });
+    this.cc = InputState.new({ placeholder: "optional" });
     this.load(cx);
     cx.spawn(async (cx) => {
-      while (true) if ((await nextEvent()).kind === "rows" && shared("page") === "cases") this.load(cx);
+      while (true) if ((await nextEvent()).kind === "rows" && shared("case")) this.load(cx);
     });
     cx.spawn(async (cx) => {
       while (true) this.command(await nextCommand(), cx);
     });
   }
 
-  threads() {
-    return (this.page?.threads ?? []).map((t) => t.f ?? t);
-  }
-
   load(cx) {
     const id = shared("case");
-    if (!id) {
-      this.page = null;
-      return cx.notify();
-    }
+    if (!id) { this.c = null; return cx.notify(); }
     cx.spawn(async (cx) => {
       try {
-        const page = await call("case.page", { case_id: id });
+        const c = await call("case.view", { case_id: id });
         if (shared("case") !== id) return;
-        this.page = page;
+        const keep = this.c?.cards?.[this.sel]?.id;
+        const fresh = this.c?.id !== id;
+        this.c = { ...c, id };
+        const at = c.cards.findIndex((k) => k.id === keep);
+        this.sel = at >= 0 ? at : Math.max(0, Math.min(this.sel, c.cards.length - 1));
+        if (fresh) { this.toggled = new Set(); this.opened = {}; this.loadContext(id, c, cx); }
         this.error = null;
-        const threads = this.threads();
-        if (shared("page") === "cases" && !threads.some((t) => t.id === shared("thread"))) {
-          setShared("thread", threads[0]?.id ?? null);
-          run("thread.show");
-        }
+        this.pickThread();
       } catch (e) {
         this.error = String(e);
       }
@@ -51,74 +84,187 @@ export default class Case extends View {
     });
   }
 
+  loadContext(id, c, cx) {
+    this.context = [];
+    for (const source of SOURCES) call("context.section", { source, emails: c.emails ?? [], domains: c.domains ?? [] })
+      .then((s) => { if (s && shared("case") === id) { this.context = [...this.context, s]; cx.notify(); } }).catch(() => {});
+  }
+
+  /** The Thread keys act on the selected card's Thread. */
+  pickThread() {
+    const card = this.c?.cards?.[this.sel];
+    if (shared("page") !== "case") return;
+    setShared("thread", card?.id ?? null);
+    run("thread.show");
+  }
+
+  card() { return this.c?.cards?.[this.sel]; }
+
   command(c, cx) {
     const at = c.indexOf(":");
     const name = at < 0 ? c : c.slice(0, at);
     const answer = at < 0 ? null : JSON.parse(c.slice(at + 1));
-    const threads = this.threads();
-    const i = threads.findIndex((t) => t.id === shared("thread"));
+    const card = this.card();
     switch (name) {
       case "show": return this.load(cx);
       case "next": case "prev": {
-        const t = threads[Math.max(0, Math.min(threads.length - 1, i + (name === "next" ? 1 : -1)))];
-        if (t) { setShared("thread", t.id); run("thread.show"); }
+        const n = this.c?.cards?.length ?? 0;
+        if (!n) return;
+        this.sel = Math.max(0, Math.min(n - 1, this.sel + (name === "next" ? 1 : -1)));
+        this.pickThread();
         return cx.notify();
       }
-      case "toggle": case "open": {
-        const t = threads[i];
-        if (!t) return;
-        setShared("view", VIEW[t.status] ?? "Todo");
-        setShared("page", "threads");
-        return run("threads.reload");
-      }
+      case "toggle": // Enter folds or unfolds the card (D103)
+        if (!card) return;
+        this.toggled.has(card.id) ? this.toggled.delete(card.id) : this.toggled.add(card.id);
+        return cx.notify();
       case "describe":
-        if (!this.page?.case) return;
-        setShared("picker", { title: "Case description", options: [], prompt: "What this Case is for", reply: "case.described",
-          value: this.page.case.description ?? "" });
-        return run("overlay.open");
-      case "described":
-        return cx.spawn(async () => {
-          try {
-            await call("command.inbox.set_case_description", { case_id: this.page.case.id, description: answer.text });
-            toast("Description saved.");
-          } catch (e) {
-            toast(String(e), "error");
-          }
-        });
+        this.editing = true;
+        this.desc.set_value(this.c?.description ?? "");
+        this.desc.focus();
+        return cx.notify();
+      case "reply_all": case "reply_sender": return card && this.openReply(card, name === "reply_sender" ? "sender" : "all", cx);
+      case "send-picked": return this.sendPicked(answer.value, cx);
     }
+  }
+
+  async saveDescription(cx) {
+    const old = this.c?.description ?? "", text = this.desc.value().trim();
+    this.editing = false;
+    if (text !== old) {
+      try {
+        await call("command.inbox.set_case_description", { case_id: this.c.id, description: text });
+        offerUndo("Description saved.", [["inbox.set_case_description", { case_id: this.c.id, description: old }]]);
+      } catch (e) {
+        toast(String(e), "error");
+      }
+    }
+    focusMain();
+    cx.notify();
+  }
+
+  openReply(card, mode, cx) {
+    this.toggled.delete(card.id);
+    cx.spawn(async (cx) => {
+      try {
+        const [e, v] = await Promise.all([call("reply.envelope", { thread_id: card.id, mode }), call("thread.view", { thread_id: card.id })]);
+        if (!e.takes_replies) return toast("This thread takes no replies.", "warning");
+        this.reply = { thread: card.id, mode, envelope: e };
+        const d = v.reply_draft;
+        this.text.set_value(d?.body ?? "");
+        if (e.email) { this.to.set_value(d?.to || e.to.join(", ")); this.cc.set_value(d?.cc || e.cc.join(", ")); }
+        this.text.focus();
+      } catch (err) {
+        toast(String(err), "error");
+      }
+      cx.notify();
+    });
+  }
+
+  closeReply(cx) {
+    const r = this.reply;
+    if (!r) return;
+    this.reply = null;
+    call("command.inbox.save_reply_draft", { thread_id: r.thread, body: this.text.value() }).catch((e) => toast(String(e), "error"));
+    focusMain();
+    cx.notify();
+  }
+
+  send() {
+    const r = this.reply;
+    if (!r) return;
+    if (!this.text.value().trim()) return toast("Nothing to send.", "error");
+    if (r.envelope.email && !list(this.to.value()).length) return toast("Not sent: add at least one recipient in To.", "error");
+    const later = r.envelope.later;
+    setShared("picker", { title: "Send", reply: "case.send-picked", options: [{ value: "send", label: "Send now" },
+      { value: "tomorrow", label: `Send tomorrow · ${stamp(later.tomorrow)}` },
+      { value: "monday", label: `Send next Monday · ${stamp(later.monday)}` }, { value: "keep", label: "Keep editing" }] });
+    run("overlay.open");
+  }
+
+  sendPicked(choice, cx) {
+    const r = this.reply;
+    if (!r) return;
+    if (choice === "keep") return this.text.focus();
+    const text = this.text.value().trim();
+    const [to, cc] = r.envelope.email ? [list(this.to.value()), list(this.cc.value())] : [[], []];
+    cx.spawn(async (cx) => {
+      try {
+        if (choice === "send") {
+          toast("Sending…");
+          await call("send.reply", { thread_id: r.thread, text, to, cc });
+          toast("Sent.");
+          setShared("undo", null);
+        } else {
+          await call("command.inbox.schedule_reply", { thread_id: r.thread, body: text, to, cc, send_at: { $dt: r.envelope.later[choice] } });
+          toast(`Sends ${stamp(r.envelope.later[choice])}.`);
+        }
+        this.reply = null;
+        this.text.set_value("");
+        focusMain();
+      } catch (e) {
+        toast(`Send error: ${e}`, "error");
+      }
+      cx.notify();
+    });
   }
 
   render() {
     const t = theme();
-    const p = this.page;
-    const pane = v_flex().size_full().min_h(0).bg(t.background).text_size(13);
-    if (!p?.case) return pane.child(div().p(24).text_color(t.dim).child(this.error ?? "No Case selected"));
-    const selected = shared("thread");
-    const threads = this.threads();
-    return pane
-      .child(h_flex().h(30).flex_none().px(12).gap(8).items_center().border_b(1).border_color(t.border).text_size(12).text_color(t.muted)
-        .child(svg("icons/folder.svg").size(13).text_color(t.accent))
-        .child(div().font_medium().text_color(t.foreground).child("Case"))
-        .child(div().text_color(t.dim).child(`· ${threads.length} thread${threads.length === 1 ? "" : "s"}`)))
-      .child(v_flex().id("case").flex_1().min_h(0).overflow_y_scroll().px(24).py(18).gap(14)
-        .child(div().text_size(18).font_semibold().text_color(t.strong ?? t.foreground).child(p.case.title))
-        .child(div().id("case-description").cursor_pointer().text_color(p.case.description ? t.foreground : t.dim).line_height(1.5)
-          .on_click((_e, cx) => this.command("describe", cx))
-          .child(p.case.description || "No description · d to write one"))
-        .child(div().text_size(11.5).font_medium().text_color(t.dim).child("Threads"))
-        .child(v_flex().gap(2).children(threads.map((th) => {
-          const [label, token] = DETAIL[th.status_detail] ?? [th.status_detail, "dim"];
-          return h_flex().id(`ct-${th.id}`).h(32).px(8).gap(9).rounded(8).items_center().cursor_pointer()
-            .when(th.id === selected, (el) => el.bg(t.selected)).hover((s) => s.bg(t.hover))
-            .on_click(() => { setShared("thread", th.id); run("thread.show"); })
-            .child(div().size(7).rounded(4).flex_none().bg(t[token] ?? t.dim))
-            .child(div().flex_1().min_w(0).truncate().text_color(t.foreground).child(th.title ?? ""))
-            .child(div().flex_none().text_size(11).text_color(t.dim).child(label));
-        })))
-        .child(div().text_size(11.5).font_medium().text_color(t.dim).child("Activity"))
-        .child(v_flex().gap(4).text_size(12).children([...(p.feed ?? [])].reverse().map((f) =>
-          h_flex().gap(10).child(div().w(110).flex_none().text_color(t.dim).child((f.at ?? "").slice(0, 16).replace("T", " ")))
-            .child(div().flex_1().min_w(0).truncate().text_color(t.muted)
-              .child(`${FEED[f.kind] ?? f.kind}${f.title ? ` · ${f.title}` : ""}${f.cause && f.cause !== "action" ? ` (${f.cause})` : ""}`))))));
+    const c = this.c;
+    const root = v_flex().size_full().min_h(0).bg(t.background).text_size(13);
+    if (!c) return root.child(div().p(24).text_color(t.muted).child(this.error ?? "No case selected."));
+    let n = 0;
+    const segs = (lines) => segLines(t, lines, `g${n++}`, c.orgs ?? {});
+    const keys = (el) => el.on_key_down((ev, cx) => {
+      if (this.editing && (ev.keystroke === "ctrl-enter" || ev.keystroke === "ctrl-s")) this.saveDescription(cx);
+      else if (this.editing && ev.keystroke === "escape") { this.editing = false; focusMain(); cx.notify(); }
+      else if (this.reply && ev.keystroke === "ctrl-enter") this.send();
+      else if (this.reply && ev.keystroke === "escape") this.closeReply(cx);
+      else return;
+      cx.stop_propagation();
+    });
+    const desc = keys(v_flex().id("desc").p(10).gap(4).rounded(6).border(1).border_color(this.editing ? t.accent : t.border)
+      .when(!this.editing, (e) => e.cursor_pointer().on_click((_e, cx) => this.command("describe", cx))))
+      .child(this.editing ? Textarea.new(this.desc)
+        : div().text_color(c.description ? t.foreground : t.muted).child(c.description || DESCRIBE))
+      .when(this.editing, (e) => e.child(div().text_size(11.5).text_color(t.muted).child("ctrl+enter save · esc cancel")));
+    const cardEl = (k, i) => {
+      const open = !this.toggled.has(k.id) || this.reply?.thread === k.id;
+      const msgs = k.messages ?? [];
+      const shownSet = this.opened[k.id] ?? new Set();
+      const body = !open ? [div().text_color(t.muted).child(folded(msgs))] : msgs.map((m, j) => {
+        const full = j === msgs.length - 1 || shownSet.has(m.id);
+        return v_flex().id(`m-${i}-${j}`).gap(2).py(2).cursor_pointer()
+          .on_click((_e, cx) => { const s = (this.opened[k.id] ??= new Set()); s.has(m.id) ? s.delete(m.id) : s.add(m.id); cx.notify(); })
+          .child(h_flex().gap(6).child(div().font_semibold().text_color(t.strong ?? t.foreground).child(m.who ?? ""))
+            .child(div().text_color(t.muted).child(m.at ? stamp(m.at) : ""))
+            .when(!full, (e) => e.child(div().flex_1().min_w(0).truncate().text_color(t.muted).child((m.shown ?? "").split("\n")[0]))))
+          .when(full, (e) => e.child(div().text_color(m.deleted ? t.muted : t.foreground).child(m.deleted ? "message deleted" : m.shown ?? ""))
+            .when(Boolean(m.trimmed), (e2) => e2.child(div().text_color(t.muted).child("•••"))));
+      });
+      const r = this.reply?.thread === k.id ? this.reply : null;
+      const replyRow = !open ? null : r ? keys(v_flex().id(`reply-${i}`).mt(6).p(8).gap(6).rounded(6).border(1).border_color(t.accent)
+        .when(r.envelope.email, (e) => e.child(h_flex().gap(8).child(div().w(28).text_color(t.muted).child("To")).child(div().flex_1().child(Input.new(this.to))))
+          .child(h_flex().gap(8).child(div().w(28).text_color(t.muted).child("Cc")).child(div().flex_1().child(Input.new(this.cc)))))
+        .child(Textarea.new(this.text))
+        .child(div().text_size(11.5).text_color(t.muted).child("ctrl+enter send · esc close (keeps draft)")))
+        : div().id(`idle-${i}`).mt(6).px(8).py(6).rounded(6).border(1).border_color(t.border).text_color(t.muted).cursor_pointer()
+          .on_click((_e, cx) => { this.sel = i; this.pickThread(); this.openReply(k, "all", cx); }).child("Leave a reply… (r)");
+      return v_flex().id(`card-${i}`).p(10).gap(4).rounded(6).border(1).border_color(i === this.sel ? t.accent : t.border)
+        .on_click((_e, cx) => { if (this.sel !== i) { this.sel = i; this.pickThread(); cx.notify(); } })
+        .child(h_flex().gap(8).items_center().child(div().flex_1().min_w(0).children(segs(k.head))).child(div().flex_none().children(segs(k.status))))
+        .children(body).when(Boolean(replyRow), (e) => e.child(replyRow));
+    };
+    return root.child(h_flex().flex_1().min_h(0).items_start()
+      .child(v_flex().id("case-activity").flex_1().min_w(0).h_full().overflow_y_scroll().px(20).py(14).gap(8)
+        .children(segs(c.head))
+        .child(div().mt(6).font_semibold().text_color(t.foreground).child("Description")).child(desc)
+        .child(div().mt(6).font_semibold().text_color(t.foreground).child("Activity"))
+        .children(c.timeline.map((x) => (x.line ? v_flex().children(segs(x.line)) : cardEl(c.cards[x.card], x.card)))))
+      .child(v_flex().id("case-props").w(300).flex_none().h_full().overflow_y_scroll().px(16).py(14).gap(2).border_l(1)
+        .border_color(t.border).text_size(12.5).children(segs(c.props))
+        .children(this.context.map((s) => v_flex().mt(12).p(8).gap(2).rounded(6).border(1).border_color(t.border)
+          .child(div().text_color(t.muted).child(s.title)).children(segs(s.lines))))));
   }
 }

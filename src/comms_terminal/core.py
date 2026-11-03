@@ -25,6 +25,7 @@ import threading
 import urllib.request
 import uuid
 from concurrent.futures import Future
+from datetime import datetime
 from importlib import resources
 from pathlib import Path
 
@@ -76,10 +77,52 @@ def _rail(core, db):
             "tasks": sequences.tasks_due(db)}
 
 
+@query("shell.summary")
+def _shell(core, db):
+    """What the Console's rail and bottom bar show beyond rail.summary: Today, Drafts, Organizations and Channels
+    counts, Case Status counts, Pipeline verdicts, Connection health, the Event now and next, and the build."""
+    from collections import Counter
+    from . import calendar as cal, clock, gcal
+    from .tui import PLATFORMS, build_version, conn_name, health_ok, rail_share
+    t = inbox.today(db)
+    now = clock.local()
+    current, nxt = cal.now_and_next(db, now)
+    short = lambda e: e["title"] if len(e["title"]) <= 24 else e["title"][:23] + "…"  # noqa: E731
+    events = {}
+    if current:
+        events["now"] = {"title": short(current), "left": int((clock.local(current["end"]) - now).total_seconds() // 60)}
+    if nxt:
+        start = clock.local(nxt["start"])
+        days = (start.date() - now.date()).days
+        events["next"] = {"title": short(nxt), "when": f"{start:%H:%M}" if days == 0 else f"tomorrow {start:%H:%M}"
+                          if days == 1 else f"{start:%a %H:%M}" if days < 7 else f"{start:%b %-d %H:%M}"}
+    return {"today": sum(len(t[k]) for k in ("threads", "tasks", "drafts", "paused", "unattended")),
+            "drafts": db.execute("SELECT count(*) FROM composition_drafts").fetchone()[0],
+            "organizations": db.execute("SELECT count(*) FROM organizations").fetchone()[0],
+            "channels": db.execute("SELECT count(*) FROM channels WHERE kind != 'mailbox'").fetchone()[0],
+            "cases": dict(Counter(c["status"] for c in inbox.case_queue(db))),
+            "pipelines": {p.lower(): rail_share(db, p) for p in pipeline.PIPELINES},
+            "connections": [{"id": c["id"], "platform": c["platform"], "name": conn_name(c), "ok": health_ok(c),
+                             "writes": (c["last_error"] or "").startswith(gcal.WRITES_BROKEN),
+                             "supported": c["platform"] in PLATFORMS} for c in inbox.connections(db)],
+            "calendar_broken": bool(cal.broken(db)), **events, "build": build_version()}
+
+
+@query("sequences.pauses_since", since="string")
+def _pauses(core, db, since):
+    """Enrollments paused after `since` (ISO time), for the pause toast (FR-SEQ-20)."""
+    return sequences.pauses_since(db, since)
+
+
 @query("today.page")
 def _today(core, db):
-    """Today: Todo Threads by Case, due Tasks, and Drafts not shown through them."""
-    return inbox.today(db)
+    """Today: Todo Threads, due Tasks, the Drafts not shown through them (each with `recipient`, as drafts.list),
+    Paused Enrollments (each with `finishing`, the label of the reason it finishes as, or null) and Unattended
+    Organizations."""
+    t = inbox.today(db)
+    t["drafts"] = [d | {"recipient": inbox.recipient_names(db, d["to"] or "", d["kind"])} for d in t["drafts"]]
+    t["paused"] = [e | {"finishing": sequences.REASON_LABEL[e["reason"]] if e["reason"] else None} for e in t["paused"]]
+    return t
 
 
 @query("threads.queue", view="string")
@@ -92,10 +135,19 @@ def _queue(core, db, view):
 
 @query("thread.view", thread_id="string")
 def _thread(core, db, thread_id):
-    """One Thread: timeline, senders, its Reply Draft, files staged on it, and the Cases it may join."""
-    return {"view": inbox.thread_view(db, thread_id, files=FILES), "senders": inbox.thread_senders(db, thread_id),
+    """One Thread: timeline, senders, its Reply Draft, files staged on it, the Cases it may join, and every saved
+    reply Draft of the Thread and its merged aliases."""
+    view = inbox.thread_view(db, thread_id, files=FILES)
+    slack = view["channel"]["platform"] == "slack"
+    for m in view["messages"]:  # the Console's text body: what shows, and the Trimmed content folded behind •••
+        if m["content"] is not None:
+            body = render.from_slack(m["content"]) if slack else render.from_text(m["content"])
+            m["shown"], m["trimmed"] = render.plain(body.text), render.plain(body.trimmed)
+    return {"view": view, "senders": inbox.thread_senders(db, thread_id),
             "reply_draft": inbox.reply_draft(db, thread_id), "staged": inbox.staged(db, thread_id=thread_id),
-            "cases": inbox.cases(db)}
+            "cases": inbox.cases(db),
+            "drafts": [d for m in inbox.snapshot(db, thread_id)["_members"]
+                       if (d := inbox.reply_draft(db, m)) and (d.get("body") or "").strip()]}
 
 
 @query("thread.snapshot", thread_id="string")
@@ -166,7 +218,24 @@ def _enroll_choices(core, db, person_id, organization_id):
     return {"sequences": [q | {"live": live.get(q["id"])} for q in sequences.sequences(db) if not q["archived_at"]],
             "organizations": sequences.organization_choices(db, person_id),
             "addresses": sequences.address_choices(db, person_id, organization_id or None),
-            "reasons": sequences.REASON_LABEL, "finishing": list(sequences.FINISHING_REASONS)}
+            "reasons": sequences.REASON_LABEL, "finishing": list(sequences.FINISHING_REASONS),
+            "finish_reasons": [list(r) for r in FINISH_REASONS()]}
+
+
+def FINISH_REASONS():  # noqa: N802 - the Console's list, with each reason's explanation
+    from .tui import FINISH_REASONS as reasons
+    return reasons
+
+
+@query("address.complete", value="string", kind="string")
+def _address_complete(core, db, value, kind):
+    """The Console's To/Cc completion from local addresses: [ghost text, value Tab accepts], or null."""
+    from types import SimpleNamespace
+
+    from . import tui
+    field = SimpleNamespace(address_kind=lambda: kind, conversations=lambda: None, app=SimpleNamespace(db=db))
+    hit = tui.LocalAddressSuggester(field).resolve(value)
+    return list(hit) if hit else None
 
 
 @query("cases.list")
@@ -183,16 +252,228 @@ def _case(core, db, case_id):
             "threads": inbox.case_threads(db, case_id)}
 
 
+@query("cases.view", view="string")
+def _cases_view(core, db, view):
+    """One Case Status view's Cases (Todo oldest first, the others most recently changed), as the Console lists them."""
+    if view not in inbox.CASE_VIEWS:
+        raise ApiError(-32602, f"view must be one of {', '.join(inbox.CASE_VIEWS)}")
+    return inbox.case_queue(db, view)
+
+
+@query("case.view", case_id="string")
+def _case_view(core, db, case_id):
+    """One Case as the Console's CasePage lays it out: `head` and `props` as segment lines, the `description`, one
+    `timeline` of Activity lines and Thread cards (each card after the line that last added its Thread), each card's
+    messages with the Console's text body, and the `emails` and `domains` for its Context sections."""
+    from datetime import datetime
+
+    from types import SimpleNamespace
+
+    from .tui import ICON, PLATFORMS, VIEW_ICON, CasePage, case_feed_markup, escape, status_markup, thread_addresses
+    case = db.execute("SELECT title, description FROM cases WHERE id = ?", (case_id,)).fetchone()
+    if case is None:
+        raise ApiError(-32602, f"no Case {case_id}")
+    feed = inbox.case_feed(db, case_id)
+    at = lambda iso: datetime.fromisoformat(iso).astimezone() if iso else datetime.min.astimezone()  # noqa: E731
+    added = {e["thread_id"]: (at(e["at"]), i, 1) for i, e in enumerate(feed) if e["kind"] == "added"}
+    order = lambda v: added.get(v["thread"].id) or (at(v["messages"][0]["at"] if v["messages"] else None), -1, 1)  # noqa: E731
+    views = sorted((inbox.thread_view(db, t.id, files=FILES) for t in inbox.case_threads(db, case_id)), key=order)
+    threads = [v["thread"] for v in views]
+    status = inbox.rollup([t.status_detail for t in threads])
+    icon, color = VIEW_ICON[status]
+    head = (f"[b #45707a]{escape(case['title'])}[/]\n[{color}]{ICON[icon]} {status}[/]"
+            f"[#928374] · {len(threads)} thread{'s' * (len(threads) != 1)}[/]")
+    cards = []
+    for v in views:
+        t, slack = v["thread"], v["channel"]["platform"] == "slack"
+        msgs = []
+        for m in v["messages"]:
+            body = (render.from_slack(m["content"]) if slack else render.from_text(m["content"])) if m["content"] is not None else None
+            msgs.append({"id": m["native_id"], "who": m["who"], "at": m["at"], "deleted": m["content"] is None,
+                         "shown": render.plain(body.text) if body else "", "trimmed": render.plain(body.trimmed) if body else ""})
+        cards.append({"id": t.id, "head": segments(f"{ICON[PLATFORMS[v['channel']['platform']].icon]} [b]{escape(t.title)}[/]"
+                                                   f" [#928374]· {escape(v['where'])}[/]"),
+                      "status": segments(status_markup(t)), "messages": msgs})
+    timeline = sorted([((at(e["at"]), i, 0), {"line": segments(case_feed_markup(e))}) for i, e in enumerate(feed)]
+                      + [(order(v), {"card": i}) for i, v in enumerate(views)], key=lambda x: x[0])
+    emails, domains = thread_addresses(views)
+    return {"title": case["title"], "description": case["description"] or "", "head": segments(head),
+            "props": segments(CasePage.props_markup(SimpleNamespace(views=views))),
+            "cards": cards, "timeline": [x for _, x in timeline], "emails": emails, "domains": domains,
+            "orgs": _org_ids(db, sorted({o for v in views if v["person"] for o in v["person"]["organizations"]}))}
+
+
+@query("connection.page", connection_id="string")
+def _connection_page(core, db, connection_id):
+    """One Connection as the Console's ConnectionPage draws it (health, the Platform's guidance, account, connected,
+    last check, problem), as segment lines; and the Slack Connection's id that channel rules belong to (or null)."""
+    from .tui import connection_markup
+    c = next((c for c in inbox.connections(db) if str(c["id"]) == str(connection_id)), None)
+    if c is None:
+        raise ApiError(-32602, f"no Connection {connection_id}")
+    slack = db.execute("SELECT id FROM connections WHERE platform = 'slack'").fetchone()
+    return {"lines": segments(connection_markup(c)), "slack": slack[0] if slack else None}
+
+
 @query("drafts.list")
 def _drafts(core, db):
-    """Every Draft."""
-    return inbox.list_drafts(db)
+    """Every Draft, each with `recipient`: its To as People names, as the Console's Drafts list shows it."""
+    return [d | {"recipient": inbox.recipient_names(db, d["to"] or "", d["kind"])} for d in inbox.list_drafts(db)]
 
 
 @query("draft.view", draft_id="string")
 def _draft(core, db, draft_id):
-    """One Draft and the files staged on it."""
-    return {"draft": inbox.get_draft(db, draft_id), "staged": inbox.staged(db, draft_id=draft_id)}
+    """One Draft and the files staged on it, with what the Console's editor shows beside it: its Connection label,
+    sender and recipient labels, a Reply Draft's Thread title, its Captured history (null until To is exact), and
+    the Connections it may send from."""
+    from .tui import FORMATS, PLATFORMS, conn_icon, conn_name, connection_label, draft_history
+    d = inbox.get_draft(db, draft_id)
+    conns = inbox.connections(db)
+    c = next((c for c in conns if c["id"] == d["connection_id"]), None)
+    try:
+        views = draft_history(db, d["kind"], d["connection_id"], d["to"] or "")
+        history = None if views is None else [{"id": v["thread"].id, "title": v["thread"].title,
+                                                "status": v["thread"].status, "detail": v["thread"].status_detail,
+                                                "messages": [{k: m[k] for k in ("who", "at", "content")} for m in v["messages"]]}
+                                               for v in views]
+        note = "Choose an exact recipient." if views is None else "No captured match · prior contact unknown." if not views \
+            else "Captured local history"
+    except Exception:
+        history, note = [], "Captured history unavailable · lookup failed."
+    return {"draft": d, "staged": inbox.staged(db, draft_id=draft_id),
+            "connection": connection_label(c) if c else ("Connection unavailable" if d["connection_id"] is not None
+                                                         else "Choose Connection"),
+            "sender": conn_name(c) if d["kind"] == "slack" and c else d["sender"],
+            "recipient": inbox.recipient_names(db, d["to"] or "", "slack") if d["kind"] == "slack" else d["to"],
+            "channel": FORMATS[d["kind"]].label, "new_title": FORMATS[d["kind"]].new_title,
+            "thread_title": inbox.get_thread(db, d["thread_id"]).title if d["thread_id"] else None,
+            "history": history, "history_note": note,
+            "connections": [{"id": x["id"], "label": f"{conn_icon(x)} {PLATFORMS[x['platform']].title} · {conn_name(x)}",
+                             "kind": PLATFORMS[x["platform"]].format, "self_id": x["self_id"] or "",
+                             "kind_label": FORMATS[PLATFORMS[x["platform"]].format].label}
+                            for x in conns if x["platform"] in PLATFORMS and PLATFORMS[x["platform"]].format in FORMATS]}
+
+
+@query("draft.problem", values="object")
+def _draft_problem(core, db, values):
+    """What a Draft's values still need before it can send (the Console's pre-check), or null when complete."""
+    return inbox.draft_problem(values)
+
+
+@query("today.side", kind="string", id="string")
+def _today_side(core, db, kind, id):
+    """The right pane for a Today Paused row (kind "paused", a Person id) or Unattended row ("unattended", an
+    Organization id), as the Console fills it: lines of [text, colour or null, bold] segments."""
+    from rich.console import Console
+    from rich.text import Text
+
+    from .tui import pipeline_section, sequence_section
+    if kind == "paused":
+        p = db.execute("SELECT display_name FROM persons WHERE id = ?", (id,)).fetchone()
+        markup = f"[b]{p[0] if p else ''}[/]\n\n" + sequence_section(db, id, keys=False) \
+            + "\n\n[#928374]r resume · f finish · enter opens the Person[/]"
+    else:
+        o = db.execute("SELECT name, domain FROM organizations WHERE id = ?", (id,)).fetchone()
+        domain = f"  [#928374]{o['domain']}[/]" if o and o["domain"] != o["name"] else ""
+        markup = f"[b]{o['name'] if o else ''}[/]{domain}\n\n" + pipeline_section(db, id)
+    return segments(markup)
+
+
+def segments(markup: str) -> list:
+    """Console markup as lines of [text, colour or null, bold, link or null] segments, for a view to draw as the
+    Console does. A link is "person:<id>", "org:<domain>", "thread:<id>" (the Console's open_person, open_org and
+    open_thread) or a URL."""
+    import re
+
+    from rich.console import Console
+    from rich.text import Text
+    con = Console(color_system="truecolor")
+
+    def link(s):
+        click = (s.meta or {}).get("@click") if s else None
+        if click and (m := re.match(r"app\.open_(person|org|thread)\('?([^')]*)'?\)", click if isinstance(click, str) else "")):
+            return f"{m[1]}:{m[2]}"
+        if isinstance(click, tuple) and click and click[0] in ("app.open_person", "app.open_org", "app.open_thread"):
+            return f"{click[0][9:]}:{click[1][0] if click[1] else ''}"
+        return s.link if s and s.link else None
+
+    style = lambda s: (s.color.get_truecolor().hex if s and s.color else None, bool(s and s.bold), link(s))  # noqa: E731
+    return [[[seg.text, *style(seg.style)] for seg in line.render(con, end="") if seg.text]
+            for line in Text.from_markup(markup).split("\n", allow_blank=True)]
+
+
+@query("calendar.page", start="string", end="string")
+def _calendar_page(core, db, start, end):
+    """The Calendar on the local days [start, end), as the Console's CalendarPage: its `banner` (no provider yet, or
+    the feed is broken and this is the copy as of its last good fetch) as segment lines, and per day (YYYY-MM-DD) the
+    cell's Events (start and mark, title, colour), the `more` count, the Calendar Item `tally`, and the day pane's
+    `items` with what each opens."""
+    from datetime import date
+
+    from .tui import CAL_COUNTS, CAL_LINES, ICON, PALETTE, cal_by_day, cal_line, cal_mark, cal_style, cal_time, clock, escape
+    p, why = calendar.provider(db), calendar.broken(db)
+    banner = None
+    if p is None:
+        banner = f"[{PALETTE['grey1']}]No Event provider yet: add the google-calendar-ics credential (runbook §3g).[/]"
+    elif why:
+        since = clock.local(datetime.fromisoformat(p["ok_at"])).strftime("%a %H:%M") if p["ok_at"] else "earlier"
+        banner = (f"[b {PALETTE['red']}]{ICON['broken']} Google Calendar unreachable[/]"
+                  f" [{PALETTE['grey1']}]{escape(why)} · showing the copy as of {since}[/]")
+    days = {}
+    for day, items in cal_by_day(calendar.items(db, date.fromisoformat(start), date.fromisoformat(end))).items():
+        events = [i for i in items if i["kind"] == "event"]
+        shown = events if len(events) <= CAL_LINES else events[:CAL_LINES - 1]
+        counts = {k: sum(1 for i in items if i["kind"] == k) for k, _ in CAL_COUNTS}
+        days[day.isoformat()] = {
+            "events": [{"text": f"{'' if e['all_day'] else cal_time(e['start']) + ' '}{cal_mark(e)}{e['title']}",
+                        "color": cal_style(e).split()[-1], "struck": bool(e["deleted_at"])} for e in shown],
+            "more": len(events) - len(shown),
+            "tally": " ".join(f"{ICON[icon]}{counts[kind]}" for kind, icon in CAL_COUNTS if counts[kind]),
+            "items": [{"line": segments(cal_line(i)), "kind": i["kind"], "ref": i.get("ref"), "join_url": i.get("join_url"),
+                       "event": {"uid": i["uid"], "id": i["id"]} if i["kind"] == "event" else None} for i in items]}
+    return {"banner": segments(banner) if banner else None, "days": days}
+
+
+@query("event.page", uid="string", id="string")
+def _event_page(core, db, uid, id):
+    """One Event as the Console's EventPage draws it: `body` as segment lines (People and Organizations linked),
+    its `join_url`, `uid`, `repeats` and `deleted`, and the `emails` and `domains` for its Context sections; or
+    `available` false with the reason."""
+    from .tui import PALETTE, clock, escape, event_markup
+    e = calendar.current(db, {"uid": uid, "id": id})
+    if e is None or e["deleted_at"]:
+        reason = "This Event is deleted." if e else "This Event is unavailable."
+        title = e["title"] if e else ""
+        return {"available": False, "reason": reason, "body": segments(
+            f"[b {PALETTE['blue']}]{escape(title)}[/]\n[{PALETTE['grey1']}]Event unavailable · {reason}[/]")}
+    e = {**e, "kind": "event", "type": e["kind"], "at": clock.local(e["start"])}
+    markup, emails, known = event_markup(db, e)
+    return {"available": True, "body": segments(markup), "join_url": e["join_url"], "uid": e["uid"], "id": e["id"],
+            "repeats": bool(e["repeats"]), "emails": emails, "domains": known, "orgs": _org_ids(db, known)}
+
+
+def _org_ids(db, domains) -> dict:
+    """Organization ids by domain, for a view to open an "org:<domain>" link."""
+    marks = ",".join("?" * len(domains))
+    return {r[0]: r[1] for r in db.execute(f"SELECT domain, id FROM organizations WHERE domain IN ({marks})", list(domains))} \
+        if domains else {}
+
+
+@query("task.pane", task_id="string")
+def _task_pane(core, db, task_id):
+    """One due Task's pane as the Console's TaskPane draws it: `head`, `body` and `props` as segment lines, its
+    `hint`, the Person's `emails` and Organization `domains` for its Context sections, and its `draft` (id and
+    Thread: a New Thread Draft shows in the Draft editor in place, a Reply Draft opens its Thread's reply box)."""
+    from .tui import KIND_LABEL, escape, task_hint, task_pane_markup, task_props
+    t = next((t for t in sequences.tasks_due(db) if t["id"] == task_id), None)
+    if t is None:
+        raise ApiError(-32602, f"no due Task {task_id}")
+    return {"head": segments(f"[b #45707a]Day {t['day']} · {KIND_LABEL[t['kind']]} · {escape(t['person'])}[/]"),
+            "body": segments("\n".join(task_pane_markup(db, t))), "props": segments(task_props(t)), "hint": task_hint(t),
+            "emails": [r[0] for r in db.execute("SELECT value FROM identities WHERE person_id = ? AND kind = 'email'",
+                                                (t["person_id"],))],
+            "domains": inbox.person_organizations(db, t["person_id"]),
+            "draft": {"id": t["draft_id"], "thread_id": inbox.get_draft(db, t["draft_id"])["thread_id"]} if t["draft_id"] else None}
 
 
 @query("tasks.list")
@@ -219,10 +500,69 @@ def _sequences(core, db):
 
 @query("sequence.page", sequence_id="string")
 def _sequence(core, db, sequence_id):
-    """One Sequence: its Steps, their outline, and what would stop it running."""
+    """One Sequence: its Steps, their outline (each Step row with the Console's `label`, ↩ `reply` Step number,
+    `problem` flag and `what` summary), what would stop it running, and its side pane (`props`) as segment lines."""
+    from .tui import KIND_LABEL, sequence_props_markup
     steps = sequences.sequence_steps(db, sequence_id)
-    return {"sequence": sequences.get_sequence(db, sequence_id), "steps": steps,
-            "outline": sequences.outline(steps), "problems": sequences.validate(db, sequence_id)}
+    problems = sequences.validate(db, sequence_id)
+    flagged = {sid for sid, _ in problems}
+    by_id = {s["id"]: s for s in steps}
+    names = dict(db.execute("SELECT id, name FROM sequences").fetchall())
+    outline = sequences.outline(steps)
+    for line in outline:
+        st = line["step"]
+        if st is None:
+            continue
+        line["label"] = sequences.ACTION_LABEL.get(st["action_kind"]) if st["kind"] == "action" else \
+            f"If · {sequences.CONDITION_LABEL[st['condition']]}" if st["kind"] == "if" else KIND_LABEL[st["kind"]]
+        line["reply"] = by_id[st["reply_to_step_id"]]["position"] if st["reply_to_step_id"] in by_id else None
+        line["problem"] = st["id"] in flagged
+        what = sequences.step_summary(st, names)
+        line["what"] = what.splitlines()[0][:60] if what else ""
+    q = next((q for q in sequences.sequences(db) if str(q["id"]) == str(sequence_id)), None)
+    return {"sequence": sequences.get_sequence(db, sequence_id), "steps": steps, "outline": outline, "problems": problems,
+            "props": segments(sequence_props_markup(db, q)) if q else []}
+
+
+@query("step.editor", step_id="string")
+def _step_editor(core, db, step_id):
+    """One Step as the Console's StepEditor shows it: `head`, `problems` and `preview` as segment lines, its `fields`
+    for this kind of Step as [label, text, placeholder], the body's label and text, the voicemail (a call), and whether
+    it is an Enroll Action (its own hint)."""
+    from .tui import STEP_BODY_LABEL, step_field_values, step_fields, step_markup, step_placeholder
+    st = dict(db.execute("SELECT * FROM sequence_steps WHERE id = ?", (step_id,)).fetchone())
+    values = step_field_values(db, st)
+    head, problems, preview = step_markup(db, st)
+    return {"step": st, "head": segments(head), "problems": segments(problems) if problems else [],
+            "preview": segments(preview) if preview else [],
+            "fields": [[label, values[label], step_placeholder(st, label)] for label in step_fields(st)],
+            "body_label": STEP_BODY_LABEL[st["kind"]], "body": st["body"],
+            "voicemail": st["voicemail"] if st["kind"] == "call" else None, "enroll": st["action_kind"] == "enroll"}
+
+
+@query("step.values", step_id="string", fields="object", body="string", voicemail="string")
+def _step_values(core, db, step_id, fields, body, voicemail):
+    """The Step editor's typed fields (by label) as save_step's `values`, with `same` true when nothing changed;
+    or `error`, the Console's "Not saved" reason. `voicemail` is "" for a Step without one."""
+    from .tui import step_values
+    st = dict(db.execute("SELECT * FROM sequence_steps WHERE id = ?", (step_id,)).fetchone())
+    try:
+        v = step_values(db, st, fields, body, voicemail if st["kind"] == "call" else None)
+        if type(v.get("gap_days", 0)) is not int:
+            raise ValueError("Gap is a whole number of business days, 0 or more.")
+        if (sid := v.get("enroll_sequence_id")) is not None and not db.execute("SELECT 1 FROM sequences WHERE id = ?", (sid,)).fetchone():
+            raise ValueError(f"No Sequence is named {sid}.")
+    except (ValueError, pipeline.Refused) as e:
+        return {"error": str(e)}
+    blank = ("at_time", "linkedin_move", "reply_to_step_id", "pipeline", "stage")
+    same = all((st.get(k) or None) == (val or None) if k in blank else st.get(k) == val for k, val in v.items())
+    return {"values": v, "same": same}
+
+
+@query("step.choices")
+def _step_choices(core, db):
+    """What a new Action can do and what a new If can check, with their labels."""
+    return {"actions": sequences.ACTION_LABEL, "conditions": sequences.CONDITION_LABEL}
 
 
 @query("paused.list")
@@ -243,12 +583,45 @@ def _find(core, db, text):
     return inbox.find_people(db, text)
 
 
+@query("people.merge_preview", keep="string", drop="string")
+def _merge_preview(core, db, keep, drop):
+    """What merging `drop` into `keep` would make, without changing anything: name, Identities, Organizations, counts."""
+    return inbox.merge_preview(db, keep, drop)
+
+
 @query("person.page", person_id="string")
 def _person(core, db, person_id):
-    """One Person: Identities, Threads, Organizations and Enrollments."""
-    return {"person": inbox.person_view(db, person_id),
-            "organizations": inbox.person_organizations(db, person_id),
-            "enrollments": sequences.enrollments(db, person_id)}
+    """One Person: Identities, Threads, Organizations and Enrollments; and as the Console's PersonPage draws it, the
+    `head` and the `rest` (Sequence section, Organizations, Threads, Cases) as segment lines, the `orgs` ids for its
+    links, and the `emails` and `domains` for its Context sections."""
+    from .tui import ICON, escape, glyph, sequence_section
+    p = inbox.person_view(db, person_id)
+    threads = "\n".join(f"[@click=app.open_thread({t.id!r})]{glyph(t.status_detail)} [underline]{escape(t.title)}[/][/]"
+                        for t in p["threads"]) or "—"
+    orgs = ", ".join(f"[@click=app.open_org('{o}')][underline]{escape(o)}[/][/]" for o in p["organizations"]) or "—"
+    section = sequence_section(db, person_id)
+    rest = ((f"\n{section}\n" if section else "") + f"\n[#928374]{ICON['organizations']} organizations[/]\n{orgs}\n\n"
+            f"[#928374]{ICON['threads']} threads[/]\n{threads}\n\n"
+            f"[#928374]{ICON['cases']} cases[/]\n{escape(', '.join(p['cases']) or '—')}")
+    return {"person": p, "organizations": inbox.person_organizations(db, person_id),
+            "enrollments": sequences.enrollments(db, person_id),
+            "head": segments(f"[b #45707a]{ICON['person']} {escape(p['name'])}[/]\n\n[#928374]{ICON['identity']} identities[/]"),
+            "rest": segments(rest), "orgs": _org_ids(db, p["organizations"]),
+            "emails": [i["value"] for i in p["identities"] if i["kind"] == "email"], "domains": p["organizations"]}
+
+
+@query("enroll.start", text="string")
+def _enroll_start(core, db, text):
+    """A typed start for an Enrollment (YYYY-MM-DD or a number of days) as YYYY-MM-DD, or null when it is neither."""
+    from . import clock
+    day = sequences.parse_start(text, clock.now())
+    return day.isoformat() if day else None
+
+
+@query("enrollment.first_due", enrollment_id="string")
+def _first_due(core, db, enrollment_id):
+    """When an Enrollment's first Task is due, as the Console's enroll toast says it."""
+    return sequences.first_due(db, enrollment_id)
 
 
 @query("organizations.list")
@@ -259,8 +632,39 @@ def _organizations(core, db):
 
 @query("organization.page", domain="string")
 def _organization(core, db, domain):
-    """One Organization by its domain."""
-    return inbox.organization_view(db, domain)
+    """One Organization by its domain; and as the Console's OrganizationPage shows it: `side` (its Pipeline section and
+    People with their identities) as segment lines, `org` (id, name, domain), `emails` for its Context sections, and
+    `stages`: the Pipelines it holds a Stage in, its current Stage in each, every Pipeline's Stages and names."""
+    from .tui import ICON, IDENTITY_ICON, escape, pipeline_section
+    v = inbox.organization_view(db, domain)
+    r = db.execute("SELECT id, domain, name FROM organizations WHERE domain = ?", (domain,)).fetchone()
+    o = dict(r) if r else None
+    people = v["people"]
+    side = (pipeline_section(db, o["id"]) + "\n\n" if o else "") + ("\n\n".join(
+        f"[@click=app.open_person({p['id']!r})][b underline]{escape(p['name'])}[/][/]\n"
+        + "\n".join(f"[#928374]{ICON[IDENTITY_ICON[i['kind']]]} {escape(i['value'])}[/]" for i in p["identities"])
+        for p in people) or "[#928374]No people yet.[/]")
+    current = pipeline.current(db, o["id"]) if o else {}
+    return v | {"side": segments(side), "org": o,
+                "emails": [i["value"] for p in people for i in p["identities"] if i["kind"] == "email"],
+                "stages": {"held": [p for p, st in current.items() if st["stage"]],
+                           "current": {p: st["stage"] for p, st in current.items()},
+                           "all": {p: list(pipeline.STAGES[p]) for p in pipeline.PIPELINES}, "names": pipeline.NAMES}}
+
+
+@query("people.find", text="string")
+def _people_find(core, db, text):
+    """People matching an address, number or name, as [id, name] pairs (the Console's find_people)."""
+    return [list(m) for m in inbox.find_people(db, text)]
+
+
+@query("amount.parse", text="string")
+def _amount(core, db, text):
+    """A typed Value (90k, 1.5m, 85000) as a whole number of dollars, or null when it is not one."""
+    try:
+        return pipeline.parse_amount(text)
+    except Exception:
+        return None
 
 
 @query("pipeline.page", name="string")
@@ -270,6 +674,55 @@ def _pipeline(core, db, name):
     m = pipeline.math(db, p) if p in pipeline.MATH else None
     verdict = pipeline.on_track(m) if m else None
     return {"math": m, "verdict": list(verdict) if verdict else None, "board": pipeline.board_markdown(db, p)}
+
+
+@query("pipeline.board", name="string")
+def _pipeline_board(core, db, name):
+    """One Pipeline as the Console's PipelinePage lays it out: the THIS WEEK, PROGRESS and CONSTRAINT boxes, the
+    ORGANIZATIONS board (a column per Stage, its header with count and conversion, the Constraint's marked; each
+    card's Organization and lines), the WEEKLY REVIEW rows and legend, all as segment lines; `board_only` for Talent;
+    and `copy`, the Markdown y copies for an agent."""
+    from .tui import (PALETTE, card, column_head, escape, pipeline_constraint, pipeline_progress, pipeline_week)
+    p = pipeline.parse_pipeline(name)
+    m = pipeline.math(db, p)
+    board_only = p not in pipeline.MATH
+    g = PALETTE["grey1"]
+    rows = {r["stage"]: r for r in m["stages"] + m["ending"]}
+    c = m["summary"]["constraint"]
+    columns = []
+    for stage in pipeline.OPEN[p] + tuple(label for label, _ in pipeline.END_ROWS[p]):
+        r = rows[stage]
+        hot = not board_only and c is not None and bool(r.get("constraint") or (r.get("measure") and r["measure"] == c["stage"]))
+        head = f"[b #654735]{r['stage']}[/]\n[b]{len(r['orgs'])}[/]" if board_only else column_head(r, hot)
+        columns.append({"stage": stage, "head": segments(head), "cards": [
+            {"org": {"id": o["id"], "domain": o["domain"], "name": o["name"]}, "lines": segments(card(o, m["now"], not board_only))}
+            for o in r["orgs"]]})
+    weekly = []
+    for r in m["stages"]:
+        convert = pipeline.pct(r["rate"]) if r["rate"] is not None else \
+            f"[{g}]{pipeline.pct(r['used'])} (benchmark)[/]" if r["assumed"] else f"[{g}]no data[/]"
+        days = f"{r['time']:.0f}" if r["time"] is not None else "—"
+        stage = f"[b {PALETTE['red']}]{r['stage']} ◀[/]" if r["constraint"] else escape(r["stage"])
+        short = f"[{PALETTE['red']}]{pipeline.num(-r['pace'])}[/]" if r["pace"] is not None and r["pace"] < 0 else f"[{g}]—[/]"
+        weekly.append([segments(x)[0] if x else [] for x in (stage, str(len(r["orgs"])), convert, pipeline.pct(r["benchmark"]), days,
+                       pipeline.pct(r["to_paying"]), pipeline.num(r["need"]), pipeline.num(r["entries"]), short)])
+    for r in m["ending"]:
+        if r["measure"]:
+            word = "keep" if r["measure"] == "GRR" else "grow"
+            rate = f"{word} {pipeline.pct(r['rate'])}" if r["rate"] is not None else f"[{g}]no data[/]"
+            weekly.append([segments(x)[0] if x else [] for x in (escape(r["stage"]), str(len(r["orgs"])), rate,
+                                                                  pipeline.pct(r["benchmark"]), "", "", "", "", "")])
+    paid = pipeline.PAYING[p][0]
+    copy = (pipeline.board_markdown(db, p) if board_only else pipeline.markdown(m)) + \
+        f"\nFresh copy: `comms-terminal pipeline {pipeline.NAMES[p].lower()}`\n"
+    return {"name": pipeline.NAMES[p], "board_only": board_only,
+            "week": segments(pipeline_week(m)), "progress": segments(pipeline_progress(m)),
+            "constraint": segments(pipeline_constraint(m)), "columns": columns,
+            "weekly_head": ["Stage", "Organizations", "Convert", "Benchmark", "Days in Stage", f"Reach {paid}", "Need a week",
+                            "Getting a week", "Short by"], "weekly": weekly,
+            "legend": "Convert: share of Organizations that moved on to the next Stage in the last 12 months · Benchmark:"
+                      " Winning by Design's Bowtie Standard, Table 6.2 · Need and Getting: Organizations entering the Stage a week"
+                      " · Short by: how many more a week the Target needs", "copy": copy}
 
 
 @query("pipeline.stages")
@@ -391,7 +844,7 @@ class Core:
         return done.result()
 
     def notify(self, message, severity="information", timeout=None):
-        self.publish("toast", {"message": message, "severity": severity})
+        self.publish("toast", {"message": message, "severity": severity, "timeout": timeout})
 
     def apply_snapshot(self, syncer, body):
         if syncer.apply(self.db, body):
@@ -549,6 +1002,32 @@ class Core:
     def slack_reactions(self, payload):
         return remote.socket_slack_reactions(self._socket())(payload)
 
+    def context(self, source, emails, domains):
+        """A Context source's answer for these addresses, as the Console's ContextSection.fetch: `answer` is None
+        when the source is not connected (or no Service answers), `error` says why a connected one failed."""
+        if source not in ("attio", "tana", "linear"):
+            raise ApiError(-32602, "source must be attio, tana or linear")
+        try:
+            socket = self._socket()
+        except Exception:
+            socket = None
+        if not socket:
+            return {"answer": None, "error": None}
+        try:
+            return {"answer": remote.socket_context(socket, source)(list(emails), list(domains)), "error": None}
+        except remote.ReplyError as e:
+            return {"answer": None, "error": str(e)}
+
+    def context_section(self, source, emails, domains):
+        """A Context source's section as the Console's ContextSection draws it: its title and segment lines; null
+        when the source is not connected or no Service answers (the Console hides it then)."""
+        from .tui import CONTEXT_SOURCES, ICON
+        r = self.context(source, emails, domains)
+        if r["answer"] is None and r["error"] is None:
+            return None
+        title, icon, markup = CONTEXT_SOURCES[source]
+        return {"title": f"{ICON[icon]} {title.lower()}", "lines": segments(markup(r["answer"], r["error"], width=40))}
+
     def upload(self, owner_kind, owner_id, path):
         """Stage a file from this machine's disk on a Draft or Thread, through the Service's upload page (FR-A9)."""
         if owner_kind not in ("draft", "thread"):
@@ -593,6 +1072,11 @@ SERVICE = {  # method -> (Core method, {param: (json type, required)}, summary)
     "respond": (Core.respond, {"payload": ("object", True)}, "Respond to an invite (FR-13e; Jeremy only)."),
     "slack.reactions": (Core.slack_reactions, {"payload": ("object", True)},
                         "Read, add or remove Jeremy's own Slack reaction (FR-R)."),
+    "context": (Core.context, {"source": ("string", True), "emails": ("array", True), "domains": ("array", True)},
+                "A Context source's read-only answer (Attio, Tana, Linear) for these addresses and domains."),
+    "context.section": (Core.context_section, {"source": ("string", True), "emails": ("array", True),
+                                                "domains": ("array", True)},
+                        "A Context source's section (Attio, Tana, Linear) drawn as the Console draws it, or null."),
     "upload": (Core.upload, {"owner_kind": ("string", True), "owner_id": ("string", True), "path": ("string", True)},
                "Stage a file from this machine on a Draft or Thread."),
 }

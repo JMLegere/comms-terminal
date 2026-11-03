@@ -1,5 +1,6 @@
 // Pickers and prompts for every view, drawn over the whole window (the Console's Pick and Ask). A view opens one:
-//   setShared("picker", { title, options: [{ value, label, hint }], reply: "thread.picked", prompt: "placeholder" });
+//   setShared("picker", { title, options: [{ value, label, hint }], reply: "thread.picked", prompt: "placeholder",
+//     body: [{ text, dim, strong, label }] });  // body: lines shown above the options, as a Console Pick body; a label sits dim before its text
 //   run("overlay.open");
 // Typing filters the options (or is the answer, with `prompt` and no options); ↑/↓ move, Enter chooses, Escape
 // cancels. The choice goes back as the command `<reply>:<JSON {value, text}>`.
@@ -79,6 +80,10 @@ export default class Overlay extends View {
           cx.stop_propagation();
         })
         .child(div().px(14).pt(12).pb(6).text_size(11.5).font_medium().text_color(t.dim).child(p.title ?? ""))
+        .when(Boolean(p.body), (el) => el.child(v_flex().px(14).pb(8).gap(2).text_size(12.5)
+          .children(p.body.map((line) => h_flex().gap(0)
+            .when(Boolean(line.label), (r) => r.child(div().w(84).flex_none().text_color(t.muted).child(line.label ?? "")))
+            .child(div().flex_1().min_w(0).text_color(line.dim ? t.dim : t.foreground).when(Boolean(line.strong), (d) => d.font_semibold()).child(line.text ?? ""))))))
         .child(div().px(10).pb(8).child(Input.new(this.input)))
         .when(Boolean(p.prompt && !options.length), (el) => el.child(div().px(14).pb(12).text_size(12).text_color(t.dim).child(p.prompt)))
         .child(v_flex().id("picker-options").flex_1().min_h(0).overflow_y_scroll().px(6).pb(6)

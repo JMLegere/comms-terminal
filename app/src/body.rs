@@ -5,8 +5,8 @@
 //! litehtml runs on one worker thread: a heavy newsletter takes up to half a second to lay out (Phase 0), and the
 //! window must keep moving between Threads meanwhile (NFR-1). The window reads what the worker finished (each
 //! body's height and painted tiles), asks for what is missing, and paints again when it arrives. The page is
-//! painted in tiles as it scrolls into view, so a long newsletter costs a few screens of pixels. A plain click on
-//! a link opens it in the default browser (FR-9), through litehtml's own anchor handling.
+//! painted in tiles as it scrolls into view, so a long newsletter costs a few screens of pixels. Ctrl+click (Cmd+click
+//! on macOS) on a link opens it in the default browser (FR-9, D44), through litehtml's own anchor handling.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -440,7 +440,9 @@ impl Element for BodyElement {
         });
         let (key, hit) = (self.key.clone(), hitbox.clone());
         window.on_mouse_event(move |event: &MouseUpEvent, phase, window, _| {
-            if phase == DispatchPhase::Bubble && event.button == MouseButton::Left && hit.is_hovered(window) {
+            // Ctrl+click (Cmd+click on macOS) opens a link; a plain click only selects (D44, accepted as Ctrl+click).
+            let opener = event.modifiers.control || event.modifiers.platform;
+            if phase == DispatchPhase::Bubble && event.button == MouseButton::Left && opener && hit.is_hovered(window) {
                 let (x, y) = (f32::from(event.position.x - origin.x), f32::from(event.position.y - origin.y));
                 send(Job::Click { key: key.clone(), x, y });
             }

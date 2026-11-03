@@ -28,8 +28,8 @@ export function setShared(key: string, value: unknown): boolean;
 /** Open a link in the default browser: an http, https or mailto link, such as an Attachment's `url`. */
 export function open(url: string): void;
 
-/** Show a message in the status bar, as the core's own toasts show. */
-export function toast(message: string, severity?: "information" | "warning" | "error"): void;
+/** Show a timed notification, bottom right, as the core's own toasts show; `timeout` in seconds (5 by default). */
+export function toast(message: string, severity?: "information" | "warning" | "error", timeout?: number): void;
 
 /** keys.json as it stands: { "global": { "j": "threads.next" }, "page:<name>": { … } }. */
 export function keys(): Record<string, Record<string, string>>;

@@ -1,71 +1,105 @@
-// One calendar Event: when, where, who, and Jeremy's Invite state. o opens its join link; i Responds (accept,
-// maybe or decline) through Google Calendar; a Repeating Event's answer covers the whole series.
-import { View, div, svg } from "gpui-kit";
+// One calendar Event, as the Console's EventPage (D94, D95): title and Invite state, time and repeat, "i respond",
+// location, the join link, the organizer and attendees with their answers (each linked to their Person, with open
+// Threads and Cases), Organizations, the description with the Meet/Zoom footer folded, and the Context sources
+// beside it. o toasts the join link (Ctrl+click opens it); i Responds (accept, maybe or decline) through Google
+// Calendar; a Repeating Event's answer covers the whole series. Shared "event" names it: {uid, id}.
+import { View, div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { call, nextCommand, theme, shared, setShared, run, open, toast } from "comms";
 
-const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const ANSWERS = { accept: "Accepted", maybe: "Maybe", decline: "Declined" };
-const when = (e) => {
-  const s = new Date(e.start), end = new Date(e.end);
-  const date = `${DAYS[s.getDay()]}, ${MONTHS[s.getMonth()]} ${s.getDate()}`;
-  return e.all_day ? `${date} · all day` : `${date} · ${s.toTimeString().slice(0, 5)}–${end.toTimeString().slice(0, 5)}`;
-};
+const SOURCES = ["attio", "tana", "linear"];
+
+/** Console segment lines ([text, colour, bold, link]) as rows; a person or org link opens that page on the stack; a
+ * URL opens on Ctrl+click (Cmd+click on macOS), as message links do (D44). */
+export function segLines(t, lines, key = "s", orgs = {}) {
+  const GREY = { "#928374": "muted", "#a89984": "dim", "#7c6f64": "muted" };
+  const color = (hex) => (hex ? t[GREY[hex]] ?? hex : t.foreground);
+  const follow = (link, ev) => {
+    const push = (entry) => { setShared("push", entry); run("nav.push"); };
+    if (link.startsWith("person:")) push({ page: "person", person: link.slice(7) });
+    else if (link.startsWith("org:")) push({ page: "organization", organization: { domain: link.slice(4), id: orgs[link.slice(4)] ?? null } });
+    else if (ev?.modifiers?.control || ev?.modifiers?.platform) open(link);
+  };
+  return (lines ?? []).map((segs, r) => (segs.length ? h_flex().w_full().gap(0).flex_wrap()
+    .children(segs.map(([text, hex, bold, link], i) => div().min_w(0).text_color(link ? t.blue : color(hex)).when(Boolean(bold), (d) => d.font_semibold())
+      .when(Boolean(link), (d) => d.id(`${key}-${r}-${i}`).cursor_pointer().on_click((ev) => follow(link, ev))).child(text)))
+    : div().h(10)));
+}
 
 export default class Event extends View {
   init(_props, cx) {
+    this.page = null;
+    this.context = [];
     cx.spawn(async (cx) => {
-      while (true) {
-        const c = await nextCommand();
-        const at = c.indexOf(":");
-        const name = at < 0 ? c : c.slice(0, at);
-        const answer = at < 0 ? null : JSON.parse(c.slice(at + 1));
-        const e = shared("event");
-        if (name === "show") cx.notify();
-        else if (name === "join") e?.join_url ? open(e.join_url) : toast("No join link for this Event.");
-        else if (name === "respond" && e) {
-          if (e.deleted_at) { toast("Not answered · This Event is deleted.", "error"); continue; }
-          setShared("picker", { title: `Respond${e.repeats ? " · the whole series" : ""}`, reply: "event.answered",
-            options: Object.entries(ANSWERS).map(([value, label]) => ({ value, label })) });
-          run("overlay.open");
-        } else if (name === "answered" && e) {
-          toast(`Answering ${ANSWERS[answer.value].toLowerCase()}…`);
-          try {
-            const r = await call("respond", { payload: { event_uid: e.uid, answer: answer.value } });
-            if (r?.outcome === "confirmed") toast(`${ANSWERS[answer.value]} · Google told the organizer.`);
-            else if (r?.outcome === "refused" || r?.outcome === "unavailable") toast(`Not answered · ${r.error ?? "Google Calendar unavailable"}`, "error");
-            else toast("Outcome unknown · check the Event in Google Calendar before answering again.", "error");
-          } catch (err) {
-            toast(`Not answered · ${err}`, "error");
-          }
-        }
-      }
+      while (true) this.command(await nextCommand(), cx);
     });
+    this.load(cx);
+  }
+
+  load(cx) {
+    const e = shared("event");
+    if (!e?.uid) { this.page = null; return cx.notify(); }
+    cx.spawn(async (cx) => {
+      try {
+        const page = await call("event.page", { uid: e.uid, id: e.id });
+        if (shared("event")?.id !== e.id) return;
+        const fresh = this.page?.key !== e.id;
+        this.page = { ...page, key: e.id };
+        this.error = null;
+        if (fresh) {
+          this.context = [];
+          if (page.available) for (const source of SOURCES) call("context.section", { source, emails: page.emails, domains: page.domains })
+            .then((s) => { if (s && shared("event")?.id === e.id) { this.context = [...this.context, s]; cx.notify(); } }).catch(() => {});
+        }
+      } catch (err) {
+        this.error = String(err);
+      }
+      cx.notify();
+    });
+  }
+
+  async command(c, cx) {
+    const at = c.indexOf(":");
+    const name = at < 0 ? c : c.slice(0, at);
+    const answer = at < 0 ? null : JSON.parse(c.slice(at + 1));
+    const p = this.page;
+    if (name === "show") return this.load(cx);
+    if (name === "scroll_down" || name === "scroll_up") return run(`app.${name}`);
+    if (name === "join") { // D95: a toast with the link, as the Console's; Ctrl+click opens it
+      if (!p?.available) return toast("No current Event details available.");
+      return p.join_url ? toast(p.join_url, "information", 15) : toast("No join link for this Event.");
+    }
+    if (name === "respond") {
+      if (!p?.available) return toast(`Not answered · ${p?.reason ?? "This Event is unavailable."}`, "error");
+      setShared("picker", { title: `Respond${p.repeats ? " · the whole series" : ""}`, reply: "event.answered",
+        options: Object.entries(ANSWERS).map(([value, label]) => ({ value, label })) });
+      return run("overlay.open");
+    }
+    if (name === "answered" && p) {
+      toast(`Answering ${ANSWERS[answer.value].toLowerCase()}…`);
+      try {
+        const r = await call("respond", { payload: { event_uid: p.uid, answer: answer.value } });
+        if (r?.outcome === "confirmed") toast(`${ANSWERS[answer.value]} · Google told the organizer.`);
+        else if (r?.outcome === "refused" || r?.outcome === "unavailable") toast(`Not answered · ${r.error ?? "Google Calendar unavailable"}`, "error");
+        else toast("Outcome unknown · check the Event in Google Calendar before answering again.", "error");
+      } catch (err) {
+        toast(`Not answered · ${err}`, "error");
+      }
+    }
   }
 
   render() {
     const t = theme();
-    const e = shared("event");
-    const pane = v_flex().size_full().min_h(0).bg(t.background).text_size(13);
-    if (!e) return pane.child(div().p(24).text_color(t.dim).child("No Event on this day"));
-    const label = (text) => div().pt(6).text_size(11.5).font_medium().text_color(t.dim).child(text);
-    return pane
-      .child(h_flex().h(30).flex_none().px(12).gap(8).items_center().border_b(1).border_color(t.border).text_size(12).text_color(t.muted)
-        .child(svg("icons/calendar.svg").size(13).text_color(t.accent))
-        .child(div().flex_1().font_medium().text_color(t.foreground).child("Event"))
-        .child(div().text_size(11).text_color(t.dim).child("o join · i respond")))
-      .child(v_flex().id("event").flex_1().min_h(0).overflow_y_scroll().px(24).py(18).gap(8)
-        .child(div().text_size(18).font_semibold().text_color(t.strong ?? t.foreground).child(e.title))
-        .child(div().text_color(t.foreground).child(when(e)))
-        .child(div().text_color(t.muted).child(`${(e.state ?? "").toLowerCase().replace("_", " ")}${e.repeats ? " · repeats" : ""}`))
-        .when(Boolean(e.location), (el) => el.child(div().text_color(t.foreground).child(e.location)))
-        .when(Boolean(e.join_url), (el) => el.child(div().id("join").text_color(t.accent).cursor_pointer().on_click(() => open(e.join_url)).child("Join · o")))
-        .when(Boolean(e.organizer), (el) => el.child(label("Organizer")).child(div().text_color(t.foreground).child(e.organizer?.name || e.organizer?.email || "")))
-        .child(label(`Attendees · ${(e.attendees ?? []).length}`))
-        .children((e.attendees ?? []).map((a) => h_flex().gap(8).text_size(12.5)
-          .child(div().flex_1().min_w(0).truncate().text_color(t.foreground).child(a.name || a.email))
-          .child(div().text_size(11).text_color(t.dim).child((a.state ?? "").toLowerCase().replace("_", " ")))))
-        .when(Boolean(e.description), (el) => el.child(label("Description")).child(div().text_size(12.5).line_height(1.5).text_color(t.muted).child(e.description))));
+    const p = this.page;
+    const root = v_flex().size_full().min_h(0).bg(t.background).text_size(13);
+    if (!p) return root.child(div().p(24).text_color(t.muted).child(this.error ?? "No Event selected."));
+    return root.child(h_flex().flex_1().min_h(0).items_start()
+      .child(v_flex().id("event-body").flex_1().min_w(0).h_full().overflow_y_scroll().px(20).py(14).gap(2)
+        .children(segLines(t, p.body, "e", p.orgs ?? {})))
+      .child(v_flex().id("event-context").w(320).flex_none().h_full().overflow_y_scroll().px(16).py(14).gap(8).border_l(1)
+        .border_color(t.border).text_size(12.5)
+        .children(this.context.map((s) => v_flex().p(8).gap(2).rounded(6).border(1).border_color(t.border)
+          .child(div().text_color(t.muted).child(s.title)).children(segLines(t, s.lines, `c${s.title}`))))));
   }
 }

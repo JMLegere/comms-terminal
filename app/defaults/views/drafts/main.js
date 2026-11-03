@@ -1,18 +1,43 @@
-// Drafts: every Draft, newest first. j/k move and the Draft fills the right pane (the draft view); n starts a New
-// Thread Draft on a Connection; x deletes; y copies it for an agent; Enter edits.
-import { View, div, svg } from "gpui-kit";
+// Drafts, as the Console's DraftsPage: failed scheduled sends first, then unsent, then scheduled by send time; one
+// row each (kind, To as names, Subject with "Reply Draft · " before a reply's, status). j/k move and the Draft fills
+// the right pane (the draft view); n starts a New Thread Draft; x deletes (z undoes); y copies it for an agent;
+// Enter edits a New Thread Draft and opens a Reply Draft's Thread with its reply box (D69); ctrl+s, ctrl+enter
+// save and send from the list too (D78).
+import { View, div } from "gpui-kit";
 import { v_flex, h_flex, v_virtual_list, VirtualListScrollHandle } from "gpui-base";
 import { call, nextEvent, nextCommand, theme, shared, setShared, run, toast } from "comms";
 
 const FORMAT = { gmail: "email", fastmail: "email", slack: "slack", quo: "sms" };
+const KIND = { email: "\u{f01f0}", slack: "\u{f04b1}", sms: "\u{f011c}" };
+const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
-function when(iso) {
-  if (!iso) return "";
-  const mins = Math.round((Date.now() - new Date(iso)) / 60000);
-  if (mins < 60) return `${Math.max(mins, 1)}m`;
-  if (mins < 1440) return `${Math.round(mins / 60)}h`;
-  return mins < 10080 ? `${Math.round(mins / 1440)}d` : iso.slice(5, 10);
+/** The Console's Drafts order (Jeremy, 2026-10-17): failed scheduled sends, then unsent, then scheduled by time. */
+export function ordered(rows) {
+  const rank = (d) => d.send_error ? [0, ""] : d.send_at ? [2, d.send_at] : [1, ""];
+  return [...rows].sort((a, b) => { const x = rank(a), y = rank(b); return x[0] - y[0] || (x[1] < y[1] ? -1 : x[1] > y[1] ? 1 : 0); });
 }
+
+/** A row's status word and its colour token, as the Console's cells. */
+export function status(d, unsaved) {
+  if (unsaved) return ["unsaved", "muted"];
+  if (d.send_error) return ["failed", "red"];
+  if (d.needs_edit) return ["edit me", "yellow"];
+  if (d.send_at) return [`\u{f0150} ${DAYS[new Date(d.send_at).getDay()]}`, "muted"];
+  return ["saved", "muted"];
+}
+
+/** Opens a Reply Draft's Thread where it lives, selected, with its reply box open (the Console's open_reply). */
+export async function openReply(threadId) {
+  const th = (await call("thread.view", { thread_id: threadId })).view.thread, v = th?.f ?? th;
+  const view = v.status_detail === "IGNORED" ? "ignored" : { TODO: "todo", SNOOZED: "snoozed", DONE: "done" }[v.status] ?? "todo";
+  setShared("thread", threadId);
+  run(`nav.${view}`);
+  run("thread.show");
+  run("thread.open_reply");
+}
+
+// The one undo (nav owns z), as thread/main.js offerUndo.
+const offerUndo = (message, steps) => { setShared("undo", { message, steps }); toast(`${message}  z undo`); };
 
 export default class Drafts extends View {
   init(_props, cx) {
@@ -31,7 +56,7 @@ export default class Drafts extends View {
     cx.spawn(async (cx) => {
       try {
         const was = this.rows.findIndex((r) => r.id === shared("draft"));
-        this.rows = (await call("drafts.list")).sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? ""));
+        this.rows = ordered(await call("drafts.list"));
         this.error = null;
         if (shared("page") === "drafts" && !this.rows.some((r) => r.id === shared("draft")))
           this.select(this.rows[Math.max(0, Math.min(was, this.rows.length - 1))]?.id ?? null);
@@ -61,6 +86,12 @@ export default class Drafts extends View {
         const row = this.rows[Math.max(0, Math.min(this.rows.length - 1, i + (name === "next" ? 1 : -1)))];
         return row && this.select(row.id);
       }
+      case "enter": {
+        const d = this.rows[i];
+        if (!d) return;
+        if (d.thread_id) return cx.spawn(async () => openReply(d.thread_id).catch((e) => toast(String(e), "error")));
+        return run("draft.edit");
+      }
       case "new":
         return cx.spawn(async () => {
           const conns = (await call("connections.list")).filter((c) => FORMAT[c.platform]);
@@ -83,31 +114,17 @@ export default class Drafts extends View {
           }
           cx.notify();
         });
-      case "delete":
+      case "delete": // as the Console: delete, then z undo restores it
         if (!id) return;
-        setShared("picker", { title: "Delete this draft?", reply: "drafts.delete-picked",
-          options: [{ value: "delete", label: "Delete the draft" }, { value: "keep", label: "Keep it" }] });
-        return run("overlay.open");
-      case "delete-picked":
-        if (answer.value !== "delete") return;
         return cx.spawn(async () => {
           try {
-            await call("command.inbox.delete_draft", { draft_id: id });
-            toast("Draft deleted.");
+            const draft = await call("command.inbox.delete_draft", { draft_id: id });
+            offerUndo("Draft deleted.", [["inbox.restore_draft", { draft }]]);
           } catch (e) {
-            toast(String(e), "error");
+            toast("Draft not deleted · delete failed.", "error");
           }
         });
-      case "copy":
-        if (!id) return;
-        return cx.spawn(async (cx) => {
-          try {
-            cx.write_to_clipboard(await call("draft.markdown", { draft_id: id }));
-            toast("Copied the draft for an agent.");
-          } catch (e) {
-            toast(String(e), "error");
-          }
-        });
+      case "copy": return id && run("draft.copy"); // the editor's values as they stand (D72)
     }
   }
 
@@ -116,27 +133,25 @@ export default class Drafts extends View {
     const selected = shared("draft");
     const rows = this.rows;
     const row = (r) => {
-      const active = r.id === selected;
-      const state = r.sending_at ? ["Send outcome unknown", t.danger] : r.send_error ? ["Scheduled send failed", t.danger]
-        : r.send_at ? [`Sends ${r.send_at.slice(5, 16).replace("T", " ")}`, t.accent] : r.needs_edit ? ["Needs edit", t.status_waiting] : null;
-      return v_flex().h(52).px(8).justify_center().rounded(8).gap(2).cursor_pointer()
-        .when(active, (el) => el.bg(t.selected)).hover((s) => s.bg(t.hover))
-        .child(h_flex().gap(9).items_center()
-          .child(div().flex_1().min_w(0).truncate().font_medium().text_color(t.foreground).child(r.subject || r.to || "(no subject)"))
-          .when(Boolean(state), (el) => el.child(div().flex_none().text_size(11).text_color(state[1]).child(state[0])))
-          .child(div().flex_none().text_size(11).text_color(t.dim).child(when(r.updated_at))))
-        .child(div().truncate().text_color(t.muted).child(`${r.thread_id ? "Reply · " : ""}${r.to ? `${r.to} · ` : ""}${(r.body ?? "").split("\n")[0]}`));
+      const [word, tone] = status(r, shared("draft_unsaved") === r.id);
+      const title = (r.subject || r.body || "New draft").replace(/\r?\n/g, " ");
+      return h_flex().h(26).px(8).gap(8).rounded(4).items_center().cursor_pointer()
+        .when(r.id === selected, (el) => el.bg(t.selected)).hover((s) => s.bg(t.hover))
+        .child(div().w(16).flex_none().text_color(t.muted).child(KIND[r.kind] ?? ""))
+        .child(div().w(140).flex_none().truncate().font_semibold().text_color(t.strong ?? t.foreground).child(r.recipient || "No recipient"))
+        .child(h_flex().flex_1().min_w(0).gap(0)
+          .when(Boolean(r.thread_id), (el) => el.child(div().flex_none().text_color(t.blue).child("Reply Draft · ")))
+          .child(div().flex_1().min_w(0).truncate().text_color(t.foreground).child(title)))
+        .child(div().w(56).flex_none().text_color(t[tone]).child(word));
     };
     return v_flex().size_full().min_h(0).bg(t.background).text_size(13)
       .child(h_flex().h(30).flex_none().px(12).gap(8).items_center().border_b(1).border_color(t.border).text_size(12)
-        .child(svg("icons/square-pen.svg").size(13).text_color(t.accent))
-        .child(div().font_medium().text_color(t.foreground).child("Drafts"))
-        .child(div().flex_1().text_color(t.dim).child(`· ${rows.length}`))
-        .child(div().text_size(11).text_color(t.dim).child("n new · x delete · y copy")))
+        .child(div().text_color(t.accent).child("\u{f0cb6}"))
+        .child(div().font_medium().text_color(t.foreground).child(`drafts · ${rows.length}`)))
       .when(Boolean(this.error), (el) => el.child(div().p(12).text_size(12).text_color(t.danger).child(this.error ?? "")))
-      .when(!this.error && !rows.length, (el) => el.child(div().p(16).text_color(t.dim).child("No drafts. n starts one.")))
-      .child(div().flex_1().min_h(0).px(6).py(6).child(
-        v_virtual_list("drafts", rows.length, 52, (i) => rows[i].id, (range) => rows.slice(range.start, range.end).map(row))
+      .when(!this.error && !rows.length, (el) => el.child(div().p(16).text_color(t.muted).child("No drafts · n new")))
+      .child(div().flex_1().min_h(0).px(4).py(4).child(
+        v_virtual_list("drafts", rows.length, 26, (i) => rows[i].id, (range) => rows.slice(range.start, range.end).map(row))
           .size_full().track_scroll(this.scroll)
           .on_item_click((key) => this.select(key))));
   }

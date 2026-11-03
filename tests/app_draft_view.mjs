@@ -23,7 +23,7 @@ const modules = {
     async call(method, params) {
       calls.push({ method, params });
       if (method === "command.inbox.save_draft") { saved = params.values; return { ...saved, revision: 2 }; }
-      if (method === "send.later") return null;
+      if (method === "send.later" || method === "draft.problem") return null;
       if (method === "send.reply" || method === "send.draft") return null;
       throw Error(`Unexpected Local API call: ${method}`);
     },
@@ -51,6 +51,7 @@ editor.cc = field(" copy@example.test ");
 editor.subject = field("Edited subject");
 editor.body = field(process.argv[3] === "Body" ? "  " : "Edited text");
 editor.unsaved = true;
+editor.info = { connection: "Gmail · me@example.test", sender: "me@example.test" };
 const cx = { notify() {}, stop_propagation() {}, spawn(fn) { const task = fn(cx); tasks.push(task); return task; } };
 editor.render();
 assert.equal(handlers.length, 1);
