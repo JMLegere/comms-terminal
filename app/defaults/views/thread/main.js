@@ -179,6 +179,7 @@ export default class Thread extends View {
 
   load(cx) {
     const id = this.id();
+    if (this.ms?.id !== id) this.leaveProps(); // another Thread: its properties are not focused
     if (this.reply && this.reply.thread !== id) this.close(cx);
     if (!id) {
       this.view = null;
@@ -371,13 +372,25 @@ export default class Thread extends View {
       }
       case "scroll_down": case "scroll_up": return run(`app.${name}`); // space/pgdn/pgup: a page of messages (D55)
       // Element focus: → or Enter from the list lands on the newest message; j/k walk the messages; Enter folds one.
-      case "focus_entry": return this.focusMsg(-1, cx);
-      case "next": case "prev": {
+      case "focus_entry": this.leaveProps(); return this.focusMsg(-1, cx);
+      case "right": // into the properties column
+        if (!this.links?.length) return;
+        this.inProps = true; this.pi = 0;
+        setShared("subcol", "props");
+        return this.linkTarget(cx);
+      case "left": { this.leaveProps(); const st = this.msgState(); return this.focusMsg(st.mi ?? -1, cx); }
+      case "tab": return this.open("all", cx); // the next section down: the reply box
+      case "next": case "prev": if (this.inProps) {
+        this.pi = Math.max(0, Math.min((this.links?.length ?? 1) - 1, (this.pi ?? 0) + (name === "next" ? 1 : -1)));
+        return this.linkTarget(cx);
+      } // falls through: the messages
+      case "walk": {
         const st = this.msgState();
         st.lines = true; // every message has a row while the keyboard walks them
         return this.focusMsg((st.mi ?? (v?.messages ?? []).length - 1) + (name === "next" ? 1 : -1), cx);
       }
       case "enter": {
+        if (this.inProps) return this.links?.[this.pi ?? 0]?.go(null, cx);
         const st = this.msgState(), m = (v?.messages ?? [])[st.mi ?? -1];
         if (!m) return this.focusMsg(-1, cx);
         const opened = defaultOpen(v.messages), i = st.mi, nid = m.native_id;
@@ -611,6 +624,17 @@ export default class Thread extends View {
     cx.notify();
   }
 
+  leaveProps() {
+    if (this.inProps) setShared("subcol", null);
+    this.inProps = false;
+  }
+
+  linkTarget(cx) {
+    const l = this.links?.[this.pi ?? 0];
+    setShared("target", { col: "detail", label: `Link · ${l?.text ?? ""}`, keys: [["enter", "open"], ["j", "next"], ["esc", "messages"]] });
+    cx.notify();
+  }
+
   /** Element focus in the Thread: message `i` (−1: the newest) takes the focus, and the bar names it. */
   focusMsg(i, cx) {
     const msgs = this.view?.messages ?? [];
@@ -823,7 +847,15 @@ export default class Thread extends View {
   props(v, t) {
     const th = v.thread?.f ?? v.thread ?? {};
     const head = (icon, text) => div().pt(10).text_size(12).text_color(t.dim).child(`${I[icon] ?? ""} ${text}`);
-    const link = (id, text, go) => div().id(id).truncate().underline().cursor_pointer().on_click(go).child(text);
+    // The properties are the Thread's own inner column (element focus): → from a message focuses the first link,
+    // j/k move between links, Enter opens one, ← or esc go back to the messages.
+    const links = (this.links = []), inProps = this.inProps && shared("focus") === "detail";
+    const link = (id, text, go) => {
+      const n = links.length;
+      links.push({ text, go });
+      return div().id(id).truncate().underline().cursor_pointer().on_click(go)
+        .when(inProps && n === (this.pi ?? 0), (e) => e.bg(t.selected).border_l(3).border_color(t.accent).pl(4)).child(text);
+    };
     const push = (entry) => () => { setShared("push", entry); run("nav.push"); };
     const g = GLYPH[th.status_detail] ?? ["·", "dim", ""];
     const end = th.follow_up_at ?? th.snoozed_until;

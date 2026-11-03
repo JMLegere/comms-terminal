@@ -93,9 +93,9 @@ export default class Nav extends View {
     const items = this.items().filter((i) => i.id).map((i) => i.id);
     switch (c) {
       case "back": return this.back(cx);
-      case "down": case "up": case "enter": { // the detail column's own element moves (keys.json "detail")
+      case "down": case "up": case "enter": case "tab": { // the detail column's own element moves (keys.json "detail")
         const view = shared("detail_view");
-        return view && run(`${view}.${c === "down" ? "next" : c === "up" ? "prev" : "enter"}`);
+        return view && run(`${view}.${c === "down" ? "next" : c === "up" ? "prev" : c}`);
       }
       case "push": return this.push(shared("push"));
       case "undo": return this.undo(cx);
@@ -114,6 +114,8 @@ export default class Nav extends View {
   /** ← → and h l: the focus moves to an element in the column beside (rail, list, detail); a full page has no list. */
   focus(step, cx) {
     const at = shared("focus") ?? "list";
+    // A detail view may hold an inner column (the Thread's properties): it moves within itself first.
+    if (at === "detail" && (step > 0 || shared("subcol"))) return run(`${shared("detail_view")}.${step > 0 ? "right" : "left"}`);
     const cols = ["rail", ...(shared("list_view") ? ["list"] : []), ...(shared("detail_view") ? ["detail"] : [])];
     const next = cols[Math.max(0, Math.min(cols.length - 1, cols.indexOf(at) + step))];
     if (next && next !== at) this.into(next, cx);
@@ -176,13 +178,16 @@ export default class Nav extends View {
     stack.push({ detail: null, ...entry });
     setShared("stack", stack);
     setShared("focus", "detail");
+    setShared("subcol", null);
     this.show(stack[stack.length - 1]);
+    run(`${entry.page}.focus_entry`); // a new page: its first item takes the focus (esc returns to the link)
   }
 
   /** esc: back a column (detail → list, rail → the page), then back a page. */
   back(cx) {
     const at = shared("focus") ?? "list";
     if (at === "rail") return this.into(shared("list_view") ? "list" : "detail", cx);
+    if (at === "detail" && shared("subcol")) return run(`${shared("detail_view")}.left`);
     if (at === "detail" && shared("list_view")) return this.into("list", cx);
     const stack = [...(shared("stack") ?? [])];
     if (stack.length <= 1) return;
