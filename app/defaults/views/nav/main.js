@@ -2,7 +2,9 @@
 // by Status view; playbook; pipeline; browse; connections. It also owns what the Console's MainScreen owns:
 //   - the page stack. A rail pick resets it; a link pushes a full page (setShared("push", {page, …keys}) then
 //     run("nav.push")); esc and u go back. Each entry keeps the shared keys its page showed, so back restores them.
-//   - the pane focus (← →: rail, list, detail). While the rail has it, keys.json's "rail" keys move it.
+//   - element focus across columns (rail, list, detail): ← → and h l move the focus to an element in the column
+//     beside (each view's cursor is its element); j/k in the detail column go to that column's view (keys.json
+//     "detail"); esc steps back a column, then a page. While the rail has it, keys.json's "rail" keys move it.
 //   - the one undo (setShared("undo", {message, steps: [[method, params], …]})); z runs the steps.
 //   - the pause toast for an Enrollment paused during the session.
 // The App opens on Today, as the Console does.
@@ -90,13 +92,18 @@ export default class Nav extends View {
   command(c, cx) {
     const items = this.items().filter((i) => i.id).map((i) => i.id);
     switch (c) {
-      case "back": return this.back();
+      case "back": return this.back(cx);
+      case "down": case "up": case "enter": { // the detail column's own element moves (keys.json "detail")
+        const view = shared("detail_view");
+        return view && run(`${view}.${c === "down" ? "next" : c === "up" ? "prev" : "enter"}`);
+      }
       case "push": return this.push(shared("push"));
       case "undo": return this.undo(cx);
       case "focus_left": case "focus_right": return this.focus(c === "focus_left" ? -1 : 1, cx);
       case "next": case "prev": {
         const at = Math.max(0, items.indexOf(this.hi ?? current()));
         this.hi = items[Math.max(0, Math.min(items.length - 1, at + (c === "next" ? 1 : -1)))];
+        this.railTarget();
         return cx.notify();
       }
       case "open": return this.hi && this.go(this.hi);
@@ -104,15 +111,30 @@ export default class Nav extends View {
     }
   }
 
-  /** ← →, as the Console's focus_pane: rail ↔ list ↔ detail; a full page has no list, so ← goes to the rail. */
+  /** ← → and h l: the focus moves to an element in the column beside (rail, list, detail); a full page has no list. */
   focus(step, cx) {
     const at = shared("focus") ?? "list";
-    const full = FULL.has(shared("page"));
-    const next = step < 0 ? (at === "detail" && !full ? "list" : "rail") : (at === "rail" ? (full ? "detail" : "list") : "detail");
-    if (next === at) return;
-    this.hi = next === "rail" ? current() : null;
-    setShared("focus", next);
-    cx.notify();
+    const cols = ["rail", ...(shared("list_view") ? ["list"] : []), ...(shared("detail_view") ? ["detail"] : [])];
+    const next = cols[Math.max(0, Math.min(cols.length - 1, cols.indexOf(at) + step))];
+    if (next && next !== at) this.into(next, cx);
+  }
+
+  /** The focus enters a column: the rail on the page's own row; a list or detail view on its entry element (its
+   * cursor, or the Thread's newest message), which then names itself in the bar. */
+  into(col, cx) {
+    this.hi = col === "rail" ? current() : null;
+    setShared("focus", col);
+    if (col === "rail") this.railTarget();
+    else {
+      const view = shared(col === "list" ? "list_view" : "detail_view");
+      if (view) run(`${view}.focus_entry`);
+    }
+    cx?.notify();
+  }
+
+  railTarget() {
+    const item = this.items().find((i) => i.id === (this.hi ?? current()));
+    setShared("target", { col: "rail", label: `Rail · ${item?.label ?? ""}`, keys: [["enter", "open"], ["→", "page"]] });
   }
 
   /** Apply a stack entry's shared keys, then load its page. */
@@ -157,7 +179,11 @@ export default class Nav extends View {
     this.show(stack[stack.length - 1]);
   }
 
-  back() {
+  /** esc: back a column (detail → list, rail → the page), then back a page. */
+  back(cx) {
+    const at = shared("focus") ?? "list";
+    if (at === "rail") return this.into(shared("list_view") ? "list" : "detail", cx);
+    if (at === "detail" && shared("list_view")) return this.into("list", cx);
     const stack = [...(shared("stack") ?? [])];
     if (stack.length <= 1) return;
     stack.pop();
@@ -238,7 +264,6 @@ export default class Nav extends View {
         .child(tail);
     };
     return v_flex().id("rail").size_full().min_h(0).bg(t.chrome).text_size(13).overflow_y_scroll().pb(12)
-      .when(railFocus, (el) => el.border_r(2).border_color(t.accent))
       .children(this.items().map(row))
       .when(Boolean(this.error), (el) => el.child(div().px(16).py(8).text_size(11.5).text_color(t.danger).child(this.error ?? "")));
   }

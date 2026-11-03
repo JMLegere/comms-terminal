@@ -101,7 +101,13 @@ export default class Status extends View {
       .when(Boolean(command), (el) => el.on_click(() => run(command)))
       .child(div().font_semibold().text_color(t.blue ?? t.accent).child(k === "escape" ? "esc" : k))
       .child(div().text_color(t.grey2 ?? t.muted).child(label));
-    const groups = barKeys(keys() ?? {}, shared("page") ?? "today", shared("detail"), depth);
+    // Element focus: the bar names what keys act on, the focused element (a view publishes shared "target" for its
+    // column), or that typing goes to a field; the page's key groups only when no element has named itself.
+    const typing = shared("typing"), target = shared("target");
+    const named = !typing && target && target.col === (shared("focus") ?? "list") ? target : null;
+    const groups = typing ? [[["escape", "leaves", null]]] : named ? [named.keys.map(([k, l]) => [k, l, null]), [["?", "more", "overlay.help"]]]
+      : barKeys(keys() ?? {}, shared("page") ?? "today", shared("detail"), depth);
+    const what = typing ? `typing in ${typing}` : named?.label ?? null;
     const red = (text) => div().px(6).rounded(3).bg(t.danger).text_color(t.background).font_semibold().child(text);
     const right = [];
     if (h.now) right.push(div().child(`now ${h.now.title} · ${h.now.left} min left`));
@@ -122,7 +128,10 @@ export default class Status extends View {
       .child(h_flex().gap(6).items_center().flex_none()
         .child(div().size(6).rounded(3).bg(s.online ? t.status_done : t.danger))
         .child(div().text_color(s.online ? t.muted : t.danger).child(s.online ? "Online" : `Read-only · ${s.problem ?? "offline"}`)))
-      .child(h_flex().flex_1().min_w(0).overflow_hidden().gap(14).items_center()
+      // What keys act on comes first: this part keeps its width, and the right-hand parts clip instead.
+      .child(h_flex().flex_none().gap(14).items_center()
+        .when(Boolean(what), (el) => el.child(div().flex_shrink(1).min_w(0).max_w(320).truncate().font_semibold()
+          .text_color(t.accent).child(what ?? "")))
         .children(groups.flatMap((g, i) => [...(i ? [div().text_color(t.dim).child("·")] : []), ...g.map(key)])))
       .child(h_flex().flex_shrink(1).min_w(0).overflow_hidden().gap(8).items_center().children(parts)) // clips when narrow; Service stays
       .child(h_flex().flex_none().gap(10).items_center().text_color(t.muted)

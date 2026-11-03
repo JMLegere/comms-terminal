@@ -91,6 +91,14 @@ impl Node {
         page.and_then(|p| detail.and_then(|d| find(&format!("{p}:{d}"))).or_else(|| find(p))).or(self.view.as_deref())
     }
 
+    /// The block with this id, anywhere below this node.
+    pub fn find(&self, id: &str) -> Option<&Node> {
+        if self.id == id {
+            return Some(self);
+        }
+        self.children.iter().find_map(|c| c.find(id))
+    }
+
     /// Every view the layout can show, once each, in order.
     pub fn views(&self) -> Vec<String> {
         let mut out = Vec::new();

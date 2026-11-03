@@ -4,7 +4,7 @@
 // Enter on a Thread moves focus into it, Enter or a click on a Case header opens the Case.
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, v_virtual_list, VirtualListScrollHandle } from "gpui-base";
-import { call, nextEvent, nextCommand, theme, shared, setShared, run } from "comms";
+import { call, nextEvent, nextCommand, theme, shared, setShared, run, focusMain, keys } from "comms";
 
 // Status detail: Nerd Font glyph (icons.py), colour token, label (inbox.DETAIL_LABEL).
 const GLYPH = {
@@ -148,6 +148,17 @@ export default class Threads extends View {
     run("thread.show");
     const at = this.items.findIndex((x) => keyOf(x) === key);
     if (at >= 0) this.scroll.scroll_to_item(at, "center");
+    this.target();
+  }
+
+  /** The bar's line for the focused row (element focus): the Thread and the keys its page binds for it. */
+  target() {
+    if (shared("page") !== "threads" || shared("focus") === "detail") return;
+    const it = this.items.find((x) => keyOf(x) === this.hi);
+    const bound = Object.entries((keys() ?? {})["page:threads"] ?? {})
+      .filter(([k, c]) => k.length === 1 && c.startsWith("thread.")).map(([k, c]) => [k, c.split(".")[1].replace("reply_sender", "reply").replace(/_/g, " ")]);
+    const label = it?.row ? `Thread · ${it.row.title ?? ""}` : it?.caseHeader ? `Case · ${it.caseHeader.title || "No case"}` : it?.statusHeader?.label ?? "";
+    setShared("target", { col: "list", label, keys: it?.row ? [["enter", "open"], ...bound] : [["enter", "open"]] });
   }
 
   /** The Thread below the selection, else the one above: where it lands once this one moves (next_thread_id). */
@@ -170,9 +181,10 @@ export default class Threads extends View {
     if (c === "enter") {
       const it = this.items[i];
       if (it?.caseHeader) return this.openCase(it.caseHeader);
-      if (it?.row) { setShared("focus", "detail"); cx.notify(); }
+      if (it?.row) run("nav.focus_right"); // into the Thread: its newest message takes the focus
       return;
     }
+    if (c === "focus_entry") return this.target();
     if (c !== "next" && c !== "prev") return;
     const it = this.items[Math.max(0, Math.min(this.items.length - 1, i + (c === "next" ? 1 : -1)))];
     if (it) this.pick(keyOf(it));
@@ -184,11 +196,17 @@ export default class Threads extends View {
     const view = this.view ?? shared("view") ?? "Todo";
     const items = this.items;
     const count = items.filter((it) => it.row).length;
+    const focusHere = (shared("focus") ?? "list") === "list";
     const glyph = (detail) => div().w(16).flex_none().text_color(t[GLYPH[detail]?.[1]] ?? t.dim).child(GLYPH[detail]?.[0] ?? "·");
     const line = (it) => {
       const key = keyOf(it);
       const el = h_flex().id(key).h(26).pl(8 + 14 * it.depth).pr(8).gap(8).rounded(4).items_center().cursor_pointer()
-        .when(key === this.hi, (e) => e.bg(t.selected)).hover((s) => s.bg(t.hover));
+        .hover((s) => s.bg(t.hover))
+        // The path (Logseq bullet threading): full bar and highlight on the focused row, a thin bar while the focus
+        // is further in (the Thread).
+        .border_l(3).border_color(key === this.hi ? t.accent : t.background)
+        .when(key === this.hi && focusHere, (e) => e.bg(t.selected))
+        .when(key === this.hi && !focusHere, (e) => e.border_l(1));
       if (it.statusHeader) {
         const h = it.statusHeader, color = t[GLYPH[h.detail][1]] ?? t.dim;
         return el.child(glyph(h.detail)).child(div().flex_1().font_semibold().text_color(color).child(h.label))
@@ -223,7 +241,9 @@ export default class Threads extends View {
           .on_item_click((key, cx) => {
             const it = items.find((x) => keyOf(x) === key);
             if (it?.caseHeader) return this.openCase(it.caseHeader); // a click on a Case header opens the Case
-            this.pick(key); // a click selects and keeps the list's focus (D33)
+            setShared("focus", "list"); // a click focuses the row and takes the keys from any text field
+            focusMain();
+            this.pick(key);
             cx.notify();
           })))
       .child(h_flex().flex_none().px(12).py(6).gap(12).flex_wrap().border_t(1).border_color(t.border).text_size(11.5)

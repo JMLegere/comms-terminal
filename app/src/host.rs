@@ -70,6 +70,12 @@ pub fn set_shared(key: &str, value: Value) {
     SHARED.with(|s| s.borrow_mut().insert(key.to_owned(), value));
 }
 
+/// A toast from the host, as a view's `toast()` (and logged the same way).
+pub fn toast(message: &str) {
+    crate::log::write("toast", json!({"message": message, "severity": "information"}));
+    broadcast(&json!({"kind": "toast", "data": {"message": message, "severity": "information", "timeout": null}}));
+}
+
 pub fn status() -> Value {
     STATUS.with(|s| s.borrow().clone())
 }

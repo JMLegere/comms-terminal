@@ -18,7 +18,16 @@
     "u": "nav.back",
     "escape": "nav.back",
     "left": "nav.focus_left",
-    "right": "nav.focus_right"
+    "right": "nav.focus_right",
+    "h": "nav.focus_left",
+    "l": "nav.focus_right"
+  },
+  "detail": {
+    "j": "nav.down",
+    "k": "nav.up",
+    "down": "nav.down",
+    "up": "nav.up",
+    "enter": "nav.enter"
   },
   "page:threads": {
     "j": "threads.next",
