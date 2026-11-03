@@ -115,6 +115,11 @@ export default class Threads extends View {
 
   load(cx) {
     const view = shared("view") ?? "Todo";
+    const a = shared("advance"); // s just changed the selected Thread (thread/main.js): move on, as after Done (D32)
+    if (a && Date.now() - a.at <= 5000 && (shared("page") ?? "threads") === "threads" && this.hi === `row-${a.thread}`) {
+      setShared("advance", null);
+      this.pending = this.nextThread();
+    }
     cx.spawn(async (cx) => {
       try {
         const [rows, cases] = await Promise.all([call("threads.queue", { view }), call("cases.list")]);
@@ -176,10 +181,6 @@ export default class Threads extends View {
 
   command(c, cx) {
     if (c === "reload" || c === "show") return this.load(cx);
-    if (c === "advance") { // s: the cursor moves on, as after Done (D32); only on its own page, else it waits stale
-      if ((shared("page") ?? "threads") === "threads") this.pending = this.nextThread();
-      return;
-    }
     const i = this.items.findIndex((x) => keyOf(x) === this.hi);
     if (c === "enter") {
       const it = this.items[i];

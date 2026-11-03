@@ -32,7 +32,7 @@ if (process.argv[2] === "groups") {
   state.view = "Todo"; state.page = "threads";
   await show([row("a", "CREATED"), row("b", "CREATED"), row("c", "CREATED")]);
   view.pick("row-a"); state.thread = "a";
-  view.command("advance", cx);                            // s on a: the cursor moves on
+  state.advance = { thread: "a", at: Date.now() };         // s on a (thread/main.js): the cursor moves on
   out.items = await show([row("b", "CREATED"), row("c", "CREATED"), row("a", "IN_PROGRESS")]);
   out.thread = state.thread;
 } else if (process.argv[2] === "today-advance") { // D32 on Today: s moves on, as after Done
@@ -43,10 +43,16 @@ if (process.argv[2] === "groups") {
   answers["today.page"] = page([row("a", "CREATED"), row("b", "CREATED"), row("c", "CREATED")]);
   today.load(cx); await settle();
   out.first = state.thread;
-  today.command("advance", cx);                           // s on a: the cursor moves on
+  state.advance = { thread: "a", at: Date.now() };        // s on a (thread/main.js): the cursor moves on
   answers["today.page"] = page([row("b", "CREATED"), row("c", "CREATED"), row("a", "IN_PROGRESS")]);
   today.load(cx); await settle();
   out.thread = state.thread;
+  const Thread = await load("thread"); // the hand-off is set before the write starts, so no reload can miss it
+  const t = Object.assign(Object.create(Thread.prototype), { bodies: {}, view: { thread: { f: { id: "c", status_detail: "CREATED" } } } });
+  state.thread = "c"; state.advance = null;
+  t.command(`status-picked:${JSON.stringify({ value: "IN_PROGRESS" })}`, cx);
+  out.handoff = state.advance?.thread ?? null;
+  await settle();
 } else { // D27, D28: the Console's when() and left()
   const { when, left } = Threads.ns, now = Date.parse("2026-11-03T12:00:00Z"), at = (secs) => new Date(now - secs * 1000).toISOString();
   out.when = [when(at(30), now), when(at(119), now), when(at(3 * 3600 + 59), now), when(at(2 * 86400 + 5), now), when("2026-10-12T12:00:00", now)];

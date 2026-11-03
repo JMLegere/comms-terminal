@@ -666,6 +666,8 @@ def change_status_on_today(app):
 @then("the selection moves to the Thread below it")
 def moved_on(app):
     assert app.phase3["thread"] == "b"
+    if "handoff" in app.phase3:  # Today: the Thread view marks the move before its write
+        assert app.phase3["handoff"] == "c"
 
 
 @given("the App\'s Threads list")
