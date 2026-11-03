@@ -62,7 +62,7 @@ const caseCounts = (counts) => Object.entries(counts ?? {}).filter(([, n]) => n)
 /** Status headers, then Case headers inside each (the Console's grouped and by_case); each item has a depth. */
 export function grouped(view, rows, cases) {
   const labels = [...new Set(VIEWS[view].map((d) => GLYPH[d][2]))];
-  const byCase = (rs, depth) => {
+  const byCase = (rs, depth, under) => {
     if (!rs.some((r) => r.case_id)) return rs.map((r) => ({ row: r, depth }));
     const groups = new Map();
     for (const r of rs) {
@@ -74,7 +74,7 @@ export function grouped(view, rows, cases) {
     const order = [...groups.keys()].sort((a, b) => (a !== null) - (b !== null) || (oldest(a) < oldest(b) ? -1 : oldest(a) > oldest(b) ? 1 : 0));
     return order.flatMap((cid) => {
       const n = groups.get(cid).length, c = cases[cid];
-      return [{ caseHeader: { id: cid, title: c?.title ?? "", summary: cid ? caseCounts(c?.counts) : `${n} thread${n === 1 ? "" : "s"}` }, depth },
+      return [{ caseHeader: { id: cid, under, title: c?.title ?? "", summary: cid ? caseCounts(c?.counts) : `${n} thread${n === 1 ? "" : "s"}` }, depth },
         ...groups.get(cid).map((r) => ({ row: r, depth: depth + 1 }))];
     });
   };
@@ -83,11 +83,11 @@ export function grouped(view, rows, cases) {
     const group = rows.filter((r) => GLYPH[r.detail]?.[2] === label);
     if (!group.length) return [];
     const detail = VIEWS[view].find((d) => GLYPH[d][2] === label);
-    return [{ statusHeader: { detail, label, count: group.length }, depth: 0 }, ...byCase(group, 1)];
+    return [{ statusHeader: { detail, label, count: group.length }, depth: 0 }, ...byCase(group, 1, detail)];
   });
 }
 
-const keyOf = (it) => it.row ? `row-${it.row.id}` : it.caseHeader ? `case-${it.caseHeader.id}` : `status-${it.statusHeader.detail}`;
+const keyOf = (it) => it.row ? `row-${it.row.id}` : it.caseHeader ? `case-${it.caseHeader.under ?? ""}-${it.caseHeader.id}` : `status-${it.statusHeader.detail}`;
 
 export default class Threads extends View {
   init(_props, cx) {

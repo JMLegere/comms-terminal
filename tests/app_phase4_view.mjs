@@ -6,7 +6,16 @@ const [kase, arg] = (process.argv[2] ?? "").split(":");
 const out = {};
 const make = (View, fields) => Object.assign(Object.create(View.prototype), fields);
 
-if (kase === "order") {
+if (kase === "rowkeys") { // a Case header under two Statuses (here "No case") keeps one key each: a repeated key blanks the list
+  const rows = [{ id: "a", detail: "CREATED", case_id: "c1" }, { id: "b", detail: "CREATED" },
+    { id: "c", detail: "IN_PROGRESS", case_id: "c1" }, { id: "d", detail: "IN_PROGRESS" }];
+  const cases = { c1: { title: "Deal", counts: {} } };
+  const today = (await load("today")).ns.paneItems({ threads: rows }, cases).threads.map((it) => it.key);
+  const threads = (await load("threads")).ns.grouped("Todo", rows, cases).map((it) => it.row ? `row-${it.row.id}` : it.caseHeader ? `case-${it.caseHeader.under}-${it.caseHeader.id}` : `status-${it.statusHeader.detail}`);
+  out.today_dups = today.filter((k, i) => today.indexOf(k) !== i);
+  out.threads_dups = threads.filter((k, i) => threads.indexOf(k) !== i);
+  out.headers = today.filter((k) => k.includes("-case-")).length;
+} else if (kase === "order") {
   const { ordered, status } = (await load("drafts")).ns;
   const rows = [{ id: "later", send_at: "2026-11-06T15:00:00" }, { id: "unsent" }, { id: "soon", send_at: "2026-11-03T15:00:00" },
     { id: "edit", needs_edit: 1 }, { id: "failed", send_at: "2026-11-01T15:00:00", send_error: "refused" }];

@@ -57,7 +57,7 @@ const caseCounts = (counts) => Object.entries(counts ?? {}).filter(([, n]) => n)
 
 /** Todo's Status headers with Case headers inside them, as threads/main.js grouped("Todo"). */
 export function threadItems(rows, cases) {
-  const byCase = (rs, depth) => {
+  const byCase = (rs, depth, under) => {
     if (!rs.some((r) => r.case_id)) return rs.map((r) => ({ row: r, depth }));
     const groups = new Map();
     for (const r of rs) { const c = r.case_id ?? null; if (!groups.has(c)) groups.set(c, []); groups.get(c).push(r); }
@@ -65,13 +65,13 @@ export function threadItems(rows, cases) {
     const order = [...groups.keys()].sort((a, b) => (a !== null) - (b !== null) || (oldest(a) < oldest(b) ? -1 : oldest(a) > oldest(b) ? 1 : 0));
     return order.flatMap((cid) => {
       const n = groups.get(cid).length, c = cases[cid];
-      return [{ caseHeader: { id: cid, title: c?.title ?? "", summary: cid ? caseCounts(c?.counts) : `${n} thread${n === 1 ? "" : "s"}` }, depth },
+      return [{ caseHeader: { id: cid, under, title: c?.title ?? "", summary: cid ? caseCounts(c?.counts) : `${n} thread${n === 1 ? "" : "s"}` }, depth },
         ...groups.get(cid).map((r) => ({ row: r, depth: depth + 1 }))];
     });
   };
   return TODO.flatMap((detail) => {
     const group = rows.filter((r) => r.detail === detail);
-    return group.length ? [{ statusHeader: { detail, label: GLYPH[detail][2], count: group.length }, depth: 0 }, ...byCase(group, 1)] : [];
+    return group.length ? [{ statusHeader: { detail, label: GLYPH[detail][2], count: group.length }, depth: 0 }, ...byCase(group, 1, detail)] : [];
   });
 }
 
@@ -94,7 +94,7 @@ export function paneItems(data, cases) {
 
 function keyOf(pane, it, i) {
   if (it.row) return `${pane}-${it.row.id}`;
-  if (it.caseHeader) return `${pane}-case-${it.caseHeader.id}`;
+  if (it.caseHeader) return `${pane}-case-${it.caseHeader.under ?? ""}-${it.caseHeader.id}`; // one Case may head rows under two Statuses
   if (it.statusHeader) return `${pane}-status-${it.statusHeader.detail}`;
   return `${pane}-group-${i}`;
 }
