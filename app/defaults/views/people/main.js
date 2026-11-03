@@ -4,7 +4,7 @@
 // after a preview.
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, v_virtual_list, VirtualListScrollHandle } from "gpui-base";
-import { call, nextEvent, nextCommand, theme, shared, setShared, run, toast } from "comms";
+import { call, nextEvent, nextCommand, theme, shared, setShared, run, toast, focusMain, keys } from "comms";
 
 /** The letter a name files under: its first letter without accents (É is E), else # (the Console's initial). */
 export const initial = (name) => { const c = (name ?? "").trim().slice(0, 1).normalize("NFKD").replace(/[^\x00-\x7f]/g, "").toUpperCase(); return /[A-Z]/.test(c) ? c : "#"; };
@@ -17,6 +17,10 @@ export function items(people, folded) {
   return letters.flatMap((k) => [{ key: `L-${k}`, letter: k, n: groups.get(k).length },
     ...(folded.has(k) ? [] : groups.get(k).map((p) => ({ key: p.id, p })))]);
 }
+
+/** The single-letter keys a page binds (but j/k), as [key, label] pairs for the bar (element focus). */
+const bound = (page) => Object.entries((keys() ?? {})[`page:${page}`] ?? {})
+  .filter(([k, c]) => k.length === 1 && !/\.(next|prev)$/.test(c)).map(([k, c]) => [k, c.split(".")[1].replace(/_/g, " ")]);
 
 export default class People extends View {
   init(_props, cx) {
@@ -58,6 +62,16 @@ export default class People extends View {
     if (!String(key).startsWith("L-")) { setShared("person", key); run("person.show"); }
     const at = this.items().findIndex((it) => it.key === key);
     if (at >= 0) this.scroll.scroll_to_item(at, "center");
+    this.target();
+  }
+
+  /** The bar's line for the focused row (element focus): the Person, or the letter, and the keys it takes. */
+  target() {
+    if (shared("page") !== "people" || shared("focus") === "detail") return;
+    const it = this.items().find((x) => x.key === this.hi);
+    if (!it) return;
+    setShared("target", it.letter ? { col: "list", label: `Letter · ${it.letter}`, keys: [["enter", "fold"], ["c", "collapse all"]] }
+      : { col: "list", label: `Person · ${it.p.name ?? ""}`, keys: [["enter", "open"], ...bound("people")] });
   }
 
   command(c, cx) {
@@ -69,6 +83,7 @@ export default class People extends View {
     const its = this.items(), here = its.findIndex((it) => it.key === this.hi);
     switch (name) {
       case "show": return this.load(cx);
+      case "focus_entry": return this.target();
       case "next": case "prev": {
         const it = its[Math.max(0, Math.min(its.length - 1, here + (name === "next" ? 1 : -1)))];
         if (it) this.select(it.key);
@@ -77,7 +92,7 @@ export default class People extends View {
       case "enter": { // a header folds; a Person opens their page
         const it = its[here];
         if (!it) return;
-        if (it.letter) { this.folded.has(it.letter) ? this.folded.delete(it.letter) : this.folded.add(it.letter); return cx.notify(); }
+        if (it.letter) { this.folded.has(it.letter) ? this.folded.delete(it.letter) : this.folded.add(it.letter); this.target(); return cx.notify(); }
         setShared("push", { page: "person", person: it.p.id });
         return run("nav.push");
       }
@@ -86,6 +101,7 @@ export default class People extends View {
         this.folded = this.folded.size === all.size ? new Set() : all;
         const it = its[here];
         this.hi = `L-${it?.letter ?? initial(it?.p?.name)}`;
+        this.target();
         return cx.notify();
       }
       case "merge": { // as the Console's PeoplePage.action_merge: the selected Person joins the one picked
@@ -133,9 +149,15 @@ export default class People extends View {
   render() {
     const t = theme();
     const its = this.items();
+    const focusHere = (shared("focus") ?? "list") === "list";
     const row = (it) => {
-      const el = h_flex().h(26).px(8).gap(8).rounded(4).items_center().cursor_pointer()
-        .when(it.key === this.hi, (e) => e.bg(t.selected)).hover((s) => s.bg(t.hover));
+      const sel = it.key === this.hi;
+      const el = h_flex().h(26).px(8).gap(8).rounded(4).items_center().cursor_pointer().hover((s) => s.bg(t.hover))
+        // The path (Logseq bullet threading): full bar and highlight on the focused row, a thin bar while the focus
+        // is further in (the Person).
+        .border_l(3).border_color(sel ? t.accent : t.background)
+        .when(sel && focusHere, (e) => e.bg(t.selected))
+        .when(sel && !focusHere, (e) => e.border_l(1));
       if (it.letter) return el.child(div().w(16).text_color(t.muted).child(this.folded.has(it.letter) ? "\u{f0142}" : "\u{f0140}"))
         .child(div().w(150).font_semibold().text_color(t.blue).child(it.letter))
         .child(div().text_color(t.muted).child(`${it.n} ${it.n === 1 ? "person" : "people"}`));
@@ -155,6 +177,11 @@ export default class People extends View {
       .when(!this.error && !this.rows.length, (el) => el.child(div().p(16).text_color(t.muted).child("No people yet. Everyone who writes to you appears here.")))
       .child(div().flex_1().min_h(0).px(4).py(4).child(
         v_virtual_list("people", its.length, 26, (i) => String(its[i].key), (range) => its.slice(range.start, range.end).map(row))
-          .size_full().track_scroll(this.scroll).on_item_click((key, cx) => { this.select(key); cx.notify(); })));
+          .size_full().track_scroll(this.scroll).on_item_click((key, cx) => {
+            setShared("focus", "list"); // a click focuses the row and takes the keys from any text field
+            focusMain();
+            this.select(key);
+            cx.notify();
+          })));
   }
 }

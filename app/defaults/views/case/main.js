@@ -2,6 +2,8 @@
 // place, ctrl+enter saves with undo, esc cancels), one Activity timeline oldest first with each Thread's card after
 // the line that added it, and the properties column (Status counts, People, Organizations, Channels) with Context.
 // j/k select a card and the Thread keys act on it; Enter folds or unfolds it; r/a open its reply row in place.
+// Element focus: the Description box, then each Thread card; k above the first card focuses the Description, and
+// Enter there edits it. Esc from a field leaves the focus on its owner (the Description, or the card).
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, TextareaState, Textarea, InputState, Input } from "gpui-base";
 import { call, nextEvent, nextCommand, theme, shared, setShared, run, toast, focusMain, open } from "comms";
@@ -53,6 +55,11 @@ export default class Case extends View {
     this.text.set_auto_grow(3, 16);
     this.to = InputState.new({ placeholder: "recipients" });
     this.cc = InputState.new({ placeholder: "optional" });
+    // Typing (element focus): while a field has the keyboard, the bar says so and how to leave.
+    for (const [f, name] of [[this.desc, "Description"], [this.text, "reply"], [this.to, "To"], [this.cc, "Cc"]]) {
+      f.on("focus", () => setShared("typing", name));
+      f.on("blur", () => { if (shared("typing") === name) setShared("typing", null); });
+    }
     this.load(cx);
     cx.spawn(async (cx) => {
       while (true) if ((await nextEvent()).kind === "rows" && shared("case")) this.load(cx);
@@ -74,9 +81,10 @@ export default class Case extends View {
         this.c = { ...c, id };
         const at = c.cards.findIndex((k) => k.id === keep);
         this.sel = at >= 0 ? at : Math.max(0, Math.min(this.sel, c.cards.length - 1));
-        if (fresh) { this.toggled = new Set(); this.opened = {}; this.loadContext(id, c, cx); }
+        if (fresh) { this.toggled = new Set(); this.opened = {}; this.onDesc = false; this.loadContext(id, c, cx); }
         this.error = null;
         this.pickThread();
+        if (shared("focus") === "detail" && shared("detail_view") === "case") this.target(cx);
       } catch (e) {
         this.error = String(e);
       }
@@ -100,6 +108,31 @@ export default class Case extends View {
 
   card() { return this.c?.cards?.[this.sel]; }
 
+  /** The Description has the focus: k above the first card, a click on it, or a Case with no cards. */
+  onDescription() { return Boolean(this.onDesc || !this.card()); }
+
+  /** The bar's line for the focused element (element focus): the Description or a Thread card, with its keys. */
+  target(cx) {
+    const c = this.c;
+    if (!c) return;
+    const page = shared("page") === "case"; // the Case's own page binds d, r, a and the Thread keys (keys.json "page:case")
+    const back = ["esc", page ? "back" : "list"];
+    const title = this.card()?.head?.[0]?.find((seg) => seg[2])?.[0] ?? "";
+    setShared("target", this.onDescription()
+      ? { col: "detail", label: `Description · ${c.title ?? ""}`, keys: [["enter", "edit"], ["j", "next"], back] }
+      : { col: "detail", label: `Thread · ${title}`, keys: [["enter", "fold"], ...(page ? [["r", "reply"], ["a", "reply all"],
+        ["e", "done"], ["g", "snooze"], ["s", "status"], ["d", "describe"]] : [["j", "next"], ["k", "prev"]]), back] });
+    cx?.notify();
+  }
+
+  /** Esc leaves typing: the field's owner (the Description, or the card) keeps the focus. */
+  leave(cx) {
+    focusMain();
+    setShared("typing", null);
+    setShared("focus", "detail");
+    this.target(cx);
+  }
+
   command(c, cx) {
     const at = c.indexOf(":");
     const name = at < 0 ? c : c.slice(0, at);
@@ -109,21 +142,27 @@ export default class Case extends View {
       case "show": return this.load(cx);
       case "next": case "prev": {
         const n = this.c?.cards?.length ?? 0;
-        if (!n) return;
-        this.sel = Math.max(0, Math.min(n - 1, this.sel + (name === "next" ? 1 : -1)));
+        if (!n) return this.target(cx);
+        if (this.onDescription()) this.onDesc = name === "prev"; // j from the Description lands on the selected card
+        else if (name === "prev" && this.sel === 0) this.onDesc = true;
+        else this.sel = Math.max(0, Math.min(n - 1, this.sel + (name === "next" ? 1 : -1)));
         this.pickThread();
-        return cx.notify();
+        return this.target(cx);
       }
+      case "focus_entry": this.onDesc = false; return this.target(cx); // the selected card (the Description: no cards)
+      case "enter": if (this.onDescription()) return this.command("describe", cx); // falls through: the card
       case "toggle": // Enter folds or unfolds the card (D103)
         if (!card) return;
         this.toggled.has(card.id) ? this.toggled.delete(card.id) : this.toggled.add(card.id);
         return cx.notify();
       case "describe":
         this.editing = true;
+        this.onDesc = true; // d or a click: the Description takes the focus, and the keyboard
+        setShared("focus", "detail");
         this.desc.set_value(this.c?.description ?? "");
         this.desc.focus();
-        return cx.notify();
-      case "reply_all": case "reply_sender": return card && this.openReply(card, name === "reply_sender" ? "sender" : "all", cx);
+        return this.target(cx);
+      case "reply_all": case "reply_sender": if (card) this.onDesc = false; return card && this.openReply(card, name === "reply_sender" ? "sender" : "all", cx);
       case "send-picked": return this.sendPicked(answer.value, cx);
     }
   }
@@ -139,8 +178,7 @@ export default class Case extends View {
         toast(String(e), "error");
       }
     }
-    focusMain();
-    cx.notify();
+    this.leave(cx);
   }
 
   openReply(card, mode, cx) {
@@ -166,8 +204,7 @@ export default class Case extends View {
     if (!r) return;
     this.reply = null;
     call("command.inbox.save_reply_draft", { thread_id: r.thread, body: this.text.value() }).catch((e) => toast(String(e), "error"));
-    focusMain();
-    cx.notify();
+    this.leave(cx);
   }
 
   send() {
@@ -201,7 +238,7 @@ export default class Case extends View {
         }
         this.reply = null;
         this.text.set_value("");
-        focusMain();
+        this.leave(cx);
       } catch (e) {
         toast(`Send error: ${e}`, "error");
       }
@@ -218,13 +255,16 @@ export default class Case extends View {
     const segs = (lines) => segLines(t, lines, `g${n++}`, c.orgs ?? {});
     const keys = (el) => el.on_key_down((ev, cx) => {
       if (this.editing && (ev.keystroke === "ctrl-enter" || ev.keystroke === "ctrl-s")) this.saveDescription(cx);
-      else if (this.editing && ev.keystroke === "escape") { this.editing = false; focusMain(); cx.notify(); }
+      else if (this.editing && ev.keystroke === "escape") { this.editing = false; this.leave(cx); }
       else if (this.reply && ev.keystroke === "ctrl-enter") this.send();
       else if (this.reply && ev.keystroke === "escape") this.closeReply(cx);
       else return;
       cx.stop_propagation();
     });
-    const desc = keys(v_flex().id("desc").p(10).gap(4).rounded(6).border(1).border_color(this.editing ? t.accent : t.border)
+    // The path (element focus): the focused element (the Description or a card) carries the accent bar.
+    const focusHere = shared("focus") === "detail", onDesc = focusHere && this.onDescription();
+    const desc = keys(v_flex().id("desc").p(10).gap(4).rounded(6).border(1).border_color(this.editing || onDesc ? t.accent : t.border)
+      .when(onDesc, (e) => e.border_l(3))
       .when(!this.editing, (e) => e.cursor_pointer().on_click((_e, cx) => this.command("describe", cx))))
       .child(this.editing ? Textarea.new(this.desc)
         : div().text_color(c.description ? t.foreground : t.muted).child(c.description || DESCRIBE))
@@ -251,8 +291,16 @@ export default class Case extends View {
         .child(div().text_size(11.5).text_color(t.muted).child("ctrl+enter send · esc close (keeps draft)")))
         : div().id(`idle-${i}`).mt(6).px(8).py(6).rounded(6).border(1).border_color(t.border).text_color(t.muted).cursor_pointer()
           .on_click((_e, cx) => { this.sel = i; this.pickThread(); this.openReply(k, "all", cx); }).child("Leave a reply… (r)");
-      return v_flex().id(`card-${i}`).p(10).gap(4).rounded(6).border(1).border_color(i === this.sel ? t.accent : t.border)
-        .on_click((_e, cx) => { if (this.sel !== i) { this.sel = i; this.pickThread(); cx.notify(); } })
+      const focused = focusHere && !onDesc && i === this.sel;
+      return v_flex().id(`card-${i}`).p(10).gap(4).rounded(6).border(1).border_color(focused ? t.accent : t.border)
+        .when(focused, (e) => e.border_l(3))
+        .on_click((_e, cx) => { // a click focuses the card (and takes the keys from any field outside its reply row)
+          if (this.sel !== i) { this.sel = i; this.pickThread(); }
+          this.onDesc = false;
+          setShared("focus", "detail");
+          if (this.reply?.thread !== k.id) focusMain();
+          this.target(cx);
+        })
         .child(h_flex().gap(8).items_center().child(div().flex_1().min_w(0).children(segs(k.head))).child(div().flex_none().children(segs(k.status))))
         .children(body).when(Boolean(replyRow), (e) => e.child(replyRow));
     };

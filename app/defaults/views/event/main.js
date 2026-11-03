@@ -2,7 +2,8 @@
 // location, the join link, the organizer and attendees with their answers (each linked to their Person, with open
 // Threads and Cases), Organizations, the description with the Meet/Zoom footer folded, and the Context sources
 // beside it. o toasts the join link (Ctrl+click opens it); i Responds (accept, maybe or decline) through Google
-// Calendar; a Repeating Event's answer covers the whole series. Shared "event" names it: {uid, id}.
+// Calendar; a Repeating Event's answer covers the whole series. Shared "event" names it: {uid, id}. Element focus:
+// the Event is the page's one element; it names itself in the bar, and j/k scroll it.
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { call, nextCommand, theme, shared, setShared, run, open, toast } from "comms";
@@ -47,6 +48,7 @@ export default class Event extends View {
         const fresh = this.page?.key !== e.id;
         this.page = { ...page, key: e.id };
         this.error = null;
+        this.target();
         if (fresh) {
           this.context = [];
           if (page.available) for (const source of SOURCES) call("context.section", { source, emails: page.emails, domains: page.domains })
@@ -59,6 +61,15 @@ export default class Event extends View {
     });
   }
 
+  /** The bar's line for the Event (element focus): its title and the keys it takes. */
+  target() {
+    const p = this.page;
+    if (!p || shared("page") !== "event" || shared("focus") !== "detail") return;
+    const title = (p.body?.[0] ?? []).map(([s]) => s).join("").trim();
+    setShared("target", { col: "detail", label: `Event · ${title}`,
+      keys: [["o", "join"], ["i", "respond"], ["j/k", "scroll"], ["esc", "back"]] });
+  }
+
   async command(c, cx) {
     const at = c.indexOf(":");
     const name = at < 0 ? c : c.slice(0, at);
@@ -66,6 +77,9 @@ export default class Event extends View {
     const p = this.page;
     if (name === "show") return this.load(cx);
     if (name === "scroll_down" || name === "scroll_up") return run(`app.${name}`);
+    // Element focus: the Event has no inner elements, so the detail column's j/k scroll it
+    if (name === "next" || name === "prev") return run(name === "next" ? "app.scroll_down" : "app.scroll_up");
+    if (name === "focus_entry") { this.target(); return cx.notify(); }
     if (name === "join") { // D95: a toast with the link, as the Console's; Ctrl+click opens it
       if (!p?.available) return toast("No current Event details available.");
       return p.join_url ? toast(p.join_url, "information", 15) : toast("No join link for this Event.");

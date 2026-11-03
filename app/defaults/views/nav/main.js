@@ -22,6 +22,7 @@ const KEYS = ["page", "view", "case_view", "pipeline", "detail", "thread", "draf
 const SHOW = { threads: ["threads.reload"], pipeline: ["pipeline.show"] };
 const TITLE = { person: "Person", organization: "Organization", connection: "Connection", event: "Event", case: "Case" };
 const FULL = new Set(Object.keys(TITLE)); // full pages: the list block is hidden (layouts/main.json)
+const NOLIST = new Set([...FULL, "pipeline"]); // pages whose list block is hidden: the focus starts in the detail
 // Context sources (FR-13a, FR-13b): no Threads, no page; the rail says whether each answers (D8).
 const SOURCES = [["attio", "Attio", "server"], ["tana", "Tana", "layers"], ["linear", "Linear", "list-checks"]];
 const cap = (s) => s[0].toUpperCase() + s.slice(1);
@@ -165,9 +166,12 @@ export default class Nav extends View {
     else entry = { page: item };
     entry.detail = null;
     setShared("stack", [entry]);
-    setShared("focus", FULL.has(entry.page) ? "detail" : "list");
+    setShared("focus", NOLIST.has(entry.page) ? "detail" : "list");
+    setShared("target", null); // the new page's element names itself once it loads
+    setShared("subcol", null);
     this.hi = null;
     this.show(entry);
+    if (NOLIST.has(entry.page)) run(`${entry.page}.focus_entry`);
   }
 
   /** A full page on top of the stack: the entry below keeps what its page showed. */
@@ -193,7 +197,7 @@ export default class Nav extends View {
     if (stack.length <= 1) return;
     stack.pop();
     setShared("stack", stack);
-    setShared("focus", FULL.has(stack[stack.length - 1].page) ? "detail" : "list");
+    setShared("focus", NOLIST.has(stack[stack.length - 1].page) ? "detail" : "list");
     this.show(stack[stack.length - 1]);
   }
 

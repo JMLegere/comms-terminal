@@ -1,21 +1,24 @@
 // One Person, as the Console's PersonPage (D139): name, Identities (J/K pick one; b blocks or unblocks it, x removes
 // it, a adds one), the Sequence section, Organizations (o), Threads and Cases as links, and Context beside them.
 // s enrolls in a Sequence (D141), r resumes and f finishes an Enrollment (D142), 1/2 answer an If that asks Jeremy;
-// n renames.
+// n renames. Element focus: the Identities, then the links below them, are the Person's elements; j/k walk them,
+// tab jumps between the two, Enter opens a link.
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { call, nextEvent, nextCommand, theme, shared, setShared, run, toast, open } from "comms";
+import { call, nextEvent, nextCommand, theme, shared, setShared, run, toast, open, focusMain } from "comms";
 
 const KIND_ICON = { email: "\u{f01f0}", slack_user: "\u{f04b1}", phone: "\u{f011c}" };
 const SOURCES = ["attio", "tana", "linear"];
 const offerUndo = (message, steps) => { setShared("undo", { message, steps }); toast(`${message}  z undo`); };
+const KIND = { person: "Person", org: "Organization", thread: "Thread" };
 
 /** Console segment lines ([text, colour, bold, link]); person, org and thread links open where they live; a URL opens
- * on Ctrl+click (Cmd+click on macOS). */
-export function segLines(t, lines, key = "s", orgs = {}) {
+ * on Ctrl+click (Cmd+click on macOS), or on Enter. With `nav` ({ links: [], at }), each link joins nav.links as an
+ * element, and the one at nav.at is drawn focused. */
+export function segLines(t, lines, key = "s", orgs = {}, nav = null) {
   const GREY = { "#928374": "muted", "#a89984": "dim", "#7c6f64": "muted" };
   const color = (hex) => (hex ? t[GREY[hex]] ?? hex : t.foreground);
-  const follow = (link, ev) => {
+  const follow = (link, ev, enter = false) => {
     const push = (entry) => { setShared("push", entry); run("nav.push"); };
     if (link.startsWith("person:")) push({ page: "person", person: link.slice(7) });
     else if (link.startsWith("org:")) push({ page: "organization", organization: { domain: link.slice(4), id: orgs[link.slice(4)] ?? null } });
@@ -27,11 +30,15 @@ export function segLines(t, lines, key = "s", orgs = {}) {
         run(`nav.${v.status_detail === "IGNORED" ? "ignored" : { TODO: "todo", SNOOZED: "snoozed", DONE: "done" }[v.status] ?? "todo"}`);
         run("thread.show");
       }).catch((e) => toast(String(e), "error"));
-    } else if (ev?.modifiers?.control || ev?.modifiers?.platform) open(link);
+    } else if (enter || ev?.modifiers?.control || ev?.modifiers?.platform) open(link);
   };
   return (lines ?? []).map((segs, r) => (segs.length ? h_flex().w_full().gap(0).flex_wrap()
-    .children(segs.map(([text, hex, bold, link], i) => div().min_w(0).text_color(link ? t.blue : color(hex)).when(Boolean(bold), (d) => d.font_semibold())
-      .when(Boolean(link), (d) => d.id(`${key}-${r}-${i}`).cursor_pointer().on_click((ev) => follow(link, ev))).child(text)))
+    .children(segs.map(([text, hex, bold, link], i) => {
+      const n = nav && link ? nav.links.push({ text, link, go: () => follow(link, null, true) }) - 1 : -1;
+      return div().min_w(0).text_color(link ? t.blue : color(hex)).when(Boolean(bold), (d) => d.font_semibold())
+        .when(Boolean(link), (d) => d.id(`${key}-${r}-${i}`).cursor_pointer().on_click((ev) => follow(link, ev)))
+        .when(n >= 0 && n === nav.at, (d) => d.bg(t.selected).border_l(3).border_color(t.accent).pl(4)).child(text);
+    }))
     : div().h(10)));
 }
 
@@ -40,6 +47,7 @@ export default class Person extends View {
     this.page = null;
     this.at = 0;
     this.enroll = {};
+    this.links = [];
     this.load(cx);
     cx.spawn(async (cx) => {
       while (true) if ((await nextEvent()).kind === "rows" && shared("person")) this.load(cx);
@@ -61,18 +69,31 @@ export default class Person extends View {
         if (shared("person") !== id) return;
         if (this.page?.person?.id !== id) {
           this.at = 0;
+          this.links = [];
           this.context = [];
           for (const source of SOURCES) call("context.section", { source, emails: page.emails ?? [], domains: page.domains ?? [] })
             .then((s) => { if (s && shared("person") === id) { this.context = [...this.context, s]; cx.notify(); } }).catch(() => {});
         }
         this.page = page;
         this.error = null;
+        this.target(); // a pushed page loads after its focus_entry
       } catch (e) {
         this.page = null;
         this.error = String(e);
       }
       cx.notify();
     });
+  }
+
+  /** The bar's line for the focused element (element focus): an Identity and what it takes, or a link. */
+  target() {
+    const p = this.page?.person;
+    if (!p || !["people", "person"].includes(shared("page")) || shared("focus") !== "detail") return;
+    const ids = p.identities ?? [], i = ids[this.at], l = this.links?.[this.at - ids.length];
+    if (i) setShared("target", { col: "detail", label: `Identity · ${i.value}`, keys: [["b", i.blocked ? "unblock" : "block"],
+      ["x", "remove"], ["a", "add"], ["s", "enroll"], ["o", "organizations"], ["n", "rename"]] });
+    else if (l) setShared("target", { col: "detail", label: `${KIND[l.link.split(":")[0]] ?? "Link"} · ${l.text.trim()}`,
+      keys: [["enter", "open"], ["s", "enroll"], ["n", "rename"]] });
   }
 
   pick(title, options, reply, prompt, value, body) {
@@ -99,12 +120,20 @@ export default class Person extends View {
     if (name === "show") return this.load(cx);
     if (!p) return;
     const ids = p.identities ?? [];
-    const identity = ids[Math.min(this.at, ids.length - 1)];
+    const identity = ids[this.at] ?? null; // null while a link has the focus
     const live = (this.page.enrollments ?? []).filter((e) => e.state !== "FINISHED");
+    const last = ids.length + (this.links?.length ?? 0) - 1;
     switch (name) {
-      case "next": case "prev":
-        this.at = Math.max(0, Math.min(ids.length - 1, this.at + (name === "next" ? 1 : -1)));
+      case "focus_entry": this.at = Math.max(0, Math.min(last, this.at)); this.target(); return cx.notify();
+      case "next": case "prev": // the element cursor: the Identities, then the links
+        this.at = Math.max(0, Math.min(last, this.at + (name === "next" ? 1 : -1)));
+        this.target();
         return cx.notify();
+      case "tab": // the other section: the first link, or back to the first Identity
+        this.at = this.at < ids.length && (this.links?.length ?? 0) ? ids.length : 0;
+        this.target();
+        return cx.notify();
+      case "enter": return this.links?.[this.at - ids.length]?.go();
       case "block":
         if (!identity) return;
         return cx.spawn(async () => this.write("inbox.block", { kind: identity.kind, value: identity.value, blocked: !identity.blocked },
@@ -256,16 +285,28 @@ export default class Person extends View {
     const pane = v_flex().size_full().min_h(0).bg(t.background).text_size(13);
     if (!p) return pane.child(div().p(24).text_color(t.muted).child(this.error ?? "No Person selected"));
     const ids = p.identities ?? [];
+    const focusHere = shared("focus") === "detail";
+    const nav = { links: (this.links = []), at: focusHere ? this.at - ids.length : -1 };
     return pane.child(h_flex().flex_1().min_h(0).items_start()
       .child(v_flex().id("person").flex_1().min_w(0).h_full().overflow_y_scroll().px(20).py(14).gap(2)
         .children(segLines(t, pg.head, "h"))
         .child(v_flex().gap(0).children(ids.map((i, n) => h_flex().id(`i-${i.id}`).h(26).px(8).gap(10).rounded(4).items_center().cursor_pointer()
-          .when(n === this.at, (el) => el.bg(t.selected))
-          .on_click((_e, cx) => { this.at = n; cx.notify(); })
+          // The path (Logseq bullet threading): the focused Identity has the full bar and highlight; the picked one
+          // keeps a thin bar while the focus is elsewhere (b and x still act on it).
+          .border_l(3).border_color(n === this.at ? t.accent : t.background)
+          .when(n === this.at && focusHere, (el) => el.bg(t.selected))
+          .when(n === this.at && !focusHere, (el) => el.border_l(1))
+          .on_click((_e, cx) => { // a click focuses the Identity and takes the keys from any text field
+            this.at = n;
+            setShared("focus", "detail");
+            focusMain();
+            this.target();
+            cx.notify();
+          })
           .child(div().w(16).flex_none().text_color(t.foreground).child(KIND_ICON[i.kind] ?? ""))
           .child(div().flex_1().min_w(0).truncate().text_color(t.foreground).child(i.value))
           .when(Boolean(i.blocked), (el) => el.child(div().text_color(t.red).child("\u{f00ad} blocked"))))))
-        .children(segLines(t, pg.rest, "r", pg.orgs ?? {})))
+        .children(segLines(t, pg.rest, "r", pg.orgs ?? {}, nav)))
       .child(v_flex().id("person-context").w(320).flex_none().h_full().overflow_y_scroll().px(16).py(14).gap(8).border_l(1)
         .border_color(t.border).text_size(12.5)
         .children((this.context ?? []).map((s) => v_flex().p(8).gap(2).rounded(6).border(1).border_color(t.border)

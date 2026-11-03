@@ -3,7 +3,8 @@
 // above this week. A cell shows its date (with "today", and the month on the 1st), up to four Events as start and
 // title (? unanswered, ~ maybe, declined dim, all-day blue), "+N more", and a tally of Tasks, Snoozed waking,
 // scheduled Draft sends and Enrollment starts. The cursor's day fills the right pane (the day view). h/l move a
-// day, j/k a week, { } a month, t today; tab or Enter goes to the day pane, where j/k move and Enter opens.
+// day, j/k a week, { } a month, t today; tab or Enter goes to the day pane, where j/k move and Enter opens. Element
+// focus: the cursor's day is the list column's element; it names itself in the bar and carries the path's accent bar.
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, v_virtual_list, VirtualListScrollHandle } from "gpui-base";
 import { call, nextEvent, nextCommand, theme, shared, setShared, run } from "comms";
@@ -11,6 +12,7 @@ import { call, nextEvent, nextCommand, theme, shared, setShared, run } from "com
 const pad = (n) => String(n).padStart(2, "0");
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const SHORT = MONTHS.map((m) => m.slice(0, 3));
+const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const LINES = 4; // CAL_LINES
 const SEP_H = 24, ROW_H = SEP_H + (LINES + 2) * 17 + 8; // ponytail: one height for every row (each carries a month band)
 export const iso = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
@@ -90,6 +92,15 @@ export default class Calendar extends View {
     if (shared("page") !== "calendar") return;
     setShared("cal_day", { day: iso(this.cursor), items: this.data.days?.[iso(this.cursor)]?.items ?? [] });
     run("day.show");
+    this.target();
+  }
+
+  /** The bar's line for the cursor's day (element focus): which day and the keys it takes. */
+  target() {
+    if (shared("page") !== "calendar" || shared("focus") === "detail") return;
+    const d = this.cursor;
+    setShared("target", { col: "list", label: `Day · ${DAYS[d.getDay()]}, ${MONTHS[d.getMonth()]} ${d.getDate()}`,
+      keys: [["enter", "its Calendar Items"], ["h/l", "day"], ["j/k", "week"], ["{ }", "month"], ["t", "today"]] });
   }
 
   setCursor(day, cx) {
@@ -119,15 +130,18 @@ export default class Calendar extends View {
       case "today":
         this.setCursor(new Date(), cx);
         return this.toTop(this.blockOf(addDays(new Date(), -14)), cx);
-      case "tab": setShared("focus", inDay ? "list" : "detail"); return cx.notify();
-      case "enter": if (inDay) return run("day.open"); setShared("focus", "detail"); return cx.notify();
-      case "escape": if (inDay) { setShared("focus", "list"); return cx.notify(); } return run("nav.back");
+      case "focus_entry": this.target(); return cx.notify();
+      // into the day's Calendar Items and back: nav moves the focus, so the entered column names its element
+      case "tab": return run(inDay ? "nav.focus_left" : "nav.focus_right");
+      case "enter": return run(inDay ? "day.open" : "nav.focus_right");
+      case "escape": return run("nav.back"); // the day pane back to the grid, then back a page
     }
   }
 
   render() {
     const t = theme();
     const today = this.today, cursor = iso(this.cursor), days = this.data.days ?? {};
+    const focusHere = (shared("focus") ?? "list") === "list";
     const GREY = { "#928374": "muted", "#a89984": "dim", "#7c6f64": "muted" };
     const color = (hex) => (hex ? t[GREY[hex]] ?? (hex === "#45707a" ? t.blue : hex === "#654735" ? t.foreground : hex) : t.foreground);
     const cell = (d) => {
@@ -135,7 +149,10 @@ export default class Calendar extends View {
       const k = iso(d), info = days[k], on = k === cursor;
       const line = (text, c, bold) => div().h(17).truncate().text_color(c).when(Boolean(bold), (e) => e.font_semibold()).child(text);
       const ev = (info?.events ?? []).map((e) => line(e.text, color(e.color)));
-      return v_flex().flex_1().min_w(0).h_full().px(4).py(2).rounded(4).when(on, (e) => e.bg(t.selected)) // no handlers in a virtual list's rows
+      // The path (Logseq bullet threading): the cursor's day has a full bar and highlight; while the focus is further
+      // in (the day's Calendar Items), it keeps a thin bar. No handlers in a virtual list's rows.
+      return v_flex().flex_1().min_w(0).h_full().px(4).py(2).rounded(4).border_l(3).border_color(on ? t.accent : t.background)
+        .when(on && focusHere, (e) => e.bg(t.selected)).when(on && !focusHere, (e) => e.border_l(1))
         .child(line(dateLine(d, today), k === iso(today) ? t.blue : on ? t.strong ?? t.foreground : t.muted, true))
         .children(ev).when((info?.more ?? 0) > 0, (e) => e.child(line(`+${info.more} more`, t.muted)))
         .child(div().flex_1()).child(line(info?.tally ?? "", t.muted));

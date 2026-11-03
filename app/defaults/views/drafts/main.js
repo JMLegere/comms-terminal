@@ -5,7 +5,7 @@
 // save and send from the list too (D78).
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, v_virtual_list, VirtualListScrollHandle } from "gpui-base";
-import { call, nextEvent, nextCommand, theme, shared, setShared, run, toast } from "comms";
+import { call, nextEvent, nextCommand, theme, shared, setShared, run, toast, focusMain } from "comms";
 
 const FORMAT = { gmail: "email", fastmail: "email", slack: "slack", quo: "sms" };
 const KIND = { email: "\u{f01f0}", slack: "\u{f04b1}", sms: "\u{f011c}" };
@@ -72,6 +72,17 @@ export default class Drafts extends View {
     run("draft.show");
     const at = this.rows.findIndex((r) => r.id === id);
     if (at >= 0) this.scroll.scroll_to_item(at, "center");
+    this.target();
+  }
+
+  /** The bar's line for the focused row (element focus): the Draft and the keys it takes. */
+  target() {
+    if (shared("page") !== "drafts" || shared("focus") === "detail") return;
+    const d = this.rows.find((r) => r.id === shared("draft"));
+    if (!d) return;
+    const title = (d.subject || d.body || "New draft").replace(/\r?\n/g, " ");
+    setShared("target", { col: "list", label: `${d.thread_id ? "Reply Draft" : "Draft"} · ${title}`,
+      keys: [["enter", d.thread_id ? "open Thread" : "edit"], ["n", "new"], ["x", "delete"], ["y", "copy"]] });
   }
 
   command(c, cx) {
@@ -82,6 +93,7 @@ export default class Drafts extends View {
     const id = shared("draft");
     switch (name) {
       case "show": return this.load(cx);
+      case "focus_entry": return this.target();
       case "next": case "prev": {
         const row = this.rows[Math.max(0, Math.min(this.rows.length - 1, i + (name === "next" ? 1 : -1)))];
         return row && this.select(row.id);
@@ -131,12 +143,17 @@ export default class Drafts extends View {
   render() {
     const t = theme();
     const selected = shared("draft");
+    const focusHere = (shared("focus") ?? "list") === "list";
     const rows = this.rows;
     const row = (r) => {
       const [word, tone] = status(r, shared("draft_unsaved") === r.id);
       const title = (r.subject || r.body || "New draft").replace(/\r?\n/g, " ");
-      return h_flex().h(26).px(8).gap(8).rounded(4).items_center().cursor_pointer()
-        .when(r.id === selected, (el) => el.bg(t.selected)).hover((s) => s.bg(t.hover))
+      // The path (Logseq bullet threading): full bar and highlight on the focused row, a thin bar while the focus is
+      // further in (the Draft).
+      return h_flex().h(26).px(8).gap(8).rounded(4).items_center().cursor_pointer().hover((s) => s.bg(t.hover))
+        .border_l(3).border_color(r.id === selected ? t.accent : t.background)
+        .when(r.id === selected && focusHere, (el) => el.bg(t.selected))
+        .when(r.id === selected && !focusHere, (el) => el.border_l(1))
         .child(div().w(16).flex_none().text_color(t.muted).child(KIND[r.kind] ?? ""))
         .child(div().w(140).flex_none().truncate().font_semibold().text_color(t.strong ?? t.foreground).child(r.recipient || "No recipient"))
         .child(h_flex().flex_1().min_w(0).gap(0)
@@ -153,6 +170,11 @@ export default class Drafts extends View {
       .child(div().flex_1().min_h(0).px(4).py(4).child(
         v_virtual_list("drafts", rows.length, 26, (i) => rows[i].id, (range) => rows.slice(range.start, range.end).map(row))
           .size_full().track_scroll(this.scroll)
-          .on_item_click((key) => this.select(key))));
+          .on_item_click((key, cx) => {
+            setShared("focus", "list"); // a click focuses the row and takes the keys from any text field
+            focusMain();
+            this.select(key);
+            cx.notify();
+          })));
   }
 }

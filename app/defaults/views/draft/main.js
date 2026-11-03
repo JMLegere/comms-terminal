@@ -3,7 +3,9 @@
 // beside it. Edits save themselves after a pause with the revision they started from (ADR 0012: the latest save
 // wins); an agent's newer save shows here when nothing is being typed. ctrl-enter checks the Draft, then offers
 // send now, tomorrow or next Monday; ctrl-s saves; Escape saves and gives the keyboard back. A Reply Draft shows
-// read-only here: its Thread's reply box edits and sends it (D69).
+// read-only here: its Thread's reply box edits and sends it (D69). Element focus: the Draft's elements are its
+// Captured history Threads, then Conn., To, Cc, Subject and the body (a Reply Draft: its preview); j/k move between
+// them, Enter does what a click does (open the Thread, pick the Connection, type in the field).
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, TextareaState, Textarea } from "gpui-base";
 import { call, nextEvent, nextCommand, theme, shared, setShared, run, open, focusMain, toast } from "comms";
@@ -28,6 +30,16 @@ export const SEND_UNKNOWN = "Send outcome unknown · it may have gone out. Check
 const slackName = (to) => (to ?? "").replace(/\s*<[A-Z0-9]+>/g, "").trim();
 const viewOf = (h) => h.detail === "IGNORED" ? "ignored" : (h.status ?? "todo").toLowerCase();
 
+/** Opens a Reply Draft's Thread where it lives, with its reply box open (as drafts/main.js openReply). */
+async function openReply(threadId) {
+  const th = (await call("thread.view", { thread_id: threadId })).view.thread, v = th?.f ?? th;
+  const view = v.status_detail === "IGNORED" ? "ignored" : { TODO: "todo", SNOOZED: "snoozed", DONE: "done" }[v.status] ?? "todo";
+  setShared("thread", threadId);
+  run(`nav.${view}`);
+  run("thread.show");
+  run("thread.open_reply");
+}
+
 /** The editor's notice line: a save or send refusal, else the lock, else the Draft's send-later state. */
 export function notice(d, said) {
   if (said) return said;
@@ -47,6 +59,12 @@ export default class Draft extends View {
     this.body = TextareaState.new({ placeholder: "Write…", rows: 12 });
     this.body.set_auto_grow(8, 30);
     for (const s of [this.to, this.toSlack, this.cc, this.subject, this.body]) s.on("change", (_e, cx) => this.changed(cx));
+    // Typing (element focus): the field with the keyboard is the focused element, and the bar says typing goes to it.
+    for (const [s, key, name] of [[this.to, "To", "To"], [this.toSlack, "To", "To"], [this.cc, "Cc", "Cc"],
+      [this.subject, "Subject", "Subject"], [this.body, "Body", "Draft body"]]) {
+      s.on("focus", (_e, cx) => { this.fk = key; setShared("focus", "detail"); setShared("typing", name); this.target(cx); });
+      s.on("blur", () => { if (shared("typing") === name) setShared("typing", null); });
+    }
     this.load(cx);
     cx.spawn(async (cx) => {
       while (true) if ((await nextEvent()).kind === "rows" && shared("draft")) this.load(cx);
@@ -68,7 +86,7 @@ export default class Draft extends View {
         if (shared("draft") !== id) return;
         const d = answer.draft;
         const fresh = this.draft?.id !== id;
-        if (fresh) this.said = this.saveError = null;
+        if (fresh) this.said = this.saveError = this.fk = null; // another Draft: its entry element takes the focus
         // Someone else's newer save (an agent's) replaces the fields only while nothing here is unsaved.
         if (fresh || (!this.unsaved && d.revision !== this.draft?.revision)) this.fill(d);
         this.draft = { ...d, ...(this.unsaved ? this.values() : {}), revision: this.unsaved ? this.draft.revision : d.revision };
@@ -76,12 +94,55 @@ export default class Draft extends View {
         this.info = answer;
         this.staged = answer.staged ?? [];
         this.error = null;
+        if (shared("focus") === "detail" && shared("detail_view") === "draft") this.target(cx);
       } catch (e) {
         this.draft = null;
         this.error = String(e);
       }
       cx.notify();
     });
+  }
+
+  /** The Draft's elements (element focus), top to bottom, each with what Enter does on it (null: nothing). */
+  elements() {
+    const d = this.draft;
+    if (!d) return [];
+    if (d.thread_id) return [{ key: "reply", label: `Reply Draft · ${this.info.thread_title ?? ""}`, verb: "open Thread",
+      enter: () => openReply(d.thread_id).catch((e) => toast(String(e), "error")) }];
+    const live = !d.sending_at; // Send outcome unknown: read-only, so Enter edits nothing
+    const field = (key, s) => ({ key, label: `Draft · ${key}`, verb: "edit", enter: live ? () => s.focus() : null });
+    return [
+      ...(this.info.history ?? []).map((h, i) => ({ key: `h-${i}`, label: `Thread · ${h.title ?? ""}`, verb: "open", enter: () => this.openThread(h) })),
+      { key: "Conn.", label: "Draft · Connection", verb: "pick", enter: live ? () => this.chooseConnection() : null },
+      field("To", this.toField()),
+      ...(d.kind === "email" ? [field("Cc", this.cc), field("Subject", this.subject)] : []),
+      field("Body", this.body),
+    ];
+  }
+
+  /** The bar's line for the focused element; none chosen yet: the entry one, the body (a Reply Draft's preview). */
+  target(cx) {
+    const els = this.elements();
+    const el = els.find((e) => e.key === this.fk) ?? els.at(-1);
+    if (!el) return;
+    this.fk = el.key;
+    setShared("target", { col: "detail", label: el.label,
+      keys: [...(el.enter ? [["enter", el.verb]] : []), ["j", "next"], ["k", "prev"], ["esc", "list"]] });
+    cx?.notify();
+  }
+
+  /** A click on an element focuses it and takes the keys from any text field. */
+  focusOn(key, cx) {
+    setShared("focus", "detail");
+    focusMain();
+    this.fk = key;
+    this.target(cx);
+  }
+
+  openThread(h) {
+    setShared("thread", h.id);
+    run(`nav.${viewOf(h)}`);
+    run("thread.show");
   }
 
   toField() {
@@ -157,7 +218,21 @@ export default class Draft extends View {
       case "show": return this.load(cx);
       case "edit": return this.draft && !reply && !this.draft.sending_at && this.body.focus();
       case "save": return reply || cx.spawn(async (cx) => this.save(cx, "Saved."));
-      case "close": return cx.spawn(async (cx) => { await this.save(cx); focusMain(); });
+      case "close": return cx.spawn(async (cx) => { // esc leaves typing: the field stays the focused element
+        await this.save(cx);
+        focusMain();
+        setShared("typing", null);
+        setShared("focus", "detail");
+        this.target(cx);
+      });
+      case "focus_entry": this.fk = null; return this.target(cx);
+      case "next": case "prev": {
+        const els = this.elements(), i = els.findIndex((e) => e.key === this.fk);
+        const to = els[Math.max(0, Math.min(els.length - 1, (i < 0 ? els.length - 1 : i) + (name === "next" ? 1 : -1)))];
+        if (to) this.fk = to.key;
+        return this.target(cx);
+      }
+      case "enter": return this.elements().find((e) => e.key === this.fk)?.enter?.();
       case "send": return reply || cx.spawn(async (cx) => this.send(cx));
       case "copy": return this.draft && cx.spawn(async (cx) => this.copy(cx));
       case "connection-picked": return cx.spawn(async (cx) => this.connectionPicked(answer.value, cx));
@@ -291,8 +366,11 @@ export default class Draft extends View {
     const pane = v_flex().size_full().min_h(0).bg(t.background).text_size(13);
     if (!d) return pane.child(div().p(24).text_color(t.muted).child(this.error ?? "No draft selected. Press n for a blank draft."));
     const info = this.info;
+    // The path (element focus): the focused element carries the full accent bar while the focus is in this column.
+    const focused = shared("focus") === "detail" ? (this.fk ?? (d.thread_id ? "reply" : "Body")) : null;
+    const bar = (key, el) => el.border_l(3).pl(4).border_color(key === focused ? t.accent : t.background);
     if (d.thread_id) { // D69: the Console's read-only preview; enter opens the Thread's reply box
-      return pane.child(v_flex().p(20).gap(14)
+      return pane.child(bar("reply", v_flex().id("reply-preview").p(20).gap(14).on_click((_e, cx) => this.focusOn("reply", cx)))
         .child(h_flex().gap(6).child(div().text_color(t.blue).child(`${I.reply} Reply Draft`)).child(div().text_color(t.muted).child("·"))
           .child(div().font_semibold().text_color(t.strong ?? t.foreground).child(info.thread_title ?? "")))
         .child(div().text_color(t.foreground).child(d.body ?? ""))
@@ -302,7 +380,7 @@ export default class Draft extends View {
     const locked = Boolean(d.sending_at);
     const v = this.values();
     const text = (x) => div().text_color(t.muted).child(x || "—");
-    const field = (label, el, click) => h_flex().gap(8).items_center().text_size(12.5)
+    const field = (label, el, click) => bar(label, h_flex()).gap(8).items_center().text_size(12.5)
       .child(div().w(56).flex_none().text_color(t.muted).child(label))
       .child(div().flex_1().min_w(0).when(Boolean(click), (e) => e.id(`f-${label}`).cursor_pointer().on_click(click)).child(el));
     const shown = notice(d, this.said);
@@ -317,9 +395,9 @@ export default class Draft extends View {
     const history = (info.history ?? []).map((h, i) => {
       const g = GLYPH[h.detail] ?? ["·", "muted", h.detail];
       const msgs = h.messages ?? [];
-      return v_flex().id(`h-${i}`).gap(4)
+      return bar(`h-${i}`, v_flex().id(`h-${i}`)).gap(4)
         .child(h_flex().gap(8).items_center().cursor_pointer()
-          .on_click(() => { setShared("thread", h.id); run(`nav.${viewOf(h)}`); run("thread.show"); })
+          .on_click(() => this.openThread(h))
           .child(div().font_semibold().text_color(t.blue).child(h.title ?? ""))
           .child(div().text_color(t[g[1]] ?? t.muted).child(`${g[0]} ${g[2]}`)))
         .children(msgs.map((m, j) => v_flex().pl(8).gap(2)
@@ -338,11 +416,11 @@ export default class Draft extends View {
         cx.stop_propagation();
       })
       .child(field("Conn.", div().text_color(d.connection_id == null ? t.muted : t.foreground).child(info.connection ?? ""),
-        locked ? null : () => this.chooseConnection()))
+        locked ? null : (_e, cx) => { this.focusOn("Conn.", cx); this.chooseConnection(); }))
       .child(field("To", locked ? text(d.to) : Input.new(this.toField())))
       .when(email, (el) => el.child(field("Cc", locked ? text(d.cc) : Input.new(this.cc)))
         .child(field("Subject", locked ? text(d.subject) : Input.new(this.subject))))
-      .child(locked ? div().text_color(t.foreground).child(d.body ?? "") : Textarea.new(this.body))
+      .child(bar("Body", div()).child(locked ? div().text_color(t.foreground).child(d.body ?? "") : Textarea.new(this.body)))
       .when(Boolean(this.staged?.length), (el) => el.child(h_flex().flex_wrap().gap(6).items_center().text_size(12)
         .child(div().text_color(t.muted).child("Files"))
         .children(this.staged.map((a, i) => h_flex().id(`file-${i}`).gap(4).px(8).py(2).rounded(6).border(1).border_color(t.border)
