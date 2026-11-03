@@ -175,7 +175,7 @@ impl Drop for Body {
 
 enum Job {
     Layout { key: SharedString, html: Arc<str>, width: f32, scale: f32 },
-    Tile { key: SharedString, index: u32 },
+    Tile { key: SharedString, index: u32, width: f32 }, // `width`: the layout the window asked it of
     Click { key: SharedString, x: f32, y: f32 },
     Hover { key: SharedString, x: f32, y: f32 },
 }
@@ -292,13 +292,16 @@ fn run(job: Job, bodies: &mut Vec<(SharedString, Body)>) {
                 b.stale.extend(old.into_iter().flat_map(|o| o.tiles.into_values()));
             });
         }
-        Job::Tile { key, index } => {
-            let Some(at) = find(bodies, &key) else { return };
-            let body = &mut bodies[at].1;
-            let tile = body.tile(index);
-            let width = body.width;
+        Job::Tile { key, index, width } => {
+            // Painted only at the width it was asked at: a body laid out again since is a different page. The ask is
+            // cleared either way, so the window can ask again; a leftover one blocked that tile for good.
+            let tile = find(bodies, &key)
+                .map(|at| &mut bodies[at].1)
+                .filter(|body| (body.width - width).abs() < 0.5)
+                .map(|body| body.tile(index));
             board(|b| {
                 b.asked.remove(&tile_signature(&key, width, index));
+                let Some(tile) = tile else { return };
                 match b.shown.get_mut(&key).filter(|s| (s.width - width).abs() < 0.5) {
                     Some(shown) => drop(shown.tiles.insert(index, tile)),
                     None => b.stale.push(tile),
@@ -311,11 +314,10 @@ fn run(job: Job, bodies: &mut Vec<(SharedString, Body)>) {
             }
         }
         Job::Hover { key, x, y } => {
-            let Some(at) = find(bodies, &key) else { return };
-            let pointer = bodies[at].1.hover(x, y);
+            let pointer = find(bodies, &key).map(|at| bodies[at].1.hover(x, y));
             board(|b| {
                 b.asked.remove(&format!("H {key}"));
-                if let Some(shown) = b.shown.get_mut(&key) {
+                if let (Some(shown), Some(pointer)) = (b.shown.get_mut(&key), pointer) {
                     shown.pointer = pointer;
                 }
             });
@@ -324,6 +326,19 @@ fn run(job: Job, bodies: &mut Vec<(SharedString, Body)>) {
 }
 
 // --- the window's side ---------------------------------------------------------------------------------------
+
+/// What layout asks of a body at `width` (None: an intrinsic size, such as a flex item's basis): the size the worker
+/// last found, and nothing more. Taffy measures at several widths in one frame; when this asked the worker for each,
+/// the body flipped between two widths forever and never painted. `prepaint` asks at the width the body gets.
+fn measure(key: &str, width: Option<f32>) -> (f32, f32) {
+    let shown = board(|b| b.shown.get(key).map(|s| (s.width, s.height)));
+    (width.or(shown.map(|s| s.0)).unwrap_or(640.), shown.map_or(0., |s| s.1))
+}
+
+/// Whether the worker has laid the body out at `width` and `scale`.
+fn laid_out(key: &str, width: f32, scale: f32) -> bool {
+    board(|b| b.shown.get(key).is_some_and(|s| (s.width - width).abs() < 0.5 && s.scale == scale))
+}
 
 struct BodyElement {
     key: SharedString,
@@ -358,22 +373,13 @@ impl Element for BodyElement {
     ) -> (LayoutId, ()) {
         let mut style = Style::default();
         style.size.width = relative(1.).into();
-        let (key, html) = (self.key.clone(), self.html.clone());
-        let id = window.request_measured_layout(style, move |known, available, window, _| {
-            let width = known.width.map(f32::from).unwrap_or(match available.width {
-                gpui::AvailableSpace::Definite(w) => w.into(),
-                _ => 640.,
+        let key = self.key.clone();
+        let id = window.request_measured_layout(style, move |known, available, _, _| {
+            let definite = known.width.or(match available.width {
+                gpui::AvailableSpace::Definite(w) => Some(w),
+                _ => None,
             });
-            let scale = window.scale_factor();
-            // The height the worker last found; until it finishes at this width, the old one (or none) stands.
-            let (height, current) = board(|b| match b.shown.get(&key) {
-                Some(s) => (s.height, (s.width - width).abs() < 0.5 && s.scale == scale),
-                None => (0., false),
-            });
-            if !current {
-                let job = Job::Layout { key: key.clone(), html: html.clone(), width, scale };
-                ask(layout_signature(&key, width, scale), job);
-            }
+            let (width, height) = measure(&key, definite.map(f32::from));
             Size { width: px(width), height: px(height) }
         });
         (id, ())
@@ -388,6 +394,12 @@ impl Element for BodyElement {
         window: &mut Window,
         _: &mut App,
     ) -> Hitbox {
+        // The body is laid out at the width it is given on screen, here, never at a width Taffy only tries.
+        let (width, scale) = (f32::from(bounds.size.width), window.scale_factor());
+        if width > 0. && !laid_out(&self.key, width, scale) {
+            let job = Job::Layout { key: self.key.clone(), html: self.html.clone(), width, scale };
+            ask(layout_signature(&self.key, width, scale), job);
+        }
         window.insert_hitbox(bounds, HitboxBehavior::Normal)
     }
 
@@ -423,7 +435,7 @@ impl Element for BodyElement {
                         // the last tile clips to the body
                         let _ = window.paint_image(bounds, at, Default::default(), image.clone(), 0, false);
                     }
-                    None => ask(tile_signature(&self.key, width, index), Job::Tile { key: self.key.clone(), index }),
+                    None => ask(tile_signature(&self.key, width, index), Job::Tile { key: self.key.clone(), index, width }),
                 }
             }
         }
@@ -476,6 +488,33 @@ mod tests {
         assert_eq!(body.click(10., 150.), None);
         assert!(body.hover(10., 20.) && !body.hover(10., 150.));
         assert_eq!(body.tile(0).size(0).width.0, 400);
+    }
+
+    #[test]
+    fn measuring_reads_the_last_layout_and_asks_for_nothing() {
+        let key = "measure-test";
+        assert_eq!(measure(key, Some(500.)), (500., 0.));
+        assert_eq!(measure(key, None), (640., 0.));
+        board(|b| b.shown.insert(key.into(), Shown { width: 782., scale: 1., height: 584., ..Default::default() }));
+        assert_eq!(measure(key, None), (782., 584.)); // an intrinsic size is the laid-out width
+        assert_eq!(measure(key, Some(640.)), (640., 584.));
+        assert!(laid_out(key, 782., 1.) && !laid_out(key, 640., 1.) && !laid_out(key, 782., 2.));
+        assert!(board(|b| !b.asked.iter().any(|s| s.contains(key))));
+    }
+
+    #[test]
+    fn a_tile_asked_before_a_new_layout_is_cleared_and_painted_at_the_new_width() {
+        let key: SharedString = "tile-test".into();
+        let html: Arc<str> = Arc::from("<p style=\"height:600px\">text</p>");
+        let mut bodies = Vec::new();
+        let layout = |width| Job::Layout { key: key.clone(), html: html.clone(), width, scale: 1. };
+        run(layout(400.), &mut bodies);
+        board(|b| b.asked.insert(tile_signature(&key, 400., 0)));
+        run(layout(300.), &mut bodies); // laid out again before the tile was painted
+        run(Job::Tile { key: key.clone(), index: 0, width: 400. }, &mut bodies);
+        assert!(board(|b| !b.asked.contains(&tile_signature(&key, 400., 0)) && b.shown[&key].tiles.is_empty()));
+        run(Job::Tile { key: key.clone(), index: 0, width: 300. }, &mut bodies);
+        assert!(board(|b| b.shown[&key].width == 300. && b.shown[&key].tiles.contains_key(&0)));
     }
 
     #[test]
