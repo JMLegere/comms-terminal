@@ -25,7 +25,7 @@ if (process.argv[2] === "groups") {
   state.view = "Todo";
   await show([row("c", "CREATED", { case_id: "case-1" }), row("d", "CREATED")]);
   state.page = "threads";
-  view.pick(view.items.map((it) => it.caseHeader ? `case-${it.caseHeader.id}` : null).find((k) => k === "case-case-1"));
+  view.pick(view.items.map((it) => it.caseHeader ? `case-${it.caseHeader.under ?? ""}-${it.caseHeader.id}` : null).find((k) => k?.endsWith("-case-1")));
   view.command("enter", cx);
   out.push = state.push; out.ran = ran.filter((c) => c.startsWith("nav."));
 } else if (process.argv[2] === "advance") {
