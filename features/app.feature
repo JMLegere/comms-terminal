@@ -299,6 +299,14 @@ Feature: App
     When Jeremy skips it with x
     Then the toast offers z undo, z would restore it, and the next Task is selected
 
+  @AS-CONF-7 @FR-CONF-9
+  Scenario: A prompt shows its hint inside its box and keeps Tab
+    Given the App's New case title prompt
+    When Jeremy opens it and types a title
+    Then "What is this about?" is the box's placeholder, as in the Console
+    And Tab stays in the prompt
+    And Enter creates the Case with the typed title
+
   @AS-CONF-16 @FR-CONF-10
   Scenario: A Task's Draft stays out of the pane once another row is selected
     Given Today with an email Task whose New Thread Draft was shown

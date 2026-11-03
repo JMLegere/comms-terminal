@@ -35,6 +35,19 @@ if (kase === "rowkeys") { // a Case header under two Statuses (here "No case") k
   pane.command("send", cx); pane.command("save", cx);
   await settle();
   out.pane_calls = calls.slice(before);
+} else if (kase === "prompt") { // the Console's Ask: the prompt is the box's placeholder
+  const Overlay = await load("overlay");
+  const o = new Overlay();
+  o.init({}, cx);
+  state.picker = { title: "New case title", options: [], reply: "thread.case-named", prompt: "What is this about?" };
+  const before = o.input;
+  o.open(cx);                                             // overlay.open
+  out.placeholder = o.input.placeholder;
+  const open = before;
+  out.fresh = o.input !== open;
+  o.input.set_value("Seed Round");
+  o.choose(undefined, cx);
+  out.ran = ran.splice(0);
 } else if (kase === "early") { // NFR-APP-1: a reply key pressed while the Thread still loads acts once it arrives
   const Thread = await load("thread");
   state.thread = "thread-7";
