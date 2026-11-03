@@ -189,3 +189,16 @@ def test_rdate_events_disclose_repeating_scope(db):
     cal.sync(db, feed(rdate))
     occurrences = cal.expand(db, date(2026, 10, 19), date(2026, 11, 5))
     assert len(occurrences) == 3 and all(e["repeats"] for e in occurrences)
+
+
+def test_an_expansion_is_kept_until_the_events_change(db, monkeypatch):
+    """Today and the status bar ask for the same year on every refresh (NFR-APP-1): expand it once per change."""
+    cal.sync(db, feed(STANDUP), "2026-10-20T15:00:00+00:00")
+    expanded = []
+    real = cal.recurring_ical_events.of
+    monkeypatch.setattr(cal.recurring_ical_events, "of", lambda c: expanded.append(1) or real(c))
+    week = (date(2026, 10, 19), date(2026, 10, 24))
+    first = titles(db, *week, False)
+    assert titles(db, *week, False) == first and len(expanded) == 1
+    cal.sync(db, feed(STANDUP.replace("Agent Maple Standup", "Standup")), "2026-10-20T15:01:00+00:00")
+    assert {t for _, t, _ in titles(db, *week, False)} == {"Standup"} and len(expanded) == 2

@@ -47,6 +47,27 @@ Feature: App
     When an agent saves new text for that Draft through the CLI
     Then the App shows the agent's text within 2 seconds
 
+  @NFR-APP-1
+  Scenario: A Thread action is answered while a Context source is still looking
+    Given a Thread in Status "TODO"
+    And a Context source that takes 2 seconds to answer
+    When the App asks for the Thread's context and then marks it Done, on one Local API connection
+    Then the Done answer arrives within 0.5 seconds, before the context answer
+    And the laptop copy's Thread has Status "DONE"
+
+  @NFR-APP-1
+  Scenario: The Views' reload after a write asks each query once
+    Given a laptop copy with Threads, Tasks and Events
+    When the Views reload after a write and two of them ask the same query
+    Then the Local core computes that query once
+
+  @NFR-APP-1
+  Scenario: A reply key pressed while the Thread loads is not lost
+    Given a Thread the App is still loading
+    When Jeremy presses r before it arrives
+    Then the reply box opens to the sender once the Thread arrives
+    And a reply key left from a Thread he moved away from opens nothing
+
   @wip @AS-APP-7 @FR-APP-11
   Scenario: A broken key file keeps the last good keys
     Given the App running with its default keys

@@ -289,7 +289,8 @@ export default class Draft extends View {
     const t = theme();
     const d = this.draft;
     const pane = v_flex().size_full().min_h(0).bg(t.background).text_size(13);
-    if (!d) return pane.child(div().p(24).text_color(t.muted).child(this.error ?? "No draft selected. Press n for a blank draft."));
+    if (!d) return pane.child(div().p(24).text_color(t.muted)
+      .child(this.error ?? (shared("draft") ? "Loading the draft…" : "No draft selected. Press n for a blank draft.")));
     const info = this.info;
     if (d.thread_id) { // D69: the Console's read-only preview; enter opens the Thread's reply box
       return pane.child(v_flex().p(20).gap(14)
