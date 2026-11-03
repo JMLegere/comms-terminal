@@ -132,7 +132,8 @@ export default class Today extends View {
   load(cx) {
     cx.spawn(async (cx) => {
       try {
-        const keep = this.rows()[this.at]?.key;
+        const keep = this.pending ?? this.rows()[this.at]?.key;
+        this.pending = null;
         const [data, cases] = await Promise.all([call("today.page"), call("cases.list").catch(() => [])]);
         this.data = data;
         this.cases = Object.fromEntries((cases ?? []).map((c) => [c.id, c]));
@@ -155,6 +156,14 @@ export default class Today extends View {
     this.at = Math.max(0, Math.min(n - 1, this.at + by));
     this.select(cx);
     cx.notify();
+  }
+
+  /** s: after this load, the Thread below the cursor, else the one above, as the Threads list (D32). */
+  advance() {
+    const rows = this.rows(), here = rows[this.at];
+    if (shared("page") !== "today" || here?.kind !== "threads" || !here.r) return;
+    const thread = (x) => x.kind === "threads" && x.r;
+    this.pending = (rows.slice(this.at + 1).find(thread) ?? rows.slice(0, this.at).reverse().find(thread))?.key ?? null;
   }
 
   /** tab: the first row of the next pane that has one, round to the first. */
@@ -220,6 +229,7 @@ export default class Today extends View {
     if (c === "show") return this.load(cx);
     if (c === "next" || c === "prev") return this.move(c === "next" ? 1 : -1, cx);
     if (c === "tab") return this.nextPane(cx);
+    if (c === "advance") return this.advance();
     if (c === "enter") return this.enter(cx);
     if (c === "focus_entry") return this.target();
     if (KEYS.includes(c)) { // a key goes to the row's own kind; one it does not take says what that row takes

@@ -219,6 +219,12 @@ Feature: App
     Then the selection moves to the Thread below it
 
   @AS-CONF-7 @FR-CONF-9
+  Scenario: After s on Today, the selection moves on to the next Thread
+    Given three Todo Threads on the App's Today with the first selected
+    When Jeremy changes its Status detail with s on Today
+    Then the selection moves to the Thread below it
+
+  @AS-CONF-7 @FR-CONF-9
   Scenario: Ages and countdowns read as the Console's
     Given the App's Threads list
     When it shows ages and snooze countdowns

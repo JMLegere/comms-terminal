@@ -14,3 +14,6 @@ Marked `COMMS:`.
 
 - `gpui-kit/crates/shell/src/root.rs`: each `ShellRoot` ran its toast clock every 50 ms forever; it now runs
   only while a toast is mounted. With six views that clock alone kept an idle window above 1% CPU (PRD NFR-5).
+- `gpui-kit/crates/base/src/input/base/state.rs`: in a multi-line input, `secondary-enter` (ctrl-enter, cmd-enter)
+  typed a newline and stopped there, so it never reached the reply box or Draft editor that sends on it. It now
+  inserts nothing and propagates, like a submitting Enter, and still emits `PressEnter { secondary: true }`.

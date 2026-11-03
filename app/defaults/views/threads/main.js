@@ -176,7 +176,10 @@ export default class Threads extends View {
 
   command(c, cx) {
     if (c === "reload" || c === "show") return this.load(cx);
-    if (c === "advance") { this.pending = this.nextThread(); return; } // s: the cursor moves on, as after Done (D32)
+    if (c === "advance") { // s: the cursor moves on, as after Done (D32); only on its own page, else it waits stale
+      if ((shared("page") ?? "threads") === "threads") this.pending = this.nextThread();
+      return;
+    }
     const i = this.items.findIndex((x) => keyOf(x) === this.hi);
     if (c === "enter") {
       const it = this.items[i];
