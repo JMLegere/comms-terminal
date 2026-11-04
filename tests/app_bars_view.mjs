@@ -19,6 +19,8 @@ out.many = problems({ online: true }, { connections: [1, 2, 3].map((n) => ({ ok:
 // An update keeps the App read-only (PRD 2026-11-04-app-update-on-restart, FR-UPD-7): the bar names the step.
 const updating = { online: false, problem: "Update ready · restart Comms Terminal to load the service's version; read-only." };
 out.updates = ["building", "ready", "failed"].map((step) => problems(updating, {}, step)[0]);
+out.progress = [null, { elapsed: 30, percent: null, left: null }, { elapsed: 150, percent: 40, left: 210 },
+  { elapsed: 400, percent: 99, left: 0 }].map((p) => problems(updating, {}, "building", p)[0][0]);
 out.offlineNoUpdate = problems({ online: false, problem: "offline" }, {}, null)[0];
 out.typing = acting("reply", null, "detail");
 out.target = acting(null, { col: "list", label: "Thread · Brunch", keys: [["e", "done"], ["r", "reply"], ["s", "status"], ["i", "respond"], ["y", "copy"]] }, "list");

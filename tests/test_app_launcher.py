@@ -110,6 +110,7 @@ def test_a_new_build_is_staged_beside_the_running_one_and_opens_at_the_next_star
     assert sorted(p.name for p in (m.data / "builds").iterdir()) == [m.v2]  # older slots pruned (NFR-UPD-3)
     assert m.installed.read_text().endswith("# v2\n")  # the installed launcher followed the build
     assert m.file("builds.log") == ["built", "built"]
+    assert int(m.file("stage-seconds")[0]) >= 0 and not (m.data / "stage-started").exists()  # for the App's ETA
 
 
 def test_a_start_opens_at_once_on_the_installed_build_and_never_builds_first(tmp_path):

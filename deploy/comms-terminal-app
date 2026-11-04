@@ -101,6 +101,9 @@ unlock() {
 }
 
 build_slot() {  # build_slot COMMIT|"": the Service's build (or main's head) into $DATA/builds/<commit>
+    # The App shows % done and time left from these: when this build started, and how long the last one took.
+    started=$(date +%s)
+    echo "$started" > "$DATA/stage-started"
     git -C "$REPO" fetch -q origin
     rev=$(git -C "$REPO" rev-parse --verify -q "${1:-origin/main}^{commit}")
     short=${1:-$(git -C "$REPO" rev-parse --short "$rev")}
@@ -121,6 +124,8 @@ build_slot() {  # build_slot COMMIT|"": the Service's build (or main's head) int
     git -C "$REPO" show "$rev:deploy/comms-terminal-app" > "$slot/launcher"  # installed at the switch
     chmod 755 "$slot/launcher"
     echo "$short" > "$DATA/staged-build"  # last: a staged build is a complete one
+    echo $(( $(date +%s) - started )) > "$DATA/stage-seconds"
+    rm -f "$DATA/stage-started"
 }
 
 prepare() {  # stage the Service's build unless it is installed or staged already; again if the Service moved on
@@ -183,7 +188,7 @@ fi
 echo $$ > "$DATA/launch.pid"
 
 export COMMS_TERMINAL_CORE="[\"$DATA/current/bin/comms-terminal\", \"--db\", \"$DATA/inbox.db\", \"--remote\", \"$SSH_ARGS\"]"
-export COMMS_TERMINAL_APP_PREPARE="$LAUNCHER"
+export COMMS_TERMINAL_APP_PREPARE="$LAUNCHER" COMMS_TERMINAL_APP_DATA="$DATA"
 while :; do
     if [ ! -x "$DATA/current/bin/comms-terminal-app" ]; then  # first install: the one build before a window
         notice "installing; the first build takes several minutes, then the App opens."

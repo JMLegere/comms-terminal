@@ -34,6 +34,10 @@ def test_the_bottom_bar_names_the_update_step_and_ready_restarts_on_a_click():
                               ["Update ready · restart to edit", True, "app.restart"],
                               ["Update failed · read-only · Settings › Diagnostics", True]]
     assert out["offlineNoUpdate"] == ["Read-only · offline", True]
+    assert out["progress"] == ["Building the update · read-only until it is ready",  # % and time left (Jeremy)
+                               "Building the update · under a minute so far · read-only",
+                               "Building the update · 40% · about 4 min left · read-only",
+                               "Building the update · 99% · almost done · read-only"]
     assert out["target"] == ["Thread · Brunch", [["e", "done"], ["r", "reply"], ["s", "status"], ["i", "respond"]]]
     assert out["otherCol"] == [None, []]
     assert out["many"] == [["3 Connections broken", True]]

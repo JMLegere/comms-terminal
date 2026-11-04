@@ -18,10 +18,21 @@ export const UPDATE = {
   unmanaged: ["The Service runs another build · read-only · reinstall the App"],
 };
 
+/** Seconds as the bar says them: "under a minute", "about 3 min". */
+const minutes = (s) => s < 60 ? "under a minute" : `about ${Math.round(s / 60)} min`;
+
+/** The building step with how far it is (shared "update_progress", window.rs update_progress). */
+export function building(progress) {
+  if (!progress) return UPDATE.building[0];
+  if (progress.percent == null) return `Building the update · ${minutes(progress.elapsed)} so far · read-only`;
+  return `Building the update · ${progress.percent}% · ${progress.left > 0 ? `${minutes(progress.left)} left` : "almost done"} · read-only`;
+}
+
 /** The Problems, left: [[text, red, command?]]; empty when all is well. */
-export function problems(s, h, update = null) {
+export function problems(s, h, update = null, progress = null) {
   const out = [];
-  if (!s.online) out.push(UPDATE[update] ? [UPDATE[update][0], true, ...UPDATE[update].slice(1)] : [`Read-only · ${s.problem ?? "offline"}`, true]);
+  if (!s.online && update === "building") out.push([building(progress), true]);
+  else if (!s.online) out.push(UPDATE[update] ? [UPDATE[update][0], true, ...UPDATE[update].slice(1)] : [`Read-only · ${s.problem ?? "offline"}`, true]);
   if (h.calendar_broken) out.push(["Google Calendar broken", true]);
   const broken = (h.connections ?? []).filter((c) => !c.ok);
   if (broken.length > 2) out.push([`${broken.length} Connections broken`, true]); // one Problem, not a wall of them
@@ -81,7 +92,7 @@ export default class Status extends View {
     return h_flex().size_full().px(14).gap(16).items_center().bg(t.chrome).border_t(1).border_color(t.border).text_size(11.8)
       .text_color(t.foreground)
       // Narrow window: the Events clip first, then what keys act on; Problems and the Palette's key always show.
-      .child(h_flex().flex_none().gap(8).items_center().children(problems(status() ?? {}, h, shared("update")).map(pill)))
+      .child(h_flex().flex_none().gap(8).items_center().children(problems(status() ?? {}, h, shared("update"), shared("update_progress")).map(pill)))
       .child(div().flex_1())
       .child(h_flex().flex_shrink(1).min_w(0).overflow_hidden().gap(12).items_center()
         .when(Boolean(what), (el) => el.child(div().flex_shrink(1).min_w(0).max_w(300).truncate().font_semibold().text_color(t.accent).child(what ?? "")))
