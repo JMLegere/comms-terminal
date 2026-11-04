@@ -83,12 +83,27 @@ Feature: App
     Then the Local core refuses the call for the Panel Origin
     And the Draft is not sent
 
-  @AS-APP-9 @FR-APP-14 @FR-APP-15
-  Scenario: A new Service build makes the App read-only until it updates
+  # Updates follow .agents/prd/2026-11-04-app-update-on-restart.md (AS-UPD-n, FR-UPD-n), which replaces AS-APP-9.
+  # The launcher is deploy/comms-terminal-app; its --prepare stages a build in its own slot.
+  @AS-UPD-1 @AS-UPD-2 @FR-UPD-1 @FR-UPD-2 @FR-APP-14
+  Scenario: A new Service build makes the App read-only and is staged for the next start
     Given the App and the Local core on the Service's build
     When the Service reports a different build
     Then the App shows read-only and refuses writes
-    And the update installs the Service's build
+    And the Service's build is staged beside the running one, which keeps running
+
+  @AS-UPD-3 @AS-UPD-9 @FR-UPD-4 @FR-APP-15
+  Scenario: The next start opens the staged build without building
+    Given the App installed on one build and the next build staged
+    When Jeremy starts the App
+    Then it opens on the staged build with no build first
+    And the old Local core was stopped
+
+  @AS-UPD-4 @FR-UPD-5
+  Scenario: Starting the App while it is open brings the window forward
+    Given the App open
+    When Jeremy starts the App again
+    Then the open window comes forward and no second App opens
 
   @AS-APP-10 @FR-APP-14
   Scenario: Offline, reads work and writes are refused

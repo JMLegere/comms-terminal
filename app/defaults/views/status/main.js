@@ -9,10 +9,19 @@ import { call, nextEvent, status, theme, shared, run } from "comms";
 
 const KEYS = 4;
 
-/** The Problems, left: [[text, red]]; empty when all is well. */
-export function problems(s, h) {
+/** What the bar says while an update keeps the App read-only (shared "update", window.rs prepare_update), and the
+ * command a click runs. The App never restarts by itself: the staged build opens at the next start. */
+export const UPDATE = {
+  building: ["Updating · read-only until you restart"],
+  ready: ["Update ready · restart to edit", "app.restart"],
+  failed: ["Update failed · read-only · Settings › Diagnostics"],
+  unmanaged: ["The Service runs another build · read-only · reinstall the App"],
+};
+
+/** The Problems, left: [[text, red, command?]]; empty when all is well. */
+export function problems(s, h, update = null) {
   const out = [];
-  if (!s.online) out.push([`Read-only · ${s.problem ?? "offline"}`, true]);
+  if (!s.online) out.push(UPDATE[update] ? [UPDATE[update][0], true, ...UPDATE[update].slice(1)] : [`Read-only · ${s.problem ?? "offline"}`, true]);
   if (h.calendar_broken) out.push(["Google Calendar broken", true]);
   const broken = (h.connections ?? []).filter((c) => !c.ok);
   if (broken.length > 2) out.push([`${broken.length} Connections broken`, true]); // one Problem, not a wall of them
@@ -57,9 +66,12 @@ export default class Status extends View {
     const key = ([k, label]) => h_flex().gap(4).items_center().flex_none()
       .child(div().font_semibold().text_color(t.blue ?? t.accent).child(k))
       .child(div().text_color(t.grey2 ?? t.muted).child(label));
-    const pill = ([text, red]) => red
-      ? div().px(6).rounded(3).bg(t.danger).text_color(t.background).font_semibold().flex_none().child(text)
-      : div().text_color(t.muted).flex_none().child(text);
+    const pill = ([text, red, command]) => {
+      const el = red
+        ? div().px(6).rounded(3).bg(t.danger).text_color(t.background).font_semibold().flex_none().child(text)
+        : div().text_color(t.muted).flex_none().child(text);
+      return command ? el.id(`bar-${command}`).cursor_pointer().on_click(() => run(command)) : el;
+    };
     const events = [];
     if (h.now) events.push(h_flex().gap(4).flex_none().child(div().text_color(t.muted).child("now"))
       .child(div().max_w(200).truncate().child(h.now.title)).child(div().text_color(t.muted).child(`${h.now.left} min left`)));
@@ -69,7 +81,7 @@ export default class Status extends View {
     return h_flex().size_full().px(14).gap(16).items_center().bg(t.chrome).border_t(1).border_color(t.border).text_size(11.8)
       .text_color(t.foreground)
       // Narrow window: the Events clip first, then what keys act on; Problems and the Palette's key always show.
-      .child(h_flex().flex_none().gap(8).items_center().children(problems(status() ?? {}, h).map(pill)))
+      .child(h_flex().flex_none().gap(8).items_center().children(problems(status() ?? {}, h, shared("update")).map(pill)))
       .child(div().flex_1())
       .child(h_flex().flex_shrink(1).min_w(0).overflow_hidden().gap(12).items_center()
         .when(Boolean(what), (el) => el.child(div().flex_shrink(1).min_w(0).max_w(300).truncate().font_semibold().text_color(t.accent).child(what ?? "")))

@@ -1,4 +1,4 @@
-//! `comms-terminal-app shot [file.png]`, `status` and `do <command>`: drive the running window from a shell
+//! `comms-terminal-app raise`, `shot [file.png]`, `status` and `do <command>`: drive the running window from a shell
 //! (agents, tests) over `<home>/comms-terminal-app.sock`, one JSON line each way. As herdr-app's `control.rs`.
 
 use std::io::{BufRead, BufReader, Write};
@@ -69,6 +69,7 @@ pub fn client(args: &[String]) -> i32 {
             }
             json!({"shot": path})
         }
+        [verb] if verb == "raise" => return if raise_running() { 0 } else { 1 }, // the launcher's second start
         [verb] if verb == "status" => json!({"status": true}),
         [verb, command] if verb == "do" => json!({"do": command}),
         [verb, rest @ ..] if verb == "probe" => {
@@ -76,7 +77,7 @@ pub fn client(args: &[String]) -> i32 {
             let view = rest.get(1).map(String::as_str).unwrap_or("done");
             json!({"probe": {"moves": moves, "view": view}})
         }
-        _ => return fail("usage: comms-terminal-app status | shot [file.png] | do <command> | probe [moves] [view]"),
+        _ => return fail("usage: comms-terminal-app raise | status | shot [file.png] | do <command> | probe [moves] [view]"),
     };
     let mut stream = match UnixStream::connect(socket()) {
         Ok(s) => s,

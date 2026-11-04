@@ -11,7 +11,7 @@ How Comms Terminal runs in production on Oracle, on Jeremy's laptop, and at Clou
 | `cloudflared-comms-terminal-{deploy,ingest}.service` | Tunnels for the deploy webhook and the public `/hooks/*` |
 | `comms-terminal`, `comms-terminal-launcher`, `comms-terminal-release.conf` | Console launchers on the server |
 | `comms-terminal-local` | Jeremy's laptop launcher: local copy of the database, writes over SSH (ADR 0004) |
-| `comms-terminal-app`, `comms-terminal-app.desktop`, `comms-terminal-app.plist` | The desktop App's launcher on Mani or a teammate's Mac (the plist makes its macOS app): installs the Local core and the App at the Service's build, its own copy of the database, reopens after an update (ADR 0013) |
+| `comms-terminal-app`, `comms-terminal-app.desktop`, `comms-terminal-app.plist` | The desktop App's launcher on Mani or a teammate's Mac (the plist makes its macOS app): installs the Local core and the App at the Service's build, its own copy of the database; stages each new build in its own slot and switches at the next start (ADR 0013, runbook §10) |
 | `comms-terminal.service`, `comms-terminal.service.d/`, `install.sh` | The native systemd install and its credentials (Workbox history; not Oracle) |
 | `email-worker/` | Cloudflare Email Worker that posts forwarded mail to `/hooks/email` |
 | `slack-app-manifest.yml` | The Slack app definition |

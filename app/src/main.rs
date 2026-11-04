@@ -19,6 +19,7 @@ const HELP: &str = "comms-terminal-app: Comms Terminal's desktop App (ADR 0013)
   comms-terminal-app               open the window (starts the Local core when it is not running)
   comms-terminal-app check <dir>   load a view or Panel, render it once, exit nonzero on error
   comms-terminal-app types <dir>   write gpui-kit.d.ts for a view or Panel
+  comms-terminal-app raise         bring the running window forward (exit 1 when none is open)
   comms-terminal-app shot [f.png]  save the running window's last frame as a PNG
   comms-terminal-app status        the running window: views loaded, errors, the Local core's status
   comms-terminal-app do <command>  run a command in the running window (threads.next, app.reset, …)
@@ -36,7 +37,7 @@ fn main() {
             window::prepare_policy(&home, "check", "panel", rx); // so `import … from "comms"` resolves
             gpui_shell::host::main_with_components(body::components());
         }
-        Some("shot" | "status" | "do" | "probe") => std::process::exit(control::client(&args[1..])),
+        Some("raise" | "shot" | "status" | "do" | "probe") => std::process::exit(control::client(&args[1..])),
         Some("--help" | "-h" | "help") => println!("{HELP}"),
         Some(other) => {
             eprintln!("comms-terminal-app: unknown command {other:?}\n\n{HELP}");

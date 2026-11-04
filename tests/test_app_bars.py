@@ -26,6 +26,14 @@ def test_the_bottom_bar_shows_problems_only_and_four_keys_at_most():
     assert out["bad"] == [["Read-only · Service unreachable", True], ["Google Calendar broken", True],
                           ["Slack broken", True], ["2 saving", False]]
     assert out["typing"] == ["typing in reply", [["esc", "leaves"]]]
+
+
+def test_the_bottom_bar_names_the_update_step_and_ready_restarts_on_a_click():
+    out = _run()  # PRD 2026-11-04-app-update-on-restart, FR-UPD-7, AS-UPD-1, AS-UPD-2, AS-UPD-5, AS-UPD-8
+    assert out["updates"] == [["Updating · read-only until you restart", True],
+                              ["Update ready · restart to edit", True, "app.restart"],
+                              ["Update failed · read-only · Settings › Diagnostics", True]]
+    assert out["offlineNoUpdate"] == ["Read-only · offline", True]
     assert out["target"] == ["Thread · Brunch", [["e", "done"], ["r", "reply"], ["s", "status"], ["i", "respond"]]]
     assert out["otherCol"] == [None, []]
     assert out["many"] == [["3 Connections broken", True]]

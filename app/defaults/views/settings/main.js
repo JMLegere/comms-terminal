@@ -7,6 +7,9 @@ import { nextCommand, theme, shared, setShared, run, status, keys, fonts, settin
 
 const SECTIONS = [["look", "Look", "monitor"], ["keys", "Keys", "file-text"], ["service", "Service & updates", "server"],
   ["diagnostics", "Diagnostics", "layers"]];
+/** Settings › Service & updates: the update step (shared "update", window.rs prepare_update) in words. */
+export const UPDATE_STEP = { building: "Building in the background", ready: "Ready · opens when you restart",
+  failed: "Failed to build · see Diagnostics", unmanaged: "No launcher · reinstall the App" };
 const DEFAULT_FONT = "JetBrainsMono Nerd Font Mono"; // the shipped settings.json's ui_font
 const pad = (n) => String(n).padStart(2, "0");
 const clock = (ms) => { const d = new Date(ms); return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`; };
@@ -136,13 +139,14 @@ export default class Settings extends View {
       .child(row("State", c.online ? "Online" : `Read-only · ${c.problem ?? "offline"}`, c.online ? t.green : t.danger))
       .child(row("Writes waiting", String(c.pending ?? 0)))
       .child(div().h(8))
-      .child(this.title(t, "Updates", "The App runs the build the Service runs."))
+      .child(this.title(t, "Updates", "The App runs the build the Service runs. A new one builds in the background and opens the next time you start the App."))
       .child(row("This App", c.build || "?"))
       .child(row("Service runs", c.service_build ?? "?", differ ? t.accent : undefined))
+      .when(differ, (el) => el.child(row("Update", UPDATE_STEP[shared("update")] ?? "Waiting to build", shared("update") === "failed" ? t.danger : undefined)))
       .child(h_flex().gap(8).pt(6)
-        .when(differ, (el) => el.child(button("update", "Update now", () => {
+        .when(differ && !["building", "ready"].includes(shared("update")), (el) => el.child(button("update", shared("update") === "failed" ? "Try again" : "Update now", () => {
           run("app.update");
-          toast("Building the Service's version; the App restarts when it is ready.");
+          toast("Building the Service's version; it opens the next time you start the App.");
         })))
         .child(button("restart", "Restart App", () => run("app.restart"))))
       .when(!differ, (el) => el.child(div().text_color(t.dim).child("Up to date with the Service.")));

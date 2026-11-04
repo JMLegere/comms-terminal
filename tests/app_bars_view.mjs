@@ -16,6 +16,10 @@ out.fine = problems({ online: true }, { connections: [{ ok: true }] });
 out.bad = problems({ online: false, problem: "Service unreachable", pending: 2 },
   { calendar_broken: true, connections: [{ ok: false, name: "Slack", writes: false, supported: true }] });
 out.many = problems({ online: true }, { connections: [1, 2, 3].map((n) => ({ ok: false, name: `c${n}`, supported: true })) });
+// An update keeps the App read-only (PRD 2026-11-04-app-update-on-restart, FR-UPD-7): the bar names the step.
+const updating = { online: false, problem: "Update ready · restart Comms Terminal to load the service's version; read-only." };
+out.updates = ["building", "ready", "failed"].map((step) => problems(updating, {}, step)[0]);
+out.offlineNoUpdate = problems({ online: false, problem: "offline" }, {}, null)[0];
 out.typing = acting("reply", null, "detail");
 out.target = acting(null, { col: "list", label: "Thread · Brunch", keys: [["e", "done"], ["r", "reply"], ["s", "status"], ["i", "respond"], ["y", "copy"]] }, "list");
 out.otherCol = acting(null, { col: "rail", label: "Rail · Todo", keys: [] }, "list");

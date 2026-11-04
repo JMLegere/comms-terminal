@@ -1,21 +1,53 @@
-# The desktop App on Apple silicon (PRD Phase 7, FR-17): build, test, and draw the demo inbox, so a change that
-# breaks macOS shows here before a teammate's Mac. Reads only synthetic data; no secrets.
-name: App on macOS
+# The desktop App on Linux (Mani) and Apple silicon (PRD Phase 7, FR-17): build, test, and on macOS draw the demo
+# inbox and an update, so a change that breaks either shows here first. Reads only synthetic data; no secrets.
+# Linux is the check to wait on: its runners start at once. macOS runners sometimes wait 5 to 10 minutes.
+name: App
 
 on:
   push:
-    paths: ["app/**", "deploy/comms-terminal-app*", "src/comms_terminal/core.py", ".github/workflows/app-macos.yml"]
+    paths: ["app/**", "deploy/comms-terminal-app*", "src/comms_terminal/**", "tests/**", "features/**",
+            "pyproject.toml", "uv.lock", ".github/workflows/app-macos.yml"]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  app:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      # A checkout gives every file a new mtime, so cargo rebuilt all 28 vendored crates on every run even with a
+      # warm cache. Vendored files get one fixed mtime; the cache key holds their content hash instead.
+      - name: Pin vendored mtimes
+        run: find app/vendor -exec touch -h -t 202601010000 {} +
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Linux libraries
+        run: sudo apt-get update -q && sudo apt-get install -yq libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libfontconfig-dev libfreetype-dev libx11-xcb-dev libxcb1-dev libvulkan-dev
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            app/target
+          key: app-linux-${{ hashFiles('app/Cargo.lock') }}-${{ hashFiles('app/vendor/**') }}
+      - name: Rust tests
+        run: cargo test --release --manifest-path app/Cargo.toml
+      - name: Build
+        run: cargo build --release --manifest-path app/Cargo.toml
+      - name: App tests
+        run: uv run pytest -q tests/test_core.py tests/test_features.py tests/test_app_launcher.py tests/test_app_bars.py tests/test_app_settings.py tests/test_app_parity.py -k "core or app or App or launcher"
+
+  macos:
     runs-on: macos-15
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+      - name: Pin vendored mtimes
+        run: find app/vendor -exec touch -h -t 202601010000 {} +
       - uses: astral-sh/setup-uv@v6
       - uses: actions/setup-node@v4
         with:
@@ -25,7 +57,7 @@ jobs:
           path: |
             ~/.cargo/registry
             app/target
-          key: app-macos-${{ hashFiles('app/Cargo.lock') }}
+          key: app-macos-${{ hashFiles('app/Cargo.lock') }}-${{ hashFiles('app/vendor/**') }}
       - name: Rust tests
         run: cargo test --release --manifest-path app/Cargo.toml
       - name: Build
@@ -48,6 +80,25 @@ jobs:
           app/target/release/comms-terminal-app status
           app/target/release/comms-terminal-app shot "$RUNNER_TEMP/demo.png"
           pkill -f comms-terminal || true  # the core holds uv's cache lock while it runs
+      - name: Draw an update (PRD 2026-11-04-app-update-on-restart)
+        # An offline core is read-only; a stand-in --prepare stages for 12 s. The App fades and names the step
+        # (building, then ready) and never quits; a second start's `raise` finds the open window.
+        run: |
+          printf '#!/bin/sh\nsleep 12\n' > "$RUNNER_TEMP/prepare"
+          chmod 755 "$RUNNER_TEMP/prepare"
+          export COMMS_TERMINAL_APP_PREPARE="$RUNNER_TEMP/prepare"
+          export COMMS_TERMINAL_CORE="[\"uv\", \"run\", \"--project\", \"$PWD\", \"comms-terminal\", \"--db\", \"$RUNNER_TEMP/demo.db\", \"--remote\", \"-o BatchMode=yes -o ConnectTimeout=1 nobody@127.0.0.1\"]"
+          app/target/release/comms-terminal-app > "$RUNNER_TEMP/app-update.log" 2>&1 &
+          for i in $(seq 60); do app/target/release/comms-terminal-app status > /dev/null 2>&1 && break; sleep 2; done
+          sleep 5
+          app/target/release/comms-terminal-app do app.update
+          sleep 2
+          app/target/release/comms-terminal-app shot "$RUNNER_TEMP/update-building.png"
+          sleep 15
+          app/target/release/comms-terminal-app shot "$RUNNER_TEMP/update-ready.png"
+          app/target/release/comms-terminal-app raise
+          app/target/release/comms-terminal-app status | tee "$RUNNER_TEMP/update-status.json"
+          pkill -f comms-terminal || true
       - if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -55,3 +106,6 @@ jobs:
           path: |
             ${{ runner.temp }}/demo.png
             ${{ runner.temp }}/app.log
+            ${{ runner.temp }}/update-*.png
+            ${{ runner.temp }}/update-status.json
+            ${{ runner.temp }}/app-update.log

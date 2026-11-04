@@ -396,3 +396,11 @@ def test_a_console_older_than_the_service_quits_to_update_at_startup(service, la
     monkeypatch.setattr(tui, "build_version", lambda: "2026-10-25-1855-ec7db66")
     app, _ = run_laptop_console(str(tmp_path / "laptop" / "inbox.db"), rem, syncer)
     assert app._exception is None and app.return_code == tui.UPDATE_EXIT
+
+
+def test_the_ssh_master_starts_off_linux_too(monkeypatch):
+    """macOS has no prctl: setting the death signal there raised, so a Mac's Local core never started."""
+    import ctypes
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(ctypes, "CDLL", lambda *a, **k: object())  # a libc without prctl, as macOS's
+    remote._die_with_parent()  # no AttributeError

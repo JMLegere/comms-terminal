@@ -82,7 +82,8 @@ Then add a block for it to `layouts/main.json`: `{ "id": "todo-count", "type": "
 - `shared(key)` and `setShared(key, value)` are state every view sees. The shipped views use `page` (the page
   shown: `threads`, `today`, `drafts`, …), `view` (the Status view), `detail` (Today's row kind), and the selection
   of each page: `thread`, `draft`, `case`, `person`, `organization` (`{id, domain}`), `task`, `sequence`,
-  `connection`, `event`, `pipeline`.
+  `connection`, `event`, `pipeline`. The App sets `update` while a new Service build keeps it read-only:
+  `building`, `ready` (opens at the next start; `run("app.restart")` restarts now), `failed` or `unmanaged`.
 - Element focus: one element (a row, message, link, field) takes the keys; columns are only layout.
   `shared("focus")` is its column (`rail`, `list`, `detail`; `list_view` and `detail_view` name the views there).
   A view whose element has the focus names it with `setShared("target", { col, label: "<Kind> · <name>",
