@@ -39,10 +39,14 @@ class Mani:
         bin_.mkdir(parents=True)
         (self.repo / "deploy").mkdir(parents=True)
         git(self.repo, "init", "-q")
+        (self.repo / "app" / "vendor").mkdir(parents=True)
+        (self.repo / "app" / "vendor" / "crate.rs").write_text("// vendored\n")  # changed only in v1
         for n in (1, 2, 3):
             (self.repo / "deploy" / "comms-terminal-app").write_text(LAUNCHER.read_text() + f"# v{n}\n")
             git(self.repo, "add", ".")
-            git(self.repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", f"v{n}")
+            date = f"2026-01-0{n}T12:00:00"
+            subprocess.run(["git", "-C", str(self.repo), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q",
+                            "-m", f"v{n}"], check=True, env={**os.environ, "GIT_AUTHOR_DATE": date, "GIT_COMMITTER_DATE": date})
         git(self.repo, "remote", "add", "origin", str(self.repo))
         git(self.repo, "fetch", "-q", "origin")
         self.v1, self.v2, self.v3 = (git(self.repo, "rev-parse", "--short", f"HEAD~{n}") for n in (2, 1, 0))
@@ -193,3 +197,14 @@ def test_an_install_from_before_slots_opens_without_a_build_and_switches_later(t
     assert m.launch().returncode == 0
     assert m.current() == f"builds/{m.v2}" and not (m.data / "bin").exists() and not (m.data / "tools").exists()
     assert m.file("runs")[-2:] == ["run", m.v2]
+
+
+def test_unchanged_vendored_crates_keep_their_date_so_cargo_reuses_them(tmp_path):
+    m = Mani(tmp_path)
+    m.service(m.v1)
+    m.launch()
+    m.service(m.v3)  # v2 and v3 change only the launcher
+    assert m.launch("--prepare").returncode == 0
+    vendored = (m.data / "src" / "app" / "vendor" / "crate.rs").stat().st_mtime
+    launcher = (m.data / "src" / "deploy" / "comms-terminal-app").stat().st_mtime
+    assert vendored == int(git(m.repo, "log", "-1", "--format=%ct", m.v1)) and launcher > vendored

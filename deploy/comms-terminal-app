@@ -109,6 +109,10 @@ build_slot() {  # build_slot COMMIT|"": the Service's build (or main's head) int
     rm -rf "$slot" "$src"
     mkdir -p "$slot/bin" "$src"
     git -C "$REPO" archive "$rev" | tar -x -C "$src"
+    # An export dates every file at the commit, so cargo rebuilt all vendored crates (minutes) on every update.
+    # Date them at the last commit that changed them instead: unchanged vendored crates are reused from target/.
+    vendored=$(git -C "$REPO" log -1 --format=%cd --date=format-local:%Y%m%d%H%M.%S "$rev" -- app/vendor)
+    [ -z "$vendored" ] || find "$src/app/vendor" -exec touch -h -t "$vendored" {} +
     COMMS_TERMINAL_BUILD="$(git -C "$REPO" log -1 --format=%ct "$rev") $short" UV_TOOL_DIR="$slot/tools" \
         UV_TOOL_BIN_DIR="$slot/bin" uv tool install -q --reinstall --python 3.12 "$src"
     cargo build -q --release --manifest-path "$src/app/Cargo.toml"
