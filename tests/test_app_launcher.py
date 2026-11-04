@@ -1,6 +1,6 @@
 """deploy/comms-terminal-app (PRD 2026-11-04-app-update-on-restart): a new Service build is staged in its own slot
 while the App stays open, and the next start switches to it; a second start brings the open window forward.
-uv, cargo, the core and the App are stand-ins."""
+uv, the CI download (curl), the core and the App are stand-ins."""
 import os
 import subprocess
 import time
@@ -12,6 +12,7 @@ LAUNCHER = Path(__file__).resolve().parents[1] / "deploy" / "comms-terminal-app"
 # started on, and quits with 75 (Restart App) once when `restart-once` exists.
 FAKE_APP = """#!/bin/sh
 D="$XDG_DATA_HOME/comms-terminal-app"
+[ "${1:-}" = --help ] && exit 0
 if [ "${1:-}" = raise ]; then
     [ -f "$D/no-window" ] && exit 1
     echo raised >> "$D/raised"
@@ -30,7 +31,7 @@ def git(repo, *args):
 
 
 class Mani:
-    """A home with a checkout of three commits, stand-in uv and cargo, and the installed launcher."""
+    """A home with a checkout of three commits, stand-in uv and download, and the installed launcher."""
 
     def __init__(self, tmp_path):
         self.home, self.repo = tmp_path / "home", tmp_path / "repo"
@@ -52,20 +53,23 @@ class Mani:
         self.v1, self.v2, self.v3 = (git(self.repo, "rev-parse", "--short", f"HEAD~{n}") for n in (2, 1, 0))
         (bin_ / "uv").write_text('#!/bin/sh\nmkdir -p "$UV_TOOL_DIR" "$UV_TOOL_BIN_DIR"\n'
                                  'echo core > "$UV_TOOL_BIN_DIR/comms-terminal"\n')
-        # `on-build`, when present, runs inside the build: it can fail it, slow it, or move the Service on.
-        (bin_ / "cargo").write_text('#!/bin/sh\nD="$XDG_DATA_HOME/comms-terminal-app"\n'
-                                    '[ -f "$D/on-build" ] && . "$D/on-build"\n'
-                                    'mkdir -p "$CARGO_TARGET_DIR/release"\n'
-                                    f"cat > \"$CARGO_TARGET_DIR/release/comms-terminal-app\" <<'EOF'\n{FAKE_APP}EOF\n"
-                                    'chmod 755 "$CARGO_TARGET_DIR/release/comms-terminal-app"\necho built >> "$D/builds.log"\n')
-        for f in ("uv", "cargo"):
+        # CI's published App (curl -fsSL -o OUT URL). `on-build`, when present, runs first: it can fail the download
+        # (not published yet), slow it, or move the Service on.
+        (bin_ / "curl").write_text('#!/bin/sh\nD="$XDG_DATA_HOME/comms-terminal-app"\n'
+                                   'while [ "$#" -gt 1 ]; do [ "$1" = -o ] && out=$2; shift; done\n'
+                                   'echo "$1" >> "$D/urls.log"\n'
+                                   '[ -f "$D/on-build" ] && . "$D/on-build"\n'
+                                   f"cat > \"$out\" <<'EOF'\n{FAKE_APP}EOF\n"
+                                   'echo built >> "$D/builds.log"\n')
+        for f in ("uv", "curl"):
             (bin_ / f).chmod(0o755)
         self.installed = bin_ / "comms-terminal-app-launch"
         self.installed.write_text(LAUNCHER.read_text())
         self.installed.chmod(0o755)
         self.data.mkdir(parents=True)
         self.env = {"HOME": str(self.home), "XDG_DATA_HOME": str(self.home / "data"), "PATH": os.environ["PATH"],
-                    "COMMS_TERMINAL_REPO": str(self.repo), "COMMS_TERMINAL_SSH": "-o BatchMode=yes nowhere"}
+                    "COMMS_TERMINAL_REPO": str(self.repo), "COMMS_TERMINAL_SSH": "-o BatchMode=yes nowhere",
+                    "COMMS_TERMINAL_APP_RELEASES": "https://releases.test", "COMMS_TERMINAL_APP_POLL": "0"}
 
     def service(self, build):
         (self.data / "service-build").write_text(build + "\n")
@@ -149,9 +153,10 @@ def test_a_failed_build_stages_nothing_and_leaves_the_installed_build(tmp_path):
     m.service(m.v1)
     m.launch()
     m.service(m.v2)
-    (m.data / "on-build").write_text("exit 1\n")
+    (m.data / "on-build").write_text("exit 22\n")  # CI never publishes this build
+    m.env.update(COMMS_TERMINAL_APP_WAIT="1", COMMS_TERMINAL_APP_POLL="1")
     r = m.launch("--prepare")
-    assert r.returncode != 0  # the App reports "Update failed" (FR-UPD-9)
+    assert r.returncode != 0 and "no build of" in r.stderr  # the App reports "Update failed" (FR-UPD-9)
     assert m.file("staged-build") == [m.v1] and m.current() == f"builds/{m.v1}"  # v2 never staged
     assert not (m.data / "stage.lock").exists()
     (m.data / "on-build").unlink()
@@ -200,17 +205,6 @@ def test_an_install_from_before_slots_opens_without_a_build_and_switches_later(t
     assert m.file("runs")[-2:] == ["run", m.v2]
 
 
-def test_unchanged_vendored_crates_keep_their_date_so_cargo_reuses_them(tmp_path):
-    m = Mani(tmp_path)
-    m.service(m.v1)
-    m.launch()
-    m.service(m.v3)  # v2 and v3 change only the launcher
-    assert m.launch("--prepare").returncode == 0
-    vendored = (m.data / "src" / "app" / "vendor" / "crate.rs").stat().st_mtime
-    launcher = (m.data / "src" / "deploy" / "comms-terminal-app").stat().st_mtime
-    assert vendored == int(git(m.repo, "log", "-1", "--format=%ct", m.v1)) and launcher > vendored
-
-
 def test_restart_starts_afresh_after_the_app_and_its_launcher_exit_and_switches(tmp_path):
     m = Mani(tmp_path)
     m.service(m.v1)
@@ -233,3 +227,18 @@ def test_restart_starts_afresh_after_the_app_and_its_launcher_exit_and_switches(
             break
         time.sleep(0.2)
     assert m.file("runs") == ["run", m.v1, "run", m.v2] and m.current() == f"builds/{m.v2}"  # FR-UPD-4
+
+
+def test_the_app_is_downloaded_from_ci_and_waited_for_until_published(tmp_path):
+    m = Mani(tmp_path)
+    m.service(m.v1)
+    m.launch()
+    full = git(m.repo, "rev-parse", m.v2)
+    assert m.file("urls.log")[-1].startswith("https://releases.test/comms-terminal-app-")
+    m.service(m.v2)
+    # Not published for the first two tries (CI still building), then there.
+    (m.data / "on-build").write_text('n=$(cat "$D/tries" 2>/dev/null || echo 0); echo $((n + 1)) > "$D/tries"\n'
+                                     '[ "$n" -ge 2 ] || exit 22\n')
+    assert m.launch("--prepare").returncode == 0
+    assert m.file("staged-build") == [m.v2] and m.file("tries") == ["3"]
+    assert m.file("urls.log")[-1].startswith(f"https://releases.test/comms-terminal-app-{full}-")

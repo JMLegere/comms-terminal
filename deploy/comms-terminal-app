@@ -1,9 +1,9 @@
 #!/bin/sh
 # The Comms Terminal desktop App on Linux and macOS (ADR 0013). Installed as ~/.local/bin/comms-terminal-app-launch;
 # the desktop entry (Linux) or ~/Applications/Comms Terminal App.app (macOS) runs it. Like deploy/comms-terminal-local
-# it installs the build the Service runs: the Local core (Python, with uv) and the App (Rust, with cargo) from an
-# export of that commit in the local checkout (COMMS_TERMINAL_REPO). The core works on its own copy of the inbox in
-# $DATA and outlives the window.
+# it installs the build the Service runs: the App as CI built it for that commit (downloaded), and the Local core
+# (Python, with uv) from an export of that commit in the local checkout (COMMS_TERMINAL_REPO). The core works on its
+# own copy of the inbox in $DATA and outlives the window.
 # Updates (.agents/prd/2026-11-04-app-update-on-restart.md): each build lives in its own slot, $DATA/builds/<commit>,
 # and $DATA/current points at the installed one. When the Service reports a new build the App stays open, read-only,
 # and runs --prepare, which builds that commit into a new slot without touching the running one. The next start
@@ -32,9 +32,14 @@ SSH_ARGS="${COMMS_TERMINAL_SSH:-"-i $HOME/.ssh/oracle-dev -o IdentitiesOnly=yes 
 -o LogLevel=ERROR ubuntu@168.138.69.153"}"
 REPO="${COMMS_TERMINAL_REPO:-$HOME/Workspace/comms-terminal}"
 [ -n "${COMMS_TERMINAL_SSH:-}" ] || export COMMS_TERMINAL_SERVICE_NAME="${COMMS_TERMINAL_SERVICE_NAME:-Oracle}"
-# A desktop entry or a macOS app starts with a bare PATH: find uv and cargo where their installers put them.
-PATH="$HOME/.local/bin:$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
-export CARGO_TARGET_DIR="$DATA/target"  # shared by every slot, so each build is incremental
+# A desktop entry or a macOS app starts with a bare PATH: find uv where its installer puts it.
+PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+# CI builds the App for every push to main and publishes it here (.github/workflows/app-macos.yml); Mani downloads it
+# and compiles nothing. Assets: comms-terminal-app-<full commit>-<os>-<arch>, e.g. …-linux-x86_64, …-darwin-arm64.
+RELEASES="${COMMS_TERMINAL_APP_RELEASES:-https://github.com/JMLegere/comms-terminal/releases/download/app-builds}"
+PLATFORM="$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m)"
+WAIT="${COMMS_TERMINAL_APP_WAIT:-1200}"  # seconds to wait for CI to publish a build before the update fails
+POLL="${COMMS_TERMINAL_APP_POLL:-15}"
 
 place() {  # place FILE MODE DEST: main's copy of deploy/FILE, whatever the checkout has checked out
     mkdir -p "$(dirname "$3")"
@@ -107,20 +112,23 @@ build_slot() {  # build_slot COMMIT|"": the Service's build (or main's head) int
     git -C "$REPO" fetch -q origin
     rev=$(git -C "$REPO" rev-parse --verify -q "${1:-origin/main}^{commit}")
     short=${1:-$(git -C "$REPO" rev-parse --short "$rev")}
-    echo "Comms Terminal App: building the Service's version $short…" >&2
+    echo "Comms Terminal App: installing the Service's version $short…" >&2
     slot="$DATA/builds/$short"
     src="$DATA/src"
     rm -rf "$slot" "$src"
     mkdir -p "$slot/bin" "$src"
+    # The App: CI's build of this commit, waiting while CI still builds it (about 2 minutes after a push).
+    while ! curl -fsSL -o "$slot/bin/comms-terminal-app.part" "$RELEASES/comms-terminal-app-$rev-$PLATFORM"; do
+        [ $(( $(date +%s) - started )) -lt "$WAIT" ] || { echo "Comms Terminal App: no build of $short published" >&2; return 1; }
+        sleep "$POLL"
+    done
+    chmod 755 "$slot/bin/comms-terminal-app.part"
+    "$slot/bin/comms-terminal-app.part" --help >/dev/null  # a whole binary for this machine
+    mv "$slot/bin/comms-terminal-app.part" "$slot/bin/comms-terminal-app"
+    # The Local core: Python, installed from an export of the same commit (seconds).
     git -C "$REPO" archive "$rev" | tar -x -C "$src"
-    # An export dates every file at the commit, so cargo rebuilt all vendored crates (minutes) on every update.
-    # Date them at the last commit that changed them instead: unchanged vendored crates are reused from target/.
-    vendored=$(git -C "$REPO" log -1 --format=%cd --date=format-local:%Y%m%d%H%M.%S "$rev" -- app/vendor)
-    [ -z "$vendored" ] || find "$src/app/vendor" -exec touch -h -t "$vendored" {} +
     COMMS_TERMINAL_BUILD="$(git -C "$REPO" log -1 --format=%ct "$rev") $short" UV_TOOL_DIR="$slot/tools" \
         UV_TOOL_BIN_DIR="$slot/bin" uv tool install -q --reinstall --python 3.12 "$src"
-    cargo build -q --release --manifest-path "$src/app/Cargo.toml"
-    install -m 755 "$CARGO_TARGET_DIR/release/comms-terminal-app" "$slot/bin/comms-terminal-app"
     git -C "$REPO" show "$rev:deploy/comms-terminal-app" > "$slot/launcher"  # installed at the switch
     chmod 755 "$slot/launcher"
     echo "$short" > "$DATA/staged-build"  # last: a staged build is a complete one
@@ -160,7 +168,7 @@ switch() {  # at start only: the staged build becomes the installed one, when th
         for slot in "$DATA"/builds/*; do
             [ "$slot" = "$DATA/builds/$new" ] || rm -rf "$slot"
         done
-        rm -rf "$DATA/bin" "$DATA/tools"
+        rm -rf "$DATA/bin" "$DATA/tools" "$DATA/target"  # a pre-slot install, and cargo's builds from before downloads
         unlock
     fi
 }
