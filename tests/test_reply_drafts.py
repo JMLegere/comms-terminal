@@ -1,11 +1,12 @@
 """Reply Drafts (.agents/prd/2026-10-16-sequencing.md P1, FR-SEQ-11): a reply box's text is its Thread's Draft."""
 
 import sqlite3
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from test_console import seed_demo  # puts scripts/ on the path
-from comms_terminal import inbox
+from comms_terminal import files, inbox
 from test_attachment_send import FakeSender
 
 
@@ -49,13 +50,76 @@ def test_one_reply_draft_per_thread(seeded):
         inbox.save_draft(db, values, thread_id=ids["ana"])
 
 
-def test_a_reply_draft_sends_from_its_thread_not_as_a_new_thread(seeded):
+def test_a_reply_draft_sends_its_saved_revision_into_its_thread(seeded):
+    """Decision #143: every Draft sends through send_draft; a Reply Draft goes into its Thread."""
+    path, ids = seeded
+    db = inbox.connect(path)
+    threads = db.execute("SELECT count(*) FROM threads").fetchone()[0]
+    d = inbox.save_reply_draft(db, ids["ana"], "Hi Ana,")
+    sender = FakeSender("<r1@example.test>")
+    t = inbox.send_draft(db, d["id"], d["revision"], sender)
+    assert t.id == ids["ana"] and (t.status, t.status_detail) == ("SNOOZED", "WAITING_FOR_CUSTOMER")
+    assert db.execute("SELECT count(*) FROM threads").fetchone()[0] == threads
+    assert db.execute("SELECT content FROM activities WHERE native_id = '<r1@example.test>'").fetchone()[0] == "Hi Ana,"
+    assert inbox.reply_drafts(db) == {}
+
+
+def test_a_reply_draft_whose_send_outcome_is_unknown_locks_until_sent_again(seeded):
     path, ids = seeded
     db = inbox.connect(path)
     d = inbox.save_reply_draft(db, ids["ana"], "Hi Ana,")
-    with pytest.raises(ValueError, match="reply box"):
-        inbox.send_draft(db, d["id"], d["revision"], FakeSender())
-    assert inbox.reply_drafts(db) == {ids["ana"]: "Hi Ana,"}
+    with pytest.raises(inbox.SendUnknown):
+        inbox.send_draft(db, d["id"], d["revision"], FakeSender(TimeoutError("timed out")))
+    assert inbox.get_draft(db, d["id"])["sending_at"]
+    with pytest.raises(inbox.SendUnknown):
+        inbox.reply(db, ids["ana"], "Hi Ana,", FakeSender())  # the reply path takes the same lock
+    inbox.send_draft(db, d["id"], inbox.get_draft(db, d["id"])["revision"], FakeSender("<r2@example.test>"), again=True)
+    assert inbox.reply_drafts(db) == {}
+
+
+def test_a_reply_save_is_a_revision_the_latest_save_wins(seeded):
+    path, ids = seeded
+    db = inbox.connect(path)
+    jeremy = inbox.save_reply_draft(db, ids["ana"], "Hi Ana,")
+    agent = inbox.save_draft(db, {k: jeremy[k] for k in ("connection_id", "kind", "sender", "to", "cc", "subject")}
+                             | {"body": "Hi Ana, the agent's text."}, draft_id=jeremy["id"],
+                             expected_revision=jeremy["revision"])
+    later = datetime.now(timezone.utc) + timedelta(seconds=5)
+    kept = inbox.save_reply_draft(db, ids["ana"], "Hi Ana, mine.", expected_revision=jeremy["revision"], now=later)
+    assert (kept["revision"], kept["body"]) == (agent["revision"] + 1, "Hi Ana, mine.")
+    with pytest.raises(inbox.DraftConflict):  # an edit older than the stored save is refused
+        inbox.save_reply_draft(db, ids["ana"], "stale", expected_revision=jeremy["revision"],
+                               now=datetime(2000, 1, 1, tzinfo=timezone.utc))
+
+
+def test_files_staged_for_a_reply_belong_to_its_reply_draft(seeded):
+    path, ids = seeded
+    db = inbox.connect(path)
+    staged = inbox.stage(db, sha=files.store_file(db, b"abc"), name="notes.txt", type="text/plain", size=3,
+                         thread_id=ids["ana"])
+    d = inbox.reply_draft(db, ids["ana"])
+    assert d and d["body"] == "" and [s["id"] for s in inbox.staged(db, draft_id=d["id"])] == [staged]
+    assert inbox.staged(db, thread_id=ids["ana"]) == inbox.staged(db, draft_id=d["id"])
+    assert inbox.save_reply_draft(db, ids["ana"], "") is not None  # empty text with files keeps it
+    inbox.unstage(db, staged)  # the last file off an empty Reply Draft removes it
+    assert inbox.reply_draft(db, ids["ana"]) is None
+
+
+def test_migration_35_moves_thread_files_onto_reply_drafts(seeded):
+    from schema_history import downgrade
+    path, ids = seeded
+    db = inbox.connect(path)
+    inbox.save_reply_draft(db, ids["ana"], "Hi Ana,")
+    inbox.stage(db, sha=files.store_file(db, b"a"), name="a.txt", type="text/plain", size=1, thread_id=ids["ana"])
+    inbox.stage(db, sha=files.store_file(db, b"b"), name="b.txt", type="text/plain", size=1, thread_id=ids["logan"])
+    downgrade(db, 34, "DELETE FROM composition_drafts WHERE thread_id = '%s';" % ids["logan"])
+    assert db.execute("SELECT count(*) FROM staged_attachments WHERE thread_id IS NOT NULL").fetchone()[0] == 2
+    inbox.migrate(db)
+    assert db.execute("SELECT count(*) FROM staged_attachments WHERE thread_id IS NOT NULL").fetchone()[0] == 0
+    logan = inbox.reply_draft(db, ids["logan"])
+    assert (logan["kind"], logan["subject"], logan["body"]) == ("slack", None, "")
+    assert [s["name"] for s in inbox.staged(db, thread_id=ids["ana"])] == ["a.txt"]
+    assert [s["name"] for s in inbox.staged(db, thread_id=ids["logan"])] == ["b.txt"]
 
 
 def test_reply_removes_its_draft_only_when_the_send_goes_through(seeded):
@@ -140,7 +204,8 @@ def test_a_file_staged_on_a_reply_draft_goes_out_with_the_reply(seeded):
     assert inbox.list_drafts(db) == [] and inbox.staged(db, thread_id=ids["ana"]) == []
 
 
-def test_version_18_moves_files_staged_on_a_reply_draft_to_its_thread(seeded):
+def test_versions_18_and_35_leave_files_staged_on_a_reply_draft_on_it(seeded):
+    """18 moved them to the Thread; 35 (decision #143) moves them back to the Reply Draft."""
     from test_attachment_send import PDF, pdf
     path, ids = seeded
     db = inbox.connect(path)
@@ -154,11 +219,11 @@ def test_version_18_moves_files_staged_on_a_reply_draft_to_its_thread(seeded):
                        " VALUES (?, ?, 'pkg.pdf', 'application/pdf', ?, '2026-10-16T21:10:06+00:00')",
                        (draft_id, sha, len(PDF)))
     from schema_history import downgrade, renumbered
-    (ana,), (new_id,) = renumbered(db, "threads", ids["ana"]), renumbered(db, "composition_drafts", new["id"])
+    reply_id, new_id = renumbered(db, "composition_drafts", reply["id"], new["id"])
     downgrade(db, 17)
     inbox.migrate(db)
     rows = db.execute("SELECT draft_id, thread_id FROM staged_attachments ORDER BY id").fetchall()
-    assert [tuple(r) for r in rows] == [(None, ana), (new_id, None)]
+    assert [tuple(r) for r in rows] == [(reply_id, None), (new_id, None)]
 
 
 def test_console_says_to_restart_once_the_database_outgrows_its_code(seeded):

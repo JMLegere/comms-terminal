@@ -135,7 +135,7 @@ def _pauses(core, db, since):
 
 @query("today.page")
 def _today(core, db):
-    """Today: Todo Threads, due Tasks, the Drafts not shown through them (each with `recipient`, as drafts.list),
+    """Today: Todo Threads, due Tasks and every Draft, each item once (each Draft with `recipient`, as drafts.list),
     Paused Enrollments (each with `finishing`, the label of the reason it finishes as, or null) and Unattended
     Organizations."""
     t = dict(_shared(core, "today", inbox.today, db))

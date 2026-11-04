@@ -3083,10 +3083,9 @@ class DraftsPage(Page):
                 Binding("y", "copy", "copy for agent"),
                 Binding("ctrl+s", "save", "save draft"), Binding("ctrl+enter", "send", show=False)]
 
-    def __init__(self, include=None):
+    def __init__(self):
         super().__init__()
         self.items = []
-        self.include = include  # which Drafts to list (Today's rule); every Draft when None
 
     def compose(self):
         yield ClickTable(id="table", cursor_type="row", show_header=False)
@@ -3101,7 +3100,7 @@ class DraftsPage(Page):
         if not self.query(DataTable) or not self.on_screen:
             return
         try:
-            items = [d for d in inbox.list_drafts(self.app.db) if self.include is None or self.include(d)]
+            items = inbox.list_drafts(self.app.db)
             # grouped by status (Jeremy, 2026-10-17): failed sends first, then unsent, then scheduled by send time
             items.sort(key=lambda d: (2, d["send_at"]) if d.get("send_at") and not d.get("send_error") else
                        (0 if d.get("send_error") else 1, ""))
@@ -5941,7 +5940,7 @@ class TodayPage(Page):
         threads = ThreadsPage()
         threads.fixed_view = 0
         self.threads, self.tasks = threads, TasksPage()
-        self.drafts = DraftsPage(include=lambda d: inbox.today_draft(self.app.db, d))
+        self.drafts = DraftsPage()
         self.paused, self.orgs = PausedPage(), UnattendedPage()
         for page in self.lists:
             page.host = self

@@ -27,7 +27,7 @@ from typing import Protocol, Sequence
 from . import clock, files, platforms
 from .writers import writer
 
-SCHEMA_VERSION = 34
+SCHEMA_VERSION = 35
 WAIT = timedelta(days=4)  # Waiting for them ends after this with no reply: back to Todo to follow up (#116)
 EMAIL_CONFIRMATION_PENDING = "Email confirmation pending; wait for its sent receipt before replying."
 MIGRATIONS = {  # version -> statement that upgrades an existing database to it
@@ -698,6 +698,19 @@ MIGRATIONS[34] = """CREATE TABLE applied_mutations (  -- each laptop write appli
   applied_at  TEXT NOT NULL,
   PRIMARY KEY (client_id, mutation_id)
 ) STRICT;"""
+# Files belong to their Draft (decision #143): a file staged on a Thread's reply moves to that Thread's Reply
+# Draft, made with empty text where there is none (its next save fills in the reply-all To and Cc).
+MIGRATIONS[35] = """INSERT INTO composition_drafts (revision, connection_id, kind, sender, "to", cc, subject, body,
+  created_at, updated_at, thread_id)
+SELECT 1, c.id, CASE c.platform WHEN 'slack' THEN 'slack' WHEN 'quo' THEN 'sms' ELSE 'email' END, c.external_id, '', '',
+  CASE WHEN c.platform IN ('slack', 'quo') THEN NULL WHEN lower(t.title) LIKE 're:%' THEN t.title ELSE 'Re: ' || t.title END,
+  '', min(s.added_at), min(s.added_at), t.id
+FROM staged_attachments s JOIN threads t ON t.id = s.thread_id JOIN channels ch ON ch.id = t.channel_id
+JOIN connections c ON c.id = ch.connection_id
+WHERE NOT EXISTS (SELECT 1 FROM composition_drafts d WHERE d.thread_id = s.thread_id) GROUP BY t.id;
+UPDATE staged_attachments SET draft_id = (
+  SELECT d.id FROM composition_drafts d WHERE d.thread_id = staged_attachments.thread_id), thread_id = NULL
+WHERE thread_id IS NOT NULL;"""
 
 
 class SendUnknown(SendFailed):
@@ -996,37 +1009,52 @@ def mark_needs_edit(db, draft_id: int, *, now: datetime | None = None) -> dict:
     return get_draft(db, draft_id)
 
 
+def _reply_values(db, thread_id: int, body: str) -> dict:
+    """A Reply Draft's envelope as its Composer shows it: the Thread's Connection and place, and for email the
+    reply-all To and Cc and the "Re:" Subject."""
+    v = thread_view(db, thread_id)
+    ch, title = v["channel"], v["thread"].title
+    kind = platforms.PLATFORMS[ch["platform"]].format
+    if kind is None:
+        raise ValueError(NO_REPLY)
+    values = dict(connection_id=ch["connection_id"], kind=kind, sender=ch["external_id"], cc="", subject=None,
+                  to=v["where"], body=body)
+    if kind == "email":
+        from .email import reply_all
+        to, cc = reply_all([{"native_id": m["native_id"], "data": m["data"]} for m in v["messages"]],
+                           ch["external_id"])
+        values |= dict(to=", ".join(to), cc=", ".join(cc), subject=title if title.lower().startswith("re:")
+                       else f"Re: {title}")
+    return values
+
+
 @writer("write")
-def save_reply_draft(db, thread_id: int, body: str, task_id: int | None = None, *, now: datetime | None = None) -> dict | None:
-    """The reply Draft kept under one Thread id (the one its reply box opened on, so an alias keeps its own):
-    text replaces it, empty text deletes it. The envelope comes from the Thread as the reply box shows it; the
-    box still sends its own To and Cc. ponytail: last writer wins here; revisions guard the agent's edits."""
+def save_reply_draft(db, thread_id: int, body: str, task_id: int | None = None, *,
+                     expected_revision: int | None = None, to: str | None = None, cc: str | None = None,
+                     now: datetime | None = None) -> dict | None:
+    """Save the Reply Draft kept under one Thread id (the one its Composer opened on, so an alias keeps its own)
+    as a new revision. The latest save wins (ADR 0012): `expected_revision` is the revision the editor read, and
+    without it the save applies over any stored one. Empty text deletes the Reply Draft unless files are staged
+    on it. An email Reply Draft starts with the reply-all To and Cc and keeps its own after that; `to` and `cc`
+    replace them."""
     with _write_snapshot(db):
         row = db.execute('SELECT id, revision, task_id, send_at, "to", cc FROM composition_drafts WHERE thread_id = ?',
                          (thread_id,)).fetchone()
-        if not body.strip():
+        if not body.strip() and not (row and db.execute(
+                "SELECT 1 FROM staged_attachments WHERE draft_id = ?", (row["id"],)).fetchone()):
             if row:
                 db.execute("DELETE FROM composition_drafts WHERE id = ?", (row["id"],))
                 from . import sequences
                 sequences.task_draft_deleted(db, dict(row), now=now)  # an email Task's reply cleared: the Task is skipped
             return None
-        v = thread_view(db, thread_id)
-        ch, title = v["channel"], v["thread"].title
-        kind = platforms.PLATFORMS[ch["platform"]].format
-        if kind is None:
-            raise ValueError(NO_REPLY)
-        values = dict(connection_id=ch["connection_id"], kind=kind, sender=ch["external_id"], cc="", subject=None,
-                      to=v["where"], body=body)
-        if kind == "email":
-            from .email import reply_all
-            to, cc = reply_all([{"native_id": m["native_id"], "data": m["data"]} for m in v["messages"]],
-                               ch["external_id"])
-            values |= dict(to=", ".join(to), cc=", ".join(cc), subject=title if title.lower().startswith("re:")
-                           else f"Re: {title}")
-        if row and row["send_at"]:  # a scheduled reply keeps the To and Cc its reply box scheduled it with
-            values |= dict(to=row["to"], cc=row["cc"])
+        values = _reply_values(db, thread_id, body)
+        if values["kind"] == "email":
+            if row:
+                values |= dict(to=row["to"], cc=row["cc"])
+            values |= {k: v for k, v in (("to", to), ("cc", cc)) if v is not None}
         if row:
-            return save_draft(db, values, draft_id=row["id"], expected_revision=row["revision"], now=now)
+            return save_draft(db, values, draft_id=row["id"], expected_revision=expected_revision or row["revision"],
+                              now=now)
         return save_draft(db, values, thread_id=thread_id, task_id=task_id, now=now)
 
 
@@ -1059,10 +1087,9 @@ def schedule_reply(db, thread_id: int, body: str, to: list[str], cc: list[str], 
     with db:
         if not db.in_transaction:
             db.execute("BEGIN IMMEDIATE")
-        d = save_reply_draft(db, thread_id, body, now=now)
+        d = save_reply_draft(db, thread_id, body, to=", ".join(to), cc=", ".join(cc), now=now)
         if d is None:
             raise ValueError("Nothing to send.")
-        db.execute('UPDATE composition_drafts SET "to" = ?, cc = ? WHERE id = ?', (", ".join(to), ", ".join(cc), d["id"]))
         return schedule_draft(db, d["id"], send_at, now=now)
 
 
@@ -1200,10 +1227,9 @@ def _preserve_send_changes(db, thread_id, changes):
 
 
 def _send(db, connection_id: int, fmt: str, files: Sequence[Staged], call, record, *, settle=None,
-          draft_id: int | None = None, thread_id: int | None = None) -> Thread:
-    """The send sequence a reply and a Draft share: check the files against the format's size limit
-    (ValueError, nothing sent), make the provider call, then record what went out and clear the staged files
-    (`draft_id=` or `thread_id=`). `call()` returns the native_id; `record(native_id, now)` runs inside the
+          draft_id: int) -> Thread:
+    """The send sequence every Draft takes: check the files against the format's size limit (ValueError, nothing
+    sent), make the provider call, then record what went out and clear the Draft's staged files. `call()` returns the native_id; `record(native_id, now)` runs inside the
     recording transaction and returns (the new MESSAGE Activity's id, or None when it is already stored; its
     Thread's id). `settle(thread_id)`, when given, runs last in that transaction (after the Attachments are
     stored) and returns the Thread's id after any reconciliation.
@@ -1223,48 +1249,65 @@ def _send(db, connection_id: int, fmt: str, files: Sequence[Staged], call, recor
         set_connection_error(db, connection_id, f"Send outcome unknown: {e}")
         raise SendUnknown(f"Send outcome unknown: {e}") from e
     set_connection_error(db, connection_id, None)
-    column, owner = _owner(db, draft_id, thread_id)
     with db:
         if not db.in_transaction:
             db.execute("BEGIN IMMEDIATE")
         activity_id, sent_in = record(native_id, clock.now())
         if activity_id:
             _add_sent(db, activity_id, files)
-        db.execute(f"DELETE FROM staged_attachments WHERE {column} = ?", (owner,))
+        db.execute("DELETE FROM staged_attachments WHERE draft_id = ?", (draft_id,))
         if settle:
             sent_in = settle(sent_in)
     return get_thread(db, sent_in)
 
 
 def send_draft(db, draft_id: int, revision: int, sender: Sender, *, again: bool = False) -> Thread:
-    """Send one saved Draft revision, record it, then remove the Draft. An email starts a new Thread; an SMS or
-    Slack message is recorded like any message Jeremy sends there, so it joins the conversation's Thread unless
-    the conversation has been quiet long enough (FR-33).
+    """Send one saved Draft revision, record it, then remove the Draft. A Reply Draft goes into its Thread
+    (`_reply_send`). Any other email starts a new Thread; an SMS or Slack message is recorded like any message
+    Jeremy sends there, so it joins the conversation's Thread unless the conversation has been quiet long enough
+    (FR-33).
 
     `sending_at` is set before the provider call and cleared only on a refusal, so a send whose outcome is
     unknown leaves the Draft locked; `again` is Jeremy's explicit choice to send it once more anyway.
     """
+    from . import sequences
     with db:
         if not db.in_transaction:
             db.execute("BEGIN IMMEDIATE")
         d = get_draft(db, draft_id)
-        if d["thread_id"] is not None:
-            raise ValueError("A reply Draft sends from its Thread's reply box.")
         if d["revision"] != revision:
             raise DraftConflict("Draft changed since this revision; reload before sending.")
         if d["sending_at"] and not again:
             raise SendUnknown("Send outcome unknown; check before sending again.")
         files = staged_files(db, draft_id=draft_id)
-        from . import sequences
-        problem = draft_problem(d, files) or sequences.send_problem(db, d)  # size check included, so _send's cannot fail after the claim
-        if problem:
-            raise ValueError(problem)
-        connection = db.execute("SELECT * FROM connections WHERE id = ?", (d["connection_id"],)).fetchone()
         started = clock.now()
         at = clock.iso(started)
-        gmail = platforms.PLATFORMS[connection["platform"]].receipts
-        checkpoint = _send_checkpoint(db, connection["id"]) if gmail else None
+        if d["thread_id"] is not None:
+            connection_id, fmt, call, record, settle = _reply_send(db, d, files, sender, started)
+        else:
+            problem = draft_problem(d, files) or sequences.send_problem(db, d)  # size check included, so _send's cannot fail after the claim
+            if problem:
+                raise ValueError(problem)
+            connection_id, fmt = d["connection_id"], d["kind"]
+            call, record, settle = _new_send(db, d, files, sender, started, at)
         db.execute("UPDATE composition_drafts SET sending_at = ? WHERE id = ?", (at, draft_id))
+    try:
+        return _send(db, connection_id, fmt, files, call, record, settle=settle, draft_id=draft_id)
+    except SendUnknown:
+        raise
+    except SendFailed:
+        with db:
+            db.execute("UPDATE composition_drafts SET sending_at = NULL WHERE id = ?", (draft_id,))
+        raise
+
+
+def _new_send(db, d, files, sender, started, at):
+    """A New Thread Draft's provider call, record and settle steps for `_send`."""
+    from . import sequences
+    draft_id, revision = d["id"], d["revision"]
+    connection = db.execute("SELECT * FROM connections WHERE id = ?", (d["connection_id"],)).fetchone()
+    gmail = platforms.PLATFORMS[connection["platform"]].receipts
+    checkpoint = _send_checkpoint(db, connection["id"]) if gmail else None
     sms = d["kind"] == "sms"
     to, cc = platforms.destinations(d["to"], d["kind"]), platforms.destinations(d["cc"], d["kind"])
     changes = {}
@@ -1312,16 +1355,76 @@ def send_draft(db, draft_id: int, revision: int, sender: Sender, *, again: bool 
         sequences.task_sent(db, d, thread_id, clock.now())  # an email Task's Draft: the Task is done
         return thread_id
 
-    try:
-        return _send(db, connection["id"], d["kind"], files,
-                     lambda: sender.start(to, cc, d["subject"], d["body"], f"draft-{draft_id}-{revision}-{at}", files=files),
-                     record, settle=settle, draft_id=draft_id)
-    except SendUnknown:
-        raise
-    except SendFailed:
-        with db:
-            db.execute("UPDATE composition_drafts SET sending_at = NULL WHERE id = ?", (draft_id,))
-        raise
+    call = lambda: sender.start(to, cc, d["subject"], d["body"], f"draft-{draft_id}-{revision}-{at}", files=files)  # noqa: E731
+    return call, record, settle
+
+
+def _reply_send(db, d, files, sender, started):
+    """A Reply Draft's checks (ValueError before anything is claimed) and its connection, format, provider call,
+    record and settle steps for `_send`: the saved text goes into the Thread the Draft was saved under, with the
+    Thread's history for threading, and the Thread moves on as any reply of Jeremy's does (decision #59)."""
+    from . import sequences
+    draft_id, staged_on = d["id"], d["thread_id"]
+    t = get_thread(db, staged_on)
+    thread_id = t.id
+    records = db.execute(
+        "SELECT native_id, data, content, occurred_at, identity_id FROM thread_activities"
+        " WHERE thread_id = ? AND kind = 'MESSAGE' ORDER BY occurred_at, id", (thread_id,)).fetchall()
+    history = [{"native_id": r["native_id"], "data": json.loads(r["data"]), "content": r["content"],
+                "at": r["occurred_at"]} for r in records]
+    connection_id, platform = db.execute("SELECT c.id, c.platform FROM channels ch JOIN connections c"
+                                         " ON c.id = ch.connection_id WHERE ch.id = ?", (t.channel_id,)).fetchone()
+    p = platforms.PLATFORMS[platform]
+    if not p.takes_replies:
+        raise ValueError(NO_REPLY)
+    rules = platforms.FORMATS[p.format]
+    text = d["body"]
+    if problem := ((rules.size_problem and rules.size_problem(files))
+                   or (None if text.strip() or files else "Write a message")
+                   or sequences.send_problem(db, d, text)):  # a reply goes out while its Enrollment is Paused
+        raise ValueError(problem)
+    to, cc = [], []
+    if p.format == "email":
+        to, cc = platforms.destinations(d["to"], "email"), platforms.destinations(d["cc"], "email")
+    checkpoint = _send_checkpoint(db, connection_id)
+    receipts = p.receipts
+    if receipts:
+        for message, record in zip(history, records):
+            message["native_id"] = _gmail_wire_id(db, record["native_id"], connection_id, record["identity_id"])
+            message["wire_id"] = message["native_id"]
+        if history and history[-1]["native_id"] is None:
+            raise ValueError(EMAIL_CONFIRMATION_PENDING)
+    changes, recorded_at = {}, []
+
+    def record(native_id, now):
+        if receipts:
+            now = started
+        recorded_at.append(now)
+        t = get_thread(db, thread_id)  # reconciliation may have happened while the Sender was in flight
+        changes.update(_send_changes(db, connection_id, checkpoint))
+        data = {"to": list(to), "cc": list(cc)}
+        if receipts:
+            data["seen_through_activity_id"] = checkpoint[0]
+        row = db.execute(
+            "INSERT OR IGNORE INTO activities (thread_id, kind, occurred_at, native_id, content, data)"
+            " VALUES (?, 'MESSAGE', ?, ?, ?, ?) RETURNING id", (t.id, clock.iso(now), native_id, text, json.dumps(data))
+        ).fetchone()
+        db.execute("DELETE FROM composition_drafts WHERE id = ?", (draft_id,))  # the Reply Draft went out
+        sequences.task_sent(db, d, t.id, now)
+        return row[0] if row else None, t.id
+
+    def settle(tid):
+        t = get_thread(db, tid)
+        if receipts:
+            _reconcile_email_threads(db, True, t.channel_id)
+            t = get_thread(db, tid)
+        if not _preserve_send_changes(db, t.id, changes):
+            if nxt := transition((t.status, t.status_detail), Arrived(from_jeremy=True)):
+                _set_status(db, t.id, recorded_at[0], *nxt, cause="reply")
+        return t.id
+
+    call = lambda: sender.send(t, text, list(to), list(cc), history, files=files)  # noqa: E731
+    return connection_id, p.format, call, record, settle
 
 
 def _new_thread(db, channel_id, native_id, title, status, at) -> int:
@@ -1924,38 +2027,39 @@ def mark_failed(db, attachment_id: int) -> None:
                    (ATTACHMENT_TRIES, attachment_id))
 
 
-def _owner(db, draft_id, thread_id) -> tuple[str, int]:
-    """The staged_attachments column and id that own these files. A reply Draft's files are its Thread's
-    reply files, the ones `reply` sends, so staging on a reply Draft stages on its Thread."""
+def _owner(db, draft_id, thread_id) -> int | None:
+    """The Draft that owns these files: a Thread's reply files are its Reply Draft's (None while it has none)."""
     if (draft_id is None) == (thread_id is None):
         raise ValueError("stage on exactly one of draft_id or thread_id")
-    if thread_id is not None:
-        return "thread_id", thread_id
-    r = db.execute("SELECT thread_id FROM composition_drafts WHERE id = ?", (draft_id,)).fetchone()
-    return ("thread_id", r[0]) if r and r[0] is not None else ("draft_id", draft_id)
+    if thread_id is None:
+        return draft_id
+    r = db.execute("SELECT id FROM composition_drafts WHERE thread_id = ?", (thread_id,)).fetchone()
+    return r[0] if r else None
 
 
 @writer("create")
 def stage(db, *, sha: str, name: str, type: str, size: int,
           draft_id: int | None = None, thread_id: int | None = None, now: datetime | None = None) -> int:
-    """Attach a stored file to an unsent Draft or to one Thread's open reply."""
-    column, owner = _owner(db, draft_id, thread_id)
+    """Attach a stored file to an unsent Draft; `thread_id` stages on that Thread's Reply Draft, creating it."""
     path = files.attachment_path(db, sha)
     if files.files_dir(db) is not None and (path is None or not path.is_file()):
         raise ValueError("stage needs the sha256 of a stored file")
+    owner = _owner(db, draft_id, thread_id)
+    if owner is None:  # a file for a reply with no text yet: an empty Reply Draft holds it
+        owner = save_draft(db, _reply_values(db, thread_id, ""), thread_id=thread_id, now=now)["id"]
     with db:
-        return db.execute(f"INSERT INTO staged_attachments ({column}, sha, name, type, size, added_at)"
+        return db.execute("INSERT INTO staged_attachments (draft_id, sha, name, type, size, added_at)"
                           " VALUES (?, ?, ?, ?, ?, ?) RETURNING id", (owner, sha, name, type, size, clock.iso((now or clock.now())))).fetchone()[0]
 
 
 def staged(db, *, draft_id: int | None = None, thread_id: int | None = None) -> list[dict]:
-    column, owner = _owner(db, draft_id, thread_id)
+    owner = _owner(db, draft_id, thread_id)
     return [dict(r) for r in db.execute(
-        f"SELECT * FROM staged_attachments WHERE {column} = ? ORDER BY id", (owner,))]
+        "SELECT * FROM staged_attachments WHERE draft_id = ? ORDER BY id", (owner,))] if owner else []
 
 
 def staged_files(db, *, draft_id: int | None = None, thread_id: int | None = None) -> list[Staged]:
-    """A Draft's or reply's staged Attachments as files to send; ValueError when a stored file is gone."""
+    """A Draft's staged Attachments as files to send; ValueError when a stored file is gone."""
     out = []
     for s in staged(db, draft_id=draft_id, thread_id=thread_id):
         path = files.attachment_path(db, s["sha"])
@@ -1967,8 +2071,16 @@ def staged_files(db, *, draft_id: int | None = None, thread_id: int | None = Non
 
 @writer("write")
 def unstage(db, staged_id: int, *, now: datetime | None = None) -> None:
+    """Take a file off its Draft; a Reply Draft left with no text and no files goes too."""
     with db:
+        r = db.execute("SELECT d.* FROM staged_attachments s JOIN composition_drafts d ON d.id = s.draft_id"
+                       " WHERE s.id = ?", (staged_id,)).fetchone()
         db.execute("DELETE FROM staged_attachments WHERE id = ?", (staged_id,))
+        if r and r["thread_id"] is not None and not r["body"].strip() and not db.execute(
+                "SELECT 1 FROM staged_attachments WHERE draft_id = ?", (r["id"],)).fetchone():
+            db.execute("DELETE FROM composition_drafts WHERE id = ?", (r["id"],))
+            from . import sequences
+            sequences.task_draft_deleted(db, dict(r), now=now)
 
 
 EMAIL_ATOM = r"[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+"
@@ -2350,70 +2462,15 @@ def act(db, thread_id: int, action: Action | Reopen, *, now: datetime | None = N
 
 def reply(db, thread_id: int, text: str, sender: Sender,
           to: list[str] = (), cc: list[str] = ()) -> Thread:
-    """Send first, with the reply's staged Attachments; store the outbound Activity and clear them only on
-    success (decision #59). SendFailed (refused) or SendUnknown (it may have gone out) propagates, nothing is
-    stored, and they stay staged. ValueError: an Attachment problem found before sending (FR-A15)."""
-    staged_on = thread_id
-    with _read_snapshot(db):
-        t = get_thread(db, thread_id)
-        thread_id = t.id
-        records = db.execute(
-            "SELECT native_id, data, content, occurred_at, identity_id FROM thread_activities"
-            " WHERE thread_id = ? AND kind = 'MESSAGE' ORDER BY occurred_at, id", (thread_id,)).fetchall()
-        history = [{"native_id": r["native_id"], "data": json.loads(r["data"]), "content": r["content"],
-                    "at": r["occurred_at"]} for r in records]
-        connection_id, platform = db.execute("SELECT c.id, c.platform FROM channels ch JOIN connections c"
-                                             " ON c.id = ch.connection_id WHERE ch.id = ?", (t.channel_id,)).fetchone()
-        if not platforms.PLATFORMS[platform].takes_replies:
-            raise ValueError(NO_REPLY)
-        files = staged_files(db, thread_id=staged_on)
-        from . import sequences
-        draft = db.execute("SELECT * FROM composition_drafts WHERE thread_id = ?", (staged_on,)).fetchone()
-        draft = dict(draft) if draft else {}
-        if problem := sequences.send_problem(db, draft, text):
-            raise ValueError(problem)
-        checkpoint = _send_checkpoint(db, connection_id)
-        receipts = platforms.PLATFORMS[platform].receipts
-        if receipts:
-            for message, record in zip(history, records):
-                message["native_id"] = _gmail_wire_id(
-                    db, record["native_id"], connection_id, record["identity_id"])
-                message["wire_id"] = message["native_id"]
-            if history and history[-1]["native_id"] is None:
-                raise ValueError(EMAIL_CONFIRMATION_PENDING)
-    started = clock.now()
-    changes, recorded_at = {}, []
-
-    def record(native_id, now):
-        if receipts:
-            now = started
-        recorded_at.append(now)
-        t = get_thread(db, thread_id)  # reconciliation may have happened while the Sender was in flight
-        changes.update(_send_changes(db, connection_id, checkpoint))
-        data = {"to": list(to), "cc": list(cc)}
-        if receipts:
-            data["seen_through_activity_id"] = checkpoint[0]
-        row = db.execute(
-            "INSERT OR IGNORE INTO activities (thread_id, kind, occurred_at, native_id, content, data)"
-            " VALUES (?, 'MESSAGE', ?, ?, ?, ?) RETURNING id", (t.id, clock.iso(now), native_id, text, json.dumps(data))
-        ).fetchone()
-        db.execute("DELETE FROM composition_drafts WHERE thread_id = ?", (staged_on,))  # the reply Draft went out
-        sequences.task_sent(db, draft, t.id, now)
-        return row[0] if row else None, t.id
-
-    def settle(tid):
-        t = get_thread(db, tid)
-        if receipts:
-            _reconcile_email_threads(db, True, t.channel_id)
-            t = get_thread(db, tid)
-        if not _preserve_send_changes(db, t.id, changes):
-            if nxt := transition((t.status, t.status_detail), Arrived(from_jeremy=True)):
-                _set_status(db, t.id, recorded_at[0], *nxt, cause="reply")
-        return t.id
-
-    return _send(db, connection_id, platforms.PLATFORMS[platform].format, files,
-                 lambda: sender.send(t, text, list(to), list(cc), history, files=files), record, settle=settle,
-                 thread_id=staged_on)
+    """Send a Composer's text as this Thread's reply: save it as the Thread's Reply Draft revision (with the
+    Composer's To and Cc, for email), then send that revision through `send_draft`, which locks the Draft when
+    the outcome is unknown. SendFailed (refused) or SendUnknown (it may have gone out) propagates and the Draft
+    stays with its files. ValueError: nothing to send, or a problem found before sending (FR-A15)."""
+    d = save_reply_draft(db, thread_id, text, to=", ".join(to) if to or cc else None,
+                         cc=", ".join(cc) if to or cc else None)
+    if d is None:
+        raise ValueError("Write a message")
+    return send_draft(db, d["id"], d["revision"], sender)
 
 
 def wake(db, now: datetime) -> int:
@@ -2758,16 +2815,9 @@ def _where(channel, identity) -> str:
     return _org(domain) if domain and domain not in FREE_MAIL else "email"
 
 
-def today_draft(db, draft: dict) -> bool:
-    """Whether Today lists this Draft itself: not a Task's (it shows through its Task once due), and not a reply
-    on a Todo Thread (it shows through that Thread)."""
-    if draft["task_id"] is not None:
-        return False
-    return draft["thread_id"] is None or get_thread(db, draft["thread_id"]).status_detail not in VIEWS["Todo"]
-
-
 def today(db, now: datetime | None = None) -> dict:
-    """Today (GLOSSARY): Todo Threads, Due Tasks, the Drafts not shown through them, each once, Paused
+    """Today (GLOSSARY): Todo Threads, Due Tasks, and every Draft, each once: a Thread whose Reply Draft is
+    ready and a Task with a Draft show as that Draft (decision #143). Then Paused
     Enrollments (FR-SEQ-39), and Unattended Organizations; and, for an empty Today, when the next Snoozed Thread wakes and the next Task comes due (None
     when nothing is coming)."""
     from . import pipeline, sequences
@@ -2782,8 +2832,9 @@ def today(db, now: datetime | None = None) -> dict:
         "SELECT t.due_at FROM tasks t JOIN enrollments e ON e.id = t.enrollment_id"
         " WHERE t.state = 'DUE' AND e.state IN ('ACTIVE', 'FINISHING') ORDER BY t.due_at")
         if datetime.fromisoformat(r[0]).astimezone(sequences.LOCAL).date() > day]
-    return {"threads": queue(db, "Todo"), "tasks": sequences.tasks_due(db, now),
-            "drafts": [d for d in list_drafts(db) if today_draft(db, d)], "paused": sequences.paused(db),
+    return {"threads": [t for t in queue(db, "Todo") if t["detail"] != REPLY_DRAFT],
+            "tasks": [t for t in sequences.tasks_due(db, now) if not t["draft_id"]],
+            "drafts": list_drafts(db), "paused": sequences.paused(db),
             "unattended": pipeline.unattended(db),
             "next_wake": wake, "next_task": later[0] if later else None}
 

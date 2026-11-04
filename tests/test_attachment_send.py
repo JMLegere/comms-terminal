@@ -208,7 +208,8 @@ def test_reply_sends_staged_files_and_clears_them_only_on_success(db):
             inbox.reply(db, t.id, "Here", FakeSender(error))
         assert len(inbox.staged(db, thread_id=t.id)) == 1
     sender = FakeSender("<r1@example.test>")
-    inbox.reply(db, t.id, "Here", sender)
+    d = inbox.reply_draft(db, t.id)  # the unknown outcome locked the Reply Draft: Jeremy sends it again
+    inbox.send_draft(db, d["id"], d["revision"], sender, again=True)
     assert [(f.name, f.path.read_bytes()) for f in sender.files] == [("contract.pdf", PDF)]
     assert inbox.staged(db, thread_id=t.id) == []
 
