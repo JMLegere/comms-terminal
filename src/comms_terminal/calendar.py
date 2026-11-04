@@ -270,8 +270,10 @@ def items(db, start: date, end: date) -> list[dict]:
     for t in db.execute("SELECT id, title, coalesce(snoozed_until, follow_up_at) AS at FROM threads"
                         " WHERE status = 'SNOOZED' AND merged_into IS NULL"):
         add("snooze", t["at"], t["title"], t["id"])
-    for d in db.execute('SELECT id, subject, "to", send_at FROM composition_drafts WHERE send_at IS NOT NULL'):
-        add("draft", d["send_at"], d["subject"] or f"message to {d['to']}", d["id"])
+    for d in db.execute('SELECT id, subject, "to", send_at, task_id FROM composition_drafts WHERE send_at IS NOT NULL'):
+        # an email Task's scheduled send opens its Task, which lists it (decision #146)
+        add("draft", d["send_at"], d["subject"] or f"message to {d['to']}", d["id"],
+            **({"task": d["task_id"]} if d["task_id"] else {}))
     for e in db.execute("SELECT e.id, e.starts_at, p.id AS person_id, p.display_name, q.name FROM enrollments e"
                         " JOIN persons p ON p.id = e.person_id JOIN sequences q ON q.id = e.sequence_id"
                         " WHERE e.starts_at IS NOT NULL AND e.state != 'FINISHED'"):

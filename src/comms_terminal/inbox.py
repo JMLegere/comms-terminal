@@ -1204,9 +1204,8 @@ def restore_draft(db, draft: dict, *, now: datetime | None = None) -> None:
 
 def list_drafts(db, *, tasks: bool = True) -> list[dict]:
     """Drafts, newest updated first. `tasks=False` is the Drafts list (Drafts page, Today's drafts pane): an email
-    Task's Draft stays its Task until sent (Jeremy, 2026-11-04) and is listed through it, except while its send is
-    scheduled, when the Tasks list leaves the Task out (sequences.tasks_due) and it waits here as a scheduled Draft."""
-    where = "" if tasks else " WHERE task_id IS NULL OR (send_at IS NOT NULL AND send_error IS NULL)"
+    Task's Draft stays its Task until sent, scheduled or not, and is listed only through it (decisions #145, #146)."""
+    where = "" if tasks else " WHERE task_id IS NULL"
     return [dict(r) for r in db.execute(f"SELECT * FROM composition_drafts{where} ORDER BY updated_at DESC, id DESC")]
 
 
@@ -2877,7 +2876,8 @@ def _where(channel, identity) -> str:
 def today(db, now: datetime | None = None) -> dict:
     """Today (GLOSSARY): Todo Threads, Due Tasks, and the Drafts list, each item once: a Thread whose Reply Draft is
     ready shows as that Draft (decision #144); an email Task stays a Task until its Draft is sent, so its Draft is
-    not in the Drafts list (Jeremy, 2026-11-04, reversing #144 for Tasks). Then Paused
+    not in the Drafts list (Jeremy, 2026-11-04, reversing #144 for Tasks); while its send is scheduled it waits on the
+    Tasks page, off Today (decision #146). Then Paused
     Enrollments (FR-SEQ-39), and Unattended Organizations; and, for an empty Today, when the next Snoozed Thread wakes and the next Task comes due (None
     when nothing is coming)."""
     from . import pipeline, sequences

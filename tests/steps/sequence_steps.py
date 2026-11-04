@@ -170,6 +170,21 @@ def schedule_task_draft(outreach, day):
     inbox.schedule_draft(outreach.db, task_draft(outreach)["id"], DAYS[day], now=outreach.now)
 
 
+@when(parsers.parse("the scheduled send fails on {day}"))
+def scheduled_send_fails(outreach, day):
+    """As serve.py's send loop: claim the due sends, then record the failure."""
+    outreach.now = DAYS[day]
+    for d in inbox.claim_due_drafts(outreach.db, outreach.now):
+        inbox.set_send_error(outreach.db, d["id"], "refused")
+
+
+@then(parsers.parse("the Tasks page on {day} lists:"))
+def tasks_page(outreach, day, datatable):
+    rows = [(t["person"], t["kind"], t["group"], t["send_at"] or "")
+            for t in sequences.tasks_due(outreach.db, DAYS[day], scheduled=True)]
+    assert rows == [tuple(row) for row in datatable[1:]]
+
+
 @given(parsers.parse('Save Reply Draft keeps Body "{body}" on the Thread "{title}"'))
 def reply_draft(outreach, body, title):
     inbox.save_reply_draft(outreach.db, thread_titled(outreach, title), body)

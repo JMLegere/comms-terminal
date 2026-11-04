@@ -1,5 +1,6 @@
-// Tasks, as the Console's TasksPage (D107, D111, D112): due Tasks under OVERDUE / DUE TODAY / LATER TODAY, one row
-// each (kind, Person with ⚠ when flagged, Day N, Sequence, When), "N due" under them.
+// Tasks, as the Console's TasksPage (D107, D111, D112): due Tasks under OVERDUE / DUE TODAY / LATER TODAY, then
+// scheduled email Tasks under SCHEDULED with their send time (decision #146), one row each (kind, Person with ⚠ when
+// flagged, Day N, Sequence, When), "N due" under them.
 // j/k move and the Task fills the right pane. e marks a touch done (an email Task is done when its Draft sends), x
 // skips it, 1/2 answer an If that asks Jeremy: each is undoable (z) and the next Task is selected. n starts a new
 // Thread when the reply target was skipped, p opens the Person, y copies for an agent. (The
@@ -10,14 +11,20 @@ import { call, nextEvent, nextCommand, theme, shared, setShared, run, toast, foc
 
 export const KIND = { email: "Email", call: "Call", linkedin: "LinkedIn", letter: "Letter", action: "Action", if: "If" }; // KIND_LABEL
 const I = { email: "\u{f01f0}", call: "\u{f0df0}", linkedin: "\u{f033b}", letter: "\u{f0d8c}", action: "\u{f027b}", if: "\u{f0641}",
-  warn: "\u{f002a}", sequence: "\u{f027b}", tasks: "\u{f05c7}" };
+  warn: "\u{f002a}", sequence: "\u{f027b}", tasks: "\u{f05c7}", time: "\u{f0150}" };
+const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const pad = (n) => String(n).padStart(2, "0");
 // The one undo (nav owns z), as thread/main.js offerUndo.
 const offerUndo = (message, steps) => { setShared("undo", { message, steps }); toast(`${message}  z undo`); };
 
-/** The When column: red "Nd" overdue, "HH:MM" later today, blank due today. */
-export const whenOf = (r) => r.group === "overdue" ? `${r.age}d`
-  : r.group === "later today" ? (() => { const d = new Date(r.due_at); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; })() : "";
+/** The When column: red "Nd" overdue, "HH:MM" later today, blank due today, "⏱ Wed 09:00" when a scheduled one sends. */
+export const whenOf = (r) => {
+  const hm = (d) => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  if (r.group === "overdue") return `${r.age}d`;
+  if (r.group === "later today") return hm(new Date(r.due_at));
+  if (r.group === "scheduled") { const d = new Date(r.send_at); return `${I.time} ${DAYS[d.getDay()]} ${hm(d)}`; }
+  return "";
+};
 
 export default class Tasks extends View {
   init(_props, cx) {
@@ -182,6 +189,9 @@ export default class Tasks extends View {
             cx.notify();
           })))
       .when(rows.length > 0, (el) => el.child(div().flex_none().px(12).py(6).border_t(1).border_color(t.border).text_size(11.5)
-        .text_color(t.muted).child(`${rows.length} due`)));
+        .text_color(t.muted).child((() => {
+          const later = rows.filter((r) => r.group === "scheduled").length;
+          return `${rows.length - later} due${later ? ` · ${later} scheduled` : ""}`;
+        })())));
   }
 }

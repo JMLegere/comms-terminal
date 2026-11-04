@@ -492,7 +492,7 @@ def _task_pane(core, db, task_id):
     `hint`, the Person's `emails` and Organization `domains` for its Context sections, and its `draft` (id and
     Thread: a New Thread Draft shows in the Draft editor in place, a Reply Draft opens its Thread's reply box)."""
     from .tui import KIND_LABEL, escape, task_hint, task_pane_markup, task_props
-    t = next((t for t in sequences.tasks_due(db) if t["id"] == task_id), None)
+    t = next((t for t in sequences.tasks_due(db, scheduled=True) if t["id"] == task_id), None)
     if t is None:
         raise ApiError(-32602, f"no due Task {task_id}")
     return {"head": segments(f"[b #45707a]Day {t['day']} · {KIND_LABEL[t['kind']]} · {escape(t['person'])}[/]"),
@@ -505,15 +505,15 @@ def _task_pane(core, db, task_id):
 
 @query("tasks.list")
 def _tasks(core, db):
-    """Due Tasks."""
-    return sequences.tasks_due(db)
+    """The Tasks page: due Tasks, then scheduled email Tasks in group "scheduled" with their `send_at` (#146)."""
+    return sequences.tasks_due(db, scheduled=True)
 
 
 @query("task.markdown", task_id="string")
 def _task_markdown(core, db, task_id):
     """One due Task as the Markdown `comms-terminal tasks` prints, for an agent."""
     from .tui import task_markdown
-    t = next((t for t in sequences.tasks_due(db) if t["id"] == task_id), None)
+    t = next((t for t in sequences.tasks_due(db, scheduled=True) if t["id"] == task_id), None)
     if t is None:
         raise ApiError(-32602, f"no due Task {task_id}")
     return task_markdown(db, t)

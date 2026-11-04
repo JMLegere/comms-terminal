@@ -149,7 +149,7 @@ def add_parsers(sub):
     d.add_argument("--attach", metavar="NAME", help="attach a file named NAME, its bytes read from stdin")
     d.add_argument("--detach", metavar="NAME", help="take the attached file NAME off it")
     d.add_argument("--delete", action="store_true", help="delete it (an email Task's Draft: the Task is skipped)")
-    sub.add_parser("tasks", help="Due Tasks as Markdown, each with its Person and Draft (Sequences)")
+    sub.add_parser("tasks", help="Due Tasks, then scheduled email Tasks, as Markdown, each with its Person and Draft (Sequences)")
     e = sub.add_parser("enroll", help="enroll one Person in a Sequence; its first Task is due today, or from --start")
     e.add_argument("person", help="a Person id, email address, or exact name")
     e.add_argument("sequence", help="a Sequence id or exact name")
@@ -268,7 +268,7 @@ def run(a, db):
             for c in inbox.connections(db):
                 print(f"{c['id']}\t{connection_label(c)}")
         elif a.cmd == "tasks":
-            due = sequences.tasks_due(db)
+            due = sequences.tasks_due(db, scheduled=True)  # as the Tasks page: scheduled email Tasks last (#146)
             print("".join(task_markdown(db, t) + "\n" for t in due) or "No Tasks due.\n", end="")
         elif a.cmd == "enroll":
             print(enroll(db, a.person, a.sequence, getattr(a, "start", None), getattr(a, "org", None),

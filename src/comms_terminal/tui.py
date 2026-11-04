@@ -4945,7 +4945,7 @@ def task_markdown(db, t: dict) -> str:
     ids = [r[0] for r in db.execute("SELECT value FROM identities WHERE person_id = ? ORDER BY kind, id", (t["person_id"],))]
     lines = [f"# {KIND_LABEL[t['kind']]} Task · Day {t['day']} of {t['sequence']}", "",
              f"- Person: {t['person']} ({', '.join(ids)})", f"- Organization: {t['organization'] or 'none'}",
-             f"- Due: {t['group']}", f"- Task id: {t['id']}"]
+             f"- Due: {t['group']}" + (f" · sends {t['send_at']}" if t.get("send_at") else ""), f"- Task id: {t['id']}"]
     if t["flag"]:
         lines.append(f"- Flag: {t['flag']}")
     if t["draft_id"]:
@@ -5114,8 +5114,11 @@ class TasksPage(Page):
     def on_resize(self, _):
         self.call_after_refresh(self.refresh_data)
 
+    today = False  # Today's tasks pane: due Tasks only; the Tasks page adds scheduled email Tasks (decision #146)
+
     def tasks(self):
-        ts = sequences.tasks_due(self.app.db)  # an email Task stays here until its Draft is sent (Jeremy, 2026-11-04)
+        # an email Task stays a Task until its Draft is sent (decisions #145, #146)
+        ts = sequences.tasks_due(self.app.db, scheduled=not self.today)
         if isinstance(self.filter, str):
             ts = [t for t in ts if t["kind"] == self.filter]
         elif self.filter:
@@ -5148,7 +5151,9 @@ class TasksPage(Page):
             room = max(4, width - 40)
             seq = t["sequence"] if len(t["sequence"]) <= room else t["sequence"][:room - 1] + "…"
             when = (f"{t['age']}d" if t["group"] == "overdue" else
-                    datetime.fromisoformat(t["due_at"]).astimezone(sequences.LOCAL).strftime("%H:%M") if t["group"] == "later today" else "")
+                    datetime.fromisoformat(t["due_at"]).astimezone(sequences.LOCAL).strftime("%H:%M") if t["group"] == "later today" else
+                    f"{ICON['time']} " + datetime.fromisoformat(t["send_at"]).astimezone(sequences.LOCAL).strftime("%a %H:%M")
+                    if t["group"] == "scheduled" else "")
             self.items.append(t)
             add(f"[#654735]{ICON[t['kind']]}[/]", mark + f"[b]{escape(name)}[/]",
                           "" if narrow else f"Day {t['day']}", "" if narrow else f"[#928374]{escape(seq)}[/]",
@@ -5166,8 +5171,10 @@ class TasksPage(Page):
                                                      escape(sequences.get_sequence(self.app.db, self.filter[1])["name"]))
         if self.host is None:
             self.app.main.query_one("#main").border_title = pill(self.TITLE, "blue")
-        count = sum(1 for t in self.items if t)
-        self.query_one("#below").update(f"[#928374]{count} due · / filters by kind or Sequence[/]" if count else "")
+        count = sum(1 for t in self.items if t and t["group"] != "scheduled")
+        later = sum(1 for t in self.items if t and t["group"] == "scheduled")
+        below = f"{count} due" + (f" · {later} scheduled" if later else "")
+        self.query_one("#below").update(f"[#928374]{below} · / filters by kind or Sequence[/]" if count or later else "")
         if self.host is not None:
             self.host.list_changed(self)
         if self.active:
@@ -5307,8 +5314,9 @@ class TasksPage(Page):
             self.refresh_data(select_id=t["id"])
 
     def action_filter(self):
-        counts = Counter(t["kind"] for t in sequences.tasks_due(self.app.db))
-        by_seq = Counter((t["sequence_id"], t["sequence"]) for t in sequences.tasks_due(self.app.db))
+        ts = sequences.tasks_due(self.app.db, scheduled=not self.today)
+        counts = Counter(t["kind"] for t in ts)
+        by_seq = Counter((t["sequence_id"], t["sequence"]) for t in ts)
         options = [("all", f"All Tasks · {sum(counts.values())}")] + [
             (k, f"{ICON[k]} {KIND_LABEL[k]} · {counts[k]}") for k in KIND_LABEL] + [
             (f"seq:{sid}", f"{ICON['sequence']} {escape(name)} · {n}") for (sid, name), n in by_seq.items()]
@@ -6040,6 +6048,7 @@ class TodayPage(Page):
         threads = ThreadsPage()
         threads.fixed_view, threads.today = 0, True
         self.threads, self.tasks = threads, TasksPage()
+        self.tasks.today = True
         self.drafts = DraftsPage()
         self.paused, self.orgs = PausedPage(), UnattendedPage()
         for page in self.lists:
@@ -6410,10 +6419,11 @@ def cal_open(app, i):
         main.open_thread(i["ref"])
     elif i["kind"] == "enrollment":
         main.open_person(i["ref"])
-    else:
-        page = TasksPage() if i["kind"] == "task" else DraftsPage()
+    else:  # a Task, or a scheduled send: its Task's when it is an email Task's (decision #146), else the Draft
+        task = i.get("task") or (i["ref"] if i["kind"] == "task" else None)
+        page = TasksPage() if task else DraftsPage()
         main.open(lambda: page)
-        app.call_after_refresh(lambda: app.call_after_refresh(lambda: page.refresh_data(select_id=i["ref"])))
+        app.call_after_refresh(lambda: app.call_after_refresh(lambda: page.refresh_data(select_id=task or i["ref"])))
 
 
 class CalendarPage(Page):

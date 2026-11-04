@@ -40,6 +40,17 @@ Workbox
 
 ## 3. Screens
 
+### Placement principles (Jeremy, 2026-11-04; decisions #145, #146)
+
+These decide which list shows an item, in the console and the App alike.
+
+1. **One identity.** An item is listed as what it is. An email Task is a Task until it is sent, including while scheduled; it is never listed as a Draft.
+2. **Lists show what needs you.** Today and the due Tasks list hold work to act on now. Something waiting on a time (a Snooze, a scheduled send) stays off Today until it needs action.
+3. **Queued work stays findable.** Anything that will happen without Jeremy (a scheduled send) has one list where he can see, edit or cancel it, not only the Calendar.
+4. **Failure returns as work.** When something automatic fails, it comes back as the item it is, ready to act on.
+
+So an email Task with a Draft is listed in Today's tasks pane and on the Tasks page, with its Draft in place, and on neither the Drafts page nor Today's drafts pane. While its send is scheduled it waits on the Tasks page under SCHEDULED with its send time and stays off Today; the Calendar still shows the send. If the send fails, it is a due Task again.
+
 **Revision 2026-10-12 (decisions #89–#92)** supersedes the preview, full-thread page, and details container below (#79):
 
 - **One cohesive view (#90, updated for pane arrows)**: the console opens on Today and focus starts on its first list. `←`/`→` move between the rail, main page, and displayed Thread timeline, stopping at the edges; they keep the current section, row, Thread, and page stack unchanged. In the rail, `↑`/`↓` move the highlight; only `enter` or a click opens an item. Informational side panes are skipped. Text inputs keep their native cursor keys and modal screens keep their own navigation. Reply fields take focus while you type; `esc` returns to the list. `1` opens Today, `2`–`5` switch Status views, `6` Drafts, and `7`–`0` open People, Organizations, Cases, Channels from anywhere.
@@ -75,7 +86,7 @@ Workbox
 ```
 
 - Every region is its own rounded, bordered panel with its title on the border (herdr); the focused panel's border turns accent blue.
-- **Today** (FR-14b; `.agents/prd/2026-10-17-today-view.md`): the rail's first line, above every section, with the count of what it lists. The page stacks five bordered lists: Todo Threads (grouped by Case), Due Tasks (title in red with the overdue count), the Drafts not shown through them, Paused Enrollments (FR-SEQ-39), and Unattended Organizations (title in red: Organizations in an open or paying Stage with no Todo or Snoozed Thread among their People and no Active or Finishing Enrollment for them, and none of their People on an upcoming Event, FR-OA-6 as amended by FR-SEQ-38 and FR-OA-5; `enter` opens the Organization, and its Pipeline section fills the right pane); a list with nothing in it hides, and when all are empty it says All clear with the next wake and the next Task. Each list fits its rows (Threads up to half the height, Tasks and Drafts up to a third), and the bottom list shown takes the spare height. `↓`/`↑` run on from one list into the next, `tab` jumps; the list holding the cursor fills the right pane, and the statusline reads `TODAY › THREADS` (or TASKS, DRAFTS, ORGANIZATIONS) with that list's keys.
+- **Today** (FR-14b; `.agents/prd/2026-10-17-today-view.md`): the rail's first line, above every section, with the count of what it lists. The page stacks five bordered lists: Todo Threads (grouped by Case), Due Tasks (title in red with the overdue count; an email Task until its Draft is sent, scheduled ones excepted), the Drafts not shown through them, Paused Enrollments (FR-SEQ-39), and Unattended Organizations (title in red: Organizations in an open or paying Stage with no Todo or Snoozed Thread among their People and no Active or Finishing Enrollment for them, and none of their People on an upcoming Event, FR-OA-6 as amended by FR-SEQ-38 and FR-OA-5; `enter` opens the Organization, and its Pipeline section fills the right pane); a list with nothing in it hides, and when all are empty it says All clear with the next wake and the next Task. Each list fits its rows (Threads up to half the height, Tasks and Drafts up to a third), and the bottom list shown takes the spare height. `↓`/`↑` run on from one list into the next, `tab` jumps; the list holding the cursor fills the right pane, and the statusline reads `TODAY › THREADS` (or TASKS, DRAFTS, ORGANIZATIONS) with that list's keys.
 - **Rail** sections: `threads` (Todo, Snoozed, Done, Ignored, All, with counts), `cases` (Todo, Snoozed, Done, Ignored, with counts of Cases by rolled-up Status, #120), `playbook` (Tasks, Sequences), `pipeline` (Revenue, Fundraising, with % of Target; Talent, with its open count), `browse` (People, Organizations, Channels), `connections` (one line per Connection with its health icon). The current item has an accent bar. Status views live in the rail; there are no tabs above the list.
 - **Main panel**: the selected rail item's list, or a full Thread, Person, Organization, Case, or Connection page.
 - **Preview panel**: a single click on a Thread (or `space`) opens it read-only beside the list; `j`/`k` keep the preview in step; a second click, a double click, or `enter` opens it full; `esc` closes the preview.
@@ -211,7 +222,8 @@ Thread, Person, Organization, and Case pages show separate details-column sectio
 - **Finishing** (`f`): Goal met, Not Right Now, Lost (each runs the path's On completion), Canceled, Unsubscribed. A Finishing Enrollment offers only Canceled and Unsubscribed.
 - **Picks**: an If that asks Jeremy shows its question and `1 <label>  2 <label>` on Tasks and on the Person page; `1` or `2` answers, and `z` undoes.
 - **Use when** (`w` on the Sequences list): a one-line "use when", shown in the list (wide), the side pane, and the enroll picker under each name.
-- **Needs edit**: a Draft from a Step whose text is still a brief shows `edit me` in the Drafts list; sending it says to change its text first.
+- **Needs edit**: an email Task's Draft whose text is still a brief Needs edit; sending it says to change its text first.
+- **Tasks page**: due Tasks under OVERDUE, DUE TODAY and LATER TODAY, then scheduled email Tasks under SCHEDULED with their send time (decision #146); the line under them reads `N due · M scheduled`.
 - **Today**: a yellow `paused · N` list after Drafts: Person, Sequence (with "finishing as …"), and when it paused; `r` resumes, `f` finishes, `enter` opens the Person. The rail count includes it; the pause toast points to it.
 - **Talent**: the Pipeline page shows only the board, with Stage names and counts and no rates, Constraint, Value, This week, Progress, or Weekly review; `y` copies `comms-terminal pipeline talent`.
 
