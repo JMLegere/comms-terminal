@@ -67,17 +67,20 @@ Feature: Sequences
     When Wake runs twice on Monday
     Then there is 1 Task and 1 Draft
 
-  @AS-T1 @AS-T9 @AS-T10 @FR-T5
-  Scenario: Today lists each Draft once, a Task's Draft only through its Task
+  @AS-T1 @AS-T9 @AS-T10 @FR-T5 @AS-UD-5 @FR-UD-8
+  Scenario: Today lists every Draft once, and a Thread or Task with a Draft through that Draft
     Given "Dana Roy" is enrolled in "Secret Sequence" on Monday
     And Save Reply Draft keeps Body "Thanks" on the Thread "Hello"
     And Save Draft keeps a new email Draft with Body "Hi there"
-    Then Today on Monday lists 1 Todo Thread, 1 Due Task, and Drafts with Body:
+    Then Today on Monday lists 0 Todo Threads, 0 Due Tasks, and Drafts with Body:
       | Body     |
+      | Hi Dana  |
       | Hi there |
+      | Thanks   |
     When Act snoozes the Thread "Hello" until Wednesday
-    Then Today on Monday lists 0 Todo Threads, 1 Due Task, and Drafts with Body:
+    Then Today on Monday lists 0 Todo Threads, 0 Due Tasks, and Drafts with Body:
       | Body     |
+      | Hi Dana  |
       | Hi there |
       | Thanks   |
 

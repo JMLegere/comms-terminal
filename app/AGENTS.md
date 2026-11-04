@@ -21,6 +21,9 @@ gpui-shell scripts, the way herdr-app does, on top of the Local core (`src/comms
   `comms-terminal-app shot` before calling it done. States to check: `docs/design/app.md` §5.
 - Every function the `comms` module exports must be declared in `defaults/comms.d.ts`; the runtime refuses a
   mismatch at start.
+- A view imports only files in its own directory (the shell refuses a path outside it). A file several views share
+  lives at `defaults/views/<file>.js` and `src/workspace.rs` DEFAULTS ships it beside each view that imports it, as
+  `composer.js` (the Composer) beside `thread`, `case` and `draft`; `tests/app_view_kit.mjs` resolves it the same way.
 - The host, never a script, decides a call's Origin. Shipped views run as `view`; anything in `panels/` runs
   as `panel`.
 - Keep idle CPU under 1% and Thread moves under 100 ms at p95: `comms-terminal-app probe 300 done`, and

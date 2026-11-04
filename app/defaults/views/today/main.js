@@ -5,6 +5,10 @@
 // the right pane (shared "detail" picks its view). A key acts on the row's own kind: r replies on a Thread and
 // resumes a Paused Enrollment; x ignores a Thread, skips a Task and deletes a Draft. Thread keys reach only a Thread
 // row: any other row clears the shared Thread, so a key never reaches a Thread that is not on screen (D87).
+// The drafts pane lists every Draft (FR-UD-8); a Reply Draft shows in place, as its Thread with the Composer open on
+// it (decision #144). After a send, schedule or delete the Draft below is selected, else the one above (FR-UD-7). A
+// selected row keeps its place while its Thread or Task moves to another pane, as when a reply typed on a Thread
+// makes it a Reply Draft; it takes its new place once the selection leaves it (FR-UD-9).
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, v_virtual_list, VirtualListScrollHandle } from "gpui-base";
 import { call, nextEvent, nextCommand, theme, shared, setShared, run, toast, focusMain } from "comms";
@@ -97,6 +101,32 @@ export function paneItems(data, cases) {
   return out;
 }
 
+/** The Thread and Task a row stands for, so a row that moved to another pane is known there (FR-UD-9). */
+export function idsOf(pane, r) {
+  if (!r) return [];
+  if (pane === "threads") return [`t${r.id}`];
+  if (pane === "tasks") return [`k${r.id}`];
+  if (pane === "drafts") return [r.thread_id && `t${r.thread_id}`, r.task_id && `k${r.task_id}`].filter(Boolean);
+  return [];
+}
+
+/** `held` ({ item, index }), the selected row, kept where it was while its Thread or Task shows in another pane:
+ * that pane's row for it is left out until the selection leaves (FR-UD-9). */
+export function holdPlace(panes, held) {
+  const { item, index } = held ?? {};
+  if (!item || panes[item.pane].some((it) => it.key === item.key)) return panes;
+  const ids = idsOf(item.pane, item.row);
+  let moved = false;
+  for (const k of PANES) {
+    if (k === item.pane) continue;
+    const kept = panes[k].filter((it) => !idsOf(k, it.row).some((x) => ids.includes(x)));
+    moved ||= kept.length !== panes[k].length;
+    panes[k] = kept;
+  }
+  if (moved) panes[item.pane].splice(Math.min(index, panes[item.pane].length), 0, item);
+  return panes;
+}
+
 function keyOf(pane, it, i) {
   if (it.row) return `${pane}-${it.row.id}`;
   if (it.caseHeader) return `${pane}-case-${it.caseHeader.under ?? ""}-${it.caseHeader.id}`; // one Case may head rows under two Statuses
@@ -120,7 +150,7 @@ export default class Today extends View {
   }
 
   panes() {
-    return paneItems(this.data, this.cases);
+    return holdPlace(paneItems(this.data, this.cases), this.held);
   }
 
   /** The rows the cursor visits, pane after pane. */
@@ -132,10 +162,15 @@ export default class Today extends View {
   load(cx) {
     cx.spawn(async (cx) => {
       try {
-        const keep = this.advanced() ?? this.rows()[this.at]?.key;
+        const here = this.rows()[this.at], moved = this.advanced();
+        const keep = moved ?? here?.key;
+        const index = here ? this.panes()[here.kind].findIndex((it) => it.key === here.key) : -1;
         const [data, cases] = await Promise.all([call("today.page"), call("cases.list").catch(() => [])]);
         this.data = data;
         this.cases = Object.fromEntries((cases ?? []).map((c) => [c.id, c]));
+        // FR-UD-9: the selected row is held where it is; panes() places it there only while its Thread or Task
+        // shows in another pane. An action that moves on (advance) holds nothing.
+        this.held = !moved && here?.row ? { item: { pane: here.pane, key: here.key, row: here.row, depth: here.depth, pick: true }, index } : null;
         const rows = this.rows();
         const again = rows.findIndex((x) => x.key === keep);
         const first = Math.max(0, rows.findIndex((x) => x.r)); // on arrival: the first Thread, not its header
@@ -161,10 +196,13 @@ export default class Today extends View {
    * Thread below the cursor, else the one above, so the cursor moves on as after Done (D32). Read once, at reload. */
   advanced() {
     const a = shared("advance"), rows = this.rows(), here = rows[this.at];
-    if (!a || Date.now() - a.at > 5000 || shared("page") !== "today" || here?.kind !== "threads" || here.r?.id !== a.thread) return null;
+    if (!a || Date.now() - a.at > 5000 || shared("page") !== "today" || !here?.r) return null;
+    // s on a Thread (D32), or a send, schedule or delete of a Draft (FR-UD-7): the next of its kind, else the one above.
+    const kind = here.kind === "threads" && here.r.id === a.thread ? "threads" : here.kind === "drafts" && here.r.id === a.draft ? "drafts" : null;
+    if (!kind) return null;
     setShared("advance", null);
-    const thread = (x) => x.kind === "threads" && x.r;
-    return (rows.slice(this.at + 1).find(thread) ?? rows.slice(0, this.at).reverse().find(thread))?.key ?? null;
+    const same = (x) => x.kind === kind && x.r;
+    return (rows.slice(this.at + 1).find(same) ?? rows.slice(0, this.at).reverse().find(same))?.key ?? null;
   }
 
   /** tab: the first row of the next pane that has one, round to the first. */
@@ -178,15 +216,21 @@ export default class Today extends View {
   }
 
   select(cx) {
-    const row = this.rows()[this.at];
+    let row = this.rows()[this.at];
+    if (this.held && row?.key !== this.held.item.key) { // FR-UD-9: the selection left the held row; it takes its new place
+      this.held = null;
+      this.at = Math.max(0, this.rows().findIndex((x) => x.key === row?.key));
+      row = this.rows()[this.at];
+    }
     if (!row || shared("page") !== "today") return;
     const r = row.r;
-    setShared("thread", row.kind === "threads" ? r?.id ?? null : null);
-    setShared("detail", DETAIL[row.kind]);
+    const inPlace = row.kind === "drafts" && Boolean(r?.thread_id); // a Reply Draft shows as its Thread (decision #144)
+    setShared("thread", row.kind === "threads" ? r?.id ?? null : inPlace ? r.thread_id : null);
+    setShared("detail", inPlace ? "thread" : DETAIL[row.kind]);
     if (row.kind === "threads") run("thread.show");
     setShared("task", row.kind === "tasks" ? r.id : null); // as the Thread: a Task off screen never acts or reloads (D87)
     if (row.kind === "tasks") { run("task.show"); run("tasks.show"); }
-    if (row.kind === "drafts") { setShared("draft", r.id); run("draft.show"); }
+    if (row.kind === "drafts") { setShared("draft", r.id); run(inPlace ? "thread.show" : "draft.show"); if (inPlace) run("thread.show_reply"); }
     if (row.kind === "paused") { setShared("person", r.person_id); setShared("side", { kind: "paused", id: r.person_id }); run("person.show"); run("side.show"); }
     if (row.kind === "unattended") {
       setShared("organization", { id: r.id, domain: r.domain });
@@ -220,8 +264,8 @@ export default class Today extends View {
         return;
       case "tasks": return run("task.open");
       case "drafts":
-        if (!r.thread_id) return run("draft.edit");
-        return cx.spawn(async () => openReply(r.thread_id).catch((e) => toast(String(e), "error")));
+        setShared("focus", "detail"); // the Draft's Composer takes the keyboard, where it is shown
+        return run(r.thread_id ? "thread.open_reply" : "draft.edit");
       case "paused": return push({ page: "person", person: r.person_id });
       case "unattended": return push({ page: "organization", organization: { id: r.id, domain: r.domain } });
     }
@@ -354,14 +398,4 @@ export default class Today extends View {
     }
     return root.children(shown.map(pane));
   }
-}
-
-/** A Reply Draft's Thread where it lives, selected, with its reply box open (the Console's open_reply). */
-async function openReply(threadId) {
-  const th = (await call("thread.view", { thread_id: threadId })).view.thread, v = th?.f ?? th;
-  const view = v.status_detail === "IGNORED" ? "ignored" : { TODO: "todo", SNOOZED: "snoozed", DONE: "done" }[v.status] ?? "todo";
-  setShared("thread", threadId);
-  run(`nav.${view}`);
-  run("thread.show");
-  run("thread.open_reply");
 }

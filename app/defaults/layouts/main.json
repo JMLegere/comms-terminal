@@ -83,6 +83,7 @@
                 "today": "thread",
                 "calendar": "day",
                 "drafts": "draft",
+                "drafts:thread": "thread",
                 "cases": "case",
                 "tasks": "task",
                 "sequences": "sequence",

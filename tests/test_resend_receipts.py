@@ -276,10 +276,12 @@ def test_pending_parent_refuses_before_sender_and_keeps_files_and_stored_identit
     parent = outbound(db)
     path = staged_file(db, thread_id=parent.id)
     sender = RecordingSender()
+    drafts = lambda dump: "\n".join(ln for ln in dump.splitlines() if not ln.startswith('INSERT INTO "composition_drafts"'))  # noqa: E731
     before = persisted(db)
     with pytest.raises(ValueError, match="confirmation pending"):
         inbox.reply(db, parent.id, "Keep this text", sender)
-    assert not hasattr(sender, "history") and persisted(db) == before
+    assert not hasattr(sender, "history") and drafts(persisted(db)) == drafts(before)
+    assert inbox.reply_draft(db, parent.id)["body"] == "Keep this text"  # the text stays as the Reply Draft
     message = inbox.thread_view(db, parent.id)["messages"][0]
     assert message["native_id"] == MARKER and message["wire_id"] is None and message["link"] is None
     assert inbox.staged(db, thread_id=parent.id) and path.read_bytes() == b"private attachment"

@@ -65,7 +65,10 @@ def test_reply_timeout_is_unknown_records_nothing_and_a_sent_reply_clears_last_e
     assert status == 504 and "outcome unknown" in out["error"]
     assert db.execute("SELECT count(*) FROM activities").fetchone()[0] == 1  # only the inbound message
     assert db.execute("SELECT last_error FROM connections WHERE id = 2").fetchone()[0].startswith("Send outcome unknown")
-    assert serve.handle_reply(db, body, serve.Senders(made={"2": Sender()}))[0] == 200
+    assert serve.handle_reply(db, body, serve.Senders(made={"2": Sender()}))[0] == 504  # the Reply Draft is locked
+    d = inbox.reply_draft(db, tid)
+    again = json.dumps({"draft_id": d["id"], "revision": d["revision"], "again": True}).encode()
+    assert serve.handle_send_draft(db, again, serve.Senders(made={"2": Sender()}))[0] == 200
     assert db.execute("SELECT last_error FROM connections WHERE id = 2").fetchone()[0] is None
 
 

@@ -130,10 +130,11 @@ def test_an_empty_today_says_all_clear_and_what_comes_next(tmp_path):
     assert seen["shown"] == [False, False, False, False, False]
 
 
-@pytest.mark.parametrize("kind", ["call", "email"])
+@pytest.mark.parametrize("kind", ["call", "linkedin"])
 def test_a_refresh_keeps_the_cursor_on_a_later_task(tmp_path, kind):
     """FR-T11: a rebuild keeps the selected Task. The rebuild's stale highlight of the group header must not step
-    the cursor back onto the first Task (2026-10-29: editing Evan's email Task jumped to Nic's call)."""
+    the cursor back onto the first Task (2026-10-29: editing an email Task jumped to a call). An email Task's
+    Draft now shows in the drafts list instead (decision #144)."""
     path, _ = seeded(tmp_path)
     db = inbox.connect(path)
     s = sq.create_sequence(db, "Touch")
@@ -260,7 +261,8 @@ def test_a_thread_with_a_saved_reply_draft_shows_a_pencil_before_its_title(tmp_p
     path, _ = seeded(tmp_path)
     db = inbox.connect(path)
     drafted, plain = [t["id"] for t in inbox.queue(db, "Todo")][:2]
-    inbox.save_reply_draft(db, drafted, "Thanks, more soon")
+    d = inbox.save_reply_draft(db, drafted, "Thanks, more soon")
+    inbox.mark_needs_edit(db, d["id"])  # not ready, so the Thread stays in Today's threads list (decision #144)
     seen = {}
 
     async def scenario(app, pilot):

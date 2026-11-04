@@ -41,6 +41,9 @@ def _integer_keys_sql() -> str:
 
 
 UNDO = {
+    35: """UPDATE staged_attachments SET thread_id = (
+  SELECT d.thread_id FROM composition_drafts d WHERE d.id = staged_attachments.draft_id), draft_id = NULL
+WHERE draft_id IN (SELECT id FROM composition_drafts WHERE thread_id IS NOT NULL);""",
     34: "DROP TABLE applied_mutations;",
     33: _integer_keys_sql(),
     32: "".join(f"DROP TRIGGER IF EXISTS changes_{t}_{e};" for t in re.findall(

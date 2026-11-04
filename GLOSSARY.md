@@ -16,15 +16,19 @@ _Avoid_: Deleted thread, Duplicate activity
 An unsent email, SMS, or Slack composition with its own Connection, recipients, subject and body; it sends as the Connection's own address, number, or Slack user. A Slack Draft has no subject and goes to one existing Slack Channel (a channel, DM, or group DM Jeremy is in) instead of recipients. A Draft is a Reply Draft or a New Thread Draft. A Draft is neither a Thread nor an Activity. Sending it removes it and records the message: an email Draft starts a new Thread unless it is a Reply Draft; an SMS or Slack Draft joins its Channel's Thread by the ordinary Thread rules, starting a new one only when the Channel has been quiet long enough.
 
 **Reply Draft**:
-A Draft that belongs to one Thread, at most one per Thread, and sends as a reply in it from the Thread's reply box. A Todo Thread with a ready Reply Draft shows the Status detail Reply Draft.
+A Draft that belongs to one Thread, at most one per Thread, and sends as a reply in it. It is written in the Composer, inline in its Thread, and saves and sends like any Draft. A Todo Thread with a ready Reply Draft shows the Status detail Reply Draft.
 _Avoid_: Reply box text, Response draft
 
 **New Thread Draft**:
-A Draft that belongs to no Thread: an email to new recipients, or an SMS or Slack message to a Channel. Sending an email one starts a new Thread; an SMS or Slack one joins its Channel's Thread by the ordinary Thread rules.
-_Avoid_: Compose, Outbound draft, Standalone draft
+A Draft that belongs to no Thread: an email to new recipients, or an SMS or Slack message to a Channel. It is written in the Composer. Sending an email one starts a new Thread; an SMS or Slack one joins its Channel's Thread by the ordinary Thread rules.
+_Avoid_: Compose (as the name of this kind), Outbound draft, Standalone draft
+
+**Composer**:
+The one editor for every Draft, of either kind and on every Platform, in the Console and the App. It has the same keys everywhere: ctrl+enter sends (or schedules), ctrl+s saves, ctrl+o attaches a file, esc closes and keeps the Draft. A Reply Draft's Composer opens inline in its Thread with Reply and Reply all and a fixed "Re:" Subject; a New Thread Draft's has a Connection and its own Subject. Every save is a new Draft revision, and every send sends the saved revision.
+_Avoid_: Reply box (for the editor as a whole), Draft editor
 
 **Send outcome unknown**:
-A send that was started but never confirmed or refused, so the message may or may not have gone out. A Draft stays locked until Jeremy marks it sent, which removes it without making a Thread, or explicitly sends it again. A reply has no lock: nothing is recorded, its text and staged files stay, and Jeremy checks the Thread before sending again.
+A send that was started but never confirmed or refused, so the message may or may not have gone out. The Draft, a Reply Draft included, stays locked until Jeremy marks it sent, which removes it without recording a message, or explicitly sends it again. Nothing is recorded, and its text and staged files stay.
 _Avoid_: Failed send, Pending
 
 **Needs edit**:
@@ -71,7 +75,7 @@ Connected, missed, voicemail, or no answer. Missed and voicemail are incoming on
 A later record appended to a Phone call, holding Quo's transcript of the conversation or the voicemail. It never changes the Thread's Status.
 
 **Attachment**:
-A file that arrives or is sent with a message, or is added to a Draft to go with it, listed beside the message rather than placed in its body. A reply Draft's Attachments are its Thread's reply Attachments. A Slack file or an SMS photo is an Attachment.
+A file that arrives or is sent with a message, or is added to a Draft to go with it, listed beside the message rather than placed in its body. A file added for a Thread's reply belongs to its Reply Draft, as a New Thread Draft's belong to it. A Slack file or an SMS photo is an Attachment.
 _Avoid_: File (alone), Part, Upload
 
 **Inline image**:

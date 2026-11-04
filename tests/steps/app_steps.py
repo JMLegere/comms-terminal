@@ -226,16 +226,17 @@ def empty_app_reply_draft(app, field):
     app.empty_draft_field = field
 
 
+def composer_view(case):
+    """tests/app_composer_view.mjs: the Composer and the Draft review list (unified Drafts PRD)."""
+    script = Path(__file__).resolve().parents[1] / "app_composer_view.mjs"
+    result = subprocess.run(["node", "--experimental-vm-modules", str(script), case],
+                            capture_output=True, text=True, timeout=10, check=True)
+    return json.loads(result.stdout)
+
+
 @when("Jeremy presses Ctrl Enter and chooses Send now in the Draft editor")
 def send_in_app_draft_editor(app):
-    if app.draft_kind == "Reply Draft":  # a Reply Draft sends from its Thread's reply box (D69)
-        app.draft_send = phase4_view(f"reply:{getattr(app, 'empty_draft_field', '')}")
-        return
-    script = Path(__file__).resolve().parents[1] / "app_draft_view.mjs"
-    result = subprocess.run(["node", "--experimental-vm-modules", str(script), app.draft_kind,
-                             getattr(app, "empty_draft_field", "")],
-                            capture_output=True, text=True, timeout=10, check=True)
-    app.draft_send = json.loads(result.stdout)
+    app.draft_send = composer_view(f"send:{app.draft_kind}:{getattr(app, 'empty_draft_field', '')}")
 
 
 @then(parsers.parse('the App calls "{method}" with the edited Draft contents'))
@@ -243,11 +244,11 @@ def app_uses_draft_send_path(app, method):
     calls = app.draft_send["calls"]
     sends = [c for c in calls if c["method"] in {"send.reply", "send.draft"}]
     assert len(sends) == 1 and sends[0]["method"] == method, sends
-    if method == "send.reply":
-        assert sends[0]["params"] == {
-            "thread_id": "thread-1", "text": "Edited text",
-            "to": ["ana@example.test", "ben@example.test"], "cc": ["copy@example.test"],
-        }
+    if app.draft_kind == "Reply Draft":  # saved as the Thread's Reply Draft revision, then that revision sends
+        assert calls[0] == {"method": "command.inbox.save_reply_draft", "params": {
+            "thread_id": "thread-1", "body": "Edited text", "expected_revision": 1,
+            "to": "ana@example.test, ben@example.test", "cc": "copy@example.test"}}
+        assert sends[0]["params"] == {"draft_id": "draft-1", "revision": 2, "again": False}
         return
     assert app.draft_send["saved"] == {
         "connection_id": "connection-1", "kind": "email", "sender": "me@example.test",
@@ -255,7 +256,7 @@ def app_uses_draft_send_path(app, method):
         "subject": "Edited subject", "body": "Edited text",
     }
     assert calls[0]["method"] == "command.inbox.save_draft"
-    assert sends[0]["params"] == {"draft_id": "draft-1", "revision": 2, "again": False}
+    assert sends[0]["params"] == {"draft_id": "draft-2", "revision": 2, "again": False}
 
 
 @then(parsers.parse('the App refuses the send with "{error}"'))
@@ -716,26 +717,154 @@ def drafts_words(app, a, b, c):
     assert app.phase4["words"] == [a, b, c, "\U000f0150 Tue", "\U000f0150 Fri"]
 
 
-@given("a Reply Draft selected in the App's Drafts list")
-def reply_draft_selected(app):
+@given("a Reply Draft and a New Thread Draft in the App's Drafts list and Today's drafts pane")
+def reply_and_new_draft_listed(app):
     pass
 
 
-@when("Jeremy presses Enter on it")
-def press_enter_on_reply_draft(app):
-    app.phase4 = phase4_view("d69")
+@when("Jeremy selects each")
+def select_each_draft(app):
+    app.ud = composer_view("inplace")
 
 
-@then("its Thread opens in its Status view with the reply box open")
-def reply_box_opened(app):
-    assert app.phase4["ran"] == ["nav.snoozed", "thread.show", "thread.open_reply"]
-    assert app.phase4["thread"] == "thread-9"
-    assert app.phase4["opened"] == "all"
+@then("the Reply Draft shows as its Thread with the Composer open on it, on the same page, the keyboard left in the list")
+def reply_draft_in_place(app):
+    shown = {"detail": "thread", "thread": "thread-1", "ran": ["thread.show", "thread.show_reply"]}
+    assert app.ud["drafts_reply"] == {"page": "drafts", **shown}
+    assert app.ud["today_reply"] == {"page": "today", "draft": "draft-1", **shown}
+    assert app.ud["thread"] == {"open": "thread-1", "body": "Old text", "focused": 0}
 
 
-@then("Ctrl Enter in the Draft pane sends nothing")
-def reply_draft_pane_inert(app):
-    assert app.phase4["pane_calls"] == []
+@then("the New Thread Draft shows in the Draft view")
+def new_thread_draft_in_draft_view(app):
+    assert app.ud["drafts_new"] == {"detail": None, "ran": ["draft.show"]}
+
+
+@then("Enter gives the Reply Draft's Composer the keyboard, and Ctrl Enter from the list goes to that Composer")
+def enter_focuses_composer(app):
+    assert app.ud["today_enter"] == ["thread.open_reply"] and app.ud["enter_focused"] == 1
+    assert app.ud["list_send"] == ["thread.send"]
+
+
+@given("an App Composer on a Reply Draft and one on a New Thread Draft")
+def composer_on_both(app):
+    pass
+
+
+@when("Jeremy presses ctrl+enter, ctrl+s, esc and ctrl+o in each")
+def composer_keys(app):
+    app.ud = composer_view("keys")
+
+
+@then("each key does the same in both: send, save, close and attach")
+def composer_same_keys(app):
+    keys = {"ctrl-enter": "send", "ctrl-s": "save", "escape": "close", "ctrl-o": "app.attach"}
+    assert app.ud["reply"]["keys"] == keys and app.ud["new"]["keys"] == keys
+    assert app.ud["reply"]["editor"] == app.ud["new"]["editor"] == "Composer"
+
+
+@then(parsers.parse('the Reply Draft shows Reply, Reply all and its "Re:" subject, the New Thread Draft its Connection and Subject'))
+def composer_fields_by_kind(app):
+    reply, new = app.ud["reply"]["fields"], app.ud["new"]["fields"]
+    assert any(f.endswith(" reply") for f in reply) and any(f.endswith(" reply all") for f in reply), reply
+    assert "Re: Plans" in reply and "Conn." not in reply
+    assert new == ["Conn.", "To", "Cc", "Subject"]
+
+
+@then("esc on the Reply Draft saves its text and keeps the Draft")
+def composer_esc_keeps(app):
+    assert app.ud["esc"] == {"open": False, "calls": [["command.inbox.save_reply_draft", "Kept words"]]}
+
+
+@given("an App Composer on a Slack New Thread Draft and one on an SMS Reply Draft")
+def composer_slack_sms(app):
+    pass
+
+
+@when("the Composer shows them")
+def composer_shows_slack_sms(app):
+    app.ud = composer_view("fields")
+
+
+@then("each shows its destination, and neither shows a Cc or a Subject")
+def composer_destination_only(app):
+    assert app.ud["slack"] == {"to": True, "labels": ["Conn.", "To"]}
+    assert app.ud["sms"] == {"labels": ["To"], "where": "+1 555 0100 · in thread"}
+
+
+@given("an App Composer on a Reply Draft")
+def composer_on_reply(app):
+    pass
+
+
+@when("Jeremy sends it and the answer is lost")
+def composer_send_lost(app):
+    app.ud = composer_view("unknown")
+
+
+@then("the Composer says the send failed and, once the Draft reloads locked, ignores typing")
+def composer_locked(app):
+    assert app.ud["said"].startswith("Not sent · ")
+    assert app.ud["locked"] == {"body": "Old text", "unsaved": False}
+
+
+@then("Ctrl Enter offers Keep locked, Send again anyway and Mark as sent, and Send again sends the revision with again")
+def composer_send_again(app):
+    assert app.ud["menu"] == {"title": "Send outcome unknown", "options": ["keep", "again", "sent"]}
+    assert app.ud["again"] == [{"draft_id": "draft-1", "revision": 1, "again": True}]
+
+
+@given("App Drafts that are a Reply Draft, a New Thread Draft, an email Task's Draft, a failed send and scheduled ones")
+def every_kind_of_draft(app):
+    pass
+
+
+@when("the Drafts page and Today's drafts pane list them")
+def both_lists(app):
+    app.ud = composer_view("order")
+
+
+@then("both list them in the same order: failed sends, then unsent, then scheduled by send time")
+def one_order(app):
+    assert app.ud["drafts"] == app.ud["today"] == ["failed", "reply", "new", "task", "soon", "later"]
+
+
+@given("three Drafts in the App's Drafts list and in Today's drafts pane")
+def three_drafts(app):
+    pass
+
+
+@when("Jeremy sends, schedules and deletes them in turn")
+def act_on_drafts(app):
+    app.ud = composer_view("next") | composer_view("today-next")
+
+
+@then("the Draft below is selected after each, and the one above after the last one")
+def next_draft_selected(app):
+    assert app.ud == {"sent": "c", "scheduled": "c", "deleted_last": "c", "after_middle": "drafts-c", "after_last": "drafts-a"}
+
+
+@given("Today in the App with two Threads, the first selected")
+def today_two_threads(app):
+    pass
+
+
+@when("Jeremy's typed reply is saved as its Reply Draft and Today reloads, twice")
+def reply_saved_on_today(app):
+    app.ud = composer_view("keep")
+
+
+@then("the Thread stays selected in the threads pane and its Reply Draft is not in the drafts pane")
+def thread_keeps_place(app):
+    assert app.ud["typing"]["selected"] == app.ud["again"] == "threads-t1"
+    assert app.ud["typing"]["thread"] == "t1"
+    assert app.ud["typing"]["panes"]["threads"] == ["threads-t1", "threads-t2"] and app.ud["typing"]["panes"]["drafts"] == []
+
+
+@then("once the selection moves to the next Thread, the Reply Draft is in the drafts pane and the Thread is not")
+def thread_takes_new_place(app):
+    assert app.ud["left"]["selected"] == "threads-t2"
+    assert app.ud["left"]["panes"]["threads"] == ["threads-t2"] and app.ud["left"]["panes"]["drafts"] == ["drafts-d9"]
 
 
 @given("a New Thread Draft in the App with no subject")
@@ -958,8 +1087,8 @@ def select_reply_draft_then_change(app):
 @then("the pane keeps the Reply Draft he selected")
 def pane_keeps_reply_draft(app):
     assert app.phase5["shown"] == ["d-task", "draft"]
-    assert app.phase5["selected"] == ["d-reply", "draft", None]
-    assert app.phase5["after"] == ["d-reply", "draft"]
+    assert app.phase5["selected"] == ["d-reply", "thread", None]  # a Reply Draft shows in its Thread (decision #144)
+    assert app.phase5["after"] == ["d-reply", "thread"]
 
 
 @given("two due Tasks in the App with the first selected")

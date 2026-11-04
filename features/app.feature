@@ -102,16 +102,16 @@ Feature: App
     Given the Console's key bindings
     Then each one maps to a key in the App's default "keys.json" or is listed with a reason
 
-  @AS-APP-11 @FR-APP-6
-  Scenario Outline: Ctrl Enter in the App uses the right send path for a Draft
+  @AS-APP-11 @FR-APP-6 @AS-UD-3 @FR-UD-2 @FR-UD-3
+  Scenario Outline: Ctrl Enter in the App saves the Draft, then sends its saved revision
     Given an App Draft editor containing a "<kind>" with edited text and recipients
     When Jeremy presses Ctrl Enter and chooses Send now in the Draft editor
     Then the App calls "<method>" with the edited Draft contents
 
-    # A Reply Draft edits and sends in its Thread's reply box (D69).
+    # Every Draft sends through send.draft (decision #144); a Reply Draft is saved with save_reply_draft first.
     Examples:
       | kind             | method     |
-      | Reply Draft      | send.reply |
+      | Reply Draft      | send.draft |
       | New Thread Draft | send.draft |
 
   @AS-APP-11 @FR-APP-6
@@ -237,12 +237,13 @@ Feature: App
     Then failed sends come first, then unsent, then scheduled by send time
     And their status words read "failed", "saved", "edit me" and the weekday they send
 
-  @AS-CONF-12 @FR-CONF-10
-  Scenario: Enter on a Reply Draft opens its Thread's reply box
-    Given a Reply Draft selected in the App's Drafts list
-    When Jeremy presses Enter on it
-    Then its Thread opens in its Status view with the reply box open
-    And Ctrl Enter in the Draft pane sends nothing
+  @AS-UD-6 @FR-UD-6
+  Scenario: Selecting a Reply Draft in a list shows its Thread with the Composer open, with no page change
+    Given a Reply Draft and a New Thread Draft in the App's Drafts list and Today's drafts pane
+    When Jeremy selects each
+    Then the Reply Draft shows as its Thread with the Composer open on it, on the same page, the keyboard left in the list
+    And the New Thread Draft shows in the Draft view
+    And Enter gives the Reply Draft's Composer the keyboard, and Ctrl Enter from the list goes to that Composer
 
   @AS-CONF-12 @FR-CONF-10
   Scenario: Ctrl Enter refuses an incomplete Draft before the send menu
@@ -347,3 +348,42 @@ Feature: App
     Then the Paused one resumes at once, f asks "Which Enrollment?", and a Finishing one offers only Canceled and Unsubscribed
     And finishing can be undone with z
 
+  @AS-UD-1 @FR-UD-1
+  Scenario: A Reply Draft and a New Thread Draft open in the same Composer, with the same keys
+    Given an App Composer on a Reply Draft and one on a New Thread Draft
+    When Jeremy presses ctrl+enter, ctrl+s, esc and ctrl+o in each
+    Then each key does the same in both: send, save, close and attach
+    And the Reply Draft shows Reply, Reply all and its "Re:" subject, the New Thread Draft its Connection and Subject
+    And esc on the Reply Draft saves its text and keeps the Draft
+
+  @AS-UD-9 @FR-UD-1
+  Scenario: A Slack and an SMS Draft open in the Composer with their destination and no Subject
+    Given an App Composer on a Slack New Thread Draft and one on an SMS Reply Draft
+    When the Composer shows them
+    Then each shows its destination, and neither shows a Cc or a Subject
+
+  @AS-UD-3 @FR-UD-3
+  Scenario: In the App, a Reply Draft whose send answer was lost locks, and Send again sends it with again
+    Given an App Composer on a Reply Draft
+    When Jeremy sends it and the answer is lost
+    Then the Composer says the send failed and, once the Draft reloads locked, ignores typing
+    And Ctrl Enter offers Keep locked, Send again anyway and Mark as sent, and Send again sends the revision with again
+
+  @AS-UD-5 @FR-UD-5 @FR-UD-8
+  Scenario: The Drafts page and Today's drafts pane list every kind of Draft in one order
+    Given App Drafts that are a Reply Draft, a New Thread Draft, an email Task's Draft, a failed send and scheduled ones
+    When the Drafts page and Today's drafts pane list them
+    Then both list them in the same order: failed sends, then unsent, then scheduled by send time
+
+  @AS-UD-7 @FR-UD-7
+  Scenario: Send, schedule or delete selects the next Draft, and on the last one the one above
+    Given three Drafts in the App's Drafts list and in Today's drafts pane
+    When Jeremy sends, schedules and deletes them in turn
+    Then the Draft below is selected after each, and the one above after the last one
+
+  @AS-UD-8 @FR-UD-8 @FR-UD-9
+  Scenario: A reply typed on a Thread selected in Today's threads pane keeps it in place
+    Given Today in the App with two Threads, the first selected
+    When Jeremy's typed reply is saved as its Reply Draft and Today reloads, twice
+    Then the Thread stays selected in the threads pane and its Reply Draft is not in the drafts pane
+    And once the selection moves to the next Thread, the Reply Draft is in the drafts pane and the Thread is not

@@ -1,8 +1,10 @@
-// Drafts, as the Console's DraftsPage: failed scheduled sends first, then unsent, then scheduled by send time; one
-// row each (kind, To as names, Subject with "Reply Draft · " before a reply's, status). j/k move and the Draft fills
-// the right pane (the draft view); n starts a New Thread Draft; x deletes (z undoes); y copies it for an agent;
-// Enter edits a New Thread Draft and opens a Reply Draft's Thread with its reply box (D69); ctrl+s, ctrl+enter
-// save and send from the list too (D78).
+// Drafts, as the Console's DraftsPage: the one Draft review list (FR-UD-5) of every Draft, failed scheduled sends
+// first, then unsent, then scheduled by send time; one row each (kind, To as names, Subject with "Reply Draft · "
+// before a reply's, status). j/k move and the Draft fills the right pane in place (decision #144, FR-UD-6): a New
+// Thread Draft in the draft view with its history, a Reply Draft as its Thread with the Composer open on it. n starts
+// a New Thread Draft; x deletes (z undoes); y copies it for an agent; Enter gives the Draft's Composer the keyboard;
+// ctrl+s, ctrl+enter save and send from the list too (D78). After a send, schedule or delete the Draft below is
+// selected, else the one above (FR-UD-7).
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, v_virtual_list, VirtualListScrollHandle } from "gpui-base";
 import { call, nextEvent, nextCommand, theme, shared, setShared, run, toast, focusMain } from "comms";
@@ -26,14 +28,32 @@ export function status(d, unsaved) {
   return ["saved", "muted"];
 }
 
-/** Opens a Reply Draft's Thread where it lives, selected, with its reply box open (the Console's open_reply). */
-export async function openReply(threadId) {
-  const th = (await call("thread.view", { thread_id: threadId })).view.thread, v = th?.f ?? th;
-  const view = v.status_detail === "IGNORED" ? "ignored" : { TODO: "todo", SNOOZED: "snoozed", DONE: "done" }[v.status] ?? "todo";
-  setShared("thread", threadId);
-  run(`nav.${view}`);
-  run("thread.show");
-  run("thread.open_reply");
+/** Shows a Draft in the right pane in place (FR-UD-6): a Reply Draft as its Thread, with the Composer open on it
+ * but the keyboard left in the list; a New Thread Draft in the draft view. */
+export function showDraft(d) {
+  if (d?.thread_id) {
+    setShared("detail", "thread");
+    setShared("thread", d.thread_id);
+    run("thread.show");
+    run("thread.show_reply");
+  } else {
+    setShared("detail", null);
+    run("draft.show");
+  }
+}
+
+/** The Draft to select once `id` leaves after an action (FR-UD-7): the one below it, else the one above. */
+export function nextDraft(rows, id) {
+  const at = rows.findIndex((r) => r.id === id);
+  return at < 0 ? null : (rows[at + 1] ?? rows[at - 1])?.id ?? null;
+}
+
+/** An action on `id` just began (shared "advance", set before its write): read once, at the next reload. */
+export function advancing(id) {
+  const a = shared("advance");
+  if (!a?.draft || a.draft !== id || Date.now() - a.at > 5000) return false;
+  setShared("advance", null);
+  return true;
 }
 
 // The one undo (nav owns z), as thread/main.js offerUndo.
@@ -52,14 +72,20 @@ export default class Drafts extends View {
     });
   }
 
-  load(cx) {
+  /** `arrive`: the page just opened, so the right pane shows the selected Draft again. */
+  load(cx, arrive) {
+    const here = shared("draft");
+    const next = shared("page") === "drafts" && advancing(here) ? nextDraft(this.rows, here) : null;
     cx.spawn(async (cx) => {
       try {
-        const was = this.rows.findIndex((r) => r.id === shared("draft"));
+        const was = this.rows.findIndex((r) => r.id === here);
         this.rows = ordered(await call("drafts.list"));
         this.error = null;
-        if (shared("page") === "drafts" && !this.rows.some((r) => r.id === shared("draft")))
+        if (shared("page") !== "drafts") return;
+        if (next && this.rows.some((r) => r.id === next)) this.select(next);
+        else if (!this.rows.some((r) => r.id === shared("draft")))
           this.select(this.rows[Math.max(0, Math.min(was, this.rows.length - 1))]?.id ?? null);
+        else if (arrive) this.select(shared("draft"));
       } catch (e) {
         this.error = String(e);
       }
@@ -69,7 +95,7 @@ export default class Drafts extends View {
 
   select(id) {
     setShared("draft", id);
-    run("draft.show");
+    showDraft(this.rows.find((r) => r.id === id));
     const at = this.rows.findIndex((r) => r.id === id);
     if (at >= 0) this.scroll.scroll_to_item(at, "center");
     this.target();
@@ -82,7 +108,7 @@ export default class Drafts extends View {
     if (!d) return;
     const title = (d.subject || d.body || "New draft").replace(/\r?\n/g, " ");
     setShared("target", { col: "list", label: `${d.thread_id ? "Reply Draft" : "Draft"} · ${title}`,
-      keys: [["enter", d.thread_id ? "open Thread" : "edit"], ["n", "new"], ["x", "delete"], ["y", "copy"]] });
+      keys: [["enter", "edit"], ["n", "new"], ["x", "delete"], ["y", "copy"]] });
   }
 
   command(c, cx) {
@@ -92,7 +118,7 @@ export default class Drafts extends View {
     const i = this.rows.findIndex((r) => r.id === shared("draft"));
     const id = shared("draft");
     switch (name) {
-      case "show": return this.load(cx);
+      case "show": return this.load(cx, true);
       case "focus_entry": return this.target();
       case "next": case "prev": {
         const row = this.rows[Math.max(0, Math.min(this.rows.length - 1, i + (name === "next" ? 1 : -1)))];
@@ -101,8 +127,8 @@ export default class Drafts extends View {
       case "enter": {
         const d = this.rows[i];
         if (!d) return;
-        if (d.thread_id) return cx.spawn(async () => openReply(d.thread_id).catch((e) => toast(String(e), "error")));
-        return run("draft.edit");
+        setShared("focus", "detail"); // the Draft's Composer takes the keyboard, where it is shown
+        return run(d.thread_id ? "thread.open_reply" : "draft.edit");
       }
       case "new":
         return cx.spawn(async () => {
@@ -128,11 +154,13 @@ export default class Drafts extends View {
         });
       case "delete": // as the Console: delete, then z undo restores it
         if (!id) return;
+        setShared("advance", { draft: id, at: Date.now() }); // the Draft below takes its place (FR-UD-7)
         return cx.spawn(async () => {
           try {
             const draft = await call("command.inbox.delete_draft", { draft_id: id });
             offerUndo("Draft deleted.", [["inbox.restore_draft", { draft }]]);
           } catch (e) {
+            setShared("advance", null);
             toast("Draft not deleted · delete failed.", "error");
           }
         });

@@ -1,13 +1,15 @@
-// The selected Thread, as the Console's ThreadView (ADR 0014): conversation and reply box on the left, properties,
+// The selected Thread, as the Console's ThreadView (ADR 0014): conversation and the Composer on its Reply Draft
+// (composer.js) on the left, properties,
 // related Threads and Context sources on the right. Messages collapse Gmail-style; Status and Case changes sit
 // between them. An email with an HTML part shows it through MessageBody (litehtml; nothing is fetched until
-// "Load images"); other messages show their text. Attachments and links open with one click; files dropped on the window go on this Thread's reply.
+// "Load images"); other messages show their text. Attachments and links open with one click; files dropped on the window go on this Thread's Reply Draft.
 // Every Thread key of the Console lands here as a command (keys.json: "thread.done", …), whichever page shows the
 // Thread: Done, Snooze, Ignore, Status, Case, block, Person, link, copy, forward, react, Respond, reply and undo.
 import { View, div, svg } from "gpui-kit";
-import { v_flex, h_flex, InputState, Input, TextareaState, Textarea } from "gpui-base";
+import { v_flex, h_flex } from "gpui-base";
 import { MessageBody } from "gpui-component";
 import { call, nextEvent, nextCommand, theme, shared, setShared, mark, open, run, focusMain, toast } from "comms";
+import { Composer } from "./composer.js";
 
 // Status detail: Nerd Font glyph (icons.py), colour token, label (inbox.DETAIL_LABEL).
 const GLYPH = {
@@ -152,19 +154,9 @@ export default class Thread extends View {
   init(_props, cx) {
     this.view = null;
     this.bodies = {}; // message id -> { html, remote, loaded } from message.body
-    this.reply = null; // { thread, mode, envelope } while the reply box is open
-    this.text = TextareaState.new({ placeholder: "Write a reply…", rows: 6 });
-    this.text.set_auto_grow(4, 16);
-    this.to = InputState.new({ placeholder: "recipients, comma-separated" });
-    this.cc = InputState.new({ placeholder: "optional" });
-    this.text.on("change", (_e, cx) => this.autosave(cx));
-    // Typing (element focus): while a reply field has the keyboard, the bar says so and how to leave.
-    for (const [f, name] of [[this.text, "reply"], [this.to, "To"], [this.cc, "Cc"]]) {
-      f.on("focus", () => setShared("typing", name));
-      f.on("blur", () => { if (shared("typing") === name) setShared("typing", null); });
-    }
-    this.to.on("change", (_e, cx) => this.complete("to", cx));
-    this.cc.on("change", (_e, cx) => this.complete("cc", cx));
+    // The Composer on this Thread's Reply Draft (FR-UD-1); its `reply` is set while it is open.
+    this.composer = new Composer("thread", { placeholder: "Write a reply…", rows: 6, grow: [4, 16], bodyName: "reply",
+      command: (c, cx) => this.command(c, cx), done: (cx) => cx.notify() });
     this.load(cx);
     cx.spawn(async (cx) => {
       while (true) if ((await nextEvent()).kind === "rows") this.load(cx);
@@ -181,7 +173,7 @@ export default class Thread extends View {
   load(cx) {
     const id = this.id();
     if (this.ms?.id !== id) this.leaveProps(); // another Thread: its properties are not focused
-    if (this.reply && this.reply.thread !== id) this.close(cx);
+    if (this.composer?.reply && this.composer.reply.thread !== id) this.composer.close(cx); // another Thread: saved, quietly
     if (!id) {
       this.view = null;
       this.loaded = null; // the next Thread shown, even this one again, opens afresh
@@ -198,16 +190,18 @@ export default class Thread extends View {
         this.cases = answer.cases ?? [];
         this.drafts = answer.drafts ?? [];
         this.error = null;
+        const r = this.composer?.reply;
+        if (r?.thread === id) this.composer.refresh(this.draftFor(r.key), this.staged);
         if (this.loaded !== id) {
           this.loaded = id; this.extrasFor = null; this.related = null; this.ctx = {}; this.reactions = {};
           this.pinUntil = Date.now() + PIN_MS; // a Thread opens at its newest entries, as the Console's
           cx.timer.after(60, () => this.pin(id));
         }
         if (this.wantReply && this.wantReply !== id) this.wantReply = this.wantMode = null; // moved on before it loaded
-        if (this.wantReply === id) { // Drafts' Enter (D69), or r/a pressed before the Thread loaded
-          const mode = this.wantMode ?? "all";
-          this.wantReply = this.wantMode = null;
-          this.open(mode, cx);
+        if (this.wantReply === id) { // a list's Reply Draft (decision #144), or r/a pressed before the Thread loaded
+          const mode = this.wantMode ?? "all", focus = this.wantFocus ?? true;
+          this.wantReply = this.wantMode = this.wantFocus = null;
+          this.open(mode, cx, focus);
         }
         // Bodies and the Service lookups (Context sources, related Threads, reactions) wait until the selection
         // rests, so holding j or k never queues them.
@@ -367,15 +361,10 @@ export default class Thread extends View {
         });
       case "reply_all": case "reply_sender":
         return this.open(name === "reply_sender" ? "sender" : "all", cx);
-      case "open_reply": { // a Reply Draft's Thread, from Drafts or Today: its reply box opens once it has loaded
-        const id = this.id();
-        if ((this.view?.thread?.f ?? this.view?.thread)?.id === id && this.loaded === id) return this.open("all", cx);
-        this.wantReply = id;
-        return;
-      }
-      case "send": return this.send(cx);
-      case "send-picked": return this.sendPicked(answer.value, cx);
-      case "save": return this.save(cx, "Saved.");
+      // A Reply Draft from a list (decision #144, FR-UD-6): show_reply opens the Composer on it where Jeremy reviews
+      // it; open_reply (Enter) also gives it the keyboard. Either waits for the Thread to load.
+      case "open_reply": case "show_reply": return this.open("all", cx, name === "open_reply");
+      case "send": case "save": case "send-picked": case "unknown-picked": return this.composer.command(name, answer, cx);
       case "close": return this.close(cx);
       case "expand_all": case "collapse_all": { // ; and :, as the Console's expand_all
         const st = this.msgState();
@@ -394,7 +383,7 @@ export default class Thread extends View {
         setShared("subcol", "props");
         return this.linkTarget(cx);
       case "left": { this.leaveProps(); const st = this.msgState(); return this.focusMsg(st.mi ?? -1, cx); }
-      case "tab": return this.open("all", cx); // the next section down: the reply box
+      case "tab": return this.open("all", cx); // the next section down: the Composer
       case "next": case "prev": if (this.inProps) {
         this.pi = Math.max(0, Math.min((this.links?.length ?? 1) - 1, (this.pi ?? 0) + (name === "next" ? 1 : -1)));
         return this.linkTarget(cx);
@@ -546,112 +535,51 @@ export default class Thread extends View {
     }
   }
 
-  // --- the reply box ---
+  // --- the Composer on this Thread's Reply Draft ---
 
-  open(mode, cx) {
+  /** The Reply Draft saved under Thread id `key` (this Thread's own, or a merged alias's). */
+  draftFor(key) {
+    return key === this.id() ? this.replyDraft ?? null : (this.drafts ?? []).find((d) => d.thread_id === key) ?? null;
+  }
+
+  /** Opens the Composer on the Thread's Reply Draft; `focus` gives it the keyboard (a list only shows it). */
+  open(mode, cx, focus = true) {
     const id = this.id();
-    this.pinUntil = 0;
+    if (focus) this.pinUntil = 0;
     if (!id) return;
     if ((this.view?.thread?.f ?? this.view?.thread)?.id !== id || this.loaded !== id) { // still loading: open on arrival
       this.wantReply = id;
       this.wantMode = mode;
+      this.wantFocus = focus;
       return;
     }
-    if (!(PLATFORM[this.view.channel?.platform]?.[2] ?? true)) return toast("This thread takes no replies.", "warning");
-    if (this.reply?.thread === id) return this.text.focus();
+    if (!(PLATFORM[this.view.channel?.platform]?.[2] ?? true)) return focus && toast("This thread takes no replies.", "warning");
+    if (this.composer?.reply?.thread === id) return focus && this.composer.body.focus();
     const texts = new Set((this.drafts ?? []).map((d) => d.body.trim()));
-    if (texts.size > 1) { // merged aliases each kept a reply: choose one, as the Console's "Choose draft"
+    if (focus && texts.size > 1) { // merged aliases each kept a reply: choose one, as the Console's "Choose draft"
       this.pendingMode = mode;
       return this.pick("Choose draft", this.drafts.map((d) => ({ value: String(d.thread_id),
         label: `Thread ${d.thread_id} · ${d.body.trim().split("\n")[0].slice(0, 80)}` })), "draft-chosen");
     }
-    this.openDraft(mode, this.drafts?.[0]?.thread_id ?? id, cx);
+    this.openDraft(mode, focus ? this.drafts?.[0]?.thread_id ?? id : id, cx, focus);
   }
 
-  openDraft(mode, key, cx) {
+  openDraft(mode, key, cx, focus = true) {
     const id = this.id();
     cx.spawn(async (cx) => {
-      const e = await call("reply.envelope", { thread_id: id, mode }).catch((err) => toast(String(err), "error"));
-      if (!e) return;
-      if (!e.takes_replies) return toast("This thread takes no replies.", "warning");
-      const draft = (this.drafts ?? []).find((d) => d.thread_id === key) ?? this.replyDraft;
-      this.reply = { thread: id, key, mode, envelope: e };
-      this.ghost = {};
-      this.text.set_value(draft?.body ?? "");
-      if (e.email) this.fill(e, draft);
-      this.text.focus();
-      cx.notify();
+      if (focus) setShared("focus", "detail");
+      await this.composer.openReply(id, key, mode, this.draftFor(key) ?? this.replyDraft, this.staged, focus, cx);
+      if (this.id() !== id) this.composer.close(cx); // moved on while it opened
     });
   }
 
-  fill(e, draft) {
-    this.to.set_value(draft?.to || e.to.join(", "));
-    this.cc.set_value(draft?.cc || e.cc.join(", "));
-  }
-
-  /** Reply / Reply all refill To and Cc, as the Console's set_mode. */
-  setMode(mode, cx) {
-    const r = this.reply;
-    if (!r || r.mode === mode) return;
-    cx.spawn(async (cx) => {
-      const e = await call("reply.envelope", { thread_id: r.thread, mode }).catch((err) => toast(String(err), "error"));
-      if (!e || this.reply !== r) return;
-      Object.assign(r, { mode, envelope: e });
-      this.to.set_value(e.to.join(", "));
-      this.cc.set_value(e.cc.join(", "));
-      cx.notify();
-    });
-  }
-
-  /** To/Cc completion from local addresses (address.complete); → at the end of the field takes it, as a shell's
-   * suggestion (the input passes → on only there; Tab belongs to element focus). */
-  complete(field, cx) {
-    const state = field === "to" ? this.to : this.cc, value = state.value();
-    const n = (this.typed = (this.typed ?? 0) + 1);
-    cx.timer.after(150, (cx) => {
-      if (n !== this.typed) return;
-      call("address.complete", { value, kind: "email" }).then((hit) => {
-        if (state.value() !== value) return;
-        this.ghost = { ...(this.ghost ?? {}), [field]: hit };
-        cx.notify();
-      }).catch(() => {});
-    });
-  }
-
-  /** →: the field takes its completion. True when it did. */
-  accept(name, state, keystroke, cx) {
-    const hit = this.ghost?.[name];
-    if (keystroke !== "right" || !hit) return false;
-    state.set_value(hit[1]);
-    this.ghost = { ...this.ghost, [name]: null };
-    cx.notify();
-    return true;
-  }
-
-  autosave(cx) {
-    if (!this.reply) return;
-    const id = this.reply.thread;
-    const n = (this.edits = (this.edits ?? 0) + 1);
-    cx.timer.after(800, (cx) => {
-      if (n === this.edits && this.reply?.thread === id) this.save(cx);
-    });
-  }
-
-  save(cx, message) {
-    if (!this.reply) return;
-    const key = this.reply.key ?? this.reply.thread, body = this.text.value();
-    cx.spawn(async (cx) => {
-      await this.write("inbox.save_reply_draft", { thread_id: key, body }, message, cx);
-    });
-  }
-
+  /** esc: the Composer saves and closes; the Thread's newest message takes the focus. */
   close(cx) {
-    if (!this.reply) return;
-    this.save(cx);
-    this.reply = null;
+    if (!this.composer?.reply) return;
+    this.composer.close(cx);
     focusMain();
     setShared("typing", null);
-    setShared("focus", "detail"); // esc leaves typing: the reply box's owner, the Thread's newest message, takes the focus
+    setShared("focus", "detail"); // esc leaves typing: the Composer's owner, the Thread's newest message, takes the focus
     this.focusMsg(-1, cx);
     cx.notify();
   }
@@ -677,48 +605,6 @@ export default class Thread extends View {
     setShared("target", { col: "detail", label: `Message · ${m.who ?? ""} · ${when(m.at)}`,
       keys: [["enter", "fold"], ["e", "done"], ["r", "reply"], ["a", "reply all"], ["s", "status"], ["g", "snooze"], ["esc", "list"]] });
     cx.notify();
-  }
-
-  send(cx) {
-    const r = this.reply;
-    if (!r) return;
-    if (!this.text.value().trim()) return toast("Nothing to send.", "error");
-    if (r.envelope.email && !list(this.to.value()).length) return toast("Not sent: add at least one recipient in To.", "error");
-    const later = r.envelope.later;
-    const options = [{ value: "send", label: "Send now" },
-      { value: "tomorrow", label: `Send tomorrow · ${stamp(later.tomorrow)}` },
-      { value: "monday", label: `Send next Monday · ${stamp(later.monday)}` }];
-    if (this.replyDraft?.send_at) options.push({ value: "unschedule", label: `Unschedule · keep the draft (now sends ${stamp(this.replyDraft.send_at)})` });
-    options.push({ value: "keep", label: "Keep editing" });
-    this.pick("Send", options, "send-picked");
-  }
-
-  sendPicked(choice, cx) {
-    const r = this.reply;
-    if (!r) return;
-    if (choice === "keep") return this.text.focus();
-    const text = this.text.value().trim();
-    const [to, cc] = r.envelope.email ? [list(this.to.value()), list(this.cc.value())] : [[], []];
-    cx.spawn(async (cx) => {
-      if (choice === "send") {
-        toast("Sending…");
-        try {
-          await call("send.reply", { thread_id: r.thread, text, to, cc });
-          toast("Sent.");
-          setShared("undo", null); // a sent message cannot be unsent
-          this.reply = null;
-          this.text.set_value("");
-          focusMain();
-        } catch (e) {
-          toast(`Send error: ${e}`, "error"); // the text and staged files stay either way
-        }
-        return cx.notify();
-      }
-      const at = choice === "unschedule" ? null : dt(r.envelope.later[choice]);
-      if ((await this.write("inbox.schedule_reply", { thread_id: r.thread, body: text, to, cc, send_at: at }, null, cx)) === undefined) return;
-      toast(at ? `Sends ${stamp(at.$dt)}.` : "Unscheduled · kept as a draft.");
-      this.close(cx);
-    });
   }
 
   /** The message's HTML: safe (no remote images), or with them fetched by the core ("Load images"). */
@@ -954,58 +840,26 @@ export default class Thread extends View {
   }
 
   replyBox(t) {
-    const r = this.reply;
+    const r = this.composer?.reply;
     const v = this.view;
     if (!(PLATFORM[v?.channel?.platform]?.[2] ?? true)) return null; // a Meeting Thread takes no reply
     const keys = div().flex_shrink(1).min_w(0).truncate().text_color("#a89984").child("r reply · a reply all");
     const card = v_flex().ml(66).mr(20).mb(14).px(14).py(10).gap(8).rounded(4).border(1).border_color(r ? t.accent : t.border).bg(t.background);
-    const note = (d) => d?.send_error ? `Scheduled send failed · ${d.send_error}` : d?.send_at ? `${I.time} Sends ${stamp(d.send_at)}` : "";
-    if (!r) {
-      const drafts = this.drafts ?? [];
-      const d = drafts[0], body = (d?.body ?? "").trim(), first = body.split("\n")[0] ?? "";
-      const n = note(d);
-      return card.id("reply-idle").cursor_pointer().on_click((_e, cx) => this.open("all", cx))
-        .child(h_flex().gap(8).items_center().text_size(12.5).min_w(0)
-          .when(drafts.length > 1, (el) => el.child(div().flex_1().text_color(t.yellow ?? t.status_needs_next).child(`${I.edited} ${drafts.length} saved drafts`)))
-          .when(drafts.length === 1, (el) => el
-            .child(div().flex_none().text_color(t.yellow ?? t.status_needs_next).child(`${I.edited} Draft`))
-            .when(Boolean(n), (e) => e.child(div().flex_none().text_color(n.startsWith("Scheduled send failed") ? t.danger : t.accent).child(n)))
-            .child(div().flex_1().min_w(0).truncate().text_color(t.foreground).child(first.slice(0, 80) + (body.length > first.slice(0, 80).length ? "…" : ""))))
-          .when(!drafts.length, (el) => el.child(div().flex_1().min_w(0).truncate().text_color(t.dim).child(`${I.reply} Leave a reply…`)))
-          .child(keys));
-    }
-    const e = r.envelope;
-    const label = (text) => div().w(64).flex_none().text_color(t.dim).child(text);
-    const field = (text, el) => h_flex().gap(8).items_center().text_size(12).child(label(text)).child(div().flex_1().min_w(0).child(el));
-    const address = (name, state) => v_flex().flex_1().min_w(0)
-      .on_key_down((ev, cx) => { if (this.accept(name, state, ev.keystroke, cx)) cx.stop_propagation(); })
-      .child(Input.new(state))
-      .when(Boolean(this.ghost?.[name]), (el) => el.child(div().text_size(11).text_color(t.dim).child(`→ ${this.ghost[name]?.[0] ?? ""}`)));
-    const mode = (m, text) => div().id(`mode-${m}`).px(6).rounded(3).cursor_pointer().on_click((_e, cx) => this.setMode(m, cx))
-      .when(r.mode === m, (el) => el.bg(t.selected).font_semibold().text_color(t.strong ?? t.foreground)).when(r.mode !== m, (el) => el.text_color(t.dim)).child(text);
-    const subject = (v?.thread?.f?.title ?? "");
-    const n = note((this.drafts ?? []).find((d) => d.thread_id === r.key) ?? this.replyDraft);
-    return card.id("reply-open")
-      .on_key_down((ev, cx) => {
-        if (ev.keystroke === "escape") this.close(cx);
-        else if (ev.keystroke === "ctrl-enter") this.send(cx);
-        else if (ev.keystroke === "ctrl-s") this.save(cx, "Saved.");
-        else if (ev.keystroke === "ctrl-o") run("app.attach"); // the system file picker (D63)
-        else return;
-        cx.stop_propagation();
-      })
-      .when(e.email, (el) => el.child(h_flex().gap(4).text_size(12).child(mode("sender", `${I.reply} reply`)).child(mode("all", `${I.people} reply all`))))
-      .when(e.email, (el) => el
-        .child(field("From", div().text_color(t.muted).child(v?.channel?.external_id ?? e.from ?? "")))
-        .child(h_flex().gap(8).items_start().text_size(12).child(label("To")).child(address("to", this.to)))
-        .child(h_flex().gap(8).items_start().text_size(12).child(label("Cc")).child(address("cc", this.cc)))
-        .child(field("Subject", div().text_color(t.muted).child(/^re:/i.test(subject) ? subject : `Re: ${subject}`))))
-      .when(!e.email, (el) => el.child(field("To", h_flex().gap(4).child(div().text_color(t.muted).child(e.where ?? v?.where ?? ""))
-        .child(div().text_color(t.dim).child("· in thread")))))
-      .child(Textarea.new(this.text))
-      .when(Boolean(this.staged?.length), (el) => el.child(this.files(this.staged, t, "Reply files")))
-      .child(div().text_size(11).text_color(t.dim)
-        .child((n ? `${n} · ` : "") + "ctrl+enter send · " + (e.sends_files ? "ctrl+o attach · " : "") + "esc close (keeps draft)"));
+    const note = (d) => d?.sending_at ? "Send outcome unknown" : d?.send_error ? `Scheduled send failed · ${d.send_error}`
+      : d?.send_at ? `${I.time} Sends ${stamp(d.send_at)}` : "";
+    if (r) return card.id("reply-open").child(this.composer.editor(t));
+    const drafts = this.drafts ?? [];
+    const d = drafts[0], body = (d?.body ?? "").trim(), first = body.split("\n")[0] ?? "";
+    const n = note(d);
+    return card.id("reply-idle").cursor_pointer().on_click((_e, cx) => this.open("all", cx))
+      .child(h_flex().gap(8).items_center().text_size(12.5).min_w(0)
+        .when(drafts.length > 1, (el) => el.child(div().flex_1().text_color(t.yellow ?? t.status_needs_next).child(`${I.edited} ${drafts.length} saved drafts`)))
+        .when(drafts.length === 1, (el) => el
+          .child(div().flex_none().text_color(t.yellow ?? t.status_needs_next).child(`${I.edited} Draft`))
+          .when(Boolean(n), (e) => e.child(div().flex_none().text_color(n.startsWith(I.time) ? t.accent : t.danger).child(n)))
+          .child(div().flex_1().min_w(0).truncate().text_color(t.foreground).child(first.slice(0, 80) + (body.length > first.slice(0, 80).length ? "…" : ""))))
+        .when(!drafts.length, (el) => el.child(div().flex_1().min_w(0).truncate().text_color(t.dim).child(`${I.reply} Leave a reply…`)))
+        .child(keys));
   }
 
   render() {
@@ -1023,7 +877,7 @@ export default class Thread extends View {
         .child(v_flex().id("messages").flex_1().min_h(0).overflow_y_scroll()
           .child(this.head(v, t))
           .child(v_flex().px(20).pb(10).gap(8).children(this.timeline(v, t)))
-          .when(!this.reply && Boolean(this.staged?.length), (el) => el.child(div().ml(66).mb(14).child(this.files(this.staged, t, "Reply files")))))
+          .when(!this.composer?.reply && Boolean(this.staged?.length), (el) => el.child(div().ml(66).mb(14).child(this.files(this.staged, t, "Reply files")))))
         .when(Boolean(this.replyBox(t)), (el) => el.child(this.replyBox(t))))
       .when(!narrow(), (el) => el.child(this.props(v, t)));
   }

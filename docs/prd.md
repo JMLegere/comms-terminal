@@ -146,7 +146,7 @@ Status key in brackets:
 - **FR-6c** [PL + D]: Eligible activity from the other side moves a Snoozed or Done Thread to Todo / Needs next response. This includes messages, and [C] edits and deletions; Plain: "When any activity happens in a thread, it will move back to Todo." [D] Blocked ordinary activity on existing Threads is excluded by FR-7a (decision #138).
 - **FR-6d** [PL + D]: A snooze ends at its time, or on the other side's next eligible activity (FR-7a), and the Thread returns to Todo.
 - **FR-6e** [PL]: An Ignored Thread does not move Status on new activity until Jeremy un-ignores it.
-- **FR-6f** [D]: A Todo Thread whose Reply Draft has text, is not Needs edit, and is not sending shows as Reply Draft, listed last in Todo (Jeremy, 2026-10-28; first named Draft ready). It is derived when the queue is read and never stored, so the Thread's stored Status detail, its transitions, and the `s` menu stay as they are.
+- **FR-6f** [D]: A Todo Thread whose Reply Draft has text, is not Needs edit, and is not sending shows as Reply Draft, listed last in Todo (Jeremy, 2026-10-28; first named Draft ready). It is derived when the queue is read and never stored, so the Thread's stored Status detail, its transitions, and the `s` menu stay as they are. On Today such a Thread shows through its Draft in the drafts list, not in the threads list, except while it is selected (decision #144).
 
 ### Ignore and Block
 
@@ -1041,6 +1041,11 @@ All entries are dated 2026-10-10; exact times are unproven unless noted. Full de
   - Request / decision: A native desktop App, built by copying Herdr's migration (ADR 0013): a Local core with a published, grow-only Local API (JSON-RPC over a user-only socket, OpenRPC); a GPU-drawn App on gpui-kit with its code in `app/`; the App starts the Local core and the core outlives the App; the Console kept; Interface files with `AGENTS.md`, `check` and `shot`; mail bodies through litehtml after the core removes remote fetches. Heavy newsletters may open in up to about 0.5 s. macOS for Logan follows Linux.
   - Source: Jeremy's discovery (2026-10-31, `.agents/discovery/2026-10-31-desktop-app.md`): "i want to copy their migration almost exactly"; PRD decisions D-A to D-F; Phase 0 results (litehtml 30/30 readable against Blitz 25/30; move-to-frame p95 58 ms); "Phases 1 and 2".
   - Status: Approved; Phases 1 and 2 authorized (2026-10-31). Built on branch `jeremy/desktop-app`.
+
+- **144**
+  - Request / decision: Unified Drafts (ADR 0015): every Draft, a Reply Draft included, saves by revision, sends its saved revision through `send_draft` (so a reply locks on Send outcome unknown), and owns its staged files. Each client edits every Draft in one Composer with the same keys. A review list shows a Reply Draft in place, as its Thread with the Composer, and selects the next Draft after send, schedule, delete or skip. Today lists every Draft; a Thread whose Reply Draft is ready and a Task with a Draft show through that Draft, and the selected row keeps its place until the selection leaves it (FR-6f, FR-UD-8/9). Supersedes D69 (a Reply Draft jumped to its Thread from a list) and amends #75 (the inline reply box is the Composer).
+  - Source: Jeremy's discovery (2026-11-03, `.agents/discovery/2026-11-03-unified-drafts.md`): "we should unify thread drafts and reply drafts", "Same editor everywhere", "Composer", "One list", "Thread + Composer", "Drafts pane, all Drafts", "Drafts pane only"; PRD `.agents/prd/2026-11-03-unified-drafts.md` approved 2026-11-04: "approved, execute the entire prd and ship it to prod".
+  - Status: Approved (2026-11-04). Built on branch `jeremy/unified-drafts`.
 
 ## 8. Work log
 

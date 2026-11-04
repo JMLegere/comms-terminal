@@ -603,16 +603,15 @@ def test_reply_prepares_coherent_history_before_wal_merge_and_releases_snapshot_
     writer = inbox.connect(str(tmp_path / "inbox.db"))
     merged = []
 
-    def merge_before_history_read(sql):
-        if sql.startswith("SELECT native_id, data, content, occurred_at"):
-            db.set_trace_callback(None)
-            try:
-                merged.append(inbox.reconcile_email_threads(writer, apply=True)["merged"])
-            except Exception as exc:
-                merged.append(exc)
+    def merge_now():  # another writer reconciles while the reply is in flight (send_draft claimed it first)
+        try:
+            merged.append(inbox.reconcile_email_threads(writer, apply=True)["merged"])
+        except Exception as exc:
+            merged.append(exc)
 
     class CoherentSender(RecordingSender):
         def send(self, thread, text, to, cc, history, files=()):
+            merge_now()  # no transaction is held across the provider call, so the merge goes through
             assert merged == [1] and not db.in_transaction
             assert thread.id == child.id and thread.channel_id == child.channel_id
             assert [m["native_id"] for m in history] == ["<child@test>"]
@@ -620,11 +619,9 @@ def test_reply_prepares_coherent_history_before_wal_merge_and_releases_snapshot_
             return super().send(thread, text, to, cc, history)
 
     sender = CoherentSender()
-    db.set_trace_callback(merge_before_history_read)
     try:
         replied = inbox.reply(db, child.id, "Prepared reply", sender, to=["ana@acme.test"])
     finally:
-        db.set_trace_callback(None)
         writer.close()
     assert replied.id == root.id and replied.status_detail == "WAITING_FOR_CUSTOMER"
     assert sender.arguments == ("Prepared reply", ["ana@acme.test"], [])

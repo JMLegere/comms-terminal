@@ -122,7 +122,10 @@ def console_bindings() -> set[tuple[str, str]]:
 
 
 def view_source(view: str) -> str:
-    return (DEFAULTS / "views" / view / "main.js").read_text()
+    """A view's main.js, with the shared files it imports (workspace.rs ships each beside it, as the Composer)."""
+    src = (DEFAULTS / "views" / view / "main.js").read_text()
+    shared = [f for f in (DEFAULTS / "views").glob("*.js") if f'from "./{f.name}"' in src]
+    return src + "".join(f.read_text() for f in shared)
 
 
 def test_every_console_binding_reaches_the_app_or_says_why():

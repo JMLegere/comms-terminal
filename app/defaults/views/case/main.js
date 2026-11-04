@@ -1,19 +1,20 @@
 // One Case, as the Console's CasePage (D101–D106): title and rolled-up Status, the Description box (d edits it in
 // place, ctrl+enter saves with undo, esc cancels), one Activity timeline oldest first with each Thread's card after
 // the line that added it, and the properties column (Status counts, People, Organizations, Channels) with Context.
-// j/k select a card and the Thread keys act on it; Enter folds or unfolds it; r/a open its reply row in place.
+// j/k select a card and the Thread keys act on it; Enter folds or unfolds it; r/a open the Composer on its Reply
+// Draft in place (composer.js).
 // Element focus: the Description box, then each Thread card; k above the first card focuses the Description, and
 // Enter there edits it. Esc from a field leaves the focus on its owner (the Description, or the card).
 import { View, div } from "gpui-kit";
-import { v_flex, h_flex, TextareaState, Textarea, InputState, Input } from "gpui-base";
+import { v_flex, h_flex, TextareaState, Textarea } from "gpui-base";
 import { call, nextEvent, nextCommand, theme, shared, setShared, run, toast, focusMain, open } from "comms";
+import { Composer } from "./composer.js";
 
 const SOURCES = ["attio", "tana", "linear"];
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const pad = (n) => String(n).padStart(2, "0");
 const stamp = (iso) => { const d = new Date(iso); return `${DAYS[d.getDay()]} ${MONTHS[d.getMonth()]} ${d.getDate()}, ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
-const list = (s) => s.split(",").map((x) => x.trim()).filter(Boolean);
 const offerUndo = (message, steps) => { setShared("undo", { message, steps }); toast(`${message}  z undo`); };
 export const DESCRIBE = "Add a description: what this Case is about, who is involved, what done looks like.  d edit";
 
@@ -51,15 +52,12 @@ export default class Case extends View {
     this.context = [];
     this.desc = TextareaState.new({ placeholder: "What this Case is about, who is involved, what done looks like.", rows: 4 });
     this.desc.set_auto_grow(3, 16);
-    this.text = TextareaState.new({ placeholder: "Leave a reply…", rows: 3 });
-    this.text.set_auto_grow(3, 16);
-    this.to = InputState.new({ placeholder: "recipients" });
-    this.cc = InputState.new({ placeholder: "optional" });
-    // Typing (element focus): while a field has the keyboard, the bar says so and how to leave.
-    for (const [f, name] of [[this.desc, "Description"], [this.text, "reply"], [this.to, "To"], [this.cc, "Cc"]]) {
-      f.on("focus", () => setShared("typing", name));
-      f.on("blur", () => { if (shared("typing") === name) setShared("typing", null); });
-    }
+    // The Composer on the selected card's Reply Draft (FR-UD-1), open while its `reply` is set.
+    this.composer = new Composer("case", { placeholder: "Leave a reply…", rows: 3, grow: [3, 16], bodyName: "reply",
+      command: (c, cx) => this.command(c, cx), done: (cx) => this.leave(cx) });
+    // Typing (element focus): while the Description has the keyboard, the bar says so and how to leave.
+    this.desc.on("focus", () => setShared("typing", "Description"));
+    this.desc.on("blur", () => { if (shared("typing") === "Description") setShared("typing", null); });
     this.load(cx);
     cx.spawn(async (cx) => {
       while (true) if ((await nextEvent()).kind === "rows" && shared("case")) this.load(cx);
@@ -167,7 +165,8 @@ export default class Case extends View {
         this.desc.focus();
         return this.target(cx);
       case "reply_all": case "reply_sender": if (card) this.onDesc = false; return card && this.openReply(card, name === "reply_sender" ? "sender" : "all", cx);
-      case "send-picked": return this.sendPicked(answer.value, cx);
+      case "close": return this.closeReply(cx);
+      case "send": case "save": case "send-picked": case "unknown-picked": return this.composer.command(name, answer, cx);
     }
   }
 
@@ -189,13 +188,8 @@ export default class Case extends View {
     this.toggled.delete(card.id);
     cx.spawn(async (cx) => {
       try {
-        const [e, v] = await Promise.all([call("reply.envelope", { thread_id: card.id, mode }), call("thread.view", { thread_id: card.id })]);
-        if (!e.takes_replies) return toast("This thread takes no replies.", "warning");
-        this.reply = { thread: card.id, mode, envelope: e };
-        const d = v.reply_draft;
-        this.text.set_value(d?.body ?? "");
-        if (e.email) { this.to.set_value(d?.to || e.to.join(", ")); this.cc.set_value(d?.cc || e.cc.join(", ")); }
-        this.text.focus();
+        const v = await call("thread.view", { thread_id: card.id });
+        await this.composer.openReply(card.id, card.id, mode, v.reply_draft, v.staged, true, cx);
       } catch (err) {
         toast(String(err), "error");
       }
@@ -204,50 +198,9 @@ export default class Case extends View {
   }
 
   closeReply(cx) {
-    const r = this.reply;
-    if (!r) return;
-    this.reply = null;
-    call("command.inbox.save_reply_draft", { thread_id: r.thread, body: this.text.value() }).catch((e) => toast(String(e), "error"));
+    if (!this.composer.reply) return;
+    this.composer.close(cx);
     this.leave(cx);
-  }
-
-  send() {
-    const r = this.reply;
-    if (!r) return;
-    if (!this.text.value().trim()) return toast("Nothing to send.", "error");
-    if (r.envelope.email && !list(this.to.value()).length) return toast("Not sent: add at least one recipient in To.", "error");
-    const later = r.envelope.later;
-    setShared("picker", { title: "Send", reply: "case.send-picked", options: [{ value: "send", label: "Send now" },
-      { value: "tomorrow", label: `Send tomorrow · ${stamp(later.tomorrow)}` },
-      { value: "monday", label: `Send next Monday · ${stamp(later.monday)}` }, { value: "keep", label: "Keep editing" }] });
-    run("overlay.open");
-  }
-
-  sendPicked(choice, cx) {
-    const r = this.reply;
-    if (!r) return;
-    if (choice === "keep") return this.text.focus();
-    const text = this.text.value().trim();
-    const [to, cc] = r.envelope.email ? [list(this.to.value()), list(this.cc.value())] : [[], []];
-    cx.spawn(async (cx) => {
-      try {
-        if (choice === "send") {
-          toast("Sending…");
-          await call("send.reply", { thread_id: r.thread, text, to, cc });
-          toast("Sent.");
-          setShared("undo", null);
-        } else {
-          await call("command.inbox.schedule_reply", { thread_id: r.thread, body: text, to, cc, send_at: { $dt: r.envelope.later[choice] } });
-          toast(`Sends ${stamp(r.envelope.later[choice])}.`);
-        }
-        this.reply = null;
-        this.text.set_value("");
-        this.leave(cx);
-      } catch (e) {
-        toast(`Send error: ${e}`, "error");
-      }
-      cx.notify();
-    });
   }
 
   render() {
@@ -260,8 +213,6 @@ export default class Case extends View {
     const keys = (el) => el.on_key_down((ev, cx) => {
       if (this.editing && (ev.keystroke === "ctrl-enter" || ev.keystroke === "ctrl-s")) this.saveDescription(cx);
       else if (this.editing && ev.keystroke === "escape") { this.editing = false; this.leave(cx); }
-      else if (this.reply && ev.keystroke === "ctrl-enter") this.send();
-      else if (this.reply && ev.keystroke === "escape") this.closeReply(cx);
       else return;
       cx.stop_propagation();
     });
@@ -274,7 +225,8 @@ export default class Case extends View {
         : div().text_color(c.description ? t.foreground : t.muted).child(c.description || DESCRIBE))
       .when(this.editing, (e) => e.child(div().text_size(11.5).text_color(t.muted).child("ctrl+enter save · esc cancel")));
     const cardEl = (k, i) => {
-      const open = !this.toggled.has(k.id) || this.reply?.thread === k.id;
+      const r = this.composer.reply?.thread === k.id ? this.composer.reply : null;
+      const open = !this.toggled.has(k.id) || Boolean(r);
       const msgs = k.messages ?? [];
       const shownSet = this.opened[k.id] ?? new Set();
       const body = !open ? [div().text_color(t.muted).child(folded(msgs))] : msgs.map((m, j) => {
@@ -287,12 +239,8 @@ export default class Case extends View {
           .when(full, (e) => e.child(div().text_color(m.deleted ? t.muted : t.foreground).child(m.deleted ? "message deleted" : m.shown ?? ""))
             .when(Boolean(m.trimmed), (e2) => e2.child(div().text_color(t.muted).child("•••"))));
       });
-      const r = this.reply?.thread === k.id ? this.reply : null;
-      const replyRow = !open ? null : r ? keys(v_flex().id(`reply-${i}`).mt(6).p(8).gap(6).rounded(6).border(1).border_color(t.accent)
-        .when(r.envelope.email, (e) => e.child(h_flex().gap(8).child(div().w(28).text_color(t.muted).child("To")).child(div().flex_1().child(Input.new(this.to))))
-          .child(h_flex().gap(8).child(div().w(28).text_color(t.muted).child("Cc")).child(div().flex_1().child(Input.new(this.cc)))))
-        .child(Textarea.new(this.text))
-        .child(div().text_size(11.5).text_color(t.muted).child("ctrl+enter send · esc close (keeps draft)")))
+      const replyRow = !open ? null : r ? v_flex().id(`reply-${i}`).mt(6).p(8).rounded(6).border(1).border_color(t.accent)
+        .child(this.composer.editor(t))
         : div().id(`idle-${i}`).mt(6).px(8).py(6).rounded(6).border(1).border_color(t.border).text_color(t.muted).cursor_pointer()
           .on_click((_e, cx) => { this.sel = i; this.pickThread(); this.openReply(k, "all", cx); }).child("Leave a reply… (r)");
       const focused = focusHere && !onDesc && i === this.sel;
@@ -302,7 +250,7 @@ export default class Case extends View {
           if (this.sel !== i) { this.sel = i; this.pickThread(); }
           this.onDesc = false;
           setShared("focus", "detail");
-          if (this.reply?.thread !== k.id) focusMain();
+          if (!r) focusMain();
           this.target(cx);
         })
         .child(h_flex().gap(8).items_center().child(div().flex_1().min_w(0).children(segs(k.head))).child(div().flex_none().children(segs(k.status))))

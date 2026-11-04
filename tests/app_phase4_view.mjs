@@ -1,5 +1,5 @@
 // Phase 4: Drafts and Today as the Console's (AS-CONF-12, AS-CONF-13, AS-APP-11 replies), run in the shipped views.
-// Usage: node --experimental-vm-modules app_phase4_view.mjs order|d69|early|d75|keys|unattended|reply:<To|Body|>
+// Usage: node --experimental-vm-modules app_phase4_view.mjs order|early|d75|keys|unattended|complete|pin|prompt|rowkeys
 import { answers, calls, cx, input, load, ran, settle, state, tasks, toasts } from "./app_view_kit.mjs";
 
 const [kase, arg] = (process.argv[2] ?? "").split(":");
@@ -21,20 +21,6 @@ if (kase === "rowkeys") { // a Case header under two Statuses (here "No case") k
     { id: "edit", needs_edit: 1 }, { id: "failed", send_at: "2026-11-01T15:00:00", send_error: "refused" }];
   out.order = ordered(rows).map((d) => d.id);
   out.words = ordered(rows).map((d) => status(d)[0]);
-} else if (kase === "d69") {
-  const Drafts = await load("drafts"), Thread = await load("thread"), Draft = await load("draft");
-  answers["thread.view"] = { view: { thread: { f: { id: "thread-9", status: "SNOOZED", status_detail: "WAITING_FOR_CUSTOMER" } } } };
-  state.draft = "draft-9";
-  make(Drafts, { rows: [{ id: "draft-9", thread_id: "thread-9" }] }).command("enter", cx);
-  await settle();
-  out.ran = ran.splice(0);
-  out.thread = state.thread;
-  make(Thread, { view: { thread: { f: { id: "thread-9" } } }, loaded: "thread-9", open(mode) { out.opened = mode; } }).command("open_reply", cx);
-  const pane = make(Draft, { draft: { id: "draft-9", thread_id: "thread-9", body: "Hi" }, info: {} });
-  const before = calls.length;
-  pane.command("send", cx); pane.command("save", cx);
-  await settle();
-  out.pane_calls = calls.slice(before);
 } else if (kase === "prompt") { // the Console's Ask: the prompt is the box's placeholder
   const Overlay = await load("overlay");
   const o = new Overlay();
@@ -49,13 +35,14 @@ if (kase === "rowkeys") { // a Case header under two Statuses (here "No case") k
   o.choose(undefined, cx);
   out.ran = ran.splice(0);
 } else if (kase === "complete") { // → takes a To/Cc completion, as a shell's suggestion; Tab does not
-  const Thread = await load("thread");
-  const t = make(Thread, { ghost: { cc: ["ana@example.test, ben@example.test", "ana@example.test, ben@example.test"] } });
+  const { Composer } = (await load("thread")).deps["./composer.js"];
+  const c = new Composer("thread");
+  c.ghost = { cc: ["ana@example.test, ben@example.test", "ana@example.test, ben@example.test"] };
   const cc = input(); cc.set_value("ana@example.test, ben@exa");
-  out.tab = t.accept("cc", cc, "tab", cx);
-  out.right = t.accept("cc", cc, "right", cx);
+  out.tab = c.accept("cc", cc, "tab", cx);
+  out.right = c.accept("cc", cc, "right", cx);
   out.value = cc.value();
-  out.again = t.accept("cc", cc, "right", cx);            // taken: → moves on as usual
+  out.again = c.accept("cc", cc, "right", cx);            // taken: → moves on as usual
 } else if (kase === "pin") { // a Thread opens at its newest entries; Jeremy's own scroll ends that
   const Thread = await load("thread");
   const after = cx.timer.after;
@@ -91,16 +78,17 @@ if (kase === "rowkeys") { // a Case header under two Statuses (here "No case") k
   out.after_move = out.opened ?? null;
 } else if (kase === "d75") {
   const Draft = await load("draft");
-  const field = (v) => { const f = input(); f.set_value(v); return f; };
-  const d = make(Draft, { to: field("ana@example.test"), toSlack: field(""), cc: field(""), subject: field(""), body: field("Hi"),
-    info: { connection: "Gmail · me@example.test", sender: "me@example.test" }, unsaved: false,
-    draft: { id: "d1", revision: 1, thread_id: null, connection_id: "c1", kind: "email", sender: "me@example.test",
-      to: "ana@example.test", cc: "", subject: "", body: "Hi", sending_at: null } });
+  const d = new Draft();
+  d.init({}, cx); tasks.length = 0;
+  d.draft = { id: "d1", revision: 1, thread_id: null, connection_id: "c1", kind: "email", sender: "me@example.test",
+    to: "ana@example.test", cc: "", subject: "", body: "Hi", sending_at: null };
+  d.info = { connection: "Gmail · me@example.test", sender: "me@example.test", draft: d.draft };
+  d.composer.showDraft(d.info);
   answers["draft.problem"] = "Add a subject";
   d.command("send", cx);
   await settle();
-  out.said = d.said; out.picker = state.picker ?? null;
-  d.subject.set_value("Hello");
+  out.said = d.composer.said; out.picker = state.picker ?? null;
+  d.composer.subject.set_value("Hello");
   answers["draft.problem"] = null;
   d.command("send", cx);
   await settle();
@@ -122,16 +110,6 @@ if (kase === "rowkeys") { // a Case header under two Statuses (here "No case") k
   const { stagesOf, wake } = (await load("today")).ns;
   out.stages = stagesOf({ stages: { revenue: "Proposal", talent: "Intro" } });
   out.wake = `Next wake · ${wake("2026-11-02T09:00:00")}`;
-} else if (kase === "reply") { // the reply box: a Reply Draft sends here (D69)
-  const Thread = await load("thread");
-  const field = (v) => { const f = input(); f.set_value(v); return f; };
-  const t = make(Thread, { reply: { thread: "thread-1", envelope: { email: true, later: { tomorrow: "2026-11-04T07:30:00", monday: "2026-11-09T07:30:00" } } },
-    text: field(arg === "Body" ? "  " : "Edited text"), to: field(arg === "To" ? "  " : " ana@example.test, ben@example.test "),
-    cc: field(" copy@example.test "), replyDraft: null });
-  t.send(cx);
-  if (state.picker) t.sendPicked("send", cx);
-  await settle();
-  Object.assign(out, { calls, toasts });
 }
 tasks.length = 0;
 console.log(JSON.stringify(out));

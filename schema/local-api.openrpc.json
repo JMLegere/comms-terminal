@@ -911,6 +911,21 @@
      "schema": {}
     },
     {
+     "name": "expected_revision",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "to",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "cc",
+     "required": false,
+     "schema": {}
+    },
+    {
      "name": "now",
      "required": false,
      "schema": {}
@@ -3709,7 +3724,7 @@
   },
   {
    "name": "today.page",
-   "summary": "Today: Todo Threads, due Tasks, the Drafts not shown through them (each with `recipient`, as drafts.list), Paused Enrollments (each with `finishing`, the label of the reason it finishes as, or null) and Unattended Organizations.",
+   "summary": "Today: Todo Threads, due Tasks and every Draft, each item once (each Draft with `recipient`, as drafts.list), Paused Enrollments (each with `finishing`, the label of the reason it finishes as, or null) and Unattended Organizations.",
    "params": [
     {
      "name": "origin",

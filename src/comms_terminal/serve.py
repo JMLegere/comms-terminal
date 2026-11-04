@@ -207,8 +207,9 @@ def handle_respond(db, body: bytes, client: gcal.Client | None) -> tuple[int, di
 
 
 def handle_reply(db, body: bytes, senders: Senders) -> tuple[int, dict]:
-    """POST /reply: {"thread_id", "text", "to", "cc"} -> (status, JSON body); 502 refused, 504 outcome unknown
-    (nothing recorded either way). The Thread's staged Attachments go with it."""
+    """POST /reply: {"thread_id", "text", "to", "cc"} -> (status, JSON body): the text is saved as the Thread's
+    Reply Draft and sent through send_draft with the Reply Draft's files. 502 refused (the Draft stays editable),
+    504 outcome unknown (the Draft locks); nothing is recorded either way."""
     try:
         req = json.loads(body)
         thread_id, text = str(req["thread_id"]), str(req["text"])
@@ -268,12 +269,11 @@ def handle_send_draft(db, body: bytes, senders: Senders) -> tuple[int, dict]:
 
 
 def send_due(db, senders: Senders, now: datetime) -> int:
-    """Send each Draft whose send-later time has come: a reply Draft into its Thread, any other as a new one.
-    Its time is cleared first, so a refused send, or one whose outcome is unknown, is never repeated; the
-    reason stays on the Draft as send_error. Returns how many went out."""
+    """Send each Draft whose send-later time has come through `send_draft`: a Reply Draft into its Thread, any
+    other as a new one. Its time is cleared first, so a refused send, or one whose outcome is unknown, is never
+    repeated; the reason stays on the Draft as send_error. Returns how many went out."""
     import logging
     sent = 0
-    split = lambda s: [a.strip() for a in s.split(",") if a.strip()]  # noqa: E731
     for d in inbox.claim_due_drafts(db, now):
         try:
             r = db.execute("SELECT * FROM connections WHERE id = ?", (d["connection_id"],)).fetchone()
@@ -281,12 +281,7 @@ def send_due(db, senders: Senders, now: datetime) -> int:
             if sender is None:
                 name = (r["label"] or r["platform"]) if r else "No Connection"
                 raise inbox.SendFailed(f"{name} is not connected for sending")
-            if d["thread_id"] is None:
-                inbox.send_draft(db, d["id"], inbox.get_draft(db, d["id"])["revision"], sender)
-            else:
-                email_reply = d["kind"] == "email"
-                inbox.reply(db, d["thread_id"], d["body"], sender, split(d["to"]) if email_reply else [],
-                            split(d["cc"]) if email_reply else [])
+            inbox.send_draft(db, d["id"], inbox.get_draft(db, d["id"])["revision"], sender)
             sent += 1
         except Exception as e:  # noqa: BLE001 - one failed Draft must not stop the others
             inbox.set_send_error(db, d["id"], str(e) or type(e).__name__)

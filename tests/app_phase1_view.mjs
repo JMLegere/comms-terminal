@@ -10,16 +10,16 @@ if (process.argv[2] === "locked") {
   const Draft = await load("draft");
   const d = new Draft();
   start(d);
-  d.draft = d.server = { id: "draft-1", revision: 3, kind: "email", to: "ana@example.test", cc: "", subject: "Hi",
+  d.draft = { id: "draft-1", revision: 3, kind: "email", to: "ana@example.test", cc: "", subject: "Hi",
     body: "Locked text", sending_at: "2026-11-02T10:00:00", send_at: null, needs_edit: 0 };
-  d.fill(d.draft);
-  d.body.set_value("Typed while locked");
-  d.body.fire("change", cx);                              // a keystroke in the body
+  d.composer.showDraft({ draft: d.draft, staged: [] });   // the Composer on it, as draft.show loads it
+  d.composer.body.set_value("Typed while locked");
+  d.composer.body.fire("change", cx);                     // a keystroke in the body
   d.command("save", cx);                                  // ctrl-s
   d.command("close", cx);                                 // esc
   await settle();
   d.render();
-  out.body = d.body.value();
+  out.body = d.composer.body.value();
   out.saves = methods().filter((m) => m === "command.inbox.save_draft").length;
 } else if (process.argv[2] === "step") { // the Step editor in the Sequences page's right pane
   const Sequence = await load("sequence");
