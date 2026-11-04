@@ -2,7 +2,7 @@
 
 ## 1. Status
 
-- Current phase: complete — Phase 4 approved.
+- Current phase: complete — Phase 4 approved. Implemented and shipped through `.agents/prd/2026-11-04-app-update-on-restart.md` (PRs #30–#33).
 - Gates: Seed approved 2026-11-04 · Phase 1 approved 2026-11-04 · Phase 2 approved 2026-11-04 (measure 1 revised in Phase 4) · Phase 3 approved 2026-11-04 · Phase 4 approved 2026-11-04.
 - Last updated: 2026-11-04 (America/Halifax).
 
@@ -310,6 +310,7 @@ flowchart TB
 | 2026-11-04 | Apply updates at next start only; every push fading the App is fine; keep shipping each approval; no prebuilt binaries now | Jeremy, structured questions | Approved | — |
 | 2026-11-04 | Recommended strategy: honest lockstep | Claude, from Q1–Q5 | Approved at Phase 4 gate | — |
 | 2026-11-04 | Phase 4 approved: strategy, diagrams, open risks | Jeremy, structured question | Approved | — |
+| 2026-11-04 | Prebuilt App binaries reopened and chosen: CI publishes each build of `main`; Mani downloads and compiles nothing ("lets revisit this", "no building, migrate fully to the new system") | Jeremy, after 10-minute builds on Mani | Shipped in PR #33 (see the PRD's Phase 4) | Q5 "Not now"; rejected approach "Prebuilt App binaries" |
 
 ## 12. Sources
 

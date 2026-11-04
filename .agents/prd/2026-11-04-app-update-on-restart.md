@@ -5,13 +5,13 @@
 | Field | Value |
 |---|---|
 | Title | App Updates on Restart |
-| Status | **Implementing.** Strategy approved in discovery 2026-11-04; Jeremy said "execute the prd fully" 2026-11-04. Phases 0–2 and 3.1 built on branch `jeremy/app-update-on-restart`; Phase 3.2 (merge, deploys Oracle) and 3.3 (hands-on check on Mani) pending. |
+| Status | **Shipped.** Built and deployed 2026-11-04 in PRs #30, #31, #32 and #33; Mani runs `44bd570`, the Service's build, since 2026-11-04T18:58+00:00. Hand checks in §6 remain (launch while open, restart guard, first downloaded update, macOS download). |
 | Owner / authority | Jeremy. Source-of-truth chain: `AGENTS.md` (project rules) → `.agents/discovery/2026-11-04-autoupdate.md` (approved problem and strategy) → `.agents/prd/2026-10-31-desktop-app.md` (FR-APP-14, FR-APP-15, AS-APP-9, which this PRD amends) → code on `origin/main`. |
-| Created / updated | Created 2026-11-04T17:09+00:00 (2026-11-04 13:09 America/Halifax). |
+| Created / updated | Created 2026-11-04T17:09+00:00 (13:09 America/Halifax). Updated 2026-11-04T19:06+00:00 after shipping #30–#33 and the follow-ups in Phase 4. |
 | Topic | How the desktop App on Mani takes a new Service build: stage it in the background, fade while read-only, apply at the next start, and always answer a launch. |
 | Code basis | `origin/main` at `7a8b707`, exported read-only to the session scratchpad. Line numbers below refer to that commit. |
 | History limits | This session's conversation (seed through Phase 4 of discovery) was available in full. Earlier App work is known only through the desktop App PRD, commit messages and code. Mani was unreachable over SSH on 2026-11-04, so nothing on it was observed. |
-| Implementation authorization | Jeremy, 2026-11-04: "execute the prd fully". Merging to `main` deploys to Oracle and replaces the App on Mani at the next start; the merge is confirmed with Jeremy before it runs. |
+| Implementation authorization | Jeremy, 2026-11-04: "execute the prd fully", then "ship it" for each merge, and "do not wait for runners". Merges used admin bypass of the code-owner rule on the Linux check. |
 
 ## 2. Executive framing
 
@@ -52,15 +52,18 @@
 | ID | Requirement | Status | Measures |
 |---|---|---|---|
 | FR-UPD-1 | The App never quits by itself because of an update. An `update` event starts background staging only. `app.restart` stays the one way an update applies while the window is open, and it runs only on Jeremy's action. | Confirmed (discovery Q2: next start only) | 1, 2 |
-| FR-UPD-2 | Staging builds the Service build into its own slot beside the installed one. It does not replace, stop or modify the running core, the running App binary or the installed launcher. | Proposed (follows from FR-UPD-1; discovery risk 1) | 2, 5 |
+| FR-UPD-2 | Staging puts the Service build into its own slot beside the installed one (since #33 by downloading CI's App build, FR-UPD-12). It does not replace, stop or modify the running core, the running App binary or the installed launcher. | Proposed (follows from FR-UPD-1; discovery risk 1) | 2, 5 |
 | FR-UPD-3 | One stager at a time. A second request while one runs waits for it or returns. When a staging finishes and the Service build has moved on, it stages the newest build. | Proposed | 2 |
 | FR-UPD-4 | At start, the launcher switches to a staged slot that matches the Service build, stops the old core, and opens the App. A launch never builds before the window when an installed build exists; a build happens before the window only on first install (`--install`, run in a terminal). | Proposed (measure 3) | 2, 3 |
 | FR-UPD-5 | A launch while the App is open brings its window forward. A launch while the launcher is alive and no window answers yet shows a visible notice that the App is starting. | Proposed (measure 3) | 3 |
 | FR-UPD-6 | While the Local core is read-only because of an update, the whole App fades. Navigation, reading, search and the Palette keep working; writes stay refused by the core. Network offline stays as today (bar pill, no fade). | Confirmed (Jeremy: "fade the entire app when a restart is required and only allow navigation") | 1, 4 |
-| FR-UPD-7 | The bar names the update step: building ("Updating · read-only"), ready ("Update ready · restart to edit"), failed ("Update failed · read-only · see log"). Settings › Service & updates shows the same step; "Update now" stages without restarting and says so. | Proposed wording; requirement confirmed (measure 4) | 1, 4 |
+| FR-UPD-7 | The bar names the update step: building ("Building the update · 40% · about 1 min left · read-only", FR-UPD-13; never a restart hint while building), ready ("Update ready · restart to edit"), failed ("Update failed · read-only · Settings › Diagnostics"). Settings › Service & updates shows the same step; "Update now" stages without restarting and says so. | Built (#30, wording #33) | 1, 4 |
 | FR-UPD-8 | `app.restart` with unsaved Composer text (`draft_unsaved` set) does not restart; it toasts that the text is unsaved and how to keep it. | Proposed (discovery risk: typed text across restart) | 2 |
 | FR-UPD-10 | When the staged build is ready, a notice floats above the bottom bar: "Comms Terminal <build> has been installed and the app requires a restart", with Restart, What changed (the repository's compare page between the two builds) and × (hides it until the next update step). | Confirmed (Jeremy, 2026-11-04, herdr-app's update notice as the model) | 2, 4 |
-| FR-UPD-9 | A failed staging leaves the installed build untouched and usable read-only, records the failure in the App log, and reports it per FR-UPD-7. | Proposed | 4 |
+| FR-UPD-9 | A failed staging leaves the installed build untouched and usable read-only, records the failure in the App log, and reports it per FR-UPD-7. | Built (#30) | 4 |
+| FR-UPD-11 | Restart App opens the staged build whichever launcher opened the window: the App asks the launcher (`--restart APP LAUNCHER`) to start a fresh launcher once both have exited, then exits 0; the fresh launcher switches before the window opens. | Built (#32; Jeremy: "the restart button needs to work properly") | 2 |
+| FR-UPD-12 | Mani compiles nothing. Every push to `main` publishes the App binary to the rolling pre-release `app-builds` (`comms-terminal-app-<commit>-linux-x86_64`, and `-darwin-arm64`); staging downloads the binary for the Service's commit, waits up to 20 minutes while CI builds it, checks it runs (`--help`), and installs the core from an export. A build CI never publishes fails the update (FR-UPD-9). | Built (#33; Jeremy: "no building, migrate fully to the new system") | 2, 4 |
+| FR-UPD-13 | While staging, the bar shows percent done and time left, from when this staging began (`stage-started`) and how long the last one took (`stage-seconds`); before a first staging, the time so far. | Built (#33; Jeremy: "needs a % complete and a ETA") | 4 |
 
 ### Non-functional requirements and invariants
 
@@ -68,7 +71,7 @@
 |---|---|---|
 | NFR-UPD-1 | Exact-build matching stays: the core's write gate (`core.py:901-910`) is unchanged. | Confirmed (guardrail 5; discovery decision) |
 | NFR-UPD-2 | The App binary and the core always run from the same slot (one commit). | Current invariant (runbook §10), kept |
-| NFR-UPD-3 | Disk: keep the installed slot and at most one staged slot; remove older ones after a switch. Cargo's `target/` stays shared so incremental builds stay incremental. | Proposed |
+| NFR-UPD-3 | Disk: keep the installed slot and at most one staged slot; remove older ones after a switch. Since #33 the switch also removes cargo's old `target/` (2.7 GB on Mani). | Built |
 | NFR-UPD-4 | The launcher still works from a bare desktop-entry `PATH` and on macOS (`deploy/comms-terminal-app:26-28`, `:42-49`). | Current, kept |
 | NFR-UPD-5 | The installed launcher updates only at a switch, never while the old one runs it. | Proposed (today it is replaced during `--prepare`, `:79-82`) |
 
@@ -224,18 +227,32 @@ Rollback: revert the launcher; `--install` from the previous `main` restores the
 
 Independent work: Phase 1 (launcher, `control.rs`, `main.rs`) and Phase 2 (`window.rs`, views) touch separate files. Their interface is: the launcher sets `COMMS_TERMINAL_APP_PREPARE` and stages on `--prepare` with exit 0 on success; the App treats exit 0 as "ready". Phase 2.1 depends on 1.2's exit-code contract.
 
+### Phase 4 — Follow-ups shipped after the first deploy (2026-11-04)
+
+| PR / change | Problem found | Change | Verified |
+|---|---|---|---|
+| #30 (in the same PR) `remote._die_with_parent` | The new CI step showed a Mac's Local core never started against a Service: `prctl` does not exist on macOS | Only Linux sets the parent-death signal | `tests/test_remote.py::test_the_ssh_master_starts_off_linux_too` fails without the fix |
+| #30 (in the same PR) CI | Every CI run rebuilt 28 vendored crates (3m17s) despite a cache hit; 7 of 25 macOS runs waited 5–10 min for a runner; test-only pushes did not trigger CI | Pinned vendored mtimes with a content-hash cache key; a Linux job (Mani's platform) is the gate; wider triggers | Linux job 1m50s with a warm cache |
+| #31 `223e50c` | Each update on Mani recompiled all vendored crates (~10 min): `git archive` dates every file at the commit | Vendored files dated at the last commit that changed them | Launcher test; Mani's `44bd570` build took about 30 s |
+| #32 `8bc0a8e` | Restart reopened the old build: Mani's launcher loop predated slots and never switches | FR-UPD-11 | Launcher test; Jeremy's Restart switched Mani to `8bc0a8e`, then `44bd570` |
+| #33 `44bd570` | Bar told Jeremy to restart while still building; no progress; Mani compiled at all | FR-UPD-12, FR-UPD-13, wording | Launcher and bar tests; `app-builds` asset for `44bd570` published (HTTP 200) |
+| Oracle `sshd` | Mani's tunnel port stayed bound up to ~10 min after a drop | `ClientAliveInterval 30`, `ClientAliveCountMax 3` in `/etc/ssh/sshd_config.d/hardening.conf` (Jeremy: "go ahead with client alive interval") | `sshd -t`, `sshd -T`; new sessions and `ssh mani-remote` work after reload |
+
+Outside this repository: Mani's user service `mani-reverse-tunnel` (another session, at Jeremy's request) keeps a reverse tunnel to Oracle so Workbox reaches Mani as `ssh mani-remote` from anywhere.
+
 ## 6. Risks, unknowns, and approvals
 
 | Item | Impact | Evidence / status | Mitigation or next evidence | Owner | Blocks |
 |---|---|---|---|---|---|
-| Restarts up to ~8 a day feel heavy | Strategy misfit | Jeremy accepted (discovery Q3) | Acceptance week; fallback is the Service contract range | Jeremy | No |
-| Staged-slot restart time on Mani | Slow restart breaks measure 3's spirit | Unmeasured; Mani unreachable | Time AS-UPD-3 in Phase 3.3 | Claude | No |
-| Notice tool on Mani for a launch with no window yet | FR-UPD-5 second half invisible | Unknown whether `notify-send` and a notification daemon run under niri | Check on Mani before Phase 1.4 | Claude | No (falls back to stderr) |
-| Migration of the flat install | Mani App fails to open after the change | Layout known from runbook §10 | Step 1.5 test; rollback via previous `--install` | Claude | No |
-| Unmerged `jeremy/app-desktop-entry` (`f72368e`) | Conflicting launcher edits | Branch adds a "building" message for a menu launch that builds first; this PRD removes that build | Decide: close the branch or fold its desktop-entry validation fix (`75e7814`) in | **Jeremy** | No |
-| Closing the window with unsaved Composer text | Text lost | Same as today; FR-UPD-8 covers restart only | Out of scope; revisit if it happens | Jeremy | No |
-| PRD approval | Implementation cannot start | Draft | Review this PRD | **Jeremy** | **Yes** |
-| Push to `main` | Deploy | Needs explicit go (`AGENTS.md`) | Ask at Phase 3.2 | **Jeremy** | Yes, for 3.2 |
+| First downloaded update not yet seen live | FR-UPD-12 unproven on Mani | `44bd570` was the last update compiled on Mani; its launcher downloads | Check the next push to `main` through `ssh mani-remote` | Claude | No |
+| CI fails for a commit on `main` | Mani cannot stage that build; "Update failed" after 20 min | By design (FR-UPD-12) | A later push builds; or push a fix | Jeremy | No |
+| A launch while the App is open; the starting notification | FR-UPD-5 unproven on niri | Tested with stand-ins only | Jeremy tries it once | Jeremy | No |
+| Restart with unsaved Composer text | FR-UPD-8 unproven live | Rust path compiled; no test drives it | Jeremy tries it once | Jeremy | No |
+| macOS download path | A teammate's Mac cannot update | CI publishes `darwin-arm64`; never run on a Mac | First teammate install | Jeremy | No |
+| Restarts up to ~8 a day feel heavy | Strategy misfit | Jeremy accepted (discovery Q3) | Fallback: the Service contract range | Jeremy | No |
+| Closing the window with unsaved Composer text | Text lost | Same as before; FR-UPD-8 covers Restart only | Revisit if it happens | Jeremy | No |
+| Unmerged `jeremy/app-desktop-entry` (`f72368e`) | Overlap | Its "building" message is moot: a launch never builds now | Close the branch, or keep its desktop-entry validation fix (`75e7814`) | **Jeremy** | No |
+| The laptop Console still self-restarts on each push | Out of scope here | `deploy/comms-terminal-local` unchanged | Same model if Jeremy asks | Jeremy | No |
 
 ## 7. Discussion and decision ledger
 
@@ -265,6 +282,15 @@ Independent work: Phase 1 (launcher, `control.rs`, `main.rs`) and Phase 2 (`wind
 | 22 | 2026-11-04 | Rust unit tests for `prepare_update` (Phase 2.1) replaced by the macOS CI step that drives the real App: offline core, stand-in `--prepare`, screenshots of the building and ready states, `raise` and `status` | Claude | `prepare_update` needs the window's thread and request channel; the CI step exercises the real path | Applied | Phase 2.1 verification |
 | 23 | 2026-11-04 | Feature scenarios cover AS-UPD-1–4 and AS-UPD-9; AS-UPD-5, 6 and 8 are launcher and view tests (`tests/test_app_launcher.py`, `tests/test_app_bars.py`); AS-UPD-7 (restart guard) is checked by hand in Phase 3.3 | Claude | No duplicate bindings | Applied | Phase 0.1 "AS-UPD-1 to 9" |
 | 24 | 2026-11-04 | "ship it"; then "ci should not take this long. need to figure it out" → fold the CI fix into this PR | Jeremy | 7 of 25 macOS runs waited 5–10 min for a runner; every run recompiled 28 vendored crates (3m17s) despite a cache hit; test-only pushes did not trigger CI | Applied: Linux job, pinned vendored mtimes with a content-hash cache key, wider trigger paths | — |
+| 25 | 2026-11-04 | Stand-in shells in launcher tests lost their arguments on macOS (`sh -c` execs `sleep`) | Claude, from macOS CI | Test fault, not product | Fixed (`sleep 60; true`) | — |
+| 26 | 2026-11-04 | Local core cannot start against a Service on macOS (`prctl`) | Claude, from the new CI step | Real bug since the App's macOS support | Fixed in #30 | — |
+| 27 | 2026-11-04 | "do not wait for runners. if none is available, we should deploy and bypass the test - but do not cancel the test" | Jeremy | Merges go on the Linux check with admin bypass; macOS runs on | Applied to #30–#33 | — |
+| 28 | 2026-11-04 | "why do builds take 10min" → vendored crates rebuilt on every update | Jeremy; Claude found the `git archive` mtime cause | — | Fixed in #31 | — |
+| 29 | 2026-11-04 | "the restart button needs to work properly" after Restart reopened the old build | Jeremy | Mani's pre-slot launcher loop never switches | FR-UPD-11, #32 | — |
+| 30 | 2026-11-04 | "lets revisit this": build the download path now; host it as a GitHub Release asset; "no building, migrate fully to the new system" | Jeremy (questions) | Builds take minutes on Mani; CI already builds in under 2 min | FR-UPD-12, #33 | #15 "No prebuilt binaries now" |
+| 31 | 2026-11-04 | "needs a % complete and a ETA" while the bar said "until you restart" during a build | Jeremy | Restarting mid-build cannot help | FR-UPD-13 and wording, #33 | FR-UPD-7's building text |
+| 32 | 2026-11-04 | Persistent reverse tunnel Mani → Oracle for `ssh mani-remote`; then "go ahead with client alive interval" | Jeremy (tunnel set up by another session) | Mani away from the home network | Applied on Oracle | — |
+| 33 | 2026-11-04 | "update prd" | Jeremy | — | This revision | — |
 
 Earlier App history (undated here): `9a60d07` "the App stays open while an update builds, then reopens" (2026-11-03) introduced `--prepare` and `launch.pid`; `4b02e1d` (2026-10-20) introduced exit code 75 for the Console.
 
@@ -278,6 +304,13 @@ Earlier App history (undated here): `9a60d07` "the App stays open while an updat
 | 2026-11-04T17:14+00:00 | Claude | Worktree `~/workspace/comms-terminal-app-update-20261104`, branch `jeremy/app-update-on-restart` from `7a8b707` | Created | `git worktree list` | Source-observed |
 | 2026-11-04 (time not recorded) | Claude | Phases 0–2, 3.1: launcher slots, `raise`, stage-only App, fade, bar and Settings step, restart guard, notice, scenarios, runbook, CI step | Committed `553466e`…`484a264`, pushed | `git log` | Source-observed |
 | 2026-11-04 (time not recorded) | Claude | Focused tests: `tests/test_app_launcher.py` (6), `test_app_bars.py`, `test_app_settings.py`, `test_app_parity.py`, `test_core.py`, update scenarios in `test_features.py` | All passed | pytest output | Source-observed |
+| 2026-11-04T18:26:29+00:00 | Claude | Merged #30 (`da609b9`) on the Linux check, admin bypass | Oracle deploy complete 18:27; Mani on `da609b9` at 18:29 (its last self-restart) | PR #30, `deployment.json`, `ssh mani-remote` | Source-observed |
+| 2026-11-04T18:40:40+00:00 | Claude | Merged #31 (`223e50c`) | Deployed | PR #31 | Source-observed |
+| 2026-11-04T18:44:41+00:00 | Claude | Merged #32 (`8bc0a8e`) | Deployed; Jeremy closed and reopened once, then Restart switched Mani to `8bc0a8e` (18:58) | PR #32, Mani state | Source-observed |
+| 2026-11-04T18:58:24+00:00 | Claude | Merged #33 (`44bd570`) | CI published `app-builds` asset for `44bd570`; Oracle complete; Mani running `44bd570`, online, by 18:58:55 local process start | PR #33, asset HTTP 200, `comms-terminal-app status` | Source-observed |
+| 2026-11-04 (time not recorded) | Claude | Oracle `sshd` keepalive 300×2 → 30×3 | Reloaded; sessions and tunnel verified | `sshd -T` | Source-observed |
+| 2026-11-04 (time not recorded) | Claude | Full suite on the #30 branch | 1792 passed | `uv run pytest` | Source-observed |
+| 2026-11-04T19:06+00:00 | Claude | Updated this PRD | Shipped status, FR-UPD-11–13, Phase 4, risks, ledger | This file | Source-observed |
 
 ## 9. Sources and coverage check
 
@@ -294,6 +327,6 @@ Earlier App history (undated here): `9a60d07` "the App stays open while an updat
 | `docs/runbook.md` §10 | Install layout | — |
 | Mani | Live install, notice tool, timings | **Unreachable** 2026-11-04 |
 
-**Coverage.** Every FR and NFR maps to a phase step and a check, except: the second half of FR-UPD-5 (notice with no window) depends on the Mani notice-tool unknown; measure 3's 2-second bound and AS-UPD-3 timing are verified only by hand in Phase 3.3. NFR-UPD-4 (macOS) has no automated check; owner Claude, next action: run the launcher tests with `uname` stubbed to Darwin in Phase 1.
+Mani was unreachable on 2026-11-04 until the reverse tunnel; later checks used `ssh mani-remote`.
 
-This `/prd` invocation performed no implementation: no code, test, configuration, branch, commit or deploy changed.
+**Coverage.** Every FR and NFR maps to a shipped change and a check. Not yet verified live: FR-UPD-5 (raise on niri, starting notification), FR-UPD-8 (restart guard), FR-UPD-12 on a real downloaded update and on macOS; see §6.
