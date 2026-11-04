@@ -5,13 +5,13 @@
 | Field | Value |
 |---|---|
 | Title | App Updates on Restart |
-| Status | **Draft.** The strategy was approved in discovery on 2026-11-04; this PRD (requirements, phases, acceptance) has not been reviewed. |
+| Status | **Implementing.** Strategy approved in discovery 2026-11-04; Jeremy said "execute the prd fully" 2026-11-04. Phases 0–2 and 3.1 built on branch `jeremy/app-update-on-restart`; Phase 3.2 (merge, deploys Oracle) and 3.3 (hands-on check on Mani) pending. |
 | Owner / authority | Jeremy. Source-of-truth chain: `AGENTS.md` (project rules) → `.agents/discovery/2026-11-04-autoupdate.md` (approved problem and strategy) → `.agents/prd/2026-10-31-desktop-app.md` (FR-APP-14, FR-APP-15, AS-APP-9, which this PRD amends) → code on `origin/main`. |
 | Created / updated | Created 2026-11-04T17:09+00:00 (2026-11-04 13:09 America/Halifax). |
 | Topic | How the desktop App on Mani takes a new Service build: stage it in the background, fade while read-only, apply at the next start, and always answer a launch. |
 | Code basis | `origin/main` at `7a8b707`, exported read-only to the session scratchpad. Line numbers below refer to that commit. |
 | History limits | This session's conversation (seed through Phase 4 of discovery) was available in full. Earlier App work is known only through the desktop App PRD, commit messages and code. Mani was unreachable over SSH on 2026-11-04, so nothing on it was observed. |
-| Implementation authorization | **None.** This PRD authorizes no code, branch, push or deploy. A push to `main` deploys to Oracle and needs Jeremy's go. |
+| Implementation authorization | Jeremy, 2026-11-04: "execute the prd fully". Merging to `main` deploys to Oracle and replaces the App on Mani at the next start; the merge is confirmed with Jeremy before it runs. |
 
 ## 2. Executive framing
 
@@ -59,6 +59,7 @@
 | FR-UPD-6 | While the Local core is read-only because of an update, the whole App fades. Navigation, reading, search and the Palette keep working; writes stay refused by the core. Network offline stays as today (bar pill, no fade). | Confirmed (Jeremy: "fade the entire app when a restart is required and only allow navigation") | 1, 4 |
 | FR-UPD-7 | The bar names the update step: building ("Updating · read-only"), ready ("Update ready · restart to edit"), failed ("Update failed · read-only · see log"). Settings › Service & updates shows the same step; "Update now" stages without restarting and says so. | Proposed wording; requirement confirmed (measure 4) | 1, 4 |
 | FR-UPD-8 | `app.restart` with unsaved Composer text (`draft_unsaved` set) does not restart; it toasts that the text is unsaved and how to keep it. | Proposed (discovery risk: typed text across restart) | 2 |
+| FR-UPD-10 | When the staged build is ready, a notice floats above the bottom bar: "Comms Terminal <build> has been installed and the app requires a restart", with Restart, What changed (the repository's compare page between the two builds) and × (hides it until the next update step). | Confirmed (Jeremy, 2026-11-04, herdr-app's update notice as the model) | 2, 4 |
 | FR-UPD-9 | A failed staging leaves the installed build untouched and usable read-only, records the failure in the App log, and reports it per FR-UPD-7. | Proposed | 4 |
 
 ### Non-functional requirements and invariants
@@ -258,7 +259,11 @@ Independent work: Phase 1 (launcher, `control.rs`, `main.rs`) and Phase 2 (`wind
 | 16 | 2026-11-04 | Measure 1 replaced: read-only looks read-only and says restart is needed; window never vanishes | Jeremy (question) | Follows #11 | Approved | Original measure 1 |
 | 17 | 2026-11-04 | Strategy "honest lockstep" with its diagrams and risks | Jeremy (Phase 4 gate) | Rejected: release train (#14), contract range and expand/contract (#11, #13), prebuilt (#15), skew protection (two Service builds on one database) | Approved | — |
 | 18 | 2026-11-04 | `/prd` for the approved strategy | Jeremy | — | Request | — |
-| 19 | 2026-11-04 | Stage in slots rather than in place; switch at start; launch guard raises; restart refuses with unsaved Composer text | Claude (this PRD) | In-place install stops and rewrites the running core (`deploy/comms-terminal-app:76`, `:83`); raise already exists in the binary | **Proposed**, needs PRD approval | — |
+| 19 | 2026-11-04 | Stage in slots rather than in place; switch at start; launch guard raises; restart refuses with unsaved Composer text | Claude (this PRD) | In-place install stops and rewrites the running core (`deploy/comms-terminal-app:76`, `:83`); raise already exists in the binary | Built under #20 | — |
+| 20 | 2026-11-04 | "execute the prd fully" | Jeremy | — | Implementation authorized | PRD "None" authorization |
+| 21 | 2026-11-04 | Show a herdr-style notice: "Comms Terminal x.y.z has been installed and the app requires a restart", with Restart (screenshot of herdr-app's "Herdr 0.1.13 and herdr-core 0.1.18 are ready · Restart · What changed · ×") | Jeremy, mid-implementation | One-click restart where his eyes are | Built as FR-UPD-10; `x.y.z` is the build's short commit, the only version the App has | — |
+| 22 | 2026-11-04 | Rust unit tests for `prepare_update` (Phase 2.1) replaced by the macOS CI step that drives the real App: offline core, stand-in `--prepare`, screenshots of the building and ready states, `raise` and `status` | Claude | `prepare_update` needs the window's thread and request channel; the CI step exercises the real path | Applied | Phase 2.1 verification |
+| 23 | 2026-11-04 | Feature scenarios cover AS-UPD-1–4 and AS-UPD-9; AS-UPD-5, 6 and 8 are launcher and view tests (`tests/test_app_launcher.py`, `tests/test_app_bars.py`); AS-UPD-7 (restart guard) is checked by hand in Phase 3.3 | Claude | No duplicate bindings | Applied | Phase 0.1 "AS-UPD-1 to 9" |
 
 Earlier App history (undated here): `9a60d07` "the App stays open while an update builds, then reopens" (2026-11-03) introduced `--prepare` and `launch.pid`; `4b02e1d` (2026-10-20) introduced exit code 75 for the Console.
 
@@ -269,6 +274,9 @@ Earlier App history (undated here): `9a60d07` "the App stays open while an updat
 | 2026-11-04 (time not recorded) | Claude | Discovery Phases 1–4 for client autoupdate | Approved strategy | `.agents/discovery/2026-11-04-autoupdate.md` | Source-observed |
 | 2026-11-04 (time not recorded) | Claude | Rendered discovery diagrams with `@mermaid-js/mermaid-cli@11.4.2` | 3 of 3 OK | Session command output | Source-observed |
 | 2026-11-04T17:09+00:00 | Claude | Read `origin/main` `7a8b707` (launcher, `window.rs`, `control.rs`, `main.rs`, `host.rs`, views, `core.py`, tests, `features/app.feature`, runbook §10); wrote this PRD | Draft PRD | This file | Source-observed |
+| 2026-11-04T17:14+00:00 | Claude | Worktree `~/workspace/comms-terminal-app-update-20261104`, branch `jeremy/app-update-on-restart` from `7a8b707` | Created | `git worktree list` | Source-observed |
+| 2026-11-04 (time not recorded) | Claude | Phases 0–2, 3.1: launcher slots, `raise`, stage-only App, fade, bar and Settings step, restart guard, notice, scenarios, runbook, CI step | Committed `553466e`…`484a264`, pushed | `git log` | Source-observed |
+| 2026-11-04 (time not recorded) | Claude | Focused tests: `tests/test_app_launcher.py` (6), `test_app_bars.py`, `test_app_settings.py`, `test_app_parity.py`, `test_core.py`, update scenarios in `test_features.py` | All passed | pytest output | Source-observed |
 
 ## 9. Sources and coverage check
 

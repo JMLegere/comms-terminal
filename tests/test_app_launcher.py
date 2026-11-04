@@ -77,7 +77,7 @@ class Mani:
         return os.readlink(self.data / "current")
 
     def core(self):  # a stand-in Local core on this home's inbox, as stop_core finds it
-        return subprocess.Popen(["sh", "-c", "sleep 60", "sh", "--db", str(self.data / "inbox.db")])
+        return subprocess.Popen(["sh", "-c", "sleep 60; true", "sh", "--db", str(self.data / "inbox.db")])
 
 
 def test_a_new_build_is_staged_beside_the_running_one_and_opens_at_the_next_start(tmp_path):
@@ -157,7 +157,7 @@ def test_a_second_start_brings_the_open_window_forward(tmp_path):
     m = Mani(tmp_path)
     m.service(m.v1)
     m.launch()
-    launcher = subprocess.Popen(["sh", "-c", "sleep 60", "comms-terminal-app-launch"])  # the first, still running
+    launcher = subprocess.Popen(["sh", "-c", "sleep 60; true", "comms-terminal-app-launch"])  # the first, still running
     try:
         (m.data / "launch.pid").write_text(str(launcher.pid))
         r = m.launch()

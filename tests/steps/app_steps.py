@@ -419,7 +419,7 @@ def old_core_stopped(mani):
 @given("the App open", target_fixture="mani")
 def app_open(tmp_path):
     m = installed_mani(tmp_path / "mani")
-    m.first = subprocess.Popen(["sh", "-c", "sleep 60", "comms-terminal-app-launch"])  # its launcher, still running
+    m.first = subprocess.Popen(["sh", "-c", "sleep 60; true", "comms-terminal-app-launch"])  # its launcher, still running
     (m.data / "launch.pid").write_text(str(m.first.pid))
     return m
 
