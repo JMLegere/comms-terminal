@@ -59,7 +59,7 @@ Jeremy works in the console; agents read and prepare work through the CLI. On Wo
 | Skip a Task, or start a new Thread for it | `comms-terminal task skip\|new-thread TASK_ID` |
 | Start a Reply Draft | `comms-terminal draft new --thread ID --body -` |
 | Start a New Thread Draft | `comms-terminal draft new --connection ID --to … --subject … --body -` |
-| Due Tasks with their Person and Draft | `comms-terminal tasks` |
+| Due Tasks, then scheduled email Tasks, with their Person and Draft | `comms-terminal tasks` |
 | Enroll a Person | `comms-terminal enroll PERSON SEQUENCE [--start DATE\|DAYS] [--org DOMAIN\|sole] [--to EMAIL]` |
 | Enrollments | `comms-terminal enrollment list [PERSON]`, `resume ID`, `start ID DATE`, `finish ID REASON`, `remove ID` |
 | Sequences | `comms-terminal sequence list`, `show NAME`, `apply - [--dry-run]` (Markdown on stdin), `new`, `rename`, `describe`, `sends-from`, `archive`, `delete` |

@@ -1120,12 +1120,14 @@ def undo_task(db, undo: dict, *, now: datetime | None = None) -> None:
                 _insert(db, "composition_drafts", d)
 
 
-def tasks_due(db, now: datetime | None = None) -> list[dict]:
-    """The Tasks page (FR-SEQ-15): Active Enrollments' Tasks whose day has come, grouped Overdue, Today, and Later
-    today (a fixed time not yet reached), oldest first. A Task whose Draft is scheduled to send is left out until it
-    sends, or until the send fails or is unscheduled (Jeremy, 2026-10-20)."""
+def tasks_due(db, now: datetime | None = None, *, scheduled: bool = False) -> list[dict]:
+    """Due Tasks (FR-SEQ-15): Active Enrollments' Tasks whose day has come, grouped Overdue, Today, and Later
+    today (a fixed time not yet reached), oldest first. An email Task whose Draft is scheduled to send needs nothing
+    until it sends or the send fails, so it is left out (Jeremy, 2026-10-20); a failed or unscheduled send brings it
+    back. `scheduled=True` is the Tasks page (decision #146): those Tasks follow under Scheduled, by send time."""
     now = now or clock.now()
     today = now.astimezone(LOCAL).date()
+    waiting = "d.send_at IS NOT NULL AND d.send_error IS NULL"
     out = []
     for r in db.execute(
             "SELECT t.*, s.kind, s.action_kind, s.condition, s.true_label, s.false_label, s.position, s.at_time, s.subject,"
@@ -1133,21 +1135,24 @@ def tasks_due(db, now: datetime | None = None) -> list[dict]:
             " e.person_id, e.sequence_id, coalesce(e.starts_at, e.enrolled_at) AS starts_at, q.name AS sequence, p.display_name AS person,"
             " (SELECT count(*) FROM sequence_steps x WHERE x.sequence_id = q.id AND x.position IS NOT NULL) AS steps,"
             " (SELECT id FROM composition_drafts d WHERE d.task_id = t.id) AS draft_id,"
+            f" (SELECT send_at FROM composition_drafts d WHERE d.task_id = t.id AND {waiting}) AS send_at,"
             " (SELECT name FROM sequences x WHERE x.id = s.enroll_sequence_id) AS enroll_sequence"
             " FROM tasks t JOIN sequence_steps s ON s.id = t.step_id JOIN enrollments e ON e.id = t.enrollment_id"
             " JOIN sequences q ON q.id = e.sequence_id JOIN persons p ON p.id = e.person_id"
-            " WHERE t.state = 'DUE' AND e.state IN ('ACTIVE', 'FINISHING') AND NOT EXISTS (SELECT 1 FROM composition_drafts d"
-            " WHERE d.task_id = t.id AND d.send_at IS NOT NULL AND d.send_error IS NULL) ORDER BY t.due_at, t.id"):
+            " WHERE t.state = 'DUE' AND e.state IN ('ACTIVE', 'FINISHING') ORDER BY t.due_at, t.id"):
+        if r["send_at"] and not scheduled:
+            continue
         due = datetime.fromisoformat(r["due_at"])
         day = due.astimezone(LOCAL).date()
         if day > today:
             continue
-        group = "overdue" if day < today else "later today" if r["at_time"] and due > now else "due today"
+        group = "scheduled" if r["send_at"] else "overdue" if day < today else \
+            "later today" if r["at_time"] and due > now else "due today"
         org = person_fill(db, r["person_id"])["company"]
         out.append(dict(r) | dict(group=group, organization=org, day=day_number(datetime.fromisoformat(r["starts_at"]), due),
                                   age=(today - day).days))
-    order = {"overdue": 0, "due today": 1, "later today": 2}
-    return sorted(out, key=lambda t: (order[t["group"]], t["due_at"], t["id"]))
+    order = {"overdue": 0, "due today": 1, "later today": 2, "scheduled": 3}
+    return sorted(out, key=lambda t: (order[t["group"]], t["send_at"] or t["due_at"], t["id"]))
 
 
 # --- hooks from inbox ---------------------------------------------------------

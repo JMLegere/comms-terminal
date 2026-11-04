@@ -1048,9 +1048,14 @@ All entries are dated 2026-10-10; exact times are unproven unless noted. Full de
   - Status: Approved (2026-11-04). Built on branch `jeremy/unified-drafts`.
 
 - **145**
-  - Request / decision: Email Tasks stay Tasks until sent. An email Task with a Draft (Reply Draft or New Thread Draft) is listed in Today's tasks pane and on the Tasks page, counted and named as a Task, until its Draft is sent; selecting it shows its Draft in place, as the Tasks page does. Its Draft is on neither the Drafts page nor Today's drafts pane (`inbox.list_drafts(tasks=False)`), except while its send is scheduled, when the Tasks list leaves the Task out (2026-10-20) and the Draft waits with the scheduled ones. Reverses the Task part of #144 (Q5 of the Unified Drafts discovery); a Thread whose Reply Draft is ready still shows through that Draft.
+  - Request / decision: Email Tasks stay Tasks until sent. An email Task with a Draft (Reply Draft or New Thread Draft) is listed in Today's tasks pane and on the Tasks page, counted and named as a Task, until its Draft is sent; selecting it shows its Draft in place, as the Tasks page does. Its Draft is on neither the Drafts page nor Today's drafts pane (`inbox.list_drafts(tasks=False)`), except while its send is scheduled, when the Tasks list leaves the Task out (2026-10-20) and the Draft waits with the scheduled ones. Reverses the Task part of #144 (Q5 of the Unified Drafts discovery); a Thread whose Reply Draft is ready still shows through that Draft. #146 refines the scheduled case: a scheduled email Task shows on the Tasks page under Scheduled, and its Draft leaves the Drafts list.
   - Source: Jeremy (2026-11-04): "Drafts from Tasks should stay as Tasks until sent"; "its an email task, not a 'draft'".
   - Status: Approved (2026-11-04). Built on branch `jeremy/task-drafts-stay-tasks`.
+
+- **146**
+  - Request / decision: Scheduled email Tasks. An email Task whose Draft is scheduled to send is a Task until it sends: the Tasks page lists it under SCHEDULED, after the due groups, with its send time, and shows its Draft in place so Jeremy can edit or unschedule it. It stays off Today (the Oct 20 rule) and off the Drafts page and Today's drafts pane; the Calendar still shows the send. A failed send brings it back as a due Task. `sequences.tasks_due(scheduled=True)` is the Tasks page (console, App `tasks.list`, `comms-terminal tasks`); `inbox.list_drafts(tasks=False)` leaves out every Task's Draft. Applies the Placement principles in `docs/design/console.md` §3 (one identity; lists show what needs you; queued work stays findable; failure returns as work). Refines #145's scheduled case.
+  - Source: Jeremy (2026-11-04), approved follow-up to #145, with the four principles to record.
+  - Status: Approved (2026-11-04). Built on branch `jeremy/scheduled-email-tasks`.
 
 ## 8. Work log
 

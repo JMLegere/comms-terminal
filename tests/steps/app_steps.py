@@ -1180,6 +1180,23 @@ def pane_keeps_reply_draft(app):
     assert app.phase5["after"] == ["d-reply", "thread"]
 
 
+@given("the App's Tasks page with an overdue call Task and a scheduled email Task")
+def tasks_with_scheduled(app):
+    pass
+
+
+@when("the Tasks page draws them")
+def tasks_draw(app):
+    app.phase5 = phase5_view("scheduled")
+
+
+@then('the scheduled one is under "SCHEDULED" after the due ones, its When is its send time, and the footer reads '
+      '"1 due · 1 scheduled"')
+def tasks_scheduled(app):
+    assert app.phase5 == {"items": ["OVERDUE", "k1", "SCHEDULED", "k2"], "when": ["2d", "\U000f0150 Wed 09:30"],
+                          "footer": ["1 due · 1 scheduled"]}
+
+
 @given("two due Tasks in the App with the first selected")
 def two_tasks(app):
     pass

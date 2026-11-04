@@ -20,7 +20,7 @@ export function opens(i) {
   if (i.kind === "event") return ["push", { page: "event", event: i.event }, "nav.push"];
   if (i.kind === "enrollment") return ["push", { page: "person", person: i.ref }, "nav.push"];
   if (i.kind === "task") return ["task", i.ref, "nav.tasks"];
-  if (i.kind === "draft") return ["draft", i.ref, "nav.drafts"];
+  if (i.kind === "draft") return i.task ? ["task", i.task, "nav.tasks"] : ["draft", i.ref, "nav.drafts"]; // an email Task's send: its Task (#146)
   return ["thread", i.ref, null]; // a Snoozed wake: the Thread where it lives
 }
 

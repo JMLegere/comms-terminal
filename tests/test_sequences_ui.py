@@ -334,6 +334,37 @@ def test_an_email_task_sends_from_the_tasks_page_and_the_next_task_follows(tmp_p
     assert seen["task"] == ("DONE", 1)
 
 
+def test_a_scheduled_email_task_waits_under_scheduled_on_the_tasks_page_and_off_today(tmp_path):
+    """Decision #146: a scheduled email Task is a Task until it sends: under SCHEDULED on the Tasks page, with its
+    Draft in place; on neither Today nor the Drafts list."""
+    path, _ = seeded(tmp_path)
+    db = inbox.connect(path)
+    s = sq.create_sequence(db, "Email first")
+    sq.save_step(db, sq.add_step(db, s, "email"), subject="Hello {first_name}", body="Hi {first_name}", needs_edit=0)
+    ana = next(p["id"] for p in inbox.people(db) if p["name"] == "Ana Ruiz")
+    sq.enroll(db, ana, s)
+    (draft,) = db.execute("SELECT id FROM composition_drafts WHERE task_id IS NOT NULL").fetchall()
+    inbox.schedule_draft(db, draft[0], clock.now() + timedelta(days=1))
+    seen = {}
+
+    async def scenario(app, pilot):
+        app.main.go("tasks")
+        await pilot.pause()
+        page = app.main.current
+        seen["tasks"] = [t and t["group"] for t in page.items]
+        seen["below"] = str(page.query_one("#below").content)
+        seen["editor"] = type(app.main.draft_view).__name__
+        app.main.go("today")
+        await pilot.pause()
+        today = app.main.current
+        seen["today"] = (today.count(today.tasks), [d["id"] for d in today.drafts.items])
+
+    run(Console(path), [scenario], size=(187, 40))
+    assert seen["tasks"] == [None, "scheduled"] and "0 due · 1 scheduled" in seen["below"]
+    assert seen["editor"] == "TaskDraftView"
+    assert seen["today"][0] == 0 and draft[0] not in seen["today"][1]
+
+
 def test_sequence_step_names_its_sequence_and_a_waiting_task_enrolls_on_e(tmp_path):
     path, _ = seeded(tmp_path)
     db, s = calls(path)

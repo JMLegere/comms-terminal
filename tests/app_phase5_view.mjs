@@ -1,6 +1,6 @@
 // Phase 5: Calendar, Cases and Tasks as the Console's (AS-CONF-14..16), run in the shipped views.
-// Usage: node --experimental-vm-modules app_phase5_view.mjs join|fold|reply|task-stale|task-enter|undo|grid
-import { answers, calls, cx, input, load, ran, settle, state, tasks, toasts } from "./app_view_kit.mjs";
+// Usage: node --experimental-vm-modules app_phase5_view.mjs join|fold|reply|task-stale|task-enter|undo|scheduled|grid
+import { answers, calls, cx, input, load, ran, settle, state, tasks, texts, toasts } from "./app_view_kit.mjs";
 
 const kase = process.argv[2];
 const out = {};
@@ -64,6 +64,17 @@ if (kase === "join") { // D95: o toasts the link; Ctrl+click opens it
   make(Tasks, { rows, filter: null, items: [], scroll: { scroll_to_item() {} } }).command("skip", cx);
   await settle();
   out.undo = state.undo; out.toast = toasts.at(-1); out.task = state.task;
+} else if (kase === "scheduled") { // decision #146: a scheduled email Task under SCHEDULED, with its send time
+  const Tasks = await load("tasks");
+  const send = new Date(2026, 10, 4, 9, 30).toISOString(); // Wed 04 Nov 09:30 local
+  const rows = [{ id: "k1", kind: "call", person: "Ben", day: 3, group: "overdue", age: 2 },
+    { id: "k2", kind: "email", person: "Dana", day: 1, group: "scheduled", send_at: send }];
+  const view = make(Tasks, { rows, filter: null, items: [], scroll: { scroll_to_item() {} } });
+  texts.length = 0;
+  view.render();
+  out.items = view.items.map((it) => it.header ?? it.key);
+  out.when = rows.map(Tasks.ns.whenOf);
+  out.footer = texts.filter((x) => /^\d+ due/.test(x));
 } else if (kase === "grid") { // D91: week rows split by month separators
   const { blocks, dateLine } = (await load("calendar")).ns;
   const b = blocks(new Date(2026, 9, 26), new Date(2026, 10, 9));

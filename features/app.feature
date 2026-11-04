@@ -329,6 +329,13 @@ Feature: App
     When Jeremy skips it with x
     Then the toast offers z undo, z would restore it, and the next Task is selected
 
+  @AS-CONF-16 @FR-CONF-10 @FR-SEQ-15
+  Scenario: The Tasks page lists a scheduled email Task under Scheduled with its send time
+    # Decision #146 (Jeremy, 2026-11-04): a scheduled email Task is a Task until it sends, findable here.
+    Given the App's Tasks page with an overdue call Task and a scheduled email Task
+    When the Tasks page draws them
+    Then the scheduled one is under "SCHEDULED" after the due ones, its When is its send time, and the footer reads "1 due · 1 scheduled"
+
   @AS-CONF-7 @FR-CONF-9
   Scenario: → takes an address completion in the reply box
     Given a reply box whose Cc offers a completion

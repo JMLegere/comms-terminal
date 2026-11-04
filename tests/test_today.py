@@ -2,9 +2,9 @@
 until its Draft is sent), the Drafts not shown through them, and what comes next. Times are fixed: Monday 2026-10-19, 10:00 in Halifax."""
 
 from test_sequences import DAY, ME, MONDAY, clock, db, person, secret  # noqa: F401  (fixtures)
-from datetime import datetime
+from datetime import datetime, timedelta
 
-from comms_terminal import inbox, sequences as sq
+from comms_terminal import calendar, inbox, sequences as sq
 
 
 def thread_of(db, pid):
@@ -19,8 +19,8 @@ def blank(db):
 
 def test_each_item_appears_once_and_an_email_task_stays_a_task_until_sent(db):
     """Decision #144 (FR-UD-8): a Todo Thread whose Reply Draft is ready leaves its own list for the drafts list.
-    Jeremy, 2026-11-04: an email Task stays a Task until its Draft is sent, so its Draft is in neither Drafts list,
-    except while its send is scheduled and the Task is out of Due Tasks."""
+    Jeremy, 2026-11-04 (#145, #146): an email Task stays a Task until its Draft is sent, so its Draft is in neither
+    Drafts list; while its send is scheduled it is on the Tasks page under Scheduled, off Today."""
     dana, ana = person(db, "dana@harbourline.example", "Dana Roy"), person(db, "ana@acme.com", "Ana Ruiz")
     s, _ = secret(db)
     sq.enroll(db, dana, s)
@@ -38,9 +38,13 @@ def test_each_item_appears_once_and_an_email_task_stays_a_task_until_sent(db):
     assert task_draft in {d["id"] for d in inbox.list_drafts(db)}  # every Draft, for callers that want them all
     inbox.mark_needs_edit(db, on_todo["id"])  # not ready: the Thread is back in its own list, the Draft stays
     assert [x["id"] for x in inbox.today(db)["threads"]] == [todo]
-    inbox.schedule_draft(db, task_draft, MONDAY + 2 * DAY)  # scheduled: off Due Tasks, so on the Drafts list
+    inbox.schedule_draft(db, task_draft, MONDAY + 2 * DAY)  # scheduled: off Today, still off the Drafts list
     t = inbox.today(db)
-    assert t["tasks"] == [] and task_draft in {d["id"] for d in t["drafts"]}
+    assert t["tasks"] == [] and task_draft not in {d["id"] for d in t["drafts"]}
+    assert [(x["id"], x["group"]) for x in sq.tasks_due(db, scheduled=True)] == [(task, "scheduled")]
+    day = (MONDAY + 2 * DAY).astimezone(sq.LOCAL).date()
+    sends = [i for i in calendar.items(db, day, day + timedelta(days=1)) if i["kind"] == "draft"]
+    assert [(i["ref"], i.get("task")) for i in sends] == [(task_draft, task)]  # the Calendar's send opens its Task
 
 
 def test_next_wake_and_next_task_say_what_comes_next(db, clock):
