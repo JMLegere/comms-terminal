@@ -993,6 +993,7 @@ class ThreadsPage(Page, ThreadActions):
     """The Status view's list. The selected Thread shows beside it; arrows move focus between panes."""
 
     fixed_view = None  # a Status view index that stays put (Today's Todo list); else the app's current view
+    today = False  # Today's list: a Thread whose Reply Draft is ready shows through that Draft (decision #144)
     KIND = "threads"
 
     def selectable_rows(self):
@@ -1082,7 +1083,10 @@ class ThreadsPage(Page, ThreadActions):
                 self.app.main.query_one("#main").border_title = pill(self.TITLE, "blue")
                 self.app.main.refresh_chrome()
         self.query_one("#legend", Static).update(LEGEND[VIEW_NAMES[view]])
-        self.rows = self.grouped(inbox.queue(db, VIEW_NAMES[view]))
+        rows = inbox.queue(db, VIEW_NAMES[view])
+        if self.today:  # the selected Thread keeps its place until the selection leaves it (FR-UD-9)
+            rows = [r for r in rows if r["detail"] != inbox.REPLY_DRAFT or r["id"] == keep]
+        self.rows = self.grouped(rows)
         threads = [r for r in self.rows if not r.get("header")]
         table = self.query_one(DataTable)
         first = next((i for i, r in enumerate(self.rows) if not r.get("header")), 0)
@@ -1710,11 +1714,10 @@ class ReplyBox(Composer, Vertical):
             title = view["thread"].title
             self.query_one(".subjectvalue").update(escape(title if title.lower().startswith("re:") else f"Re: {title}"))
             self.set_mode(mode)
-            if self.app._managed_console:
-                draft = inbox.reply_draft(self.app.db, draft_key)
-                if draft is not None:
-                    self.query_one(".toinput", Input).value = draft["to"]
-                    self.query_one(".ccinput", Input).value = draft["cc"]
+            draft = inbox.reply_draft(self.app.db, draft_key)
+            if draft is not None:  # the Reply Draft keeps its own To and Cc (decision #144)
+                self.query_one(".toinput", Input).value = draft["to"]
+                self.query_one(".ccinput", Input).value = draft["cc"]
         else:
             self.query_one(".flabel").update("To")
             self.query_one(".fromvalue").update(f"{escape(view['where'])} [#928374]· in thread[/]")
@@ -1779,8 +1782,15 @@ class ReplyBox(Composer, Vertical):
 
     def action_send(self):
         self.cancel_autosave()  # a pending autosave must not bring back a reply that went out
+        draft = inbox.reply_draft(self.app.db, self.draft_key)
+        if draft and draft["sending_at"]:  # the Reply Draft is locked, as any Draft is (decision #144)
+            self.app.push_screen(Pick("Send outcome unknown", [
+                ("keep", "Keep locked"), ("again", "Send again anyway"), ("sent", "Mark as sent · remove Draft")],
+                "This reply may already have gone out. Check the Thread and the provider's Sent folder first."),
+                lambda choice: self.resolve_unknown(choice, draft) if self.is_attached else None)
+            return
         text = self.query_one(TextArea).text.strip()
-        if not text:
+        if not text and not inbox.staged(self.app.db, thread_id=self.draft_key):
             self.hint("Nothing to send.", error=True)
             return
         split = lambda s: [a.strip() for a in s.split(",") if a.strip()]  # noqa: E731
@@ -1808,11 +1818,28 @@ class ReplyBox(Composer, Vertical):
 
         self.app.push_screen(Pick("Send", options), chosen)
 
+    def resolve_unknown(self, choice, draft):
+        if choice == "again" and self.app.send_draft is None:
+            self.app.notify(SENDING_UNAVAILABLE)
+        elif choice == "again":
+            self.hint("sending…")
+            self.send(again=draft)
+        elif choice == "sent":
+            try:
+                inbox.delete_draft(self.app.db, draft["id"])
+            except Exception:
+                self.app.notify("Draft not removed · delete failed.", severity="error")
+                return
+            self.sent()
+
     @work(thread=True, exclusive=True)
-    def send(self, text, to, cc):  # its own worker: send_result needs the worker to drop a cancelled send
+    def send(self, text="", to=(), cc=(), again=None):  # its own worker: send_result needs the worker to drop a cancelled send
         worker = get_current_worker()
         try:
-            self.app.send_reply(self.draft_key, text, to, cc)
+            if again is not None:  # Jeremy's choice: the locked Reply Draft once more, as saved
+                self.app.send_draft(again["id"], again["revision"], True)
+            else:
+                self.app.send_reply(self.draft_key, text, to, cc)
         except ReplyError as e:  # the text and staged files stay either way
             self.app.call_from_thread(self.send_result, worker, REPLY_UNKNOWN if e.status == 504 else str(e))
             return
@@ -3107,7 +3134,7 @@ class DraftsPage(Page):
         except Exception:
             self.app.notify("Draft list unavailable · current edits kept.", severity="error")
             return
-        self.items = items
+        before, self.items = [d["id"] for d in self.items], items
         table = self.query_one(DataTable)
         view = self.app.main.draft_view
         shown = repr((self.size.width, items, (view.draft_id, view.dirty) if view else None))
@@ -3124,6 +3151,9 @@ class DraftsPage(Page):
             if items:
                 ids = [d["id"] for d in items]
                 wanted = self.app.selected_draft if select_id is None else select_id
+                if wanted not in ids and wanted in before:  # it left (sent, deleted): the one below, else above
+                    i = before.index(wanted)
+                    wanted = next((x for x in before[i + 1:] + before[:i][::-1] if x in ids), None)
                 table.move_cursor(row=ids.index(wanted) if wanted in ids else 0)
             else:
                 table.add_row("[#928374]No drafts · n new[/]", "", *(("", "") if not narrow else ()))
@@ -3206,11 +3236,8 @@ class DraftsPage(Page):
         self.app.main.showing = showing
         pane = self.app.main.query_one("#thread")
         pane.remove_children()
-        if selected and selected["thread_id"]:  # a reply Draft is edited and sent in its Thread's reply box
-            title = inbox.get_thread(self.app.db, selected["thread_id"]).title
-            pane.mount(Static(f"[#45707a]{ICON['reply']} Reply Draft[/] · [b]{escape(title)}[/]\n\n{escape(selected['body'])}\n\n"
-                              "[#928374]enter opens the Thread's reply box to edit and send it · x deletes it[/]",
-                              classes="threadempty"))
+        if selected and selected["thread_id"]:  # a Reply Draft: its Thread here, enter opens the Composer on it
+            pane.mount(ThreadView(selected["thread_id"]))
             return
         pane.mount(DraftView(selected) if selected else
                    Static("[#928374]No draft selected. Press n for a blank draft.[/]", classes="threadempty"))
@@ -3224,9 +3251,24 @@ class DraftsPage(Page):
         event.stop()
         selected = self.selected()
         if selected and selected["thread_id"]:
-            self.app.main.open_reply(selected["thread_id"])
+            self.reply_box(open=True)
         else:
             self.focus_editor()
+
+    def reply_box(self, open=False):
+        """The shown Reply Draft's Composer (its Thread's reply box), opened on it when `open`."""
+        tv, selected = self.app.main.thread_view, self.selected()
+        if tv is None or not selected or not selected["thread_id"] or not tv.query(ReplyBox):
+            return None
+        box = tv.query_one(ReplyBox)
+        if open and not box.has_class("open") and tv.view is not None:
+            box.open(tv.view, "all")
+        return box
+
+    def after_change(self):  # a Reply Draft sent from its Composer here: on to the next Draft
+        self.refresh_data()
+        self.app.main.refresh_chrome()
+        self.call_after_refresh(self.focus_first)
 
     def focus_editor(self):
         view = self.app.main.draft_view
@@ -3243,11 +3285,15 @@ class DraftsPage(Page):
         view = self.app.main.draft_view
         if view:
             view.save()
+        elif (box := self.reply_box()) is not None and box.has_class("open"):
+            box.action_save()
 
     def action_send(self):
         view = self.app.main.draft_view
         if view:
             view.action_send()
+        elif (box := self.reply_box(open=True)) is not None:
+            self.call_after_refresh(box.action_send)
 
     def action_copy(self):
         """The shown Draft as its editor holds it now, saved or not."""
@@ -5024,8 +5070,13 @@ class TasksPage(Page):
     def on_resize(self, _):
         self.call_after_refresh(self.refresh_data)
 
+    today = False  # Today's list: a Task with a Draft shows through that Draft (decision #144)
+
     def tasks(self):
         ts = sequences.tasks_due(self.app.db)
+        if self.today:  # the selected Task keeps its place until the selection leaves it (FR-UD-9)
+            keep = (self.selected() or {}).get("id")
+            ts = [t for t in ts if not t["draft_id"] or t["id"] == keep]
         if isinstance(self.filter, str):
             ts = [t for t in ts if t["kind"] == self.filter]
         elif self.filter:
@@ -5927,8 +5978,8 @@ class PausedPage(TablePage):
 
 
 class TodayPage(Page):
-    """Today (GLOSSARY; .agents/prd/2026-10-17-today-view.md): Todo Threads, Due Tasks, the Drafts not shown
-    through them, and Unattended Organizations, stacked in that order; a list with nothing in it hides. The list holding the cursor fills the
+    """Today (GLOSSARY; .agents/prd/2026-10-17-today-view.md): Todo Threads, Due Tasks, every Draft (a Thread
+    whose Reply Draft is ready and a Task with a Draft show through that Draft), and Unattended Organizations, stacked in that order; a list with nothing in it hides. The list holding the cursor fills the
     right pane; ↓/↑ run on from one list into the next, and tab jumps to the next list."""
     TITLE = f"{ICON['today']} today"
     RAIL = "today"
@@ -5938,8 +5989,9 @@ class TodayPage(Page):
     def __init__(self):
         super().__init__()
         threads = ThreadsPage()
-        threads.fixed_view = 0
+        threads.fixed_view, threads.today = 0, True
         self.threads, self.tasks = threads, TasksPage()
+        self.tasks.today = True
         self.drafts = DraftsPage()
         self.paused, self.orgs = PausedPage(), UnattendedPage()
         for page in self.lists:

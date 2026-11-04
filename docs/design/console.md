@@ -157,7 +157,7 @@ A successful read proves current membership, not which request caused it. If Rea
 
 ### Reply (inline)
 
-**Decision #75**: inline reply box, chosen after trying both inline and `$EDITOR` in the mock.
+**Decision #75**: inline reply box, chosen after trying both inline and `$EDITOR` in the mock. **Decision #144** (ADR 0015): the reply box is the Composer, the one editor for every Draft. Its text saves as the Thread's Reply Draft revision, and sending sends that revision through the same path as any Draft, so a reply whose outcome is unknown locks: `ctrl+enter` then offers Keep locked, Send again anyway, or Mark as sent. Files added here belong to the Reply Draft. On the Drafts page a Reply Draft shows in place as its Thread; `enter` opens the Composer on it, and after a send the next Draft is selected.
 
 - `r` opens the box under the timeline; the conversation stays visible.
 - Email: `To` and `Cc` are prefilled reply-all (FR-3b) and editable with `tab` into a one-line field. Slack: no recipient line; the box shows the channel or DM.

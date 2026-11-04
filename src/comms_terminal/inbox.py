@@ -698,7 +698,7 @@ MIGRATIONS[34] = """CREATE TABLE applied_mutations (  -- each laptop write appli
   applied_at  TEXT NOT NULL,
   PRIMARY KEY (client_id, mutation_id)
 ) STRICT;"""
-# Files belong to their Draft (decision #143): a file staged on a Thread's reply moves to that Thread's Reply
+# Files belong to their Draft (decision #144): a file staged on a Thread's reply moves to that Thread's Reply
 # Draft, made with empty text where there is none (its next save fills in the reply-all To and Cc).
 MIGRATIONS[35] = """INSERT INTO composition_drafts (revision, connection_id, kind, sender, "to", cc, subject, body,
   created_at, updated_at, thread_id)
@@ -2466,6 +2466,9 @@ def reply(db, thread_id: int, text: str, sender: Sender,
     Composer's To and Cc, for email), then send that revision through `send_draft`, which locks the Draft when
     the outcome is unknown. SendFailed (refused) or SendUnknown (it may have gone out) propagates and the Draft
     stays with its files. ValueError: nothing to send, or a problem found before sending (FR-A15)."""
+    locked = reply_draft(db, thread_id)
+    if locked and locked["sending_at"]:  # keep the text that may have gone out; send_draft(again=True) resends it
+        raise SendUnknown("Send outcome unknown; check before sending again.")
     d = save_reply_draft(db, thread_id, text, to=", ".join(to) if to or cc else None,
                          cc=", ".join(cc) if to or cc else None)
     if d is None:
@@ -2817,7 +2820,7 @@ def _where(channel, identity) -> str:
 
 def today(db, now: datetime | None = None) -> dict:
     """Today (GLOSSARY): Todo Threads, Due Tasks, and every Draft, each once: a Thread whose Reply Draft is
-    ready and a Task with a Draft show as that Draft (decision #143). Then Paused
+    ready and a Task with a Draft show as that Draft (decision #144). Then Paused
     Enrollments (FR-SEQ-39), and Unattended Organizations; and, for an empty Today, when the next Snoozed Thread wakes and the next Task comes due (None
     when nothing is coming)."""
     from . import pipeline, sequences

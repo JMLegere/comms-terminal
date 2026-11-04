@@ -51,7 +51,7 @@ def test_one_reply_draft_per_thread(seeded):
 
 
 def test_a_reply_draft_sends_its_saved_revision_into_its_thread(seeded):
-    """Decision #143: every Draft sends through send_draft; a Reply Draft goes into its Thread."""
+    """Decision #144: every Draft sends through send_draft; a Reply Draft goes into its Thread."""
     path, ids = seeded
     db = inbox.connect(path)
     threads = db.execute("SELECT count(*) FROM threads").fetchone()[0]
@@ -72,7 +72,8 @@ def test_a_reply_draft_whose_send_outcome_is_unknown_locks_until_sent_again(seed
         inbox.send_draft(db, d["id"], d["revision"], FakeSender(TimeoutError("timed out")))
     assert inbox.get_draft(db, d["id"])["sending_at"]
     with pytest.raises(inbox.SendUnknown):
-        inbox.reply(db, ids["ana"], "Hi Ana,", FakeSender())  # the reply path takes the same lock
+        inbox.reply(db, ids["ana"], "Hi Ana, changed", FakeSender())  # the reply path takes the same lock
+    assert inbox.get_draft(db, d["id"])["body"] == "Hi Ana,"  # and keeps the text that may have gone out
     inbox.send_draft(db, d["id"], inbox.get_draft(db, d["id"])["revision"], FakeSender("<r2@example.test>"), again=True)
     assert inbox.reply_drafts(db) == {}
 
@@ -167,17 +168,18 @@ def test_reply_text_survives_a_console_restart_and_shows_on_the_drafts_page(seed
         assert isinstance(page, DraftsPage) and [d["thread_id"] for d in page.items] == [ids["ana"]]
         row = "".join(str(c) for c in page.query_one(DataTable).get_row_at(0))
         seen["row"] = row
-        seen["pane"] = str(app.main.query_one("#thread .threadempty").content)
+        box = app.main.thread_view.query_one(ReplyBox)  # in place: the Thread, its Composer idle on the Draft
+        seen["pane"] = (app.main.current is page, app.main.thread_view.thread_id, str(box.query_one(".idle").content))
         await pilot.press("enter")
         for _ in range(4):
             await pilot.pause()
         box = app.main.thread_view.query_one(ReplyBox)
-        seen["open"] = (box.has_class("open"), box.draft_key, box.query_one(TextArea).text)
+        seen["open"] = (box.has_class("open"), box.draft_key, box.query_one(TextArea).text, app.main.current is page)
 
     run(Console(path), [reopen], size=(187, 40))
     assert "Reply Draft · [/]Re: Pr" in seen["row"]
-    assert "Hi Ana, Tuesday works." in seen["pane"] and "enter opens the Thread" in seen["pane"]
-    assert seen["open"] == (True, ids["ana"], "Hi Ana, Tuesday works.")
+    assert seen["pane"][:2] == (True, ids["ana"]) and "Hi Ana, Tuesday works." in seen["pane"][2]
+    assert seen["open"] == (True, ids["ana"], "Hi Ana, Tuesday works.", True)
 
 
 def test_agent_drafts_list_labels_reply_drafts(seeded, capsys):
@@ -205,7 +207,7 @@ def test_a_file_staged_on_a_reply_draft_goes_out_with_the_reply(seeded):
 
 
 def test_versions_18_and_35_leave_files_staged_on_a_reply_draft_on_it(seeded):
-    """18 moved them to the Thread; 35 (decision #143) moves them back to the Reply Draft."""
+    """18 moved them to the Thread; 35 (decision #144) moves them back to the Reply Draft."""
     from test_attachment_send import PDF, pdf
     path, ids = seeded
     db = inbox.connect(path)

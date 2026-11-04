@@ -17,7 +17,9 @@ def blank(db):
                                  "cc": "", "subject": "Hello", "body": "new"})
 
 
-def test_each_item_appears_once_and_task_drafts_show_through_their_task(db):
+def test_each_item_appears_once_and_threads_and_tasks_with_drafts_show_through_them(db):
+    """Decision #144 (FR-UD-8): the drafts list holds every Draft; a Todo Thread whose Reply Draft is ready and a
+    Task with a Draft leave their own lists."""
     dana, ana = person(db, "dana@harbourline.example", "Dana Roy"), person(db, "ana@acme.com", "Ana Ruiz")
     s, _ = secret(db)
     sq.enroll(db, dana, s)
@@ -26,14 +28,13 @@ def test_each_item_appears_once_and_task_drafts_show_through_their_task(db):
     on_todo = inbox.save_reply_draft(db, todo, "reply on a Todo Thread")
     on_snoozed = inbox.save_reply_draft(db, waiting, "reply on a Snoozed Thread")
     new = blank(db)
+    task_draft = db.execute("SELECT id FROM composition_drafts WHERE task_id IS NOT NULL").fetchone()[0]
 
     t = inbox.today(db)
-    assert [x["id"] for x in t["threads"]] == [todo]
-    assert [(x["person"], x["group"]) for x in t["tasks"]] == [("Dana Roy", "due today")]
-    task_draft = t["tasks"][0]["draft_id"]
-    assert task_draft is not None
-    assert sorted(d["id"] for d in t["drafts"]) == sorted([on_snoozed["id"], new["id"]])
-    assert on_todo["id"] not in {d["id"] for d in t["drafts"]} and task_draft not in {d["id"] for d in t["drafts"]}
+    assert t["threads"] == [] and t["tasks"] == []
+    assert sorted(d["id"] for d in t["drafts"]) == sorted([on_todo["id"], on_snoozed["id"], new["id"], task_draft])
+    inbox.mark_needs_edit(db, on_todo["id"])  # not ready: the Thread is back in its own list, the Draft stays
+    assert [x["id"] for x in inbox.today(db)["threads"]] == [todo]
 
 
 def test_next_wake_and_next_task_say_what_comes_next(db, clock):
