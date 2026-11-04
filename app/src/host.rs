@@ -38,6 +38,8 @@ pub enum Request {
     Focus,
     /// Paint again: a message body finished laying out or painting a tile (`body.rs`).
     Repaint,
+    /// The launcher's staging of the Service's build moved on: `ready` or `failed` (`window.rs` `prepare_update`).
+    UpdateStep(&'static str),
     /// A control-socket request (`control.rs`) and where its answer goes.
     Control { cmd: Value, reply: std::sync::mpsc::Sender<Value> },
 }

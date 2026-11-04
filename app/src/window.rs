@@ -25,7 +25,7 @@ const OVERLAY: &str = "overlay";
 const TOASTS: &str = "toasts"; // timed notifications, bottom right, as the Console's
 /// Settings, drawn over the whole window while `shared("settings")` is set (herdr-app's Settings window).
 const SETTINGS: &str = "settings";
-/// The exit code that asks the launcher to install the Service's build (tui.UPDATE_EXIT).
+/// The exit code that asks the launcher to open the App again (Restart App), on a staged build if there is one.
 pub const UPDATE_EXIT: i32 = 75;
 
 /// A plain key nothing took, outside a text field, says so (element focus: no silent keys).
@@ -53,22 +53,54 @@ fn log_key(keystroke: &gpui::Keystroke, action: Option<String>, window: &Window)
     }));
 }
 
-/// Builds the Service's version in the background with the launcher's `--prepare`
-/// (`COMMS_TERMINAL_APP_PREPARE`), then quits with 75; the App stays usable while it builds. Without a launcher (a
-/// dev run) it quits at once, as before. Runs once; a failed build leaves the App open on its current version.
-fn prepare_update() {
-    static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-    if STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+/// Stages the Service's build in the background with the launcher's `--prepare` (`COMMS_TERMINAL_APP_PREPARE`), which
+/// builds it into its own slot beside the running one. The App never quits for it: it stays open and read-only, and
+/// the staged build opens at the next start (PRD 2026-11-04-app-update-on-restart, FR-UPD-1). Shared `update` names
+/// the step for the views: building, ready or failed (unmanaged: no launcher, as in a dev run). One staging at a
+/// time, once per Service build; `force` (Settings' Update now) tries the same build again.
+fn prepare_update(service_build: &str, force: bool) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static RUNNING: AtomicBool = AtomicBool::new(false);
+    static TRIED: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+    if RUNNING.load(Ordering::SeqCst) || (!force && *TRIED.lock().unwrap() == service_build) {
         return;
     }
-    let Some(prepare) = std::env::var_os("COMMS_TERMINAL_APP_PREPARE") else { std::process::exit(UPDATE_EXIT) };
+    let Some(prepare) = std::env::var_os("COMMS_TERMINAL_APP_PREPARE") else {
+        return set_update_step("unmanaged");
+    };
+    RUNNING.store(true, Ordering::SeqCst);
+    *TRIED.lock().unwrap() = service_build.to_owned();
+    set_update_step("building");
     std::thread::spawn(move || {
-        let built = std::process::Command::new(&prepare).arg("--prepare").status().is_ok_and(|s| s.success());
-        if built {
-            std::process::exit(UPDATE_EXIT);
-        }
-        eprintln!("comms-terminal-app: the update did not build; staying on this version until the next start");
+        let staged = std::process::Command::new(&prepare).arg("--prepare").status().is_ok_and(|s| s.success());
+        RUNNING.store(false, Ordering::SeqCst);
+        host::request(Request::UpdateStep(if staged { "ready" } else { "failed" }));
     });
+}
+
+/// On the window's thread: the update step every view reads (`shared("update")`), logged; null clears it.
+fn set_update_step(step: &str) {
+    let value = if step.is_empty() { Value::Null } else { Value::String(step.to_owned()) };
+    if host::shared("update") != value {
+        crate::log::write("update", serde_json::json!({"step": value}));
+        host::set_shared("update", value);
+        host::request(Request::Refresh);
+    }
+}
+
+/// Restart App: the launcher opens the App again, on a staged build if there is one. A Composer's unsaved text
+/// would be lost (a read-only core refuses its save), so the first press says so and the second restarts (FR-UPD-8).
+fn restart() {
+    static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if !host::shared("draft_unsaved").is_null() && !WARNED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return toast("A Draft has unsaved text that a restart would lose. Copy it first; Restart App again restarts.", "warning");
+    }
+    std::process::exit(UPDATE_EXIT)
+}
+
+/// While an update keeps the core read-only, everything but the bars fades (FR-UPD-6); reading and moving still work.
+fn faded() -> bool {
+    !host::shared("update").is_null() && host::status()["online"] == Value::Bool(false)
 }
 
 struct Copy {
@@ -162,10 +194,14 @@ impl AppWindow {
                 if event["kind"] == "update" {
                     crate::log::write("update", event["data"].clone());
                 }
-                // The Service runs another build (AS-9): once no write is on its way, install it while the App
-                // stays open (the launcher's --prepare), then quit with 75 so the launcher reopens the new build.
+                // The Service runs another build (AS-UPD-1): once no write is on its way, stage it while the App
+                // stays open and read-only; it opens at the next start.
                 if event["kind"] == "update" && host::status()["pending"].as_u64().unwrap_or(0) == 0 {
-                    prepare_update();
+                    prepare_update(event["data"]["service_build"].as_str().unwrap_or(""), false);
+                }
+                // Online again on this build (the Service went back to it): no update to show.
+                if status && host::status()["online"] == Value::Bool(true) {
+                    set_update_step("");
                 }
                 host::broadcast(&event); // views that care render themselves
                 if status {
@@ -175,6 +211,13 @@ impl AppWindow {
         })
         .detach();
         this.watch_files(window, cx);
+        // The core outlives the window: an update it reported while no window listened is staged now (AS-UPD-9).
+        let status = host::status();
+        if let (Some(service), Some(build)) = (status["service_build"].as_str(), status["build"].as_str()) {
+            if !service.is_empty() && !build.ends_with(service) {
+                prepare_update(service, false);
+            }
+        }
         this
     }
 
@@ -221,6 +264,7 @@ impl AppWindow {
             Request::Open(url) => crate::body::open(&url, cx),
             Request::Repaint => window.refresh(),
             Request::Control { cmd, reply } => self.control(cmd, reply, window, cx),
+            Request::UpdateStep(step) => set_update_step(step),
         }
     }
 
@@ -242,7 +286,7 @@ impl AppWindow {
                 .collect();
             let m = self.runtime.read_metrics();
             let _ = reply.send(serde_json::json!({
-                "core": host::status(), "layout": self.layout.views(), "views": copies, "problem": self.problem,
+                "core": host::status(), "update": host::shared("update"), "layout": self.layout.views(), "views": copies, "problem": self.problem,
                 "home": self.home, "log": crate::log::path(&self.home),
                 "metrics": {"window_renders": self.renders, "script_renders": m.script_renders(),
                             "materializations": m.materializations(), "frame_script_calls": m.frame_script_calls()},
@@ -315,8 +359,8 @@ impl AppWindow {
             "app.zoom_out" => return zoom((crate::theme::zoom() - 0.1).max(0.75)),
             "app.zoom_reset" => { let _ = host::write_setting("zoom", Value::Null); return; }
             "app.edit_keys" => return cx.open_with_system(&self.home.join("keys.json")),
-            "app.update" => return prepare_update(),
-            "app.restart" => std::process::exit(UPDATE_EXIT), // the launcher opens the App again
+            "app.update" => return prepare_update(host::status()["service_build"].as_str().unwrap_or(""), true),
+            "app.restart" => return restart(),
             // The top bar's window controls and drag (FR-BAR-2): niri draws no title bar, so the App draws its own.
             "app.minimize" => return window.minimize_window(),
             "app.maximize" => return window.zoom_window(),
@@ -558,7 +602,10 @@ impl AppWindow {
             Kind::Block => {
                 let (page, detail) = (host::shared("page"), host::shared("detail"));
                 let name = node.view_on(page.as_str(), detail.as_str()).unwrap_or_default().to_owned();
-                let el = el.overflow_hidden().key_context(format!("View view={name}").as_str());
+                let mut el = el.overflow_hidden().key_context(format!("View view={name}").as_str());
+                if faded() && name != "status" && name != "topbar" {
+                    el = el.opacity(0.45); // the bars stay clear: the bottom bar says what the update is doing
+                }
                 match self.copies.get(&name) {
                     Some(Copy { root: Some(root), .. }) => el.child(root.clone()).into_any_element(),
                     Some(Copy { error: Some(e), .. }) => el
