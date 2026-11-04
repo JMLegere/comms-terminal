@@ -266,12 +266,19 @@ def _v35_with_log(rows):
     inbox.migrate(db)
     with db:
         ana = db.execute("INSERT INTO persons (display_name, created_at) VALUES ('Ana', 'x') RETURNING id").fetchone()[0]
-        for domain, name in (("acme.com", "Acme"), ("nbif.ca", "NBIF"), (inbox.sole_key(ana), "Ana")):
-            db.execute("INSERT INTO organizations (domain, name, created_at) VALUES (?, ?, 'x')", (domain, name))
+        nic = db.execute("INSERT INTO persons (display_name, created_at) VALUES ('Nic', 'x') RETURNING id").fetchone()[0]
+        # A Sole proprietorship from before Person ids changed keeps its old integer key (live: person-1134.sole)
+        for domain, name, person in (("acme.com", "Acme", None), ("nbif.ca", "NBIF", None),
+                                     (inbox.sole_key(ana), "Ana", ana), ("person-1134.sole", "Nic", nic)):
+            org = db.execute("INSERT INTO organizations (domain, name, created_at) VALUES (?, ?, 'x') RETURNING id",
+                             (domain, name)).fetchone()[0]
+            if person:
+                db.execute("INSERT INTO memberships (person_id, organization_id, member, changed_at)"
+                           " VALUES (?, ?, 1, 'x')", (person, org))
     downgrade(db, 35)
     orgs = dict(db.execute("SELECT domain, id FROM organizations").fetchall())
-    orgs["SOLE"] = orgs[inbox.sole_key(ana)]
-    ids = {}
+    orgs["SOLE"], orgs["OLD"] = orgs[inbox.sole_key(ana)], orgs["person-1134.sole"]
+    ids = {"nic": nic}
     with db:
         for n, (key, domain, p, kind, stage, value, undoes) in enumerate(rows):
             at = f"2026-10-{n + 1:02d}T00:00:00+00:00"
@@ -295,10 +302,13 @@ def test_migration_36_moves_people_and_drops_undone_firm_entries():
         ("nv", "nbif.ca", "FUNDRAISING", "VALUE", None, 100000, None),
         ("nu", "nbif.ca", "FUNDRAISING", "UNDO", None, None, "n"),
         ("nvu", "nbif.ca", "FUNDRAISING", "UNDO", None, None, "nv"),
+        ("old", "OLD", "TALENT", "STAGE", "Role fit", None, None),
     ])
     inbox.migrate(db)
     rows = {r["id"]: r for r in db.execute("SELECT * FROM pipeline_log")}
-    assert set(rows) == {ids[k] for k in ("r", "f", "fv", "t", "tu")}
+    assert set(rows) == {ids[k] for k in ("r", "f", "fv", "t", "tu", "old")}
+    assert rows[ids["old"]]["person_id"] == ids["nic"]
+    assert db.execute("PRAGMA foreign_key_check").fetchall() == []
     assert rows[ids["r"]]["organization_id"] and rows[ids["r"]]["person_id"] is None
     assert {rows[ids[k]]["person_id"] for k in ("f", "fv", "t", "tu")} == {ana}
     assert all(rows[ids[k]]["organization_id"] is None for k in ("f", "fv", "t", "tu"))

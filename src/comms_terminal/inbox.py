@@ -713,7 +713,8 @@ UPDATE staged_attachments SET draft_id = (
 WHERE thread_id IS NOT NULL;"""
 
 
-# Fundraising and Talent hold People (ADR 0016): their entries on a Sole proprietorship move to its Person; firm
+# Fundraising and Talent hold People (ADR 0016): their entries on a Sole proprietorship move to its Person (found
+# by Membership, since Sole proprietorships made before Person ids changed keep an old integer key); firm
 # entries already undone go with their undos (they cancel). A firm entry still live stops the migration.
 MIGRATIONS[36] = """PRAGMA legacy_alter_table = ON;
 CREATE TABLE pipeline_log_new (
@@ -739,8 +740,9 @@ END;
 INSERT INTO pipeline_log_new (id, organization_id, person_id, pipeline, kind, stage, value, undoes, effective_at,
   recorded_at)
 SELECT l.id, CASE WHEN l.pipeline = 'REVENUE' THEN l.organization_id END,
-  CASE WHEN l.pipeline != 'REVENUE' AND o.domain LIKE 'person-%.sole'
-       THEN substr(o.domain, 8, length(o.domain) - 12) END,
+  CASE WHEN l.pipeline != 'REVENUE' AND o.domain LIKE 'person-%.sole'  -- its Person by Membership: an old key
+       THEN (SELECT m.person_id FROM memberships m WHERE m.organization_id = o.id  -- holds a pre-UUID id
+             ORDER BY m.member DESC LIMIT 1) END,
   l.pipeline, l.kind, l.stage, l.value, l.undoes, l.effective_at, l.recorded_at
 FROM pipeline_log l JOIN organizations o ON o.id = l.organization_id
 WHERE l.pipeline = 'REVENUE' OR o.domain LIKE 'person-%.sole'
