@@ -3815,11 +3815,14 @@ def pipeline_week(m: dict) -> str:
 def pipeline_constraint(m: dict) -> str:
     c = m["summary"]["constraint"]
     if not c:
-        return f"[{PALETTE['grey1']}]None yet: no Stage has a measured rate.[/]"
+        return f"[{PALETTE['grey1']}]None: no rate is below its 2-year level, and the plan shows no shortfall in new Organizations.[/]"
+    if c["kind"] == "volume":
+        return (f"[b]New {escape(c['stage'])} Organizations[/]   [b {PALETTE['red']}]{pipeline.num(c['getting'])}[/]"
+                f" a week   [{PALETTE['grey1']}]need {pipeline.num(c['need'])}[/]")
     what = {"GRR": "customers keep", "Expansion": "customers grow"}.get(c["stage"], "move on")
     name = {"GRR": "Retention", "Expansion": "Expansion"}.get(c["stage"], f"{c['stage']} → {c['next']}")
     return (f"[b]{escape(name)}[/]   [b {PALETTE['red']}]{pipeline.pct(c['rate'])}[/] {what}"
-            + (f"   [{PALETTE['grey1']}]benchmark {pipeline.pct(c['benchmark'])}[/]" if c["benchmark"] else ""))
+            + f"   [{PALETTE['grey1']}]benchmark {pipeline.pct(c['benchmark'])}[/]")
 
 
 def column_head(r: dict, hot: bool) -> str:
@@ -3987,8 +3990,8 @@ class PipelinePage(Page):
                 rate = f"{word} {pipeline.pct(r['rate'])}" if r["rate"] is not None else f"[{g}]no data[/]"
                 table.add_row(r["stage"], str(len(r["orgs"])), rate, pipeline.pct(r["benchmark"]), *[""] * 5)
         self.query_one("#pllegend", Static).update(
-            f"[{g}]Convert: share of Organizations that moved on to the next Stage in the last 12 months · Benchmark:"
-            " Winning by Design's Bowtie Standard, Table 6.2 · Need and Getting: Organizations entering the Stage a week"
+            f"[{g}]Convert: share of Organizations that moved on to the next Stage in the last 90 days · Benchmark:"
+            " the same rate over the last 2 years · Need and Getting: Organizations entering the Stage a week"
             " · Short by: how many more a week the Target needs[/]")
 
     def on_resize(self, event):

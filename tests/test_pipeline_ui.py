@@ -91,7 +91,8 @@ def test_revenue_page_this_week_board_and_stage_change_with_undo(tmp_path):
     assert seen["week"].startswith("1  ") and "Organizations to Awareness" in seen["week"]
     assert seen["progress"].startswith(("BEHIND PACE", "ON PACE")) and "Coverage" in seen["progress"]
     assert "CAD 1M" in seen["progress"] and "reach Impact by 2027-10-01" in seen["progress"]
-    assert seen["heads"][0].startswith("Awareness\n1") and "keep" in seen["heads"][6]
+    assert seen["heads"][0].startswith("Awareness ◀\n1")  # the constraint: too few new Organizations
+    assert seen["heads"][6] == "Impact\n1"  # nobody paid 90 days or 2 years ago: no retention to show
     assert seen["columns"] == ["Awareness", "Education", "Prioritization", "Selection", "Commit", "Onboarding",
                                "Impact", "Expansion", "Lost", "Churned"]
     assert seen["cards"] == {"Selection": ["acme.com"], "Impact": ["northwind.io"], "Awareness": ["globex.com"]}

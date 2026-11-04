@@ -109,25 +109,27 @@ def test_math_by_hand(five):
         {"Awareness": 10, "Education": 20, "Prioritization": 7.5, "Selection": 17.5, "Commit": 7.5,
          "Onboarding": 20})
     assert rows["Awareness"]["to_paying"] == pytest.approx(0.2)
+    # Every move is inside 90 days, so each 2-year Benchmark equals its rate
+    assert all(r["benchmark"] == r["rate"] for r in rows.values())
     s = m["summary"]
     assert (s["paying"], s["paying_count"], s["average"]) == (120_000, 1, 120_000)
-    # Nobody paid a year ago: GRR and expansion are the ACV <= 150k benchmarks (97%, 25%)
-    assert s["grr"] == (0.97, True) and s["expansion"] == (0.25, True)
-    assert s["nrr"] == pytest.approx(0.97 * 1.25)
-    assert s["kept"] == pytest.approx(120_000 * (0.97 * 1.25) ** (343 / 365))
+    # Nobody paid 90 days or 2 years ago: no GRR, expansion, or NRR, so paying Value is kept as is
+    assert s["grr"] == (None, False) and s["expansion"] == (None, False) and s["nrr"] is None
+    assert s["kept"] == 120_000
     assert s["weighted"] == pytest.approx(60_000 * 0.5 + 30_000 / 3)  # C has no Value
     gap = 1_000_000 - s["kept"] - s["weighted"]
     assert (s["gap"], s["customers"], s["deadline"], s["weeks"]) == (
         pytest.approx(gap), -(-gap // 120_000), date(2027, 10, 1), pytest.approx(WEEKS))
-    # The constraint: the measured rate furthest below its benchmark (Onboarding 100% vs 98% is the least
-    # margin; Commit has no real benchmark)
-    assert s["constraint"] == {"stage": "Onboarding", "next": "Impact", "rate": 1, "benchmark": 0.98}
+    # No 90-day rate sits below its 2-year Benchmark, so the lever is new Awareness Organizations
+    top = rows["Awareness"]
+    assert s["constraint"] == {"kind": "volume", "stage": "Awareness", "next": "Education",
+                               "getting": top["entries"], "need": top["need"], "lift": top["need"] / top["entries"]}
     n = s["customers"]
     # need = customers / rates through the paying Stage / (weeks left - Time in the Stages ahead)
     assert rows["Onboarding"]["need"] == pytest.approx(n / 1 / (WEEKS - 20 / 7))
     assert rows["Commit"]["need"] == pytest.approx(n / 0.5 / (WEEKS - 27.5 / 7))
     assert rows["Awareness"]["need"] == pytest.approx(n / 0.2 / (WEEKS - 82.5 / 7))
-    assert rows["Awareness"]["entries"] == pytest.approx(5 / (365 / 7))
+    assert rows["Awareness"]["entries"] == pytest.approx(5 / (90 / 7))
     assert rows["Awareness"]["pace"] == pytest.approx(rows["Awareness"]["entries"] - rows["Awareness"]["need"])
     assert [(r["stage"], [o["domain"] for o in r["orgs"]]) for r in m["ending"]] == [
         ("Impact", ["d.com"]), ("Expansion", []), ("Lost", ["e.com"]), ("Churned", [])]
@@ -135,23 +137,30 @@ def test_math_by_hand(five):
 
 
 def test_retention_and_expansion_from_value_changes(db):
-    """CR7 (GRR) and CR8 (expansion) over the last 12 months, for customers paying at its start."""
+    """CR7 (GRR) and CR8 (expansion) for customers paying at the window's start, annualized: the last 90 days,
+    against the last 2 years as the Benchmark."""
     p, q, r = org(db, "p.com"), org(db, "q.com"), org(db, "r.com")
     for o, value in ((p, 100_000), (q, 50_000), (r, 50_000)):
-        pl.set_stage(db, o, R, "Impact", at=NOW - 400 * DAY)
-        pl.set_value(db, o, R, value, at=NOW - 400 * DAY)
-    pl.set_value(db, p, R, "120k", at=NOW - 100 * DAY)  # expanded
+        pl.set_stage(db, o, R, "Impact", at=NOW - 800 * DAY)
+        pl.set_value(db, o, R, value, at=NOW - 800 * DAY)
+    pl.set_value(db, p, R, "120k", at=NOW - 100 * DAY)  # expanded, before the 90 days
     pl.set_stage(db, q, R, "Churned", at=NOW - 50 * DAY)  # gone
     pl.set_value(db, r, R, "30k", at=NOW - 20 * DAY)  # downgraded
-    s = pl.math(db, R)["summary"]
-    assert s["grr"] == (pytest.approx(130 / 200), False)
-    assert s["expansion"] == (pytest.approx(20 / 130), False)
-    assert s["nrr"] == pytest.approx(130 / 200 * (1 + 20 / 130))  # = (retained + expansion) / base
+    m = pl.math(db, R)
+    s, impact, expansion = m["summary"], m["ending"][0], m["ending"][1]
+    assert s["grr"] == (pytest.approx((150 / 220) ** (365 / 90)), False)  # 120k + 0 + 30k of 220k
+    assert s["expansion"] == (pytest.approx(0), False)
+    assert s["nrr"] == pytest.approx((150 / 220) ** (365 / 90))
+    assert impact["benchmark"] == pytest.approx((130 / 200) ** 0.5)  # 100k + 0 + 30k of 200k, over 2 years
+    assert expansion["benchmark"] == pytest.approx((1 + 20 / 130) ** 0.5 - 1)
+    # GRR back to 2 years lifts kept Value ×3.8; expansion back lifts it only ×1.07
+    assert s["constraint"]["stage"] == "GRR" and s["constraint"]["lift"] == pytest.approx(
+        (130 / 200) ** 0.5 / (150 / 220) ** (365 / 90))
 
 
 @pytest.fixture
 def thin(db):
-    """One customer paying since before the 12-month window; one new Organization stuck in Education."""
+    """One customer paying since before the 2-year window; one new Organization stuck in Education."""
     y, x = org(db, "y.com"), org(db, "x.com")
     walk(db, y, (400, "Impact"))
     pl.set_value(db, y, R, "100k", at=NOW - 400 * DAY)
@@ -160,23 +169,25 @@ def thin(db):
     return db
 
 
-def test_benchmarks_fill_missing_rates(thin):
+def test_two_year_rates_fill_missing_rates(thin):
     m = pl.math(thin, R)
     rows = {r["stage"]: r for r in m["stages"]}
-    assert rows["Prioritization"]["rate"] is None and rows["Prioritization"]["used"] == 0.95  # ACV <= 150k
+    # Only X moved in 90 days; Y's jump to Impact 400 days ago gives the 2-year rates
+    assert rows["Prioritization"]["rate"] is None and rows["Prioritization"]["used"] == 1
     assert rows["Prioritization"]["assumed"] and rows["Prioritization"]["to_paying"] is None  # never mixed
     assert m["summary"]["grr"] == (1.0, False) and m["summary"]["expansion"] == (0.0, False)
     assert (m["summary"]["kept"], m["summary"]["customers"]) == (pytest.approx(100_000), 9)
-    assert rows["Prioritization"]["need"] == pytest.approx(9 / (0.95 * 0.30 * 1.0 * 0.98) / (WEEKS - 4 / 7))
+    assert rows["Prioritization"]["need"] == pytest.approx(9 / 1 / (WEEKS - 4 / 7))
     assert rows["Education"]["need"] is None  # measured 0%: nobody gets through
-    assert m["summary"]["constraint"]["stage"] == "Education"
+    assert m["summary"]["constraint"] == {"kind": "rate", "stage": "Education", "next": "Prioritization", "rate": 0,
+                                          "benchmark": 0.5, "lift": float("inf")}  # 0% offers any lift
     out = pl.markdown(m)
-    assert "| Prioritization | 0 | 95%b | 95% |" in out and "NRR 100%" in out
+    assert "| Prioritization | 0 | 100%b | 100% |" in out and "NRR 100%" in out
 
 
 def test_late_and_no_target(thin):
     m = pl.math(thin, pl.FUNDRAISING)
-    assert m["summary"]["target"] is None and m["summary"]["acv"] is None  # no benchmarks for Fundraising
+    assert m["summary"]["target"] is None
     assert "No Target yet: comms-terminal pipeline target fundraising" in pl.markdown(m)
     pl.set_target(thin, R, "1m", "2027-10-25")  # Impact deadline 2026-10-26: three days left
     rows = {r["stage"]: r for r in pl.math(thin, R)["stages"]}
@@ -199,19 +210,24 @@ def test_on_track_and_coverage(five):
 def test_this_week_bullets(five):
     m = pl.math(five, R)
     top = m["stages"][0]
-    assert m["summary"]["constraint"]["stage"] == "Onboarding" and not m["stages"][5]["orgs"]
+    assert m["summary"]["constraint"]["kind"] == "volume"
+    assert pl.constraint_text(m["summary"]["constraint"]) == \
+        f"New Awareness Organizations: {pl.num(top['entries'])} a week, need {pl.num(top['need'])}"
     assert pl.this_week(m) == [
-        ("Find Organizations for Onboarding", "it is the constraint: 100% move on (benchmark 98%)"),
         (f"Add {-(-(top['need'] - top['entries']) // 1):.0f} Organizations to Awareness",
-         f"need {pl.num(top['need'])} a week, getting {pl.num(top['entries'])}"),
+         f"need {pl.num(top['need'])} a week, getting {pl.num(top['entries'])}, the constraint"),
         ("Set a Value for C", "the math leaves them out until then")]
 
 
 def test_this_week_moves_the_accounts_sitting_in_the_constraint(db):
-    a, b = org(db, "a.com", "Acme"), org(db, "b.com", "Bolt")
+    a, b, c = org(db, "a.com", "Acme"), org(db, "b.com", "Bolt"), org(db, "c.com", "Cove")
     walk(db, a, (40, "Selection"), (20, "Commit"), (10, "Onboarding"), value="10k")
     walk(db, b, (30, "Selection"), value="10k")
-    m = pl.math(db, R)  # Onboarding: 0 of 1 reached Impact, against a 93% benchmark
+    walk(db, c, (300, "Onboarding"), (200, "Impact"))
+    m = pl.math(db, R)  # Onboarding: 0 of 1 reached Impact in 90 days, against 1 of 2 over 2 years
+    assert m["summary"]["constraint"] == {"kind": "rate", "stage": "Onboarding", "next": "Impact", "rate": 0,
+                                          "benchmark": 0.5, "lift": float("inf")}  # no Target: no volume lever
+    assert pl.constraint_text(m["summary"]["constraint"]) == "Onboarding → Impact: 0% vs 50% benchmark"
     assert pl.this_week(m)[:2] == [("Set a Target", "comms-terminal pipeline target revenue AMOUNT --by DATE"),
                                    ("Move Acme", "Onboarding → Impact, the constraint")]
 
@@ -233,7 +249,7 @@ def test_cli(tmp_path, capsys):
     assert capsys.readouterr().out.splitlines()[-1] == "STMEC (stmec.example) Revenue: Selection, CAD 45,000"
     run("revenue")
     out = capsys.readouterr().out
-    assert "- STMEC (stmec.example): CAD 45k" in out and "| Commit | 0 | 100%b | 100% |" in out
+    assert "- STMEC (stmec.example): CAD 45k" in out and "| Selection | 1 | 0% | 0% |" in out
     with pytest.raises(SystemExit, match="Awareness, Education"):
         run("stage", "STMEC", "revenue", "Discovery")
     with pytest.raises(SystemExit, match="no Organization"):

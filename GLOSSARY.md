@@ -307,15 +307,15 @@ The Weighted pipeline as a share of the revenue that new customers still have to
 _Avoid_: Pipeline ratio
 
 **Constraint**:
-The measured rate, of a Stage or of retention or expansion, that sits furthest below its Benchmark.
+The lever with the largest multiplier on what reaches the paying Stage: a rate from the last 90 days back at its Benchmark, or new Organizations at the top Stage up to their Required volume. Rates multiply, so the Constraint is the biggest lift on offer, not the lowest rate. When no lever falls short, there is no Constraint.
 _Avoid_: Bottleneck
 
 **Benchmark**:
-A Conversion rate, Retention rate, or Expansion rate from Winning by Design's Bowtie Standard (Table 6.2), chosen by average deal size. It stands in where Agent Maple has no measured rate, and is always shown as a benchmark.
-_Avoid_: Planning prior, Prior, Default rate
+The same Conversion rate, Retention rate, or Expansion rate measured over the last 2 years of Agent Maple's own history, set beside the rate from the last 90 days. It stands in where the last 90 days have no data, and is always shown as a benchmark. No external table supplies it.
+_Avoid_: Planning prior, Prior, Default rate, Table 6.2
 
 **Retention rate**:
-The share of the Value that customers paying a year ago still hold today, after churn and downgrades (GRR).
+The share of the Value that customers paying at the start of the window still hold today, after churn and downgrades, scaled to a year (GRR).
 _Avoid_: Logo retention, Renewal rate
 
 **Expansion rate**:
