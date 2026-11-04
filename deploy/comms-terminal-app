@@ -3,16 +3,20 @@
 # the desktop entry (Linux) or ~/Applications/Comms Terminal App.app (macOS) runs it. Like deploy/comms-terminal-local
 # it installs the build the Service runs: the Local core (Python, with uv) and the App (Rust, with cargo) from an
 # export of that commit in the local checkout (COMMS_TERMINAL_REPO). The core works on its own copy of the inbox in
-# $DATA and outlives the window; an update stops it so the new one starts. The App quits with 75 when the Service reports a new build: update, open again.
-#   comms-terminal-app-launch            update if needed, then open the App
-#   comms-terminal-app-launch --install  install main's desktop entry and launcher, then update
-#   comms-terminal-app-launch --prepare  install the Service's build and return (the App runs it while it stays open)
+# $DATA and outlives the window.
+# Updates (.agents/prd/2026-11-04-app-update-on-restart.md): each build lives in its own slot, $DATA/builds/<commit>,
+# and $DATA/current points at the installed one. When the Service reports a new build the App stays open, read-only,
+# and runs --prepare, which builds that commit into a new slot without touching the running one. The next start
+# switches to it: stop the old core, point current at the new slot, open the App.
+#   comms-terminal-app-launch            bring the open App forward, or switch to a staged build and open the App
+#   comms-terminal-app-launch --install  install main's desktop entry and launcher, then open the App
+#   comms-terminal-app-launch --prepare  build the Service's build into its own slot and return (exit 0: staged)
 # --install keeps COMMS_TERMINAL_REPO and COMMS_TERMINAL_SSH (the ssh arguments that reach your Service; Jeremy's
 # Oracle when unset) in $DATA/env, so the desktop entry, which starts without them, finds the same ones.
 set -eu
 
 DATA="${XDG_DATA_HOME:-$HOME/.local/share}/comms-terminal-app"
-mkdir -p "$DATA/bin"
+mkdir -p "$DATA/builds"
 chmod 700 "$DATA"
 if [ "${1:-}" = "--install" ]; then
     for name in COMMS_TERMINAL_REPO COMMS_TERMINAL_SSH; do
@@ -29,7 +33,7 @@ REPO="${COMMS_TERMINAL_REPO:-$HOME/Workspace/comms-terminal}"
 [ -n "${COMMS_TERMINAL_SSH:-}" ] || export COMMS_TERMINAL_SERVICE_NAME="${COMMS_TERMINAL_SERVICE_NAME:-Oracle}"
 # A desktop entry or a macOS app starts with a bare PATH: find uv and cargo where their installers put them.
 PATH="$HOME/.local/bin:$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
-export UV_TOOL_DIR="$DATA/tools" UV_TOOL_BIN_DIR="$DATA/bin" CARGO_TARGET_DIR="$DATA/target"
+export CARGO_TARGET_DIR="$DATA/target"  # shared by every slot, so each build is incremental
 
 place() {  # place FILE MODE DEST: main's copy of deploy/FILE, whatever the checkout has checked out
     mkdir -p "$(dirname "$3")"
@@ -52,57 +56,132 @@ if [ "${1:-}" = "--install" ]; then
     fi
 fi
 
-installed() {  # the build this install came from (written below), or nothing
+notice() {  # a message Jeremy sees without a terminal: the desktop's notification, and stderr
+    echo "Comms Terminal App: $1" >&2
+    if command -v notify-send >/dev/null 2>&1; then
+        notify-send "Comms Terminal App" "$1" 2>/dev/null || true
+    elif [ "$(uname)" = Darwin ]; then
+        osascript -e "display notification \"$1\" with title \"Comms Terminal App\"" 2>/dev/null || true
+    fi
+}
+
+# An install from before slots kept one build in $DATA/bin and $DATA/tools: use it as the installed slot, no rebuild.
+if [ ! -e "$DATA/current" ] && [ -x "$DATA/bin/comms-terminal-app" ]; then
+    ln -s . "$DATA/current"
+fi
+
+installed() {  # the build the installed slot came from (written at each switch), or nothing
     cat "$DATA/installed-build" 2>/dev/null || true
+}
+
+staged() {  # a fully built slot waiting for the next start, or nothing
+    cat "$DATA/staged-build" 2>/dev/null || true
 }
 
 stop_core() {  # the old core keeps the old code; the App starts the new one
     pkill -f -- "--db $DATA/inbox.db" 2>/dev/null || true
 }
 
-update() {
-    want=$(cat "$DATA/service-build" 2>/dev/null || true)
-    have=$(installed)
-    [ -n "$have" ] && { [ -z "$want" ] || [ "$want" = "$have" ]; } && return 0
-    echo "Comms Terminal App: installing the Service's version ${want:-(latest main)}…"
+LOCK="$DATA/stage.lock"
+lock() {  # one stager at a time (mkdir is atomic, and macOS has no flock); a dead holder's lock is taken over
+    while ! mkdir "$LOCK" 2>/dev/null; do
+        holder=$(cat "$LOCK/pid" 2>/dev/null || true)
+        if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; then
+            rm -rf "$LOCK"
+            continue
+        fi
+        [ "${1:-}" = "--try" ] && return 1
+        sleep 2
+    done
+    echo $$ > "$LOCK/pid"
+}
+unlock() {
+    rm -rf "$LOCK"
+}
+
+build_slot() {  # build_slot COMMIT|"": the Service's build (or main's head) into $DATA/builds/<commit>
     git -C "$REPO" fetch -q origin
-    rev=$(git -C "$REPO" rev-parse --verify -q "${want:-origin/main}^{commit}")
-    short=${want:-$(git -C "$REPO" rev-parse --short "$rev")}
+    rev=$(git -C "$REPO" rev-parse --verify -q "${1:-origin/main}^{commit}")
+    short=${1:-$(git -C "$REPO" rev-parse --short "$rev")}
+    echo "Comms Terminal App: building the Service's version $short…" >&2
+    slot="$DATA/builds/$short"
     src="$DATA/src"
-    rm -rf "$src"
-    mkdir -p "$src"
+    rm -rf "$slot" "$src"
+    mkdir -p "$slot/bin" "$src"
     git -C "$REPO" archive "$rev" | tar -x -C "$src"
-    COMMS_TERMINAL_BUILD="$(git -C "$REPO" log -1 --format=%ct "$rev") $short" \
-        uv tool install -q --reinstall --python 3.12 "$src"
+    COMMS_TERMINAL_BUILD="$(git -C "$REPO" log -1 --format=%ct "$rev") $short" UV_TOOL_DIR="$slot/tools" \
+        UV_TOOL_BIN_DIR="$slot/bin" uv tool install -q --reinstall --python 3.12 "$src"
     cargo build -q --release --manifest-path "$src/app/Cargo.toml"
-    install -m 755 "$CARGO_TARGET_DIR/release/comms-terminal-app" "$DATA/bin/comms-terminal-app"
-    # The installed launcher follows the build too: the running one keeps its old copy, the next start reads the new.
-    if [ -f "$INSTALLED" ]; then
-        git -C "$REPO" show "$rev:deploy/comms-terminal-app" > "$INSTALLED.new" && chmod 755 "$INSTALLED.new" && mv "$INSTALLED.new" "$INSTALLED"
-    fi
+    install -m 755 "$CARGO_TARGET_DIR/release/comms-terminal-app" "$slot/bin/comms-terminal-app"
+    git -C "$REPO" show "$rev:deploy/comms-terminal-app" > "$slot/launcher"  # installed at the switch
+    chmod 755 "$slot/launcher"
+    echo "$short" > "$DATA/staged-build"  # last: a staged build is a complete one
+}
+
+prepare() {  # stage the Service's build unless it is installed or staged already; again if the Service moved on
+    lock
+    trap unlock EXIT
+    while :; do
+        want=$(cat "$DATA/service-build" 2>/dev/null || true)
+        if [ -n "$want" ]; then
+            [ "$want" = "$(installed)" ] || [ "$want" = "$(staged)" ] && break
+        else
+            [ -n "$(installed)" ] || [ -n "$(staged)" ] && break  # Service not heard from yet: main's head, once
+        fi
+        build_slot "$want"
+        [ -n "$want" ] || break
+    done
+    unlock
+    trap - EXIT
+}
+
+switch() {  # at start only: the staged build becomes the installed one, when the Service still runs it
+    new=$(staged)
+    want=$(cat "$DATA/service-build" 2>/dev/null || true)
+    [ -n "$new" ] && [ "$new" != "$(installed)" ] && [ -x "$DATA/builds/$new/bin/comms-terminal-app" ] || return 0
+    [ -z "$want" ] || [ "$want" = "$new" ] || return 0  # the Service moved on: the next staging replaces it
     stop_core
-    echo "$short" > "$DATA/installed-build"
+    ln -sfn "builds/$new" "$DATA/current"
+    echo "$new" > "$DATA/installed-build"
+    if [ -f "$INSTALLED" ]; then  # the installed launcher follows the build; this run keeps its own copy
+        cp "$DATA/builds/$new/launcher" "$INSTALLED.new" && chmod 755 "$INSTALLED.new" && mv "$INSTALLED.new" "$INSTALLED"
+    fi
+    if lock --try; then  # prune every other slot, and a pre-slot install, unless a staging is building one now
+        for slot in "$DATA"/builds/*; do
+            [ "$slot" = "$DATA/builds/$new" ] || rm -rf "$slot"
+        done
+        rm -rf "$DATA/bin" "$DATA/tools"
+        unlock
+    fi
 }
 
 LAUNCHER="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")" INSTALLED="$HOME/.local/bin/comms-terminal-app-launch"
 if [ "${1:-}" = "--prepare" ]; then
-    update
+    prepare
     exit 0
 fi
-# One launcher at a time: a second start (the window seemed gone while an update built) leaves the first one be.
-if [ -f "$DATA/launch.pid" ] && kill -0 "$(cat "$DATA/launch.pid")" 2>/dev/null; then
-    echo "Comms Terminal App is already open or updating." >&2
+# One launcher at a time. A second start brings the open window forward; while the first is still starting, says so.
+running=$(cat "$DATA/launch.pid" 2>/dev/null || true)
+if [ -n "$running" ] && kill -0 "$running" 2>/dev/null && ps -o args= -p "$running" 2>/dev/null | grep -Eq 'comms-terminal-app(-launch)?( |$)'; then
+    "$DATA/current/bin/comms-terminal-app" raise 2>/dev/null || notice "already starting; the window opens in a moment."
     exit 0
 fi
 echo $$ > "$DATA/launch.pid"
 
-export COMMS_TERMINAL_CORE="[\"$DATA/bin/comms-terminal\", \"--db\", \"$DATA/inbox.db\", \"--remote\", \"$SSH_ARGS\"]"
+export COMMS_TERMINAL_CORE="[\"$DATA/current/bin/comms-terminal\", \"--db\", \"$DATA/inbox.db\", \"--remote\", \"$SSH_ARGS\"]"
 export COMMS_TERMINAL_APP_PREPARE="$LAUNCHER"
 while :; do
-    # In its own process, so a failed build stops only the update: the installed build still opens.
-    "$LAUNCHER" --prepare || [ -x "$DATA/bin/comms-terminal-app" ] || exit 1
+    if [ ! -x "$DATA/current/bin/comms-terminal-app" ]; then  # first install: the one build before a window
+        notice "installing; the first build takes several minutes, then the App opens."
+        # In its own process, so set -e stops a failed build there.
+        "$LAUNCHER" --prepare || { notice "the install failed to build; run $INSTALLED --install in a terminal to see why."; exit 1; }
+        new=$(staged)
+        ln -sfn "builds/$new" "$DATA/current"
+        echo "$new" > "$DATA/installed-build"
+    fi
+    switch
     rc=0
-    "$DATA/bin/comms-terminal-app" || rc=$?
-    [ "$rc" -eq 75 ] && continue
+    "$DATA/current/bin/comms-terminal-app" || rc=$?
+    [ "$rc" -eq 75 ] && continue  # Restart App (app.restart): open again, on a staged build if there is one
     exit "$rc"
 done
