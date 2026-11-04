@@ -336,7 +336,7 @@ def app_shows_agent_text(laptop, seconds):
     assert published(laptop, "rows", lambda got: any(edited in (r["changed"] or []) for r in got))
 
 
-# --- AS-9: a new Service build makes the App read-only until it updates ---
+# --- AS-UPD-1, AS-UPD-2: a new Service build makes the App read-only and is staged (replaces AS-9) ---
 
 @given("the App and the Local core on the Service's build")
 def same_build(laptop, monkeypatch):
@@ -364,13 +364,78 @@ def read_only(laptop):
     assert refused["error"]["code"] == -32011
 
 
-@then("the update installs the Service's build")
-def update_installs(laptop):
-    # The App quits with 75 on this event (window.rs UPDATE_EXIT); the launcher installs `service-build`'s commit.
+@then("the Service's build is staged beside the running one, which keeps running")
+def staged_beside(laptop, tmp_path):
+    # The App stages on this event (window.rs prepare_update) and stays open: the launcher's --prepare builds the
+    # build `service-build` names into its own slot (deploy/comms-terminal-app).
     assert published(laptop, "update") == [{"service_build": "bbbbbbb", "build": "aaaaaaa"}]
     assert Path(laptop.syncer.build_file).read_text() == "bbbbbbb\n"
-    launcher = (Path(__file__).resolve().parents[2] / "deploy" / "comms-terminal-app").read_text()
-    assert 'want=$(cat "$DATA/service-build"' in launcher and "[ \"$rc\" -eq 75 ] && continue" in launcher
+    m = installed_mani(tmp_path / "mani")
+    m.service(m.v2)
+    core = m.core()
+    assert m.launch("--prepare").returncode == 0
+    assert m.file("staged-build") == [m.v2] and m.current() == f"builds/{m.v1}" and core.poll() is None
+    core.kill()
+
+
+def installed_mani(path):
+    from test_app_launcher import Mani
+    path.mkdir()
+    m = Mani(path)
+    m.service(m.v1)
+    assert m.launch().returncode == 0  # first install
+    return m
+
+
+# --- AS-UPD-3, AS-UPD-9: the next start opens the staged build ---
+
+@given("the App installed on one build and the next build staged", target_fixture="mani")
+def staged_mani(tmp_path):
+    m = installed_mani(tmp_path / "mani")
+    m.service(m.v2)
+    assert m.launch("--prepare").returncode == 0
+    m.old_core = m.core()
+    return m
+
+
+@when("Jeremy starts the App")
+def start_app(mani):
+    mani.result = mani.launch()
+
+
+@then("it opens on the staged build with no build first")
+def opens_staged(mani):
+    assert mani.result.returncode == 0, mani.result.stderr
+    assert mani.file("runs")[-2:] == ["run", mani.v2] and mani.file("builds.log") == ["built", "built"]
+
+
+@then("the old Local core was stopped")
+def old_core_stopped(mani):
+    assert mani.old_core.wait(timeout=5) is not None
+
+
+# --- AS-UPD-4: a second start brings the open window forward ---
+
+@given("the App open", target_fixture="mani")
+def app_open(tmp_path):
+    m = installed_mani(tmp_path / "mani")
+    m.first = subprocess.Popen(["sh", "-c", "sleep 60", "comms-terminal-app-launch"])  # its launcher, still running
+    (m.data / "launch.pid").write_text(str(m.first.pid))
+    return m
+
+
+@when("Jeremy starts the App again")
+def start_again(mani):
+    try:
+        mani.result = mani.launch()
+    finally:
+        mani.first.kill()
+
+
+@then("the open window comes forward and no second App opens")
+def raised(mani):
+    assert mani.result.returncode == 0 and mani.file("raised") == ["raised"]
+    assert mani.file("runs") == ["run", mani.v1]
 
 
 # --- AS-10: offline, reads work and writes are refused ---
