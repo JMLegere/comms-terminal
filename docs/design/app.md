@@ -70,6 +70,9 @@ Check each state at 1100×700 and at full screen, with `comms-terminal-app shot`
 9. The page stack three pages deep (Threads › Person › Organization), then `esc` back to each.
 10. Today with a Task, Draft, Paused and Unattended row selected after a Thread row, with Thread keys pressed.
 11. A Send outcome unknown Draft, read-only.
+12. The Composer (decision #144) on a Reply Draft shown in place on the Drafts page and on Today: shown (`thread.show_reply`, the list keeps the keyboard) and focused (after Enter).
+13. A Reply Draft whose send outcome is unknown, read-only with Keep locked, Send again anyway and Mark as sent.
+14. Today with a Thread held in the threads list while its new Reply Draft is selected, then moved to the drafts list once the selection leaves it.
 
 ## 6. Accepted differences from the Console
 
