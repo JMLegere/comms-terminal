@@ -85,6 +85,8 @@ def test_a_pipeline_with_a_target_answers_with_its_dates_as_text(demo_core):
     pipeline.set_target(db, pipeline.REVENUE, 100000, date(2027, 6, 1))
     answer = call(demo_core, "pipeline.page", name="revenue")
     assert answer["result"]["math"]["summary"]["target"]["due"] == "2027-06-01", answer
+    board = call(demo_core, "pipeline.board", name="revenue")["result"]
+    assert "last 90 days · Benchmark: the same rate over the last 2 years" in board["legend"], board
 
 
 def test_a_write_applies_to_the_copy_at_once_and_reaches_the_service(service, laptop_core):

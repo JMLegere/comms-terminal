@@ -740,8 +740,8 @@ def _pipeline_board(core, db, name):
             "constraint": segments(pipeline_constraint(m)), "columns": columns,
             "weekly_head": ["Stage", "Organizations", "Convert", "Benchmark", "Days in Stage", f"Reach {paid}", "Need a week",
                             "Getting a week", "Short by"], "weekly": weekly,
-            "legend": "Convert: share of Organizations that moved on to the next Stage in the last 12 months · Benchmark:"
-                      " Winning by Design's Bowtie Standard, Table 6.2 · Need and Getting: Organizations entering the Stage a week"
+            "legend": "Convert: share of Organizations that moved on to the next Stage in the last 90 days · Benchmark:"
+                      " the same rate over the last 2 years · Need and Getting: Organizations entering the Stage a week"
                       " · Short by: how many more a week the Target needs", "copy": copy}
 
 
