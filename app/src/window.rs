@@ -84,6 +84,7 @@ fn set_update_step(step: &str) {
     if host::shared("update") != value {
         crate::log::write("update", serde_json::json!({"step": value}));
         host::set_shared("update", value);
+        host::set_shared("update_banner_hidden", Value::Null);
         host::request(Request::Refresh);
     }
 }
@@ -96,6 +97,56 @@ fn restart() {
         return toast("A Draft has unsaved text that a restart would lose. Copy it first; Restart App again restarts.", "warning");
     }
     std::process::exit(UPDATE_EXIT)
+}
+
+/// The repository whose commits the builds are, for What changed (its compare page between two builds).
+const REPOSITORY: &str = "https://github.com/JMLegere/comms-terminal";
+
+/// Once a staged build is ready, a pill above the bottom bar says so with Restart, What changed and × (as herdr-app's
+/// update notice; Jeremy, 2026-11-04). × hides it until the next update step; the bottom bar's Problem stays.
+fn update_banner() -> Option<AnyElement> {
+    use crate::theme::color;
+    if host::shared("update").as_str() != Some("ready") || host::shared("update_banner_hidden") == Value::Bool(true) {
+        return None;
+    }
+    let status = host::status();
+    let new = status["service_build"].as_str().unwrap_or("").to_owned();
+    let old = status["build"].as_str().unwrap_or("").to_owned();
+    let label = if new.is_empty() { "Comms Terminal".to_owned() } else { format!("Comms Terminal {new}") };
+    let button = |id: &'static str, text: &'static str| {
+        div().id(id).px(px(10.)).py(px(2.)).rounded(px(10.)).cursor_pointer().text_size(px(12.5 * crate::theme::zoom())).child(text)
+    };
+    let mut pill = div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(12.))
+        .pl(px(16.))
+        .pr(px(8.))
+        .py(px(6.))
+        .rounded(px(18.))
+        .border_1()
+        .border_color(color("border"))
+        .bg(color("popover"))
+        .text_color(color("foreground"))
+        .shadow_md()
+        .child(div().text_size(px(13. * crate::theme::zoom())).child(SharedString::from(format!(
+            "{label} has been installed and the app requires a restart"
+        ))))
+        .child(button("update-restart", "Restart").bg(color("accent")).text_color(color("accent_foreground"))
+            .on_click(|_, _, _| { host::request(Request::Run("app.restart".into())); }));
+    if !old.is_empty() && !new.is_empty() {
+        let url = format!("{REPOSITORY}/compare/{old}...{new}");
+        pill = pill.child(button("update-changes", "What changed").text_color(color("blue"))
+            .on_click(move |_, _, _| { host::request(Request::Open(url.clone())); }));
+    }
+    Some(
+        pill.child(button("update-hide", "×").text_color(color("muted")).on_click(|_, _, _| {
+            host::set_shared("update_banner_hidden", Value::Bool(true));
+            host::request(Request::Refresh);
+        }))
+        .into_any_element(),
+    )
 }
 
 /// While an update keeps the core read-only, everything but the bars fades (FR-UPD-6); reading and moving still work.
@@ -661,6 +712,9 @@ impl Render for AppWindow {
             if let Some(Copy { root: Some(toasts), .. }) = self.copies.get(TOASTS) {
                 root = root.child(div().absolute().right(px(12.)).bottom(px(36.)).w(px(440.)).h(px(320.)).child(toasts.clone()));
             }
+        }
+        if let Some(banner) = update_banner() {
+            root = root.child(div().absolute().left_0().right_0().bottom(px(40.)).flex().justify_center().child(banner));
         }
         if !host::shared("settings").is_null() {
             if let Some(Copy { root: Some(settings), .. }) = self.copies.get(SETTINGS) {

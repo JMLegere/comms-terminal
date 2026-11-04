@@ -84,7 +84,7 @@ Jeremy accepted these in the App-versus-Console review (`App-Console-Review-Deci
 | D13 | `?` opens the picker as a key palette for the page. |
 | D14 | One overlay for every picker and prompt, with type-to-filter. |
 | D15 | Read-only shows in the status bar, with no toast. |
-| D17 | "Update ready" read-only reason; the App relaunches itself after an update. Superseded 2026-11-04: the App never relaunches itself; it fades while read-only, names the update step in the bottom bar, and the staged build opens at the next start (`.agents/prd/2026-11-04-app-update-on-restart.md`). |
+| D17 | "Update ready" read-only reason; the App relaunches itself after an update. Superseded 2026-11-04: the App never relaunches itself; it fades while read-only, names the update step in the bottom bar, shows a herdr-style notice with Restart and What changed once the build is ready, and the staged build opens at the next start (`.agents/prd/2026-11-04-app-update-on-restart.md`). |
 | D20 | Interface files, Panels, live reload, `.error` files and the escape-key reset. |
 | D21 | The brand row. |
 | D22 | The status bar names the Service, its build and the writes still saving. Superseded by D151: the builds moved to Settings; writes saving stays as a Problem. |
