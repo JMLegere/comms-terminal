@@ -89,12 +89,23 @@ fn set_update_step(step: &str) {
     }
 }
 
-/// Restart App: the launcher opens the App again, on a staged build if there is one. A Composer's unsaved text
-/// would be lost (a read-only core refuses its save), so the first press says so and the second restarts (FR-UPD-8).
+/// Restart App: the App opens again, on a staged build if there is one. The launcher's `--restart` starts a fresh
+/// launcher once this window and the launcher that opened it have exited, so the switch to the staged build runs
+/// whichever launcher (even one from before slots) opened this window; without a launcher (a dev run) it quits with
+/// 75. A Composer's unsaved text would be lost (a read-only core refuses its save), so the first press says so and
+/// the second restarts (FR-UPD-8).
 fn restart() {
     static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     if !host::shared("draft_unsaved").is_null() && !WARNED.swap(true, std::sync::atomic::Ordering::SeqCst) {
         return toast("A Draft has unsaved text that a restart would lose. Copy it first; Restart App again restarts.", "warning");
+    }
+    if let Some(launcher) = std::env::var_os("COMMS_TERMINAL_APP_PREPARE") {
+        let (me, parent) = (std::process::id().to_string(), std::os::unix::process::parent_id().to_string());
+        let handed = std::process::Command::new(&launcher).args(["--restart", &me, &parent]).status();
+        if handed.is_ok_and(|s| s.success()) {
+            crate::log::write("restart", serde_json::json!({"via": "launcher"}));
+            std::process::exit(0); // the launcher that opened this window ends too; the fresh one opens the App
+        }
     }
     std::process::exit(UPDATE_EXIT)
 }

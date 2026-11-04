@@ -11,6 +11,7 @@
 #   comms-terminal-app-launch            bring the open App forward, or switch to a staged build and open the App
 #   comms-terminal-app-launch --install  install main's desktop entry and launcher, then open the App
 #   comms-terminal-app-launch --prepare  build the Service's build into its own slot and return (exit 0: staged)
+#   comms-terminal-app-launch --restart APP LAUNCHER  start afresh once those two processes have exited
 # --install keeps COMMS_TERMINAL_REPO and COMMS_TERMINAL_SSH (the ssh arguments that reach your Service; Jeremy's
 # Oracle when unset) in $DATA/env, so the desktop entry, which starts without them, finds the same ones.
 set -eu
@@ -162,6 +163,15 @@ switch() {  # at start only: the staged build becomes the installed one, when th
 LAUNCHER="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")" INSTALLED="$HOME/.local/bin/comms-terminal-app-launch"
 if [ "${1:-}" = "--prepare" ]; then
     prepare
+    exit 0
+fi
+# Restart App (window.rs restart): once the App ($2) and the launcher that opened it ($3) have exited, start afresh,
+# so the switch to a staged build always runs, whichever launcher (even an older one) opened the window.
+if [ "${1:-}" = "--restart" ]; then
+    (
+        while kill -0 "$2" 2>/dev/null || kill -0 "$3" 2>/dev/null; do sleep 0.2; done
+        exec "$LAUNCHER"
+    ) </dev/null >/dev/null 2>&1 &
     exit 0
 fi
 # One launcher at a time. A second start brings the open window forward; while the first is still starting, says so.
