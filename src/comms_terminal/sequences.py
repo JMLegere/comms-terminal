@@ -943,27 +943,31 @@ def check(db, st: dict, e: dict) -> bool:
     if cond == "has_channel":
         return db.execute("SELECT 1 FROM identities WHERE person_id = ? AND kind = ?",
                           (e["person_id"], st["operand"])).fetchone() is not None
-    if cond == "stage":
-        held = pipeline_mod.current(db, e["organization_id"]) if e["organization_id"] else {}
+    if cond == "stage":  # Fundraising and Talent ask the Person (ADR 0016), Revenue the Organization
+        held = pipeline_mod.current(db, person_id=e["person_id"]) if st["pipeline"] in pipeline_mod.PEOPLE else \
+            pipeline_mod.current(db, e["organization_id"]) if e["organization_id"] else {}
         return held.get(st["pipeline"], {}).get("stage") == st["stage"]
     raise ValueError(f"{cond} is not checked by itself")
 
 
 def _run_action(db, task_id: int, st: dict, e: dict, now: datetime) -> str | None:
     """Carry out one Action and close its Task; returns why it waits for Jeremy instead. An Enrollment that names
-    no Organization takes the Person's only one, as Enroll does (FR-SEQ-36), once they have it."""
+    no Organization takes the Person's only one, as Enroll does (FR-SEQ-36), once they have it. A Stage or Value
+    in Fundraising or Talent goes on the Person and needs no Organization (ADR 0016)."""
     org, kind = e["organization_id"], st["action_kind"]
     if org is None and (org := default_organization(db, e["person_id"])) is not None:
         db.execute("UPDATE enrollments SET organization_id = ? WHERE id = ?", (org, e["id"]))
         db.execute("UPDATE tasks SET flag = NULL WHERE id = ?", (task_id,))
         e["organization_id"] = org
-    if kind in ("set_stage", "set_value", "end_for_others") and org is None:
+    personal = kind in ("set_stage", "set_value") and st["pipeline"] in pipeline_mod.PEOPLE
+    if kind in ("set_stage", "set_value", "end_for_others") and org is None and not personal:
         return NO_ORG
+    subject = e["person_id"] if personal else org
     try:
         if kind == "set_stage":
-            pipeline_mod.set_stage(db, org, st["pipeline"], st["stage"])
+            pipeline_mod.set_stage(db, subject, st["pipeline"], st["stage"])
         elif kind == "set_value":
-            pipeline_mod.set_value(db, org, st["pipeline"], st["value"])
+            pipeline_mod.set_value(db, subject, st["pipeline"], st["value"])
         elif kind == "end_for_others":
             for other in db.execute("SELECT id FROM enrollments WHERE sequence_id = ? AND organization_id = ?"
                                     " AND person_id != ? AND state != 'FINISHED'",

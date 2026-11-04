@@ -2,8 +2,9 @@
 // width, action first. THIS WEEK (numbered actions with reasons) beside PROGRESS (verdict, gauge, Target, Projected,
 // Today, Coverage, Gap, Deadline, Customers), the CONSTRAINT in red, the ORGANIZATIONS board (a column per Stage,
 // its header with count and conversion, the Constraint's marked ◀; each card's name, Value or red "no Value", days
-// in Stage, roll-up, last message), and the WEEKLY REVIEW with its legend. Talent shows the board only. j/k move
-// in a column, ←/→ between Stages; Enter opens the Organization; s and v set its Stage and Value in this Pipeline;
+// in Stage, roll-up, last message), and the WEEKLY REVIEW with its legend. Talent shows the board only. Fundraising
+// and Talent hold People (ADR 0016): a card names the Person and their Organizations. j/k move in a column, ←/→
+// between Stages; Enter opens the Organization or Person; s and v set its Stage and Value in this Pipeline;
 // y copies the Pipeline math for an agent. Element focus: the selected card is the detail column's element; it names
 // itself in the bar and carries the path's accent bar.
 import { View, div } from "gpui-kit";
@@ -51,7 +52,7 @@ export default class Pipeline extends View {
 
   card() { return this.b?.columns?.[this.col]?.cards?.[this.row]; }
 
-  /** The selected card's Organization is the one s and v act on (in the organization view, off screen). */
+  /** The selected card's Organization or Person is the one s and v act on (in its view, off screen). */
   select() {
     const c = this.b?.columns?.[this.col];
     if (c) this.row = Math.max(0, Math.min(this.row, c.cards.length - 1));
@@ -59,6 +60,7 @@ export default class Pipeline extends View {
     if (shared("page") !== "pipeline") return;
     this.target();
     if (!card) return;
+    if (card.org.person) { setShared("person", card.org.id); run("person.show"); return; }
     setShared("organization", { id: card.org.id, domain: card.org.domain });
     run("organization.show");
   }
@@ -68,7 +70,7 @@ export default class Pipeline extends View {
     const c = this.b?.columns?.[this.col], card = this.card();
     if (!c || shared("page") !== "pipeline" || shared("focus") !== "detail") return;
     setShared("target", card
-      ? { col: "detail", label: `Organization · ${card.org.name ?? card.org.domain ?? ""}`,
+      ? { col: "detail", label: `${card.org.person ? "Person" : "Organization"} · ${card.org.name ?? card.org.domain ?? ""}`,
         keys: [["enter", "open"], ["s", "stage"], ...(this.b.board_only ? [] : [["v", "value"]]), ["←→", "Stages"]] }
       : { col: "detail", label: `Stage · ${c.stage ?? ""}`, keys: [["←→", "Stages"]] });
   }
@@ -82,7 +84,16 @@ export default class Pipeline extends View {
       case "next_column": case "prev_column": this.col = Math.max(0, Math.min(cols.length - 1, this.col + (c === "next_column" ? 1 : -1))); break;
       case "enter": {
         const card = this.card();
-        if (card) { setShared("push", { page: "organization", organization: { id: card.org.id, domain: card.org.domain } }); run("nav.push"); }
+        if (card) {
+          setShared("push", card.org.person ? { page: "person", person: card.org.id }
+            : { page: "organization", organization: { id: card.org.id, domain: card.org.domain } });
+          run("nav.push");
+        }
+        return;
+      }
+      case "stage": case "value": { // s and v act in the card's own view: the Person's or the Organization's
+        const card = this.card();
+        if (card) run(`${card.org.person ? "person" : "organization"}.${c}`);
         return;
       }
       case "copy":
@@ -125,7 +136,7 @@ export default class Pipeline extends View {
           cx.notify();
         })
         .children(segs(k.lines))) : [div().px(6).text_color(t.dim).child("·")])));
-    const title = `ORGANIZATIONS  ·  each Stage${b.board_only ? "" : ", how many move on"}  ·  enter opens · s Stage${b.board_only ? "" : " · v Value"} · ←/→`;
+    const title = `${(b.noun ?? "Organizations").toUpperCase()}  ·  each Stage${b.board_only ? "" : ", how many move on"}  ·  enter opens · s Stage${b.board_only ? "" : " · v Value"} · ←/→`;
     const cell = (ss, w) => div().w(w).flex_none().children(segs([ss]));
     const widths = [130, 120, 150, 90, 110, 110, 100, 120, 80];
     return root

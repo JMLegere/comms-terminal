@@ -15,6 +15,11 @@ def stage(db, org_id, p="REVENUE"):
     return pipeline.current(db, org_id).get(p, {}).get("stage")
 
 
+def person_stage(db, person_id, p):
+    """A Person's Stage in Fundraising or Talent (ADR 0016)."""
+    return pipeline.current(db, person_id=person_id).get(p, {}).get("stage")
+
+
 def action(db, s, kind, *, section="body", parent=None, branch=None, after=None, **fields):
     step = sq.add_step(db, s, "action", after, section=section, parent_step_id=parent, branch=branch, action_kind=kind)
     sq.save_step(db, step, action_kind=kind, **fields)
@@ -211,8 +216,8 @@ def test_as_seq_30_end_for_others_cancels_the_same_sequence_at_the_organization(
 
 
 def test_an_action_needing_an_organization_waits_when_there_is_none(db):
-    s = sq.create_sequence(db, "Angels")
-    action(db, s, "set_stage", section="start", pipeline="FUNDRAISING", stage="Outreach")
+    s = sq.create_sequence(db, "Sole customers")
+    action(db, s, "set_stage", section="start", pipeline="REVENUE", stage="Awareness")
     touch(db, s, "call")
     brian = person(db, "brian@gmail.com", "Brian Dunphy")  # free mail: no Organization
     sq.enroll(db, brian, s, MONDAY)
@@ -222,14 +227,14 @@ def test_an_action_needing_an_organization_waits_when_there_is_none(db):
 
 def test_a_waiting_action_runs_once_the_person_has_one_organization(db):
     s = sq.create_sequence(db, "Bench")
-    action(db, s, "set_stage", section="start", pipeline="TALENT", stage="Explore")
+    action(db, s, "set_stage", section="start", pipeline="REVENUE", stage="Awareness")
     touch(db, s, "call")
     evan = person(db, "evan@gmail.com", "Evan Boerchers")
     eid = sq.enroll(db, evan, s, MONDAY)
     sole = inbox.create_sole_proprietorship(db, evan)  # after the Enrollment, as the console's enroll dialog does
     sq.materialize(db, MONDAY)
     assert db.execute("SELECT organization_id FROM enrollments WHERE id = ?", (eid,)).fetchone()[0] == sole
-    assert stage(db, sole, "TALENT") == "Explore"
+    assert stage(db, sole) == "Awareness"
     assert due_kinds(db, MONDAY + DAY) == [("Evan Boerchers", "call")]
 
 
@@ -317,25 +322,31 @@ def test_an_enrollment_counts_only_for_its_own_organization(db):
         db.execute("INSERT INTO memberships VALUES (?, ?, 1, 'x')", (marc, fund))
     climb = org(db, "climb.example")
     for o in (climb, fund):
-        pipeline.set_stage(db, o, "FUNDRAISING", "Diligence")
+        pipeline.set_stage(db, o, "REVENUE", "Selection")
     inbox.act(db, db.execute("SELECT id FROM threads").fetchone()[0], inbox.Done())
     sq.enroll(db, marc, s, MONDAY, organization_id=fund)
     att = pipeline.attention(db)
     assert (att[fund]["unattended"], att[climb]["unattended"]) == (False, True)
 
 
-def test_as_seq_29_a_sole_proprietorship_holds_an_angels_stage(db):
+def test_as_seq_29_an_angels_stage_is_on_the_person(db):
+    """ADR 0016: a Fundraising Action sets the Person's Stage and needs no Organization; a Sole proprietorship
+    still forms for a customer buying on their own account."""
     s = sq.create_sequence(db, "Investor fit")
     action(db, s, "set_stage", section="start", pipeline="FUNDRAISING", stage="Outreach")
+    action(db, s, "set_value", section="start", pipeline="FUNDRAISING", value=10_000)
     touch(db, s, "call")
-    brian = person(db, "brian@gmail.com", "Brian Dunphy")
+    brian = person(db, "brian@gmail.com", "Brian Dunphy")  # free mail: no Organization
+    sq.enroll(db, brian, s, MONDAY)
+    sq.materialize(db, MONDAY)
+    assert person_stage(db, brian, "FUNDRAISING") == "Outreach"
+    assert pipeline.current(db, person_id=brian)["FUNDRAISING"]["value"] == 10_000
+    assert due_kinds(db, MONDAY + DAY) == [("Brian Dunphy", "call")]
     sole = inbox.create_sole_proprietorship(db, brian)
     assert inbox.create_sole_proprietorship(db, brian) == sole
     row = db.execute("SELECT domain, name FROM organizations WHERE id = ?", (sole,)).fetchone()
     assert tuple(row) == (f"person-{brian}.sole", "Brian Dunphy")
-    assert sq.default_organization(db, brian) == sole  # his only Organization now
-    sq.enroll(db, brian, s, MONDAY)
-    assert stage(db, sole, "FUNDRAISING") == "Outreach"
+    assert pipeline.current(db, sole) == {}
 
 
 def test_as_seq_33_jeremy_sets_a_stage_by_hand_after_an_action(db, close_seq):
@@ -352,10 +363,9 @@ def test_as_seq_34_talent_is_a_board_with_no_target_or_math(db):
     touch(db, s, "call")
     assert sq.validate(db, s) == []
     nic = person(db, "nic@reach.example", "Nic Robichaud")
-    sole = inbox.create_sole_proprietorship(db, nic)
-    sq.enroll(db, nic, s, MONDAY, organization_id=sole)
-    assert stage(db, sole, "TALENT") == "Explore"
+    sq.enroll(db, nic, s, MONDAY)
+    assert person_stage(db, nic, "TALENT") == "Explore"
     board = pipeline.board_markdown(db, "TALENT", MONDAY)
-    assert "## Explore (1)\n- Nic Robichaud: 0d in Stage" in board and "Target" not in board
+    assert "## Explore (1)\n- Nic Robichaud (reach.example): 0d in Stage" in board and "Target" not in board
     with pytest.raises(pipeline.Refused):
         pipeline.set_target(db, "TALENT", 5, "2027-01-01")

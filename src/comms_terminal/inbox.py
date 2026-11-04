@@ -27,7 +27,7 @@ from typing import Protocol, Sequence
 from . import clock, files, platforms
 from .writers import writer
 
-SCHEMA_VERSION = 35
+SCHEMA_VERSION = 36
 WAIT = timedelta(days=4)  # Waiting for them ends after this with no reply: back to Todo to follow up (#116)
 EMAIL_CONFIRMATION_PENDING = "Email confirmation pending; wait for its sent receipt before replying."
 MIGRATIONS = {  # version -> statement that upgrades an existing database to it
@@ -711,6 +711,55 @@ WHERE NOT EXISTS (SELECT 1 FROM composition_drafts d WHERE d.thread_id = s.threa
 UPDATE staged_attachments SET draft_id = (
   SELECT d.id FROM composition_drafts d WHERE d.thread_id = staged_attachments.thread_id), thread_id = NULL
 WHERE thread_id IS NOT NULL;"""
+
+
+# Fundraising and Talent hold People (ADR 0016): their entries on a Sole proprietorship move to its Person; firm
+# entries already undone go with their undos (they cancel). A firm entry still live stops the migration.
+MIGRATIONS[36] = """PRAGMA legacy_alter_table = ON;
+CREATE TABLE pipeline_log_new (
+  id              TEXT PRIMARY KEY NOT NULL DEFAULT (new_id()),
+  organization_id TEXT REFERENCES organizations (id),
+  person_id       TEXT REFERENCES persons (id),
+  pipeline        TEXT NOT NULL CHECK (pipeline IN ('REVENUE', 'FUNDRAISING', 'TALENT')),
+  kind            TEXT NOT NULL CHECK (kind IN ('STAGE', 'VALUE', 'UNDO')),
+  stage           TEXT,
+  value           INTEGER,
+  undoes          TEXT REFERENCES pipeline_log (id),
+  effective_at    TEXT NOT NULL,
+  recorded_at     TEXT NOT NULL,
+  CHECK ((kind = 'STAGE') = (stage IS NOT NULL) AND (kind = 'VALUE') = (value IS NOT NULL)
+         AND (kind = 'UNDO') = (undoes IS NOT NULL)),
+  CHECK ((pipeline = 'REVENUE') = (organization_id IS NOT NULL) AND (pipeline = 'REVENUE') = (person_id IS NULL))
+) STRICT;
+CREATE TEMP TRIGGER pipeline_log_firm BEFORE INSERT ON main.pipeline_log_new
+WHEN NEW.pipeline != 'REVENUE' AND NEW.person_id IS NULL
+BEGIN
+  SELECT RAISE(ABORT, 'a live Fundraising or Talent entry is on a firm: move it to a Person first (ADR 0016)');
+END;
+INSERT INTO pipeline_log_new (id, organization_id, person_id, pipeline, kind, stage, value, undoes, effective_at,
+  recorded_at)
+SELECT l.id, CASE WHEN l.pipeline = 'REVENUE' THEN l.organization_id END,
+  CASE WHEN l.pipeline != 'REVENUE' AND o.domain LIKE 'person-%.sole'
+       THEN substr(o.domain, 8, length(o.domain) - 12) END,
+  l.pipeline, l.kind, l.stage, l.value, l.undoes, l.effective_at, l.recorded_at
+FROM pipeline_log l JOIN organizations o ON o.id = l.organization_id
+WHERE l.pipeline = 'REVENUE' OR o.domain LIKE 'person-%.sole'
+   OR (l.kind != 'UNDO' AND NOT EXISTS (SELECT 1 FROM pipeline_log u WHERE u.undoes = l.id));
+DROP TRIGGER temp.pipeline_log_firm;
+DROP TABLE pipeline_log;
+ALTER TABLE pipeline_log_new RENAME TO pipeline_log;
+CREATE INDEX pipeline_log_org ON pipeline_log (organization_id, pipeline, effective_at);
+CREATE INDEX pipeline_log_person ON pipeline_log (person_id, pipeline, effective_at);
+CREATE TRIGGER pipeline_log_no_delete BEFORE DELETE ON pipeline_log
+BEGIN
+  SELECT RAISE(ABORT, 'the pipeline log is append-only');
+END;
+CREATE TRIGGER pipeline_log_no_update BEFORE UPDATE OF id, organization_id, pipeline, kind, stage, value, undoes,
+  effective_at, recorded_at ON pipeline_log
+BEGIN
+  SELECT RAISE(ABORT, 'the pipeline log is append-only');
+END;
+PRAGMA legacy_alter_table = OFF;"""
 
 
 class SendUnknown(SendFailed):
@@ -1634,6 +1683,7 @@ def merge_persons(db, keep: int, drop: int, *, now: datetime | None = None) -> N
         db.execute("UPDATE identities SET person_id = ? WHERE person_id = ?", (keep, drop))
         db.execute("UPDATE OR IGNORE memberships SET person_id = ? WHERE person_id = ?", (keep, drop))
         db.execute("DELETE FROM memberships WHERE person_id = ?", (drop,))  # keep's own change wins
+        db.execute("UPDATE pipeline_log SET person_id = ? WHERE person_id = ?", (keep, drop))  # ADR 0016
         from . import sequences
         sequences.merge_people(db, keep, drop, now=now)
         db.execute("DELETE FROM persons WHERE id = ?", (drop,))

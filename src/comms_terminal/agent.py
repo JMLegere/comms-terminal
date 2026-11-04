@@ -229,14 +229,16 @@ def add_parsers(sub):
     ps = p.add_subparsers(dest="pipeline_cmd", required=True)
     for name in ("revenue", "fundraising"):
         ps.add_parser(name, help=f"the {name.title()} Pipeline as Markdown")
-    ps.add_parser("talent", help="the Talent Pipeline's Organizations by Stage as Markdown (no math)")
+    ps.add_parser("talent", help="the Talent Pipeline's People by Stage as Markdown (no math)")
     t = ps.add_parser("target", help="set a Pipeline's Target: TTM revenue (Revenue) or round size (Fundraising)")
     t.add_argument("pipeline")
     t.add_argument("amount", help="CAD, e.g. 1000000 or 1m")
     t.add_argument("--by", required=True, type=date.fromisoformat, help="due date, YYYY-MM-DD")
-    for kind, what in (("stage", "move an Organization to a Stage"), ("value", "set an Organization's Value")):
+    for kind, what in (("stage", "move an Organization (Revenue) or a Person (Fundraising, Talent) to a Stage"),
+                       ("value", "set an Organization's Revenue Value or a Person's Fundraising Value")):
         t = ps.add_parser(kind, help=what)
-        t.add_argument("org", help="a domain or exact Organization name")
+        t.add_argument("org", metavar="who", help="Revenue: a domain or exact Organization name; Fundraising and"
+                                                  " Talent: a Person's email, phone, or exact name")
         t.add_argument("pipeline")
         t.add_argument(kind, help="a Stage name" if kind == "stage" else "CAD, e.g. 90000 or 90k")
         t.add_argument("--at", help="backdate it: YYYY-MM-DD (seeding past Stages)")
@@ -396,14 +398,15 @@ def pipeline_cmd(db, a) -> str:
         pipeline.set_target(db, p, a.amount, a.by)
         t = pipeline.target(db, p)
         return f"{pipeline.NAMES[p]} Target: CAD {t['amount']:,} by {t['due']}\n"
-    org = pipeline.find_org(db, a.org)
+    s = pipeline.find_subject(db, p, a.org)
     if c == "stage":
-        done = pipeline.set_stage(db, org["id"], p, a.stage, a.at)
+        done = pipeline.set_stage(db, s["id"], p, a.stage, a.at)
     else:
-        done = pipeline.set_value(db, org["id"], p, a.value, a.at)
-    now = pipeline.current(db, org["id"])[p]
+        done = pipeline.set_value(db, s["id"], p, a.value, a.at)
+    now = (pipeline.current(db, person_id=s["id"]) if p in pipeline.PEOPLE else pipeline.current(db, s["id"]))[p]
     value = "no Value" if now["value"] is None else f"CAD {now['value']:,}"
-    return (f"{org['name']} ({org['domain']}) {pipeline.NAMES[p]}: {now['stage'] or 'no Stage'}, {value}"
+    who = pipeline.label(pipeline._subjects(db, p in pipeline.PEOPLE)[s["id"]])
+    return (f"{who} {pipeline.NAMES[p]}: {now['stage'] or 'no Stage'}, {value}"
             + ("" if done else " (unchanged)") + "\n")
 
 

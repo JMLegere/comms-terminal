@@ -47,7 +47,9 @@ export default class Side extends View {
     const s = shared("side");
     if (!s || shared("page") !== "today" || shared("focus") !== "detail") return;
     const name = this.lines?.[0]?.[0]?.[0] ?? "";
-    setShared("target", s.kind === "paused"
+    setShared("target", s.kind === "unattended_person"
+      ? { col: "detail", label: `Person · ${name}`, keys: [["enter", "open"], ["j/k", "scroll"], ["esc", "list"]] }
+      : s.kind === "paused"
       ? { col: "detail", label: `Person · ${name}`, keys: [["enter", "open"], ["r", "resume"], ["f", "finish"], ["j/k", "scroll"], ["esc", "list"]] }
       : { col: "detail", label: `Organization · ${name}`, keys: [["enter", "open"], ["j/k", "scroll"], ["esc", "list"]] });
   }

@@ -1151,10 +1151,33 @@ def org_stage(app):
     app.phase6 = phase6_view("stage")
 
 
-@then(parsers.parse('the picker marks "{current}" and offers the other Pipelines'))
+@then(parsers.parse('the picker marks "{current}" and offers no other Pipeline'))
 def stage_picker(app, current):
-    assert app.phase6["picker"] == {"title": "Stage · Acme (Revenue)",
-                                    "options": ["  Selection", current, "  Onboarding", "  Fundraising…", "  Talent…"]}
+    assert app.phase6["picker"] == {"title": "Stage · Acme (Revenue)", "options": ["  Selection", current, "  Onboarding"]}
+    assert app.phase6["write"] == {"org_id": "o1", "pipeline": "REVENUE", "stage": "Onboarding"}
+
+
+@given("a Person in the App in no Pipeline")
+def person_no_pipeline(app):
+    pass
+
+
+@when("Jeremy presses p, picks Fundraising and then Meeting")
+def person_stage(app):
+    app.phase6 = phase6_view("person-stage")
+
+
+@then(parsers.parse('the first picker offers "{first}" and the next "{title}" with a switch to Talent'))
+def person_pickers(app, first, title):
+    assert app.phase6["first"] == {"title": "Stage · Ana", "options": first.split(", ")}
+    assert app.phase6["picker"] == {"title": title, "options": ["  Research", "  Meeting", "  Talent…"]}
+
+
+@then(parsers.parse('the Person\'s Fundraising Stage is set to "{stage}", the toast says "{message}" and z undoes it'))
+def person_stage_written(app, stage, message):
+    assert app.phase6["write"] == {"org_id": "p1", "pipeline": "FUNDRAISING", "stage": stage}
+    assert app.phase6["toast"] == f"{message}  z undo"
+    assert app.phase6["undo"] == [["pipeline.undo", {"entry_id": 7}]]
 
 
 @then(parsers.parse('the toast says "{message}" and z undoes it'))

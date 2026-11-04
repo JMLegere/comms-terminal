@@ -481,6 +481,6 @@ def test_version_28_enrollments_get_their_one_organization_and_talent_is_a_pipel
     assert dict(db.execute("SELECT person_id, organization_id FROM enrollments")) == {dana: harbourline, marc: None}
     assert db.execute("SELECT linkedin_move FROM sequence_steps WHERE kind = 'linkedin'").fetchone()[0] == "connect"
     with db:
-        db.execute("INSERT INTO pipeline_log (organization_id, pipeline, kind, stage, effective_at, recorded_at)"
-                   " VALUES (?, 'TALENT', 'STAGE', 'Explore', 'x', 'x')", (harbourline,))
+        db.execute("INSERT INTO pipeline_log (person_id, pipeline, kind, stage, effective_at, recorded_at)"
+                   " VALUES (?, 'TALENT', 'STAGE', 'Explore', 'x', 'x')", (dana,))  # a Person since ADR 0016
     assert db.execute("PRAGMA foreign_key_check").fetchall() == []

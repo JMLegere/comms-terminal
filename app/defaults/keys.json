@@ -155,8 +155,8 @@
     "left": "pipeline.prev_column",
     "right": "pipeline.next_column",
     "enter": "pipeline.enter",
-    "s": "organization.stage",
-    "v": "organization.value",
+    "s": "pipeline.stage",
+    "v": "pipeline.value",
     "y": "pipeline.copy"
   },
   "page:channels": {
@@ -237,6 +237,8 @@
     "r": "person.resume",
     "f": "person.finish",
     "o": "person.organizations",
+    "p": "person.stage",
+    "v": "person.value",
     "1": "person.pick_first",
     "2": "person.pick_second"
   },

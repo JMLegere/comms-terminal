@@ -2922,7 +2922,7 @@
   },
   {
    "name": "pipeline.board",
-   "summary": "One Pipeline as the Console's PipelinePage lays it out: the THIS WEEK, PROGRESS and CONSTRAINT boxes, the ORGANIZATIONS board (a column per Stage, its header with count and conversion, the Constraint's marked; each card's Organization and lines), the WEEKLY REVIEW rows and legend, all as segment lines; `board_only` for Talent; and `copy`, the Markdown y copies for an agent.",
+   "summary": "One Pipeline as the Console's PipelinePage lays it out: the THIS WEEK, PROGRESS and CONSTRAINT boxes, the ORGANIZATIONS or PEOPLE board (`noun`; a column per Stage, its header with count and conversion, the Constraint's marked; each card's Organization or Person (`person` true, ADR 0016) and lines), the WEEKLY REVIEW rows and legend, all as segment lines; `board_only` for Talent; and `copy`, the Markdown y copies for an agent.",
    "params": [
     {
      "name": "name",
@@ -2999,7 +2999,7 @@
   },
   {
    "name": "pipeline.unattended",
-   "summary": "Organizations in an open Stage with nothing bringing them back.",
+   "summary": "Organizations and People (person_id set) in an open Stage with nothing bringing them back.",
    "params": [
     {
      "name": "origin",
@@ -3745,7 +3745,7 @@
   },
   {
    "name": "today.side",
-   "summary": "The right pane for a Today Paused row (kind \"paused\", a Person id) or Unattended row (\"unattended\", an Organization id), as the Console fills it: lines of [text, colour or null, bold] segments.",
+   "summary": "The right pane for a Today Paused row (kind \"paused\", a Person id) or Unattended row (\"unattended\", an Organization id; \"unattended_person\", a Person id), as the Console fills it: lines of [text, colour or null, bold] segments.",
    "params": [
     {
      "name": "kind",

@@ -377,10 +377,12 @@ CREATE TABLE event_provider (
   error     TEXT
 ) STRICT;
 
--- Pipeline (ADR 0006): Stage and Value per Organization, append-only
+-- Pipeline (ADR 0006, ADR 0016): Stage and Value per Organization in Revenue and per Person in Fundraising and
+-- Talent, append-only; a Person merge re-points person_id, nothing else changes
 CREATE TABLE pipeline_log (
   id              TEXT PRIMARY KEY NOT NULL DEFAULT (new_id()),
-  organization_id TEXT NOT NULL REFERENCES organizations (id),
+  organization_id TEXT REFERENCES organizations (id),  -- Revenue
+  person_id       TEXT REFERENCES persons (id),        -- Fundraising and Talent
   pipeline        TEXT NOT NULL CHECK (pipeline IN ('REVENUE', 'FUNDRAISING', 'TALENT')),
   kind            TEXT NOT NULL CHECK (kind IN ('STAGE', 'VALUE', 'UNDO')),
   stage           TEXT,
@@ -389,14 +391,17 @@ CREATE TABLE pipeline_log (
   effective_at    TEXT NOT NULL,             -- when it happened (backdated when seeding)
   recorded_at     TEXT NOT NULL,
   CHECK ((kind = 'STAGE') = (stage IS NOT NULL) AND (kind = 'VALUE') = (value IS NOT NULL)
-         AND (kind = 'UNDO') = (undoes IS NOT NULL))
+         AND (kind = 'UNDO') = (undoes IS NOT NULL)),
+  CHECK ((pipeline = 'REVENUE') = (organization_id IS NOT NULL) AND (pipeline = 'REVENUE') = (person_id IS NULL))
 ) STRICT;
 CREATE INDEX pipeline_log_org ON pipeline_log (organization_id, pipeline, effective_at);
+CREATE INDEX pipeline_log_person ON pipeline_log (person_id, pipeline, effective_at);
 CREATE TRIGGER pipeline_log_no_delete BEFORE DELETE ON pipeline_log
 BEGIN
   SELECT RAISE(ABORT, 'the pipeline log is append-only');
 END;
-CREATE TRIGGER pipeline_log_no_update BEFORE UPDATE ON pipeline_log
+CREATE TRIGGER pipeline_log_no_update BEFORE UPDATE OF id, organization_id, pipeline, kind, stage, value, undoes,
+  effective_at, recorded_at ON pipeline_log
 BEGIN
   SELECT RAISE(ABORT, 'the pipeline log is append-only');
 END;

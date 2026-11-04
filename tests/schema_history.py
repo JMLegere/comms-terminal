@@ -41,6 +41,38 @@ def _integer_keys_sql() -> str:
 
 
 UNDO = {
+    36: """PRAGMA foreign_keys = OFF; PRAGMA legacy_alter_table = ON;
+INSERT OR IGNORE INTO organizations (domain, name, created_at)
+SELECT 'person-' || p.id || '.sole', p.display_name, min(l.recorded_at) FROM pipeline_log l JOIN persons p ON p.id = l.person_id
+GROUP BY p.id;
+CREATE TABLE pipeline_log_old (
+  id              TEXT PRIMARY KEY NOT NULL DEFAULT (new_id()),
+  organization_id TEXT NOT NULL REFERENCES organizations (id),
+  pipeline        TEXT NOT NULL CHECK (pipeline IN ('REVENUE', 'FUNDRAISING', 'TALENT')),
+  kind            TEXT NOT NULL CHECK (kind IN ('STAGE', 'VALUE', 'UNDO')),
+  stage           TEXT,
+  value           INTEGER,
+  undoes          TEXT REFERENCES pipeline_log (id),
+  effective_at    TEXT NOT NULL,
+  recorded_at     TEXT NOT NULL,
+  CHECK ((kind = 'STAGE') = (stage IS NOT NULL) AND (kind = 'VALUE') = (value IS NOT NULL)
+         AND (kind = 'UNDO') = (undoes IS NOT NULL))
+) STRICT;
+INSERT INTO pipeline_log_old SELECT l.id, coalesce(l.organization_id,
+  (SELECT o.id FROM organizations o WHERE o.domain = 'person-' || l.person_id || '.sole')),
+  l.pipeline, l.kind, l.stage, l.value, l.undoes, l.effective_at, l.recorded_at FROM pipeline_log l;
+DROP TABLE pipeline_log;
+ALTER TABLE pipeline_log_old RENAME TO pipeline_log;
+CREATE INDEX pipeline_log_org ON pipeline_log (organization_id, pipeline, effective_at);
+CREATE TRIGGER pipeline_log_no_delete BEFORE DELETE ON pipeline_log
+BEGIN
+  SELECT RAISE(ABORT, 'the pipeline log is append-only');
+END;
+CREATE TRIGGER pipeline_log_no_update BEFORE UPDATE ON pipeline_log
+BEGIN
+  SELECT RAISE(ABORT, 'the pipeline log is append-only');
+END;
+PRAGMA legacy_alter_table = OFF;""",
     35: """UPDATE staged_attachments SET thread_id = (
   SELECT d.thread_id FROM composition_drafts d WHERE d.id = staged_attachments.draft_id), draft_id = NULL
 WHERE draft_id IN (SELECT id FROM composition_drafts WHERE thread_id IS NOT NULL);""",

@@ -232,7 +232,11 @@ export default class Today extends View {
     if (row.kind === "tasks") { run("task.show"); run("tasks.show"); }
     if (row.kind === "drafts") { setShared("draft", r.id); run(inPlace ? "thread.show" : "draft.show"); if (inPlace) run("thread.show_reply"); }
     if (row.kind === "paused") { setShared("person", r.person_id); setShared("side", { kind: "paused", id: r.person_id }); run("person.show"); run("side.show"); }
-    if (row.kind === "unattended") {
+    if (row.kind === "unattended" && r.person_id) { // a Person in Fundraising or Talent (ADR 0016)
+      setShared("person", r.person_id);
+      setShared("side", { kind: "unattended_person", id: r.person_id });
+      run("person.show"); run("side.show");
+    } else if (row.kind === "unattended") {
       setShared("organization", { id: r.id, domain: r.domain });
       setShared("side", { kind: "unattended", id: r.id });
       run("organization.show"); run("side.show");
@@ -267,7 +271,8 @@ export default class Today extends View {
         setShared("focus", "detail"); // the Draft's Composer takes the keyboard, where it is shown
         return run(r.thread_id ? "thread.open_reply" : "draft.edit");
       case "paused": return push({ page: "person", person: r.person_id });
-      case "unattended": return push({ page: "organization", organization: { id: r.id, domain: r.domain } });
+      case "unattended": return push(r.person_id ? { page: "person", person: r.person_id }
+        : { page: "organization", organization: { id: r.id, domain: r.domain } });
     }
   }
 

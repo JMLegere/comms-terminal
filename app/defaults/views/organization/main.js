@@ -44,7 +44,8 @@ export function segLines(t, lines, key = "s", orgs = {}, nav = null) {
     : div().h(10)));
 }
 
-/** s's options for one Pipeline: its Stages, the current one marked, then the other Pipelines (the Console's set_org_stage). */
+/** s's options for one Pipeline: its Stages, the current one marked, then the other Pipelines it can be in (the
+ * Console's set_org_stage; an Organization is in Revenue only, a Person in Fundraising and Talent, ADR 0016). */
 export function stageOptions(st, p) {
   const now = st.current?.[p];
   return [...st.all[p].map((s) => ({ value: s, label: `${s === now ? "▸ " : "  "}${s}${s === now ? "  (current)" : ""}` })),

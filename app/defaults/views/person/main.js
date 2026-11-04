@@ -1,7 +1,7 @@
 // One Person, as the Console's PersonPage (D139): name, Identities (J/K pick one; b blocks or unblocks it, x removes
 // it, a adds one), the Sequence section, Organizations (o), Threads and Cases as links, and Context beside them.
 // s enrolls in a Sequence (D141), r resumes and f finishes an Enrollment (D142), 1/2 answer an If that asks Jeremy;
-// n renames. Element focus: the Identities, then the links below them, are the Person's elements; j/k walk them,
+// n renames; p sets their Fundraising or Talent Stage and v their Fundraising Value (ADR 0016), as the Console's. Element focus: the Identities, then the links below them, are the Person's elements; j/k walk them,
 // tab jumps between the two, Enter opens a link.
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
@@ -92,7 +92,7 @@ export default class Person extends View {
     if (!p || !["people", "person"].includes(shared("page")) || shared("focus") !== "detail") return;
     const ids = p.identities ?? [], i = ids[this.at], l = this.links?.[this.at - ids.length];
     if (i) setShared("target", { col: "detail", label: `Identity · ${i.value}`, keys: [["b", i.blocked ? "unblock" : "block"],
-      ["x", "remove"], ["a", "add"], ["s", "enroll"], ["o", "organizations"], ["n", "rename"]] });
+      ["x", "remove"], ["a", "add"], ["s", "enroll"], ["p", "stage"], ["o", "organizations"], ["n", "rename"]] });
     else if (l) setShared("target", { col: "detail", label: `${KIND[l.link.split(":")[0]] ?? "Link"} · ${l.text.trim()}`,
       keys: [["enter", "open"], ["s", "enroll"], ["n", "rename"]] });
   }
@@ -100,6 +100,34 @@ export default class Person extends View {
   pick(title, options, reply, prompt, value, body) {
     setShared("picker", { title, options, reply: `person.${reply}`, prompt, value, body });
     run("overlay.open");
+  }
+
+  /** The Pipeline to act in: the Pipeline page's, else the one they hold a Stage in, else Jeremy picks. */
+  choose(what, then) {
+    const st = this.page.stages, p = this.page.person;
+    if (shared("page") === "pipeline") return then((shared("pipeline") ?? "fundraising").toUpperCase());
+    if (st.held.length === 1) return then(st.held[0]);
+    this.then = then;
+    this.pick(`${what} · ${p.name}`, Object.keys(st.all).map((q) => ({ value: q, label: st.names[q] })), "pipeline-picked");
+  }
+
+  /** p's options: the Pipeline's Stages, the current one marked, then the other Pipeline (the Console's set_org_stage). */
+  stagePick(q) {
+    const st = this.page.stages, now = st.current?.[q];
+    this.pipeline = q;
+    this.pick(`Stage · ${this.page.person.name} (${st.names[q]})`, [
+      ...st.all[q].map((s) => ({ value: s, label: `${s === now ? "▸ " : "  "}${s}${s === now ? "  (current)" : ""}` })),
+      ...Object.keys(st.all).filter((x) => x !== q).map((x) => ({ value: `pipeline:${x}`, label: `  ${st.names[x]}…` }))], "stage-picked");
+  }
+
+  /** A Pipeline write that z undoes, as the Organization view's. */
+  async undoable(method, params, message) {
+    try {
+      const entry = await call(`command.${method}`, params);
+      if (entry != null) offerUndo(message, [["pipeline.undo", { entry_id: entry }]]);
+    } catch (e) {
+      toast(`Not changed: ${String(e).replace(/^(Error|Refused): /, "")}`, "error");
+    }
   }
 
   async write(method, params, message) {
@@ -135,6 +163,22 @@ export default class Person extends View {
         this.target();
         return cx.notify();
       case "enter": return this.links?.[this.at - ids.length]?.go();
+      case "stage": return this.choose("Stage", (q) => this.stagePick(q));
+      case "value": // a Person's only Value is Fundraising's
+        this.pipeline = "FUNDRAISING";
+        return this.pick(`Fundraising Value · ${p.name}`, [], "value-typed", "CAD cheque, e.g. 250k");
+      case "pipeline-picked": return this.then?.(answer.value);
+      case "stage-picked":
+        if (answer.value.startsWith("pipeline:")) return this.stagePick(answer.value.slice(9));
+        return cx.spawn(async () => this.undoable("pipeline.set_stage", { org_id: p.id, pipeline: this.pipeline, stage: answer.value },
+          `${p.name} → ${answer.value}.`));
+      case "value-typed":
+        if (answer.text == null) return;
+        return cx.spawn(async () => {
+          const amount = await call("amount.parse", { text: answer.text }).catch(() => null);
+          await this.undoable("pipeline.set_value", { org_id: p.id, pipeline: this.pipeline, value: answer.text },
+            `${p.name}: Fundraising Value CAD ${String(Math.round(amount ?? 0)).replace(/\B(?=(\d{3})+(?!\d))/g, ",")}.`);
+        });
       case "block":
         if (!identity) return;
         return cx.spawn(async () => this.write("inbox.block", { kind: identity.kind, value: identity.value, blocked: !identity.blocked },

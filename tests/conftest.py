@@ -1,7 +1,7 @@
 import pytest
 
 pytest_plugins = ["steps.inbox_steps", "steps.adapter_steps", "steps.composition_steps", "steps.sequence_steps",
-                  "steps.calendar_steps", "steps.app_steps"]
+                  "steps.calendar_steps", "steps.app_steps", "steps.pipeline_steps"]
 
 
 @pytest.fixture(autouse=True)

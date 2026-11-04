@@ -254,3 +254,76 @@ def test_cli(tmp_path, capsys):
         run("stage", "STMEC", "revenue", "Discovery")
     with pytest.raises(SystemExit, match="no Organization"):
         run("value", "nobody.example", "revenue", "1k")
+
+
+
+def _v35_with_log(rows):
+    """A schema-35 database (Pipeline log on Organizations) holding `rows`: (key, domain or "SOLE" for Ana's Sole
+    proprietorship, pipeline, kind, stage, value, key of the entry it undoes). Returns the database, {key: id} and
+    Ana's Person id."""
+    from schema_history import downgrade
+    db = inbox.connect()
+    inbox.migrate(db)
+    with db:
+        ana = db.execute("INSERT INTO persons (display_name, created_at) VALUES ('Ana', 'x') RETURNING id").fetchone()[0]
+        for domain, name in (("acme.com", "Acme"), ("nbif.ca", "NBIF"), (inbox.sole_key(ana), "Ana")):
+            db.execute("INSERT INTO organizations (domain, name, created_at) VALUES (?, ?, 'x')", (domain, name))
+    downgrade(db, 35)
+    orgs = dict(db.execute("SELECT domain, id FROM organizations").fetchall())
+    orgs["SOLE"] = orgs[inbox.sole_key(ana)]
+    ids = {}
+    with db:
+        for n, (key, domain, p, kind, stage, value, undoes) in enumerate(rows):
+            at = f"2026-10-{n + 1:02d}T00:00:00+00:00"
+            ids[key] = db.execute(
+                "INSERT INTO pipeline_log (organization_id, pipeline, kind, stage, value, undoes, effective_at,"
+                " recorded_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+                (orgs[domain], p, kind, stage, value, ids.get(undoes), at, at)).fetchone()[0]
+    return db, ids, ana
+
+
+def test_migration_36_moves_people_and_drops_undone_firm_entries():
+    """ADR 0016, shaped like the live log: Revenue stays, a Sole proprietorship's Fundraising and Talent entries
+    move to its Person, and NBIF's undone firm entries go with their undos."""
+    db, ids, ana = _v35_with_log([
+        ("r", "acme.com", "REVENUE", "STAGE", "Commit", None, None),
+        ("f", "SOLE", "FUNDRAISING", "STAGE", "Meeting", None, None),
+        ("fv", "SOLE", "FUNDRAISING", "VALUE", None, 10000, None),
+        ("t", "SOLE", "TALENT", "STAGE", "Explore", None, None),
+        ("tu", "SOLE", "TALENT", "UNDO", None, None, "t"),
+        ("n", "nbif.ca", "FUNDRAISING", "STAGE", "Soft commit", None, None),
+        ("nv", "nbif.ca", "FUNDRAISING", "VALUE", None, 100000, None),
+        ("nu", "nbif.ca", "FUNDRAISING", "UNDO", None, None, "n"),
+        ("nvu", "nbif.ca", "FUNDRAISING", "UNDO", None, None, "nv"),
+    ])
+    inbox.migrate(db)
+    rows = {r["id"]: r for r in db.execute("SELECT * FROM pipeline_log")}
+    assert set(rows) == {ids[k] for k in ("r", "f", "fv", "t", "tu")}
+    assert rows[ids["r"]]["organization_id"] and rows[ids["r"]]["person_id"] is None
+    assert {rows[ids[k]]["person_id"] for k in ("f", "fv", "t", "tu")} == {ana}
+    assert all(rows[ids[k]]["organization_id"] is None for k in ("f", "fv", "t", "tu"))
+    held = pl.current(db, person_id=ana)
+    assert list(held) == ["FUNDRAISING"] and (held["FUNDRAISING"]["stage"], held["FUNDRAISING"]["value"]) == ("Meeting", 10000)
+    nbif = pl.find_org(db, "nbif.ca")["id"]
+    assert pl.current(db, nbif) == {}
+    with pytest.raises(Exception, match="append-only"):
+        db.execute("DELETE FROM pipeline_log")
+
+
+def test_migration_36_stops_on_a_live_firm_entry():
+    """A firm's Fundraising entry that is still live has no Person to move to: the upgrade stops, losing nothing."""
+    db, ids, _ = _v35_with_log([("n", "nbif.ca", "FUNDRAISING", "STAGE", "Soft commit", None, None)])
+    with pytest.raises(Exception, match="on a firm"):
+        inbox.migrate(db)
+    assert db.execute("PRAGMA user_version").fetchone()[0] == 35
+    assert db.execute("SELECT count(*) FROM pipeline_log").fetchone()[0] == 1
+
+
+def test_merging_people_keeps_their_pipeline_place(db):
+    """ADR 0016: a Person merge moves the dropped Person's Fundraising Stage to the kept one."""
+    with db:
+        keep, drop = (db.execute("INSERT INTO persons (display_name, created_at) VALUES (?, 'x') RETURNING id",
+                                 (n,)).fetchone()[0] for n in ("Ana Ruiz", "ana"))
+    pl.set_stage(db, drop, pl.FUNDRAISING, "Diligence")
+    inbox.merge_persons(db, keep, drop)
+    assert pl.current(db, person_id=keep)[pl.FUNDRAISING]["stage"] == "Diligence"

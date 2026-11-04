@@ -1,5 +1,6 @@
-"""Pipelines (ADR 0006, .agents/prd/2026-10-23-pipeline.md): each Organization's Stage and Value in Revenue and
-Fundraising, and the Bowtie math worked backwards from each Pipeline's Target.
+"""Pipelines (ADR 0006, .agents/prd/2026-10-23-pipeline.md): each Organization's Stage and Value in Revenue, each
+Person's in Fundraising and Talent (ADR 0016), and the Bowtie math worked backwards from each Pipeline's Target.
+A Pipeline's subject is what it holds: an Organization id in Revenue, a Person id in Fundraising and Talent.
 
 Every Stage and Value change is appended to `pipeline_log`; the current Stage and Value are the latest entries
 not undone. The math follows Winning by Design's "The Bowtie: A Proposed Standard" v1.0: conversion rates
@@ -9,7 +10,7 @@ the backward plan from the Target. Each rate's Benchmark is the same rate over t
 own history, no external table. A rate with no 90-day data falls back to its Benchmark, marked as such.
 Nothing here sets Tasks.
 
-Interface: parse_pipeline, parse_stage, parse_amount, find_org, set_stage, set_value, undo, set_target, target,
+Interface: parse_pipeline, parse_stage, parse_amount, find_org, find_person, find_subject, set_stage, set_value, undo, set_target, target,
 current, states, history, math, this_week, markdown.
 """
 
@@ -26,6 +27,8 @@ LOCAL = ZoneInfo("America/Halifax")  # Jeremy's days (main.LOCAL_TZ)
 REVENUE, FUNDRAISING, TALENT = "REVENUE", "FUNDRAISING", "TALENT"
 PIPELINES = (REVENUE, FUNDRAISING, TALENT)
 MATH = (REVENUE, FUNDRAISING)  # Pipelines with a Target and the Bowtie math; Talent is a board only (FR-SEQ-42)
+PEOPLE = (FUNDRAISING, TALENT)  # Pipelines that hold People (ADR 0016); Revenue holds Organizations
+NOUN = {REVENUE: "Organizations", FUNDRAISING: "People", TALENT: "People"}
 NAMES = {REVENUE: "Revenue", FUNDRAISING: "Fundraising", TALENT: "Talent"}
 OPEN = {REVENUE: ("Awareness", "Education", "Prioritization", "Selection", "Commit", "Onboarding"),
         FUNDRAISING: ("Research", "Outreach", "Meeting", "Diligence", "Soft commit"),
@@ -86,6 +89,35 @@ def find_org(db, text: str):
     return rows[0]
 
 
+def find_person(db, text: str):
+    """A Person by an address or number they write from, else by exact name (any case)."""
+    t = text.strip().lower()
+    rows = db.execute("SELECT DISTINCT p.* FROM persons p JOIN identities i ON i.person_id = p.id"
+                      " WHERE lower(i.value) = ?", (t,)).fetchall() or \
+        db.execute("SELECT * FROM persons WHERE lower(display_name) = ?", (t,)).fetchall()
+    if len(rows) != 1:
+        raise Refused(f"no Person {text!r}" if not rows else f"{text!r} names {len(rows)} People; use an address")
+    return rows[0]
+
+
+def find_subject(db, pipeline: str, text: str) -> dict:
+    """What a Pipeline holds, by text: a Person in Fundraising and Talent, an Organization in Revenue; as
+    {id, name, domain} (domain None for a Person)."""
+    if pipeline in PEOPLE:
+        r = find_person(db, text)
+        return {"id": r["id"], "name": r["display_name"], "domain": None}
+    r = find_org(db, text)
+    return {"id": r["id"], "name": r["name"], "domain": r["domain"]}
+
+
+def _column(pipeline: str) -> str:
+    return "person_id" if pipeline in PEOPLE else "organization_id"
+
+
+def _subject(e):
+    return e["person_id"] if e["pipeline"] in PEOPLE else e["organization_id"]
+
+
 def _effective(at, *, now: datetime | None = None) -> str:
     """Now, or a backdated date or time; a future one is refused."""
     if at is None:
@@ -99,28 +131,36 @@ def _effective(at, *, now: datetime | None = None) -> str:
     return clock.iso(at.astimezone(timezone.utc))
 
 
-def _append(db, org_id, pipeline, kind, at=None, stage=None, value=None, undoes=None, *, now: datetime | None = None) -> int:
+def _append(db, subject_id, pipeline, kind, at=None, stage=None, value=None, undoes=None, *, now: datetime | None = None) -> int:
     with inbox._write_snapshot(db):
         return db.execute(
-            "INSERT INTO pipeline_log (organization_id, pipeline, kind, stage, value, undoes, effective_at,"
+            f"INSERT INTO pipeline_log ({_column(pipeline)}, pipeline, kind, stage, value, undoes, effective_at,"
             " recorded_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
-            (org_id, pipeline, kind, stage, value, undoes, _effective(at, now=now), clock.iso((now or clock.now())))).fetchone()[0]
+            (subject_id, pipeline, kind, stage, value, undoes, _effective(at, now=now), clock.iso((now or clock.now())))).fetchone()[0]
+
+
+def _held(db, subject_id, pipeline: str) -> dict:
+    """The subject's {stage, since, value} in one Pipeline, or {}."""
+    return _state(_entries(db, pipeline, **{_column(pipeline): subject_id})).get((subject_id, pipeline), {})
 
 
 @writer("create")
 def set_stage(db, org_id: int, pipeline: str, stage: str, at=None, *, now: datetime | None = None) -> int | None:
-    """Move an Organization to a Stage; returns the log entry, or None when it is already there."""
+    """Move an Organization (Revenue) or a Person (Fundraising, Talent) to a Stage; returns the log entry, or None
+    when it is already there. `org_id` is the Pipeline's subject, a Person's id in Fundraising and Talent: the
+    Local API only grows (NFR-6), so the name stays."""
     stage = parse_stage(pipeline, stage)
-    if current(db, org_id).get(pipeline, {}).get("stage") == stage:
+    if _held(db, org_id, pipeline).get("stage") == stage:
         return None
     return _append(db, org_id, pipeline, "STAGE", at, stage=stage, now=now)
 
 
 @writer("create")
 def set_value(db, org_id: int, pipeline: str, value, at=None, *, now: datetime | None = None) -> int | None:
-    """Set the Organization's Revenue Value or Fundraising Value; it belongs to the Pipeline, not the Stage."""
+    """Set an Organization's Revenue Value or a Person's Fundraising Value; it belongs to the Pipeline, not the Stage.
+    `org_id` is the Pipeline's subject, as in set_stage."""
     value = parse_amount(value)
-    if current(db, org_id).get(pipeline, {}).get("value") == value:
+    if _held(db, org_id, pipeline).get("value") == value:
         return None
     return _append(db, org_id, pipeline, "VALUE", at, value=value, now=now)
 
@@ -133,7 +173,7 @@ def undo(db, entry_id: int, *, now: datetime | None = None) -> None:
         raise Refused("nothing to undo")
     if db.execute("SELECT 1 FROM pipeline_log WHERE undoes = ?", (entry_id,)).fetchone():
         raise Refused("already undone")
-    _append(db, e["organization_id"], e["pipeline"], "UNDO", undoes=entry_id, now=now)
+    _append(db, _subject(e), e["pipeline"], "UNDO", undoes=entry_id, now=now)
 
 
 def set_target(db, pipeline: str, amount, due) -> None:
@@ -150,23 +190,25 @@ def target(db, pipeline: str) -> dict | None:
     return {"amount": r["amount"], "due": date.fromisoformat(r["due"])} if r else None
 
 
-def _entries(db, pipeline=None, org_id=None) -> list:
+def _entries(db, pipeline=None, organization_id=None, person_id=None) -> list:
     """Stage and Value entries not undone, oldest first."""
     sql = ("SELECT * FROM pipeline_log l WHERE kind != 'UNDO'"
            " AND NOT EXISTS (SELECT 1 FROM pipeline_log u WHERE u.undoes = l.id)")
     args = []
     if pipeline:
         sql, args = sql + " AND pipeline = ?", args + [pipeline]
-    if org_id is not None:
-        sql, args = sql + " AND organization_id = ?", args + [org_id]
+    if organization_id is not None:
+        sql, args = sql + " AND organization_id = ?", args + [organization_id]
+    if person_id is not None:
+        sql, args = sql + " AND person_id = ?", args + [person_id]
     return db.execute(sql + " ORDER BY effective_at, id", args).fetchall()
 
 
 def _state(rows) -> dict:
-    """{(org, pipeline): {stage, since, value}} from entries oldest first."""
+    """{(subject, pipeline): {stage, since, value}} from entries oldest first."""
     out = {}
     for e in rows:
-        s = out.setdefault((e["organization_id"], e["pipeline"]), {"stage": None, "since": None, "value": None})
+        s = out.setdefault((_subject(e), e["pipeline"]), {"stage": None, "since": None, "value": None})
         if e["kind"] == "STAGE":
             s["stage"], s["since"] = e["stage"], datetime.fromisoformat(e["effective_at"])
         else:
@@ -174,23 +216,26 @@ def _state(rows) -> dict:
     return out
 
 
-def current(db, org_id: int) -> dict:
-    """{pipeline: {stage, since, value}} for each Pipeline the Organization has an entry in."""
-    return {p: s for (_, p), s in _state(_entries(db, org_id=org_id)).items()}
+def current(db, org_id: int | None = None, *, person_id: int | None = None) -> dict:
+    """{pipeline: {stage, since, value}} for each Pipeline the Organization (Revenue) or Person (Fundraising,
+    Talent) has an entry in."""
+    return {p: s for (_, p), s in _state(_entries(db, organization_id=org_id, person_id=person_id)).items()}
 
 
-def states(db) -> dict:
-    """{org_id: {pipeline: {stage, since, value}}} for every Organization with an entry (Organizations list)."""
+def states(db, people: bool = False) -> dict:
+    """{id: {pipeline: {stage, since, value}}} for every Organization with an entry (Organizations list), or with
+    people=True every Person."""
     out = {}
     for (o, p), s in _state(_entries(db)).items():
-        out.setdefault(o, {})[p] = s
+        if (p in PEOPLE) == people:
+            out.setdefault(o, {})[p] = s
     return out
 
 
-def history(db, org_id: int) -> list[dict]:
+def history(db, org_id: int | None = None, *, person_id: int | None = None) -> list[dict]:
     """Stage and Value changes, newest first, each with what it replaced."""
     out, last = [], {}
-    for e in _entries(db, org_id=org_id):
+    for e in _entries(db, organization_id=org_id, person_id=person_id):
         key = (e["pipeline"], e["kind"])
         new = e["stage"] if e["kind"] == "STAGE" else e["value"]
         out.append({"id": e["id"], "pipeline": e["pipeline"], "kind": e["kind"], "old": last.get(key), "new": new,
@@ -228,20 +273,20 @@ def _deadline(pipeline, due: date) -> date:
 ROLLUP = ("Todo", "Snoozed", "Done")  # an Organization's roll-up order: an Ignored Thread holds nothing open
 
 
-def attention(db) -> dict:
-    """Each Organization in a Pipeline, read from its People's Threads and Enrollments (FR-OA-4, FR-OA-5; never
-    stored): {org_id: {rollup, wakes, last, unattended, stages}}.
+def attention(db, people: bool = False) -> dict:
+    """Each Organization in a Pipeline, or with people=True each Person in one, read from its People's Threads and
+    Enrollments (FR-OA-4, FR-OA-5; never stored): {id: {rollup, wakes, last, unattended, stages}}.
 
-    rollup: the earliest of Todo, Snoozed, Done over the Threads its People wrote in or were addressed in, and the
-    Enrollments for it (FR-SEQ-38): an Active or Finishing one counts as Snoozed until its next Task, a Paused one
-    as Todo (it waits for Jeremy); an Enrollment that names no Organization counts for each of its Person's. Done
-    with no Threads. wakes: the earliest time a Snoozed one comes
-    back (None for Todo, Done, or a Snooze with no date). last: the latest message in those Threads.
+    rollup: the earliest of Todo, Snoozed, Done over the Threads its People wrote in or were addressed in (a
+    Person's own), and the Enrollments for it (FR-SEQ-38): an Active or Finishing one counts as Snoozed until its
+    next Task, a Paused one as Todo (it waits for Jeremy); an Enrollment that names no Organization counts for each
+    of its Person's; a Person counts all of theirs. Done with no Threads. wakes: the earliest time a Snoozed one
+    comes back (None for Todo, Done, or a Snooze with no date). last: the latest message in those Threads.
     unattended: in an open or paying Stage, Done, and with none of its People on an upcoming Event (FR-OA-5).
     stages: {pipeline: Stage}."""
     held = {}
     for (o, p), st in _state(_entries(db)).items():
-        if st["stage"]:
+        if st["stage"] and (p in PEOPLE) == people:
             held.setdefault(o, {})[p] = st["stage"]
     if not held:
         return {}
@@ -252,18 +297,24 @@ def attention(db) -> dict:
         " GROUP BY thread_id) m ON m.thread_id = t.id WHERE t.merged_into IS NULL")}
     by_org: dict[int, list] = {}  # org -> (state, next Task due) of each unfinished Enrollment for it
     by_person: dict[int, list] = {}  # the same, for Enrollments that name no Organization
+    every: dict[int, list] = {}  # the same, for every Enrollment of a Person
     for pid, org, state, due in db.execute(
             "SELECT e.person_id, e.organization_id, e.state, (SELECT min(due_at) FROM tasks t WHERE t.enrollment_id = e.id"
             " AND t.state = 'DUE') FROM enrollments e WHERE e.state != 'FINISHED'"):
         (by_org.setdefault(org, []) if org is not None else by_person.setdefault(pid, [])).append((state, due))
+        every.setdefault(pid, []).append((state, due))
+    if people:
+        subjects = {s: ({s}, every.get(s, [])) for s in held}
+    else:
+        subjects = {}
+        for o, domain in db.execute("SELECT id, domain FROM organizations"):
+            if o in held:
+                pids = members.get(domain, set())
+                subjects[o] = (pids, by_org.get(o, []) + [r for p in pids for r in by_person.get(p, [])])
     meeting = _meeting_people(db)
     out = {}
-    for o, domain in db.execute("SELECT id, domain FROM organizations"):
-        if o not in held:
-            continue
-        pids = members.get(domain, set())
+    for o, (pids, runs) in subjects.items():
         rows = [status[t] for t in set().union(*(threads.get(p, set()) for p in pids)) if t in status]
-        runs = by_org.get(o, []) + [r for p in pids for r in by_person.get(p, [])]
         found = {r["status_detail"] for r in rows} | {"NEW_REPLY" if st == "PAUSED" else "WAITING_FOR_DURATION"
                                                        for st, _ in runs}
         rollup = inbox.rollup(found, ROLLUP, "Done")
@@ -293,21 +344,49 @@ def _meeting_people(db) -> set[int]:
                                      f" AND value IN ({','.join('?' * len(emails))})", list(emails))}
 
 
+def _subjects(db, people: bool) -> dict:
+    """{id: {id, name, domain, organizations}} for every Organization, or every Person with their Organizations'
+    names by Membership (Sole proprietorships aside) and domain None."""
+    if not people:
+        return {r["id"]: {"id": r["id"], "name": r["name"], "domain": r["domain"], "organizations": []}
+                for r in db.execute("SELECT id, name, domain FROM organizations")}
+    names = dict(db.execute("SELECT domain, name FROM organizations").fetchall())
+    orgs: dict = {}
+    for domain, pids in inbox._members(db).items():
+        if domain in names and not inbox.is_sole_key(domain):
+            for pid in pids:
+                orgs.setdefault(pid, []).append(names[domain])
+    return {r["id"]: {"id": r["id"], "name": r["display_name"], "domain": None,
+                      "organizations": sorted(orgs.get(r["id"], []), key=str.lower)}
+            for r in db.execute("SELECT id, display_name FROM persons")}
+
+
+def label(s: dict) -> str:
+    """How a Pipeline's subject reads in Markdown: 'Acme (acme.com)' for an Organization, 'Laïla Thériault (NBIF)'
+    or 'Ana' for a Person."""
+    if s["domain"] is not None:
+        return f"{s['name']} ({s['domain']})"
+    return f"{s['name']} ({', '.join(s['organizations'])})" if s["organizations"] else s["name"]
+
+
 def unattended(db) -> list[dict]:
-    """Organizations in an open or paying Stage with nothing open (Today's group), by name: id, domain, name,
-    stages, last."""
-    att = attention(db)
-    return sorted(({"id": r["id"], "domain": r["domain"], "name": r["name"], "stages": att[r["id"]]["stages"],
-                    "last": att[r["id"]]["last"]}
-                   for r in db.execute("SELECT id, domain, name FROM organizations") if att.get(r["id"], {}).get(
-                       "unattended")), key=lambda o: o["name"].lower())
+    """Organizations and People in an open or paying Stage with nothing open (Today's group), by name: id, domain
+    (None for a Person), name, person_id (a Person's id, else None), organizations, stages, last."""
+    out = []
+    for people in (False, True):
+        att = attention(db, people)
+        found = {k: v for k, v in att.items() if v["unattended"]}
+        subjects = _subjects(db, people) if found else {}
+        out += [{**subjects[k], "person_id": k if people else None, "stages": a["stages"], "last": a["last"]}
+                for k, a in found.items() if k in subjects]
+    return sorted(out, key=lambda o: o["name"].lower())
 
 
 def _measure(pipeline, rows, reached, ends, now, window):
     """Rates, Times in Stage, weekly entries, and annualized GRR and expansion for Organizations active in the
     window: (rates, times, entries, grr, expansion)."""
     opens, start = OPEN[pipeline], now - window
-    cohort = {e["organization_id"] for e in rows if datetime.fromisoformat(e["effective_at"]) >= start} & set(reached)
+    cohort = {_subject(e) for e in rows if datetime.fromisoformat(e["effective_at"]) >= start} & set(reached)
 
     def top(o):
         return max(reached[o]) if reached[o] else -1
@@ -353,16 +432,16 @@ def math(db, pipeline: str, now: datetime | None = None, orgs: bool = True) -> d
     chain, opens = _chain(pipeline), OPEN[pipeline]
     rows = _entries(db, pipeline)
     state = {o: s for (o, _), s in _state(rows).items() if s["stage"]}
-    want_rows = orgs
-    orgs = {r["id"]: r for r in db.execute("SELECT * FROM organizations")} if want_rows else {}
-    att = attention(db) if want_rows and state else {}
+    want_rows, people = orgs, pipeline in PEOPLE
+    orgs = _subjects(db, people) if want_rows else {}
+    att = attention(db, people) if want_rows and state else {}
 
     # When each Organization first reached each chain Stage; a jump reaches the skipped Stages at the same time
     reached, ends = {}, {}  # org -> {index: time}; org -> time it left the chain (Lost, Passed)
     for e in rows:
         if e["kind"] != "STAGE":
             continue
-        o, at, i = e["organization_id"], datetime.fromisoformat(e["effective_at"]), _index(pipeline, e["stage"])
+        o, at, i = _subject(e), datetime.fromisoformat(e["effective_at"]), _index(pipeline, e["stage"])
         r = reached.setdefault(o, {})
         if i is None:
             ends.setdefault(o, at)
@@ -448,7 +527,8 @@ def math(db, pipeline: str, now: datetime | None = None, orgs: bool = True) -> d
     def org_row(o):
         s = state[o]
         a = att.get(o, {})
-        return {"id": o, "domain": orgs[o]["domain"], "name": orgs[o]["name"], "value": s["value"],
+        return {"id": o, "domain": orgs[o]["domain"], "name": orgs[o]["name"], "person": people,
+                "organizations": orgs[o]["organizations"], "value": s["value"],
                 "days": (now - s["since"]).days, "last_message": a.get("last"), "rollup": a.get("rollup"),
                 "wakes": a.get("wakes"), "unattended": a.get("unattended", False)}
 
@@ -467,7 +547,7 @@ def math(db, pipeline: str, now: datetime | None = None, orgs: bool = True) -> d
                "rate": dict(measured).get(right.get(label)), "benchmark": bench.get(right.get(label)),
                "constraint": right.get(label) == constraint and constraint is not None}
               for label, group in END_ROWS[pipeline]]
-    return {"pipeline": pipeline, "name": NAMES[pipeline], "paying_stage": chain[-1], "now": now,
+    return {"pipeline": pipeline, "name": NAMES[pipeline], "noun": NOUN[pipeline], "paying_stage": chain[-1], "now": now,
             "summary": summary, "stages": stages, "ending": ending}
 
 
@@ -517,9 +597,9 @@ def marked(pair) -> str:
     return pct(rate) + ("b" if assumed and rate is not None else "")
 
 
-def constraint_text(c) -> str:
+def constraint_text(c, noun: str = "Organizations") -> str:
     if c["kind"] == "volume":
-        return f"New {c['stage']} Organizations: {num(c['getting'])} a week, need {num(c['need'])}"
+        return f"New {c['stage']} {noun}: {num(c['getting'])} a week, need {num(c['need'])}"
     name = {"GRR": "Retention (GRR)", "Expansion": "Expansion"}.get(c["stage"], f"{c['stage']} → {c['next']}")
     return f"{name}: {pct(c['rate'])} vs {pct(c['benchmark'])} benchmark"
 
@@ -535,23 +615,24 @@ def names(orgs, most=3) -> str:
 def on_track(m: dict) -> tuple[str, str] | None:
     """The verdict on the Target: the top Stage's Pace, since the backward plan already counts the open
     Organizations and the rates below it. None without a Target."""
-    s, top = m["summary"], m["stages"][0]
+    s, top, noun = m["summary"], m["stages"][0], NOUN[m["pipeline"]]
     if not s["target"]:
         return None
     if s["gap"] == 0:
-        return "On track", "customers and open Organizations cover the Target"
+        return "On track", f"customers and open {noun} cover the Target"
     if top["need"] == "late":
-        return "Off track", f"new {top['stage']} Organizations can no longer reach {m['paying_stage']} by {s['deadline']}"
+        return "Off track", f"new {top['stage']} {noun} can no longer reach {m['paying_stage']} by {s['deadline']}"
     if top["pace"] is None:
         return "Pace unknown", "not enough Stage history or Value yet"
     verdict = "On pace" if top["pace"] >= 0 else "Behind pace"
-    return verdict, f"need {num(top['need'])} new {top['stage']} Organizations a week, getting {num(top['entries'])}"
+    return verdict, f"need {num(top['need'])} new {top['stage']} {noun} a week, getting {num(top['entries'])}"
 
 
 def this_week(m: dict) -> list[tuple[str, str]]:
     """What the math says to do this week, as (action, why) pairs in plain words (never Tasks): the
-    constraint's lever, the input the backward plan needs at the top Stage, and Organizations the math cannot count."""
-    s, out = m["summary"], []
+    constraint's lever, the input the backward plan needs at the top Stage, and Organizations or People the math
+    cannot count."""
+    s, out, noun = m["summary"], [], NOUN[m["pipeline"]]
     if not s["target"]:
         out.append(("Set a Target", f"comms-terminal pipeline target {m['name'].lower()} AMOUNT --by DATE"))
     c = s["constraint"]
@@ -565,13 +646,13 @@ def this_week(m: dict) -> list[tuple[str, str]]:
     elif c:
         row = next(r for r in m["stages"] if r["stage"] == c["stage"])
         out.append((f"Move {names(row['orgs'])}", f"{c['stage']} → {c['next']}, the constraint") if row["orgs"]
-                   else (f"Find Organizations for {c['stage']}", f"it is the constraint: {pct(c['rate'])} move on{vs}"))
+                   else (f"Find {noun} for {c['stage']}", f"it is the constraint: {pct(c['rate'])} move on{vs}"))
     top = m["stages"][0]
     if top["need"] == "late":
-        out.append((f"Too late for new {top['stage']} Organizations",
+        out.append((f"Too late for new {top['stage']} {noun}",
                     f"they can no longer reach {m['paying_stage']} by {s['deadline']}"))
     elif isinstance(top["need"], float) and top["pace"] < 0:
-        out.append((f"Add {_m.ceil(top['need'] - top['entries'])} Organizations to {top['stage']}",
+        out.append((f"Add {_m.ceil(top['need'] - top['entries'])} {noun} to {top['stage']}",
                     f"need {num(top['need'])} a week, getting {num(top['entries'])}"
                     + (", the constraint" if c and c["kind"] == "volume" else "")))
     live = m["stages"] + [r for r in m["ending"] if r["stage"] not in ENDING[m["pipeline"]]]  # not Lost, Churned
@@ -582,9 +663,10 @@ def this_week(m: dict) -> list[tuple[str, str]]:
 
 
 def board_markdown(db, pipeline: str, now: datetime | None = None) -> str:
-    """A Pipeline with no math (Talent, FR-SEQ-42): its Organizations under each Stage, longest in Stage first."""
+    """A Pipeline with no math (Talent, FR-SEQ-42): its People (or Organizations) under each Stage, longest in Stage
+    first."""
     now = now or clock.now()
-    names = dict(db.execute("SELECT id, name FROM organizations").fetchall())
+    names = {k: s["name"] if s["domain"] else label(s) for k, s in _subjects(db, pipeline in PEOPLE).items()}
     held = {o: st for (o, p), st in _state(_entries(db, pipeline)).items() if st["stage"]}
     lines = [f"# {NAMES[pipeline]} Pipeline", ""]
     for stage in STAGES[pipeline]:
@@ -608,7 +690,7 @@ def markdown(m: dict) -> str:
         lines += [f"- Target: CAD {t['amount']:,} {what} by {t['due']}",
                   f"- Projected: CAD {s['projected']:,.0f} ({s['share'] * 100:.0f}%): paying CAD {s['paying']:,}"
                   f" ({s['paying_count']}) → CAD {s['kept']:,.0f} in the window, weighted new CAD {s['weighted']:,.0f}",
-                  f"- Coverage: weighted open Organizations cover {pct(s['coverage'])} of the CAD {s['new']:,.0f}"
+                  f"- Coverage: weighted open {m['noun']} cover {pct(s['coverage'])} of the CAD {s['new']:,.0f}"
                   f" still to add",
                   f"- Gap: CAD {s['gap']:,.0f}"
                   + (f" = {s['customers']} new at CAD {s['average']:,.0f}" if s["customers"] is not None else ""),
@@ -617,8 +699,8 @@ def markdown(m: dict) -> str:
         b = "b" if s["nrr_benchmark"] else ""
         lines.append(f"- Retention: GRR {marked(s['grr'])}, expansion {marked(s['expansion'])}, NRR {pct(s['nrr'])}{b}")
     if s["constraint"]:
-        lines.append(f"- Constraint: {constraint_text(s['constraint'])}")
-    lines += ["", f"| Stage | Orgs | CR | bench | Time | →{m['paying_stage']} | in/wk | need/wk | pace |",
+        lines.append(f"- Constraint: {constraint_text(s['constraint'], m['noun'])}")
+    lines += ["", f"| Stage | {'Orgs' if m['pipeline'] == REVENUE else m['noun']} | CR | bench | Time | →{m['paying_stage']} | in/wk | need/wk | pace |",
               "|---|---|---|---|---|---|---|---|---|"]
     for r in m["stages"]:
         lines.append(f"| {r['stage']}{' ◀ constraint' if r['constraint'] else ''} | {len(r['orgs'])} |"
@@ -635,6 +717,6 @@ def markdown(m: dict) -> str:
     for r in m["stages"] + m["ending"]:
         if r["orgs"]:
             lines.append(f"## {r['stage']}")
-            lines += [f"- {o['name']} ({o['domain']}): CAD {money(o['value'])}, {o['days']}d in Stage" for o in r["orgs"]]
+            lines += [f"- {label(o)}: CAD {money(o['value'])}, {o['days']}d in Stage" for o in r["orgs"]]
             lines.append("")
     return "\n".join(lines).rstrip() + "\n"

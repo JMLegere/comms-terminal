@@ -19,13 +19,29 @@ if (kase === "archive") { // D121
 } else if (kase === "stage") { // D133
   const Organization = await load("organization");
   state.page = "organizations";
-  const stages = { held: ["REVENUE"], current: { REVENUE: "Commit" }, all: { REVENUE: ["Selection", "Commit", "Onboarding"], FUNDRAISING: ["Intro"], TALENT: ["Explore"] },
+  const stages = { held: ["REVENUE"], current: { REVENUE: "Commit" }, all: { REVENUE: ["Selection", "Commit", "Onboarding"] },
     names: { REVENUE: "Revenue", FUNDRAISING: "Fundraising", TALENT: "Talent" } };
   const v = make(Organization, { page: { domain: "acme.test", org: { id: "o1", name: "Acme", domain: "acme.test" }, stages } });
   v.command("stage", cx);
   out.picker = { title: state.picker.title, options: state.picker.options.map((o) => o.label) };
   answers["command.pipeline.set_stage"] = 42;
   v.command(`stage-picked:${JSON.stringify({ value: "Onboarding" })}`, cx);
+  await settle();
+  out.write = calls.find((c) => c.method === "command.pipeline.set_stage").params;
+  out.toast = toasts.at(-1);
+  out.undo = state.undo.steps;
+} else if (kase === "person-stage") { // ADR 0016: a Person's Fundraising or Talent Stage
+  const Person = await load("person");
+  state.page = "people";
+  const stages = { held: [], current: {}, all: { FUNDRAISING: ["Research", "Meeting"], TALENT: ["Explore"] },
+    names: { REVENUE: "Revenue", FUNDRAISING: "Fundraising", TALENT: "Talent" } };
+  const v = make(Person, { page: { person: { id: "p1", name: "Ana", identities: [] }, enrollments: [], stages } });
+  v.command("stage", cx);
+  out.first = { title: state.picker.title, options: state.picker.options.map((o) => o.label) };
+  v.command(`pipeline-picked:${JSON.stringify({ value: "FUNDRAISING" })}`, cx);
+  out.picker = { title: state.picker.title, options: state.picker.options.map((o) => o.label) };
+  answers["command.pipeline.set_stage"] = 7;
+  v.command(`stage-picked:${JSON.stringify({ value: "Meeting" })}`, cx);
   await settle();
   out.write = calls.find((c) => c.method === "command.pipeline.set_stage").params;
   out.toast = toasts.at(-1);

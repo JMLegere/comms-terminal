@@ -383,7 +383,8 @@ def _draft_problem(core, db, values):
 @query("today.side", kind="string", id="string")
 def _today_side(core, db, kind, id):
     """The right pane for a Today Paused row (kind "paused", a Person id) or Unattended row ("unattended", an
-    Organization id), as the Console fills it: lines of [text, colour or null, bold] segments."""
+    Organization id; "unattended_person", a Person id), as the Console fills it: lines of [text, colour or null,
+    bold] segments."""
     from rich.console import Console
     from rich.text import Text
 
@@ -392,6 +393,9 @@ def _today_side(core, db, kind, id):
         p = db.execute("SELECT display_name FROM persons WHERE id = ?", (id,)).fetchone()
         markup = f"[b]{p[0] if p else ''}[/]\n\n" + sequence_section(db, id, keys=False) \
             + "\n\n[#928374]r resume · f finish · enter opens the Person[/]"
+    elif kind == "unattended_person":
+        p = db.execute("SELECT display_name FROM persons WHERE id = ?", (id,)).fetchone()
+        markup = f"[b]{p[0] if p else ''}[/]\n\n" + pipeline_section(db, id, person=True)
     else:
         o = db.execute("SELECT name, domain FROM organizations WHERE id = ?", (id,)).fetchone()
         domain = f"  [#928374]{o['domain']}[/]" if o and o["domain"] != o["name"] else ""
@@ -614,20 +618,30 @@ def _person(core, db, person_id):
     """One Person: Identities, Threads, Organizations and Enrollments; and as the Console's PersonPage draws it, the
     `head` and the `rest` (Sequence section, Organizations, Threads, Cases) as segment lines, the `orgs` ids for its
     links, and the `emails` and `domains` for its Context sections."""
-    from .tui import ICON, escape, glyph, sequence_section
+    from .tui import ICON, escape, glyph, pipeline_section, sequence_section
     p = inbox.person_view(db, person_id)
     threads = "\n".join(f"[@click=app.open_thread({t.id!r})]{glyph(t.status_detail)} [underline]{escape(t.title)}[/][/]"
                         for t in p["threads"]) or "—"
     orgs = ", ".join(f"[@click=app.open_org('{o}')][underline]{escape(o)}[/][/]" for o in p["organizations"]) or "—"
     section = sequence_section(db, person_id)
-    rest = ((f"\n{section}\n" if section else "") + f"\n[#928374]{ICON['organizations']} organizations[/]\n{orgs}\n\n"
+    current = pipeline.current(db, person_id=person_id)  # Fundraising and Talent (ADR 0016)
+    rest = ((f"\n{pipeline_section(db, person_id, person=True)}\n" if current else "")
+            + (f"\n{section}\n" if section else "") + f"\n[#928374]{ICON['organizations']} organizations[/]\n{orgs}\n\n"
             f"[#928374]{ICON['threads']} threads[/]\n{threads}\n\n"
             f"[#928374]{ICON['cases']} cases[/]\n{escape(', '.join(p['cases']) or '—')}")
     return {"person": p, "organizations": inbox.person_organizations(db, person_id),
             "enrollments": sequences.enrollments(db, person_id),
             "head": segments(f"[b #45707a]{ICON['person']} {escape(p['name'])}[/]\n\n[#928374]{ICON['identity']} identities[/]"),
             "rest": segments(rest), "orgs": _org_ids(db, p["organizations"]),
-            "emails": [i["value"] for i in p["identities"] if i["kind"] == "email"], "domains": p["organizations"]}
+            "emails": [i["value"] for i in p["identities"] if i["kind"] == "email"], "domains": p["organizations"],
+            "stages": _stages_of(current, pipeline.PEOPLE)}
+
+
+def _stages_of(current: dict, pipelines) -> dict:
+    """A page's `stages`: the Pipelines it holds a Stage in, its current Stage in each, and the Stages and names of
+    the Pipelines it can be in (an Organization: Revenue; a Person: Fundraising and Talent, ADR 0016)."""
+    return {"held": [p for p, st in current.items() if st["stage"]], "current": {p: st["stage"] for p, st in current.items()},
+            "all": {p: list(pipeline.STAGES[p]) for p in pipelines}, "names": pipeline.NAMES}
 
 
 @query("enroll.start", text="string")
@@ -667,9 +681,7 @@ def _organization(core, db, domain):
     current = pipeline.current(db, o["id"]) if o else {}
     return v | {"side": segments(side), "org": o,
                 "emails": [i["value"] for p in people for i in p["identities"] if i["kind"] == "email"],
-                "stages": {"held": [p for p, st in current.items() if st["stage"]],
-                           "current": {p: st["stage"] for p, st in current.items()},
-                           "all": {p: list(pipeline.STAGES[p]) for p in pipeline.PIPELINES}, "names": pipeline.NAMES}}
+                "stages": _stages_of(current, (pipeline.REVENUE,))}
 
 
 @query("people.find", text="string")
@@ -699,8 +711,8 @@ def _pipeline(core, db, name):
 @query("pipeline.board", name="string")
 def _pipeline_board(core, db, name):
     """One Pipeline as the Console's PipelinePage lays it out: the THIS WEEK, PROGRESS and CONSTRAINT boxes, the
-    ORGANIZATIONS board (a column per Stage, its header with count and conversion, the Constraint's marked; each
-    card's Organization and lines), the WEEKLY REVIEW rows and legend, all as segment lines; `board_only` for Talent;
+    ORGANIZATIONS or PEOPLE board (`noun`; a column per Stage, its header with count and conversion, the Constraint's
+    marked; each card's Organization or Person (`person` true, ADR 0016) and lines), the WEEKLY REVIEW rows and legend, all as segment lines; `board_only` for Talent;
     and `copy`, the Markdown y copies for an agent."""
     from .tui import (PALETTE, card, column_head, escape, pipeline_constraint, pipeline_progress, pipeline_week)
     p = pipeline.parse_pipeline(name)
@@ -715,7 +727,8 @@ def _pipeline_board(core, db, name):
         hot = not board_only and c is not None and bool(r.get("constraint") or (r.get("measure") and r["measure"] == c["stage"]))
         head = f"[b #654735]{r['stage']}[/]\n[b]{len(r['orgs'])}[/]" if board_only else column_head(r, hot)
         columns.append({"stage": stage, "head": segments(head), "cards": [
-            {"org": {"id": o["id"], "domain": o["domain"], "name": o["name"]}, "lines": segments(card(o, m["now"], not board_only))}
+            {"org": {"id": o["id"], "domain": o["domain"], "name": o["name"], "person": o["person"]},
+             "lines": segments(card(o, m["now"], not board_only))}
             for o in r["orgs"]]})
     weekly = []
     for r in m["stages"]:
@@ -735,13 +748,14 @@ def _pipeline_board(core, db, name):
     paid = pipeline.PAYING[p][0]
     copy = (pipeline.board_markdown(db, p) if board_only else pipeline.markdown(m)) + \
         f"\nFresh copy: `comms-terminal pipeline {pipeline.NAMES[p].lower()}`\n"
-    return {"name": pipeline.NAMES[p], "board_only": board_only,
+    noun = pipeline.NOUN[p]
+    return {"name": pipeline.NAMES[p], "board_only": board_only, "noun": noun,
             "week": segments(pipeline_week(m)), "progress": segments(pipeline_progress(m)),
             "constraint": segments(pipeline_constraint(m)), "columns": columns,
-            "weekly_head": ["Stage", "Organizations", "Convert", "Benchmark", "Days in Stage", f"Reach {paid}", "Need a week",
+            "weekly_head": ["Stage", noun, "Convert", "Benchmark", "Days in Stage", f"Reach {paid}", "Need a week",
                             "Getting a week", "Short by"], "weekly": weekly,
-            "legend": "Convert: share of Organizations that moved on to the next Stage in the last 90 days · Benchmark:"
-                      " the same rate over the last 2 years · Need and Getting: Organizations entering the Stage a week"
+            "legend": f"Convert: share of {noun} that moved on to the next Stage in the last 90 days · Benchmark:"
+                      f" the same rate over the last 2 years · Need and Getting: {noun} entering the Stage a week"
                       " · Short by: how many more a week the Target needs", "copy": copy}
 
 
@@ -761,7 +775,7 @@ def _org_history(core, db, org_id):
 
 @query("pipeline.unattended")
 def _unattended(core, db):
-    """Organizations in an open Stage with nothing bringing them back."""
+    """Organizations and People (person_id set) in an open Stage with nothing bringing them back."""
     return pipeline.unattended(db)
 
 

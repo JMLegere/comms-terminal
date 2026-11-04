@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import seed_demo  # noqa: E402
 
 from comms_terminal import inbox, pipeline as pl  # noqa: E402
-from comms_terminal.tui import (Ask, BoardColumn, Console, OrganizationPage, Pick, PipelinePage, card)  # noqa: E402
+from comms_terminal.tui import (Ask, BoardColumn, Console, OrganizationPage, PersonPage, Pick, PipelinePage, card)  # noqa: E402
 
 R = pl.REVENUE
 DAY = timedelta(days=1)
@@ -168,7 +168,12 @@ def test_organization_page_pipeline_section_and_value(tmp_path):
     assert seen["list"] == ["acme.com"]
 
 
-def test_stage_picker_asks_the_pipeline_for_an_organization_in_none(tmp_path):
+def person(db, email):
+    return pl.find_person(db, email)["id"]
+
+
+def test_stage_picker_on_an_organization_offers_revenue_only(tmp_path):
+    """ADR 0016: an Organization is in Revenue only, so s goes straight to Revenue's Stages."""
     path, db, _ = seeded(tmp_path)
     with db:
         db.execute("INSERT INTO organizations (domain, name, created_at) VALUES ('initech.com', 'Initech', ?)",
@@ -179,20 +184,60 @@ def test_stage_picker_asks_the_pipeline_for_an_organization_in_none(tmp_path):
         app.main.open(lambda: OrganizationPage("initech.com"))
         await pilot.pause(0.2)
 
+    async def stages(app, pilot):
+        seen["stages"] = [o for o, _ in app.screen.options]
+        app.screen.dismiss("Awareness")
+        await pilot.pause()
+
+    run(Console(path), [open_org, "s", stages])
+    assert seen["stages"] == list(pl.STAGES[R])
+    org = db.execute("SELECT id FROM organizations WHERE domain = 'initech.com'").fetchone()[0]
+    assert pl.current(db, org)[R]["stage"] == "Awareness"
+
+
+def test_person_page_sets_fundraising_stage_and_value(tmp_path):
+    """ADR 0016: p on a Person asks Fundraising or Talent, then the Stage; v sets the Fundraising Value; the Person
+    page shows its Pipeline section and the board's card names their Organizations."""
+    path, db, _ = seeded(tmp_path)
+    sam = person(db, "sam@globex.com")
+    seen = {}
+
+    async def open_person(app, pilot):
+        app.main.open(lambda: PersonPage(sam))
+        await pilot.pause(0.2)
+
     async def pipeline_first(app, pilot):
         seen["first"] = [o for o, _ in app.screen.options]
-        shot(app, "10-stage-picker-none")
         app.screen.dismiss("FUNDRAISING")
         await pilot.pause()
         seen["stages"] = [o for o, _ in app.screen.options]
-        app.screen.dismiss("Research")
+        shot(app, "21-person-stage-picker")
+        app.screen.dismiss("Meeting")
         await pilot.pause()
 
-    run(Console(path), [open_org, "s", pipeline_first])
-    assert seen["first"] == ["REVENUE", "FUNDRAISING", "TALENT"]
-    assert seen["stages"][:2] == ["Research", "Outreach"] and seen["stages"][-2:] == ["pipeline:REVENUE", "pipeline:TALENT"]
-    org = db.execute("SELECT id FROM organizations WHERE domain = 'initech.com'").fetchone()[0]
-    assert pl.current(db, org)[pl.FUNDRAISING]["stage"] == "Research"
+    async def typed(app, pilot):
+        seen["ask"] = str(app.screen.query_one("Input").placeholder) if app.screen.query("Input") else type(app.screen)
+        app.screen.dismiss("25k")
+        await pilot.pause(0.2)
+        seen["rest"] = str(app.main.current.query_one("#prest").render())
+        shot(app, "22-person-pipeline-section")
+
+    async def board(app, pilot):
+        app.main.go("pipeline:fundraising")
+        await pilot.pause(0.2)
+        page = app.main.current
+        seen["title"] = str(page.query_one("#plboard").parent.border_title)
+        seen["cards"] = [card(o, datetime.now(timezone.utc)) for c in page.query(BoardColumn) for o in c.orgs]
+        shot(app, "23-fundraising-people-board")
+
+    run(Console(path), [open_person, "p", pipeline_first, "v", typed, board], size=(236, 57))
+    assert seen["first"] == ["FUNDRAISING", "TALENT"]
+    assert seen["stages"][:2] == ["Research", "Outreach"] and seen["stages"][-1] == "pipeline:TALENT"
+    assert pl.current(db, person_id=sam)[pl.FUNDRAISING] | {"since": None} == \
+        {"stage": "Meeting", "since": None, "value": 25_000}
+    assert "Fundraising  Meeting" in seen["rest"] and "Fundraising Value" in seen["rest"] and "CAD 25,000" in seen["rest"]
+    assert seen["title"].startswith("[b]PEOPLE")
+    assert len(seen["cards"]) == 1 and "Sam Ortiz" in seen["cards"][0] and "globex.com" in seen["cards"][0]
 
 
 def test_unattended_shows_in_today_on_the_board_and_on_the_organization_page(tmp_path):
@@ -232,9 +277,9 @@ def test_unattended_shows_in_today_on_the_board_and_on_the_organization_page(tmp
 
 
 def test_talent_page_is_the_board_alone(tmp_path):
-    """FR-SEQ-42: Talent shows its Organizations by Stage, with no This week, Constraint, or Weekly review."""
+    """FR-SEQ-42: Talent shows its People by Stage (ADR 0016), with no This week, Constraint, or Weekly review."""
     path, db, org = seeded(tmp_path)
-    pl.set_stage(db, org["globex.com"], pl.TALENT, "Explore")
+    pl.set_stage(db, person(db, "sam@globex.com"), pl.TALENT, "Explore")
     seen = {}
 
     async def open_talent(app, pilot):
@@ -248,4 +293,4 @@ def test_talent_page_is_the_board_alone(tmp_path):
 
     run(Console(path), [open_talent])
     assert seen["page"] and seen["hidden"] == [False, False, False]
-    assert seen["explore"] == [db.execute("SELECT name FROM organizations WHERE domain = 'globex.com'").fetchone()[0]]
+    assert seen["explore"] == ["Sam Ortiz"]
