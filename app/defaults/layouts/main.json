@@ -93,6 +93,7 @@
                 "channels": "connection",
                 "today:task": "task",
                 "tasks:draft": "draft",
+                "tasks:thread": "thread",
                 "today:draft": "draft",
                 "today:paused": "side",
                 "today:unattended": "side",

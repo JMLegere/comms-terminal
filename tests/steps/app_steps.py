@@ -1006,9 +1006,10 @@ def task_enter(app):
     app.phase5 = phase5_view("task-enter")
 
 
-@then("the Reply Draft opens in its Thread's reply box and the New Thread Draft's editor takes the keyboard")
+@then("the Reply Draft shows in place as its Thread with the Composer taking the keyboard, and the New Thread Draft's editor takes the keyboard")
 def task_opens(app):
-    assert app.phase5 == {"reply": ["nav.todo", "thread.show", "thread.open_reply"], "thread": "t9", "fresh": ["draft.edit"]}
+    assert app.phase5 == {"reply": ["thread.show", "thread.open_reply"], "thread": "t9", "detail": "thread",
+                           "focus": "detail", "fresh": ["draft.edit"]}
 
 
 @given("a reply box whose Cc offers a completion")

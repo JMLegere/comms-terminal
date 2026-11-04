@@ -127,6 +127,7 @@ const PREVIOUS: &[(&str, u64)] = &[
     ("layouts/main.json", 0xb363995d330f6414),
     ("layouts/main.json", 0x4e2034e653395857),
     ("layouts/main.json", 0x085901ebea1c6a70),
+    ("layouts/main.json", 0xc502fe9bbb4bdf18),
     ("keys.json", 0x1f4eb1ede7a5640e),
     ("keys.json", 0xb41b1cc21ba85367),
     ("keys.json", 0x425cfe7966802582),
