@@ -48,6 +48,25 @@ jobs:
           app/target/release/comms-terminal-app status
           app/target/release/comms-terminal-app shot "$RUNNER_TEMP/demo.png"
           pkill -f comms-terminal || true  # the core holds uv's cache lock while it runs
+      - name: Draw an update (PRD 2026-11-04-app-update-on-restart)
+        # An offline core is read-only; a stand-in --prepare stages for 12 s. The App fades and names the step
+        # (building, then ready) and never quits; a second start's `raise` finds the open window.
+        run: |
+          printf '#!/bin/sh\nsleep 12\n' > "$RUNNER_TEMP/prepare"
+          chmod 755 "$RUNNER_TEMP/prepare"
+          export COMMS_TERMINAL_APP_PREPARE="$RUNNER_TEMP/prepare"
+          export COMMS_TERMINAL_CORE="[\"uv\", \"run\", \"--project\", \"$PWD\", \"comms-terminal\", \"--db\", \"$RUNNER_TEMP/demo.db\", \"--remote\", \"-o BatchMode=yes -o ConnectTimeout=1 nobody@127.0.0.1\"]"
+          app/target/release/comms-terminal-app > "$RUNNER_TEMP/app-update.log" 2>&1 &
+          for i in $(seq 60); do app/target/release/comms-terminal-app status > /dev/null 2>&1 && break; sleep 2; done
+          sleep 5
+          app/target/release/comms-terminal-app do app.update
+          sleep 2
+          app/target/release/comms-terminal-app shot "$RUNNER_TEMP/update-building.png"
+          sleep 15
+          app/target/release/comms-terminal-app shot "$RUNNER_TEMP/update-ready.png"
+          app/target/release/comms-terminal-app raise
+          app/target/release/comms-terminal-app status | tee "$RUNNER_TEMP/update-status.json"
+          pkill -f comms-terminal || true
       - if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -55,3 +74,6 @@ jobs:
           path: |
             ${{ runner.temp }}/demo.png
             ${{ runner.temp }}/app.log
+            ${{ runner.temp }}/update-*.png
+            ${{ runner.temp }}/update-status.json
+            ${{ runner.temp }}/app-update.log

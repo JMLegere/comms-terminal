@@ -4,7 +4,7 @@ Status: **Draft for Jeremy's review** (2026-10-31; Phases 3–5 built 2026-11-01
 
 ## 1. Form
 
-- A native GPU-drawn window built the way `herdr-app` is: a small Rust host (`app/`) on GPUI (`gpui-pre` 0.3.8) and herdr-app's vendored gpui-kit 0.7.1 (`app/vendor/`). Every screen is a gpui-shell script (`views/<name>/main.js`), the same kind of script a Panel is; the host draws only the layout, the banners and the escape key. Started from `comms-terminal-app.desktop` on Mani (niri, Wayland), which runs `deploy/comms-terminal-app`: it installs the Local core and the App at the Service's build and opens the window again after an update (exit 75).
+- A native GPU-drawn window built the way `herdr-app` is: a small Rust host (`app/`) on GPUI (`gpui-pre` 0.3.8) and herdr-app's vendored gpui-kit 0.7.1 (`app/vendor/`). Every screen is a gpui-shell script (`views/<name>/main.js`), the same kind of script a Panel is; the host draws only the layout, the banners and the escape key. Started from `comms-terminal-app.desktop` on Mani (niri, Wayland), which runs `deploy/comms-terminal-app`: it installs the Local core and the App at the Service's build, stages each new build in its own slot while the window stays open, and switches to it at the next start (`.agents/prd/2026-11-04-app-update-on-restart.md`).
 - The App is one Client of the Local core (ADR 0013). It starts `comms-terminal core` when the socket is absent. Closing the window stops nothing.
 - Everything Jeremy or an agent may change lives in Interface files under `~/.config/comms-terminal-app/`, mirroring `herdr-app`'s layout:
 
@@ -84,7 +84,7 @@ Jeremy accepted these in the App-versus-Console review (`App-Console-Review-Deci
 | D13 | `?` opens the picker as a key palette for the page. |
 | D14 | One overlay for every picker and prompt, with type-to-filter. |
 | D15 | Read-only shows in the status bar, with no toast. |
-| D17 | "Update ready" read-only reason; the App relaunches itself after an update. |
+| D17 | "Update ready" read-only reason; the App relaunches itself after an update. Superseded 2026-11-04: the App never relaunches itself; it fades while read-only, names the update step in the bottom bar, and the staged build opens at the next start (`.agents/prd/2026-11-04-app-update-on-restart.md`). |
 | D20 | Interface files, Panels, live reload, `.error` files and the escape-key reset. |
 | D21 | The brand row. |
 | D22 | The status bar names the Service, its build and the writes still saving. Superseded by D151: the builds moved to Settings; writes saving stays as a Problem. |
