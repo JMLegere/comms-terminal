@@ -501,10 +501,14 @@ FILES_FORWARD = "127.0.0.1:8789:127.0.0.1:8789"
 
 
 def _die_with_parent():
-    """In the SSH master's child: SIGTERM when the console exits by any route (window closed, crash, kill)."""
+    """In the SSH master's child: SIGTERM when the console exits by any route (window closed, crash, kill).
+    Linux only: macOS has no prctl, and calling it there failed the master's start, so a Mac's core never started."""
     import ctypes
     import signal
-    ctypes.CDLL(None, use_errno=True).prctl(1, signal.SIGTERM)  # PR_SET_PDEATHSIG
+    import sys
+    if sys.platform.startswith("linux"):
+        ctypes.CDLL(None, use_errno=True).prctl(1, signal.SIGTERM)  # PR_SET_PDEATHSIG
+    # ponytail: on macOS the master can outlive a crashed core; Link.stop ends it on a clean exit.
 
 
 class Link:
