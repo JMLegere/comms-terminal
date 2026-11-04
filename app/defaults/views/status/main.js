@@ -12,7 +12,7 @@ const KEYS = 4;
 /** What the bar says while an update keeps the App read-only (shared "update", window.rs prepare_update), and the
  * command a click runs. The App never restarts by itself: the staged build opens at the next start. */
 export const UPDATE = {
-  building: ["Updating · read-only until you restart"],
+  building: ["Building the update · read-only until it is ready"],
   ready: ["Update ready · restart to edit", "app.restart"],
   failed: ["Update failed · read-only · Settings › Diagnostics"],
   unmanaged: ["The Service runs another build · read-only · reinstall the App"],
