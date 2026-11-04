@@ -338,8 +338,15 @@ Feature: App
   Scenario: s on an Organization offers its Pipeline's Stages with the current one marked
     Given an Organization in the App at Commit in Revenue only
     When Jeremy presses s and picks Onboarding
-    Then the picker marks "▸ Commit  (current)" and offers the other Pipelines
+    Then the picker marks "▸ Commit  (current)" and offers no other Pipeline
     And the toast says "Acme → Onboarding." and z undoes it
+
+  @AS-CONF-18 @FR-CONF-10 @FR-PL
+  Scenario: p on a Person asks Fundraising or Talent, then offers that Pipeline's Stages
+    Given a Person in the App in no Pipeline
+    When Jeremy presses p, picks Fundraising and then Meeting
+    Then the first picker offers "Fundraising, Talent" and the next "Stage · Ana (Fundraising)" with a switch to Talent
+    And the Person's Fundraising Stage is set to "Meeting", the toast says "Ana → Meeting." and z undoes it
 
   @AS-CONF-19 @FR-CONF-10
   Scenario: Resume and finish act on the one Enrollment, or ask which

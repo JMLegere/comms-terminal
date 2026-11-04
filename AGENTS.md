@@ -35,7 +35,7 @@ Platform ─▶ Connection ─▶ Channel ─▶ Thread ◀── Activity (mess
 - **Case** groups Threads that serve one goal across Platforms. Jeremy never sets a Case's Status.
 - **Person** is a set of Identities. **Organization** holds People through Memberships that follow company email domains; Jeremy's own changes win. A person acting on their own account gets a **Sole proprietorship**.
 - **Sequence** is ordered Steps (touches Jeremy does, Actions the console does, Ifs that choose a path) with On start and On completion. An **Enrollment** runs one Person through it for one Organization: Active, Paused, Finishing or Finished. Any inbound message from the Person pauses it. Each Step becomes a **Task** for that Enrollment; an email Task makes a Draft and is done when the Draft is sent.
-- **Pipeline** (Revenue, Fundraising, Talent) places each Organization at a **Stage** with a **Value**, and works backwards from a **Target** to the **Constraint** and This week's actions. **Unattended** Organizations sit in an open Stage with nothing bringing them back.
+- **Pipeline** places each Organization (Revenue) or Person (Fundraising, Talent; ADR 0016) at a **Stage** with a **Value**, and works backwards from a **Target** to the **Constraint** and This week's actions. **Unattended** Organizations and People sit in an open Stage with nothing bringing them back.
 - **Context sources** (Attio, Tana, Linear) show read-only context beside Threads, People, Organizations and Cases. They hold no Threads.
 - **Calendar** lays out Events, Tasks, waking Snoozes, scheduled Drafts and Enrollment starts. **Respond** sets Jeremy's Invite state through Google Calendar.
 
@@ -65,7 +65,7 @@ Jeremy works in the console; agents read and prepare work through the CLI. On Wo
 | Sequences | `comms-terminal sequence list`, `show NAME`, `apply - [--dry-run]` (Markdown on stdin), `new`, `rename`, `describe`, `sends-from`, `archive`, `delete` |
 | One Step | `comms-terminal step add\|set\|move\|delete …` |
 | Calendar | `comms-terminal events [--from] [--to] [--attendee] [--query] [--last N] [--json]` |
-| Pipelines | `comms-terminal pipeline revenue\|fundraising\|talent`; `pipeline target\|stage\|value …` |
+| Pipelines | `comms-terminal pipeline revenue\|fundraising\|talent`; `pipeline target\|stage\|value …` (Revenue takes a domain; Fundraising and Talent take a Person's email, phone or name) |
 
 `comms-terminal <command> --help` lists every flag. Jeremy can also press `y` on a Thread or Draft to copy the same Markdown for you.
 

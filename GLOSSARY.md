@@ -93,7 +93,7 @@ _Avoid_: Commitment, Issue, Project, Ticket
 ## Triage
 
 **Status**:
-Where a Thread stands, as in Plain: Todo, Snoozed, or Done. Every Thread also has one Status detail. A Case's Status is the roll-up of its Threads' Statuses. An Organization's place in a Pipeline is its Stage, not a Status.
+Where a Thread stands, as in Plain: Todo, Snoozed, or Done. Every Thread also has one Status detail. A Case's Status is the roll-up of its Threads' Statuses. An Organization's or Person's place in a Pipeline is its Stage, not a Status.
 _Avoid_: State
 
 **Status detail**:
@@ -128,11 +128,11 @@ One address a Person sends from: an email address, a Slack user, or a phone numb
 _Avoid_: Address (when it may be a Slack user), Account, Handle
 
 **Organization**:
-A company or group that Persons belong to. A Person dealt with on their own account, such as an angel investor or a candidate, gets a Sole proprietorship.
+A company or group that Persons belong to. A Person a customer deal is made with on their own account gets a Sole proprietorship.
 _Avoid_: Account, Company, Tenant
 
 **Sole proprietorship**:
-An Organization that stands for one Person acting on their own account, so their place in a Pipeline is kept apart from their employer's.
+An Organization that stands for one Person acting on their own account, so their place in the Revenue Pipeline and their Enrollments are kept apart from their employer's.
 _Avoid_: Personal organization, Individual account
 
 **Membership**:
@@ -140,7 +140,7 @@ A Person's place in an Organization. A Person can belong to several Organization
 _Avoid_: Affiliation, Employment
 
 **Unattended**:
-An Organization in a Pipeline, in an open or paying Stage, with no Todo or Snoozed Thread among its People, no Active Enrollment for it, and none of its People on an upcoming Event, so nothing will bring it back to Jeremy. An Event counts until it ends, unless Jeremy or that Person declined it or it was deleted.
+An Organization or Person in a Pipeline, in an open or paying Stage, with no Todo or Snoozed Thread among its People (a Person's own Threads), no Active Enrollment for it, and none of its People on an upcoming Event, so nothing will bring it back to Jeremy. An Event counts until it ends, unless Jeremy or that Person declined it or it was deleted.
 _Avoid_: Stalled, Dropped, No next step
 
 ## Outreach
@@ -248,18 +248,18 @@ _Avoid_: Follow-up, Next action, Nudge
 ## Pipeline
 
 **Pipeline**:
-One staged flow of Organizations toward an outcome: Revenue (customers, toward revenue), Fundraising (investors, toward a round), or Talent (candidates, toward joining). Each has its own Stages; Revenue and Fundraising also have a Target.
+One staged flow toward an outcome: Revenue holds Organizations (customers, toward revenue); Fundraising (investors, toward a round) and Talent (candidates, toward joining) hold People, since a person decides to invest or to join, and a Person's Organizations come from their Memberships. Each has its own Stages; Revenue and Fundraising also have a Target. Where the terms below say Organization, read Person for Fundraising and Talent.
 _Avoid_: Funnel, Deal list, Bowtie (when meaning the Revenue Pipeline itself)
 
 **Stage**:
-Where an Organization stands in one Pipeline. Revenue Stages follow the Bowtie: Awareness, Education, Prioritization, Selection, Commit, Onboarding, Impact, Expansion, then Lost or Churned. An Organization enters Impact when its first payment arrives; Onboarding means signed but not yet paying. Fundraising Stages: Research, Outreach, Meeting, Diligence, Soft commit, Closed, Passed. Talent Stages: Explore, Role fit, Offer, Start, then Joined or Lost. An Organization with no Stage is in no Pipeline, and it may hold a Stage in each Pipeline at once. An Action in a Sequence sets a Stage, and Jeremy may set one himself at any time; the latest change stands.
+Where an Organization stands in the Revenue Pipeline, or a Person in Fundraising or Talent. Revenue Stages follow the Bowtie: Awareness, Education, Prioritization, Selection, Commit, Onboarding, Impact, Expansion, then Lost or Churned. An Organization enters Impact when its first payment arrives; Onboarding means signed but not yet paying. Fundraising Stages: Research, Outreach, Meeting, Diligence, Soft commit, Closed, Passed. Talent Stages: Explore, Role fit, Offer, Start, then Joined or Lost. An Organization or Person with no Stage is in no Pipeline; a Person may hold a Stage in Fundraising and Talent at once. An Action in a Sequence sets a Stage, and Jeremy may set one himself at any time; the latest change stands.
 _Avoid_: Status, Account Stage (Attio's name for it), Deal stage
 
 **Stage history**:
-The record of every Stage an Organization has held in a Pipeline and when it entered and left each one.
+The record of every Stage an Organization or Person has held in a Pipeline and when it entered and left each one.
 
 **Value**:
-What one Organization is worth in a Pipeline: its Revenue Value or its Fundraising Value. Value belongs to the Organization's place in the Pipeline, not to its Stage; Jeremy sets it by hand.
+What one Organization (Revenue) or Person (Fundraising) is worth in a Pipeline: its Revenue Value or their Fundraising Value. Value belongs to that place in the Pipeline, not to its Stage; Jeremy sets it by hand.
 _Avoid_: Deal value, ACV, ARR, MRR
 
 **Revenue Value**:
@@ -267,7 +267,7 @@ The revenue expected from an Organization over the next twelve months, one-off f
 _Avoid_: ARR, ACV, Contract value
 
 **Fundraising Value**:
-The cheque an investor Organization has committed or is expected to commit.
+The cheque an investor has committed or is expected to commit, whether from their own pocket or from the fund or company they belong to.
 _Avoid_: Ticket, Check size
 
 **Target**:
