@@ -814,7 +814,7 @@ def composer_send_again(app):
     assert app.ud["again"] == [{"draft_id": "draft-1", "revision": 1, "again": True}]
 
 
-@given("App Drafts that are a Reply Draft, a New Thread Draft, an email Task's Draft, a failed send and scheduled ones")
+@given("App Drafts that are a Reply Draft, a New Thread Draft, a failed send and scheduled ones")
 def every_kind_of_draft(app):
     pass
 
@@ -826,7 +826,7 @@ def both_lists(app):
 
 @then("both list them in the same order: failed sends, then unsent, then scheduled by send time")
 def one_order(app):
-    assert app.ud["drafts"] == app.ud["today"] == ["failed", "reply", "new", "task", "soon", "later"]
+    assert app.ud["drafts"] == app.ud["today"] == ["failed", "reply", "new", "soon", "later"]
 
 
 @given("three Drafts in the App's Drafts list and in Today's drafts pane")

@@ -1043,9 +1043,14 @@ All entries are dated 2026-10-10; exact times are unproven unless noted. Full de
   - Status: Approved; Phases 1 and 2 authorized (2026-10-31). Built on branch `jeremy/desktop-app`.
 
 - **144**
-  - Request / decision: Unified Drafts (ADR 0015): every Draft, a Reply Draft included, saves by revision, sends its saved revision through `send_draft` (so a reply locks on Send outcome unknown), and owns its staged files. Each client edits every Draft in one Composer with the same keys. A review list shows a Reply Draft in place, as its Thread with the Composer, and selects the next Draft after send, schedule, delete or skip. Today lists every Draft; a Thread whose Reply Draft is ready and a Task with a Draft show through that Draft, and the selected row keeps its place until the selection leaves it (FR-6f, FR-UD-8/9). Supersedes D69 (a Reply Draft jumped to its Thread from a list) and amends #75 (the inline reply box is the Composer).
+  - Request / decision: Unified Drafts (ADR 0015): every Draft, a Reply Draft included, saves by revision, sends its saved revision through `send_draft` (so a reply locks on Send outcome unknown), and owns its staged files. Each client edits every Draft in one Composer with the same keys. A review list shows a Reply Draft in place, as its Thread with the Composer, and selects the next Draft after send, schedule, delete or skip. Today lists every Draft; a Thread whose Reply Draft is ready and a Task with a Draft show through that Draft, and the selected row keeps its place until the selection leaves it (FR-6f, FR-UD-8/9; the Task part is reversed by #145). Supersedes D69 (a Reply Draft jumped to its Thread from a list) and amends #75 (the inline reply box is the Composer).
   - Source: Jeremy's discovery (2026-11-03, `.agents/discovery/2026-11-03-unified-drafts.md`): "we should unify thread drafts and reply drafts", "Same editor everywhere", "Composer", "One list", "Thread + Composer", "Drafts pane, all Drafts", "Drafts pane only"; PRD `.agents/prd/2026-11-03-unified-drafts.md` approved 2026-11-04: "approved, execute the entire prd and ship it to prod".
   - Status: Approved (2026-11-04). Built on branch `jeremy/unified-drafts`.
+
+- **145**
+  - Request / decision: Email Tasks stay Tasks until sent. An email Task with a Draft (Reply Draft or New Thread Draft) is listed in Today's tasks pane and on the Tasks page, counted and named as a Task, until its Draft is sent; selecting it shows its Draft in place, as the Tasks page does. Its Draft is on neither the Drafts page nor Today's drafts pane (`inbox.list_drafts(tasks=False)`), except while its send is scheduled, when the Tasks list leaves the Task out (2026-10-20) and the Draft waits with the scheduled ones. Reverses the Task part of #144 (Q5 of the Unified Drafts discovery); a Thread whose Reply Draft is ready still shows through that Draft.
+  - Source: Jeremy (2026-11-04): "Drafts from Tasks should stay as Tasks until sent"; "its an email task, not a 'draft'".
+  - Status: Approved (2026-11-04). Built on branch `jeremy/task-drafts-stay-tasks`.
 
 ## 8. Work log
 

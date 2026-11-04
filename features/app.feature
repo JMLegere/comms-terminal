@@ -378,7 +378,8 @@ Feature: App
 
   @AS-UD-5 @FR-UD-5 @FR-UD-8
   Scenario: The Drafts page and Today's drafts pane list every kind of Draft in one order
-    Given App Drafts that are a Reply Draft, a New Thread Draft, an email Task's Draft, a failed send and scheduled ones
+    # An email Task's Draft is on neither list: it stays its Task until sent (Jeremy, 2026-11-04).
+    Given App Drafts that are a Reply Draft, a New Thread Draft, a failed send and scheduled ones
     When the Drafts page and Today's drafts pane list them
     Then both list them in the same order: failed sends, then unsent, then scheduled by send time
 

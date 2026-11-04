@@ -135,7 +135,8 @@ def _pauses(core, db, since):
 
 @query("today.page")
 def _today(core, db):
-    """Today: Todo Threads, due Tasks and every Draft, each item once (each Draft with `recipient`, as drafts.list),
+    """Today: Todo Threads, due Tasks (an email Task with its Draft until sent) and the Drafts list, each item once
+    (each Draft with `recipient`, as drafts.list),
     Paused Enrollments (each with `finishing`, the label of the reason it finishes as, or null) and Unattended
     Organizations."""
     t = dict(_shared(core, "today", inbox.today, db))
@@ -336,8 +337,10 @@ def _connection_page(core, db, connection_id):
 
 @query("drafts.list")
 def _drafts(core, db):
-    """Every Draft, each with `recipient`: its To as People names, as the Console's Drafts list shows it."""
-    return [d | {"recipient": inbox.recipient_names(db, d["to"] or "", d["kind"])} for d in inbox.list_drafts(db)]
+    """The Drafts list, each with `recipient`: its To as People names, as the Console's Drafts list shows it. An
+    email Task's Draft is listed through its Task until sent (Jeremy, 2026-11-04; inbox.list_drafts)."""
+    return [d | {"recipient": inbox.recipient_names(db, d["to"] or "", d["kind"])}
+            for d in inbox.list_drafts(db, tasks=False)]
 
 
 @query("draft.view", draft_id="string")

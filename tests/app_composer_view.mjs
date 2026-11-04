@@ -198,7 +198,7 @@ if (kase === "send") { // AS-UD-1/3: ctrl+enter saves the typed text as a revisi
 } else if (kase === "order") { // AS-UD-5: the Drafts page and Today's drafts pane list every Draft in one order
   const { ordered } = (await load("drafts")).ns, { paneItems } = (await load("today")).ns;
   const rows = [{ id: "later", send_at: "2026-11-06T15:00:00" }, { id: "reply", thread_id: "t1" }, { id: "new" },
-    { id: "task", task_id: "k1" }, { id: "failed", send_error: "refused", thread_id: "t2" }, { id: "soon", send_at: "2026-11-05T15:00:00" }];
+    { id: "failed", send_error: "refused", thread_id: "t2" }, { id: "soon", send_at: "2026-11-05T15:00:00" }];
   out.drafts = ordered(rows).map((d) => d.id);
   out.today = paneItems({ drafts: rows }).drafts.map((it) => it.row.id);
 }

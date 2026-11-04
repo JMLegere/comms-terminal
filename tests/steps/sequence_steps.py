@@ -160,6 +160,16 @@ def thread_titled(outreach, title):
     return outreach.db.execute("SELECT id FROM threads WHERE title = ? AND merged_into IS NULL", (title,)).fetchone()[0]
 
 
+@then("the Drafts list has Body:")
+def drafts_list(outreach, datatable):
+    assert sorted(d["body"] for d in inbox.list_drafts(outreach.db, tasks=False)) == sorted(r[0] for r in datatable[1:])
+
+
+@when(parsers.parse("the email Task's Draft is scheduled to send on {day}"))
+def schedule_task_draft(outreach, day):
+    inbox.schedule_draft(outreach.db, task_draft(outreach)["id"], DAYS[day], now=outreach.now)
+
+
 @given(parsers.parse('Save Reply Draft keeps Body "{body}" on the Thread "{title}"'))
 def reply_draft(outreach, body, title):
     inbox.save_reply_draft(outreach.db, thread_titled(outreach, title), body)

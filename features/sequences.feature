@@ -4,8 +4,9 @@ Feature: Sequences
   (sequences.enroll) starts an Enrollment; Due Tasks (sequences.tasks_due) lists what is due; Wake
   (inbox.wake) makes Tasks and their Drafts; Ingest (inbox.ingest) receives the Person's messages;
   Send Draft (inbox.send_draft) sends a Task's Draft; Finish (sequences.finish) ends an Enrollment.
-  Today (inbox.today) lists Todo Threads, Due Tasks, and the Drafts not shown through them; Save Draft
-  (inbox.save_draft) and Save Reply Draft (inbox.save_reply_draft) keep Drafts; Act (inbox.act) snoozes.
+  Today (inbox.today) lists Todo Threads, Due Tasks, and the Drafts list (inbox.list_drafts) less the Drafts shown
+  through them; Save Draft (inbox.save_draft) and Save Reply Draft (inbox.save_reply_draft) keep Drafts; Schedule
+  Draft (inbox.schedule_draft) sets a send time; Act (inbox.act) snoozes.
   Apply Sequence (sequence_md.apply) replaces a complete Sequence from Markdown, atomically with its Tasks and Drafts.
   Kind maps to a Step's kind, Gap to gap_days, Subject and Body to its text. Times are Jeremy's (Halifax);
   "Monday" is 2026-10-19 at 10:00 and "November 2" is 2026-11-02 at 10:00.
@@ -68,16 +69,26 @@ Feature: Sequences
     Then there is 1 Task and 1 Draft
 
   @AS-T1 @AS-T9 @AS-T10 @FR-T5 @AS-UD-5 @FR-UD-8
-  Scenario: Today lists every Draft once, and a Thread or Task with a Draft through that Draft
+  Scenario: Today lists an email Task as a Task until it is sent, and a Thread with a ready Reply Draft through that Draft
+    # Jeremy, 2026-11-04: an email Task stays a Task until its Draft is sent, so its Draft is in neither Drafts list
+    # (reverses decision #144 for Tasks); while its send is scheduled the Task leaves Due Tasks and its Draft waits there.
     Given "Dana Roy" is enrolled in "Secret Sequence" on Monday
     And Save Reply Draft keeps Body "Thanks" on the Thread "Hello"
     And Save Draft keeps a new email Draft with Body "Hi there"
-    Then Today on Monday lists 0 Todo Threads, 0 Due Tasks, and Drafts with Body:
+    Then Today on Monday lists 0 Todo Threads, 1 Due Task, and Drafts with Body:
       | Body     |
-      | Hi Dana  |
+      | Hi there |
+      | Thanks   |
+    And the Drafts list has Body:
+      | Body     |
       | Hi there |
       | Thanks   |
     When Act snoozes the Thread "Hello" until Wednesday
+    Then Today on Monday lists 0 Todo Threads, 1 Due Task, and Drafts with Body:
+      | Body     |
+      | Hi there |
+      | Thanks   |
+    When the email Task's Draft is scheduled to send on Wednesday
     Then Today on Monday lists 0 Todo Threads, 0 Due Tasks, and Drafts with Body:
       | Body     |
       | Hi Dana  |

@@ -82,10 +82,11 @@ export default class Draft extends View {
     if (d.thread_id) return [{ key: "reply", label: `Reply Draft · ${this.info.thread_title ?? ""}`, verb: "open Thread",
       enter: () => openReply(d.thread_id).catch((e) => toast(String(e), "error")) }];
     const live = !d.sending_at; // Send outcome unknown: read-only, so Enter edits nothing
-    const field = (key, s) => ({ key, label: `Draft · ${key}`, verb: "edit", enter: live ? () => s.focus() : null });
+    const what = d.task_id ? "Task" : "Draft"; // an email Task's Draft is named as its Task (Jeremy, 2026-11-04)
+    const field = (key, s) => ({ key, label: `${what} · ${key}`, verb: "edit", enter: live ? () => s.focus() : null });
     return [
       ...(this.info.history ?? []).map((h, i) => ({ key: `h-${i}`, label: `Thread · ${h.title ?? ""}`, verb: "open", enter: () => this.openThread(h) })),
-      { key: "Conn.", label: "Draft · Connection", verb: "pick", enter: live ? () => c.chooseConnection() : null },
+      { key: "Conn.", label: `${what} · Connection`, verb: "pick", enter: live ? () => c.chooseConnection() : null },
       field("To", c.toField()),
       ...(d.kind === "email" ? [field("Cc", c.cc), field("Subject", c.subject)] : []),
       field("Body", c.body),

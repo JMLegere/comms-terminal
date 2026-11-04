@@ -1,6 +1,6 @@
-// Drafts, as the Console's DraftsPage: the one Draft review list (FR-UD-5) of every Draft, failed scheduled sends
-// first, then unsent, then scheduled by send time; one row each (kind, To as names, Subject with "Reply Draft · "
-// before a reply's, status). j/k move and the Draft fills the right pane in place (decision #144, FR-UD-6): a New
+// Drafts, as the Console's DraftsPage: the one Draft review list (FR-UD-5) of every Draft but an email Task's, which
+// stays its Task until sent (Jeremy, 2026-11-04; drafts.list): failed scheduled sends first, then unsent, then
+// scheduled by send time; one row each (kind, To as names, Subject with "Reply Draft · " before a reply's, status). j/k move and the Draft fills the right pane in place (decision #144, FR-UD-6): a New
 // Thread Draft in the draft view with its history, a Reply Draft as its Thread with the Composer open on it. n starts
 // a New Thread Draft; x deletes (z undoes); y copies it for an agent; Enter gives the Draft's Composer the keyboard;
 // ctrl+s, ctrl+enter save and send from the list too (D78). After a send, schedule or delete the Draft below is

@@ -5,10 +5,12 @@
 // the right pane (shared "detail" picks its view). A key acts on the row's own kind: r replies on a Thread and
 // resumes a Paused Enrollment; x ignores a Thread, skips a Task and deletes a Draft. Thread keys reach only a Thread
 // row: any other row clears the shared Thread, so a key never reaches a Thread that is not on screen (D87).
-// The drafts pane lists every Draft (FR-UD-8); a Reply Draft shows in place, as its Thread with the Composer open on
-// it (decision #144). After a send, schedule or delete the Draft below is selected, else the one above (FR-UD-7). A
-// selected row keeps its place while its Thread or Task moves to another pane, as when a reply typed on a Thread
-// makes it a Reply Draft; it takes its new place once the selection leaves it (FR-UD-9).
+// The drafts pane lists the Drafts page's Drafts (FR-UD-8); a Reply Draft shows in place, as its Thread with the
+// Composer open on it (decision #144). An email Task stays a Task in the tasks pane until its Draft is sent, and
+// shows its Draft in place as the Tasks page does (Jeremy, 2026-11-04). After a send, schedule or delete the Draft
+// below is selected, else the one above (FR-UD-7). A selected row keeps its place while its Thread moves to another
+// pane, as when a reply typed on a Thread makes it a Reply Draft; it takes its new place once the selection leaves
+// it (FR-UD-9).
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, v_virtual_list, VirtualListScrollHandle } from "gpui-base";
 import { call, nextEvent, nextCommand, theme, shared, setShared, run, toast, focusMain } from "comms";
@@ -101,12 +103,12 @@ export function paneItems(data, cases) {
   return out;
 }
 
-/** The Thread and Task a row stands for, so a row that moved to another pane is known there (FR-UD-9). */
+/** The Thread or Task a row stands for, so a row that moved to another pane is known there (FR-UD-9). */
 export function idsOf(pane, r) {
   if (!r) return [];
   if (pane === "threads") return [`t${r.id}`];
   if (pane === "tasks") return [`k${r.id}`];
-  if (pane === "drafts") return [r.thread_id && `t${r.thread_id}`, r.task_id && `k${r.task_id}`].filter(Boolean);
+  if (pane === "drafts") return r.thread_id ? [`t${r.thread_id}`] : [];
   return [];
 }
 

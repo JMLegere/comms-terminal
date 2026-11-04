@@ -1202,8 +1202,12 @@ def restore_draft(db, draft: dict, *, now: datetime | None = None) -> None:
                    tuple(draft.values()))
 
 
-def list_drafts(db) -> list[dict]:
-    return [dict(r) for r in db.execute("SELECT * FROM composition_drafts ORDER BY updated_at DESC, id DESC")]
+def list_drafts(db, *, tasks: bool = True) -> list[dict]:
+    """Drafts, newest updated first. `tasks=False` is the Drafts list (Drafts page, Today's drafts pane): an email
+    Task's Draft stays its Task until sent (Jeremy, 2026-11-04) and is listed through it, except while its send is
+    scheduled, when the Tasks list leaves the Task out (sequences.tasks_due) and it waits here as a scheduled Draft."""
+    where = "" if tasks else " WHERE task_id IS NULL OR (send_at IS NOT NULL AND send_error IS NULL)"
+    return [dict(r) for r in db.execute(f"SELECT * FROM composition_drafts{where} ORDER BY updated_at DESC, id DESC")]
 
 
 def recipient_names(db, to: str, kind: str) -> str:
@@ -2871,8 +2875,9 @@ def _where(channel, identity) -> str:
 
 
 def today(db, now: datetime | None = None) -> dict:
-    """Today (GLOSSARY): Todo Threads, Due Tasks, and every Draft, each once: a Thread whose Reply Draft is
-    ready and a Task with a Draft show as that Draft (decision #144). Then Paused
+    """Today (GLOSSARY): Todo Threads, Due Tasks, and the Drafts list, each item once: a Thread whose Reply Draft is
+    ready shows as that Draft (decision #144); an email Task stays a Task until its Draft is sent, so its Draft is
+    not in the Drafts list (Jeremy, 2026-11-04, reversing #144 for Tasks). Then Paused
     Enrollments (FR-SEQ-39), and Unattended Organizations; and, for an empty Today, when the next Snoozed Thread wakes and the next Task comes due (None
     when nothing is coming)."""
     from . import pipeline, sequences
@@ -2888,8 +2893,8 @@ def today(db, now: datetime | None = None) -> dict:
         " WHERE t.state = 'DUE' AND e.state IN ('ACTIVE', 'FINISHING') ORDER BY t.due_at")
         if datetime.fromisoformat(r[0]).astimezone(sequences.LOCAL).date() > day]
     return {"threads": [t for t in queue(db, "Todo") if t["detail"] != REPLY_DRAFT],
-            "tasks": [t for t in sequences.tasks_due(db, now) if not t["draft_id"]],
-            "drafts": list_drafts(db), "paused": sequences.paused(db),
+            "tasks": sequences.tasks_due(db, now),
+            "drafts": list_drafts(db, tasks=False), "paused": sequences.paused(db),
             "unattended": pipeline.unattended(db),
             "next_wake": wake, "next_task": later[0] if later else None}
 

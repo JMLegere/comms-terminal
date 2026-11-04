@@ -3133,7 +3133,7 @@ class DraftsPage(Page):
         if not self.query(DataTable) or not self.on_screen:
             return
         try:
-            items = inbox.list_drafts(self.app.db)
+            items = inbox.list_drafts(self.app.db, tasks=False)  # an email Task's Draft shows as its Task (2026-11-04)
             # grouped by status (Jeremy, 2026-10-17): failed sends first, then unsent, then scheduled by send time
             items.sort(key=lambda d: (2, d["send_at"]) if d.get("send_at") and not d.get("send_error") else
                        (0 if d.get("send_error") else 1, ""))
@@ -5114,13 +5114,8 @@ class TasksPage(Page):
     def on_resize(self, _):
         self.call_after_refresh(self.refresh_data)
 
-    today = False  # Today's list: a Task with a Draft shows through that Draft (decision #144)
-
     def tasks(self):
-        ts = sequences.tasks_due(self.app.db)
-        if self.today:  # the selected Task keeps its place until the selection leaves it (FR-UD-9)
-            keep = (self.selected() or {}).get("id")
-            ts = [t for t in ts if not t["draft_id"] or t["id"] == keep]
+        ts = sequences.tasks_due(self.app.db)  # an email Task stays here until its Draft is sent (Jeremy, 2026-11-04)
         if isinstance(self.filter, str):
             ts = [t for t in ts if t["kind"] == self.filter]
         elif self.filter:
@@ -6032,8 +6027,8 @@ class PausedPage(TablePage):
 
 
 class TodayPage(Page):
-    """Today (GLOSSARY; .agents/prd/2026-10-17-today-view.md): Todo Threads, Due Tasks, every Draft (a Thread
-    whose Reply Draft is ready and a Task with a Draft show through that Draft), and Unattended Organizations, stacked in that order; a list with nothing in it hides. The list holding the cursor fills the
+    """Today (GLOSSARY; .agents/prd/2026-10-17-today-view.md): Todo Threads, Due Tasks (an email Task with its Draft
+    until sent, Jeremy 2026-11-04), the Drafts list (a Thread whose Reply Draft is ready shows through that Draft), and Unattended Organizations, stacked in that order; a list with nothing in it hides. The list holding the cursor fills the
     right pane; ↓/↑ run on from one list into the next, and tab jumps to the next list."""
     TITLE = f"{ICON['today']} today"
     RAIL = "today"
@@ -6045,7 +6040,6 @@ class TodayPage(Page):
         threads = ThreadsPage()
         threads.fixed_view, threads.today = 0, True
         self.threads, self.tasks = threads, TasksPage()
-        self.tasks.today = True
         self.drafts = DraftsPage()
         self.paused, self.orgs = PausedPage(), UnattendedPage()
         for page in self.lists:
