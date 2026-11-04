@@ -16,8 +16,9 @@ if (kase === "join") { // D95: o toasts the link; Ctrl+click opens it
 } else if (kase === "fold" || kase === "reply") {
   const Case = await load("case");
   state.page = "case";
-  const field = (v) => { const f = input(); f.set_value(v); return f; };
-  const c = make(Case, { sel: 0, toggled: new Set(), opened: {}, text: field(""), to: field(""), cc: field(""),
+  const c = new Case();
+  c.init({}, cx); tasks.length = 0;                       // init makes the card's Composer; its loops never end
+  Object.assign(c, { sel: 0, toggled: new Set(), opened: {},
     c: { id: "case-1", cards: [{ id: "t1", messages: [] }, { id: "t2", messages: [] }], timeline: [] } });
   if (kase === "fold") {
     c.command("next", cx);
@@ -30,7 +31,7 @@ if (kase === "join") { // D95: o toasts the link; Ctrl+click opens it
     c.toggled.add("t1");
     c.command("reply_all", cx);
     await settle();
-    out.reply = c.reply?.thread; out.text = c.text.value(); out.to = c.to.value(); out.unfolded = !c.toggled.has("t1");
+    out.reply = c.composer.reply?.thread; out.text = c.composer.body.value(); out.to = c.composer.to.value(); out.unfolded = !c.toggled.has("t1");
   }
 } else if (kase === "task-stale") { // a Task's Draft never takes the pane from the row Jeremy selected
   const Today = await load("today"), Task = await load("task");

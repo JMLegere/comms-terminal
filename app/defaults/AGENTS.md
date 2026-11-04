@@ -30,7 +30,7 @@ CLI. Never add an opt-out line to a Draft.
 | `settings.json` | `theme` (a file in `themes/`), `core` (the command that starts the Local core) | at once |
 | `themes/<name>.json` | colour tokens; views read them through `theme()` | at once |
 | `panels/<name>/main.js` | your Panels | at once (hot reload) |
-| `views/<name>/main.js` | the App's shipped views: `brand`, `nav` (the rail), `topbar`, `status`, `overlay` (pickers), and a list and a detail view per page (`threads`/`thread`, `today`, `drafts`/`draft`, `cases`/`case`, `tasks`/`task`, `sequences`/`sequence`, `pipeline`, `people`/`person`, `organizations`/`organization`, `channels`/`connection`, `calendar`/`event`) | rewritten on every start: don't edit them; copy one into `panels/` and change the layout to use the copy |
+| `views/<name>/main.js` | the App's shipped views: `brand`, `nav` (the rail), `topbar`, `status`, `overlay` (pickers), and a list and a detail view per page (`threads`/`thread`, `today`, `drafts`/`draft`, `cases`/`case`, `tasks`/`task`, `sequences`/`sequence`, `pipeline`, `people`/`person`, `organizations`/`organization`, `channels`/`connection`, `calendar`/`event`); `thread`, `case` and `draft` each carry the same `composer.js`, the one Draft editor | rewritten on every start: don't edit them; copy one into `panels/` and change the layout to use the copy |
 | `comms.d.ts` | the `comms` module's types | rewritten on every start |
 | `data/` | each view's and Panel's `localStorage` | written by the App |
 

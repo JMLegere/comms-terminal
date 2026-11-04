@@ -36,6 +36,7 @@ const DEFAULTS: &[(&str, &str, bool)] = &[
     ("icons/win-close.svg", include_str!("../defaults/icons/win-close.svg"), true), // herdr-app mods/tabs (Apache-2.0)
     ("views/threads/main.js", include_str!("../defaults/views/threads/main.js"), true),
     ("views/thread/main.js", include_str!("../defaults/views/thread/main.js"), true),
+    ("views/thread/composer.js", include_str!("../defaults/views/composer.js"), true), // the one Composer, beside each view that imports it
     ("views/status/main.js", include_str!("../defaults/views/status/main.js"), true),
     ("icons/building-2.svg", include_str!("../defaults/icons/building-2.svg"), true),
     ("icons/calendar.svg", include_str!("../defaults/icons/calendar.svg"), true),
@@ -47,10 +48,12 @@ const DEFAULTS: &[(&str, &str, bool)] = &[
     ("icons/workflow.svg", include_str!("../defaults/icons/workflow.svg"), true),
     ("views/calendar/main.js", include_str!("../defaults/views/calendar/main.js"), true),
     ("views/case/main.js", include_str!("../defaults/views/case/main.js"), true),
+    ("views/case/composer.js", include_str!("../defaults/views/composer.js"), true), // the one Composer, beside each view that imports it
     ("views/cases/main.js", include_str!("../defaults/views/cases/main.js"), true),
     ("views/channels/main.js", include_str!("../defaults/views/channels/main.js"), true),
     ("views/connection/main.js", include_str!("../defaults/views/connection/main.js"), true),
     ("views/draft/main.js", include_str!("../defaults/views/draft/main.js"), true),
+    ("views/draft/composer.js", include_str!("../defaults/views/composer.js"), true), // the one Composer, beside each view that imports it
     ("views/side/main.js", include_str!("../defaults/views/side/main.js"), true),
     ("views/day/main.js", include_str!("../defaults/views/day/main.js"), true),
     ("views/drafts/main.js", include_str!("../defaults/views/drafts/main.js"), true),
@@ -123,6 +126,7 @@ pub fn write(home: &Path) -> std::io::Result<()> {
 const PREVIOUS: &[(&str, u64)] = &[
     ("layouts/main.json", 0xb363995d330f6414),
     ("layouts/main.json", 0x4e2034e653395857),
+    ("layouts/main.json", 0x085901ebea1c6a70),
     ("keys.json", 0x1f4eb1ede7a5640e),
     ("keys.json", 0xb41b1cc21ba85367),
     ("keys.json", 0x425cfe7966802582),
