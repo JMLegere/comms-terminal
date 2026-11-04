@@ -40,6 +40,8 @@ pub enum Request {
     Repaint,
     /// The launcher's staging of the Service's build moved on: `ready` or `failed` (`window.rs` `prepare_update`).
     UpdateStep(&'static str),
+    /// How far the staging is: `{elapsed, percent, left}` in seconds (percent and left null before a first build).
+    UpdateProgress(Value),
     /// A control-socket request (`control.rs`) and where its answer goes.
     Control { cmd: Value, reply: std::sync::mpsc::Sender<Value> },
 }

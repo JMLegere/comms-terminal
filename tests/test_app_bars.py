@@ -30,10 +30,14 @@ def test_the_bottom_bar_shows_problems_only_and_four_keys_at_most():
 
 def test_the_bottom_bar_names_the_update_step_and_ready_restarts_on_a_click():
     out = _run()  # PRD 2026-11-04-app-update-on-restart, FR-UPD-7, AS-UPD-1, AS-UPD-2, AS-UPD-5, AS-UPD-8
-    assert out["updates"] == [["Updating · read-only until you restart", True],
+    assert out["updates"] == [["Building the update · read-only until it is ready", True],
                               ["Update ready · restart to edit", True, "app.restart"],
                               ["Update failed · read-only · Settings › Diagnostics", True]]
     assert out["offlineNoUpdate"] == ["Read-only · offline", True]
+    assert out["progress"] == ["Building the update · read-only until it is ready",  # % and time left (Jeremy)
+                               "Building the update · under a minute so far · read-only",
+                               "Building the update · 40% · about 4 min left · read-only",
+                               "Building the update · 99% · almost done · read-only"]
     assert out["target"] == ["Thread · Brunch", [["e", "done"], ["r", "reply"], ["s", "status"], ["i", "respond"]]]
     assert out["otherCol"] == [None, []]
     assert out["many"] == [["3 Connections broken", True]]

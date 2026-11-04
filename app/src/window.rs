@@ -72,10 +72,39 @@ fn prepare_update(service_build: &str, force: bool) {
     *TRIED.lock().unwrap() = service_build.to_owned();
     set_update_step("building");
     std::thread::spawn(move || {
-        let staged = std::process::Command::new(&prepare).arg("--prepare").status().is_ok_and(|s| s.success());
+        let staged = match std::process::Command::new(&prepare).arg("--prepare").spawn() {
+            Ok(mut child) => loop {
+                match child.try_wait() {
+                    Ok(Some(status)) => break status.success(),
+                    Ok(None) => {
+                        host::request(Request::UpdateProgress(update_progress()));
+                        std::thread::sleep(std::time::Duration::from_secs(3));
+                    }
+                    Err(_) => break false,
+                }
+            },
+            Err(_) => false,
+        };
         RUNNING.store(false, Ordering::SeqCst);
         host::request(Request::UpdateStep(if staged { "ready" } else { "failed" }));
     });
+}
+
+/// How far the launcher's build is, from `$COMMS_TERMINAL_APP_DATA/stage-started` (when it began) and
+/// `stage-seconds` (how long the last build took): `{elapsed, percent, left}`, percent capped at 99 until it is done.
+/// Null before a build starts; percent and left null before any build has finished on this machine.
+// ponytail: time-based; a build much faster or slower than the last one jumps to ready or sits at 99%.
+fn update_progress() -> Value {
+    let Some(data) = std::env::var_os("COMMS_TERMINAL_APP_DATA").map(std::path::PathBuf::from) else { return Value::Null };
+    let read = |name: &str| std::fs::read_to_string(data.join(name)).ok().and_then(|s| s.trim().parse::<u64>().ok());
+    let Some(started) = read("stage-started") else { return Value::Null };
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    let elapsed = now.saturating_sub(started);
+    match read("stage-seconds").filter(|&last| last > 0) {
+        Some(last) => serde_json::json!({"elapsed": elapsed, "percent": (elapsed * 100 / last).min(99),
+                                         "left": last.saturating_sub(elapsed)}),
+        None => serde_json::json!({"elapsed": elapsed, "percent": null, "left": null}),
+    }
 }
 
 /// On the window's thread: the update step every view reads (`shared("update")`), logged; null clears it.
@@ -327,6 +356,12 @@ impl AppWindow {
             Request::Repaint => window.refresh(),
             Request::Control { cmd, reply } => self.control(cmd, reply, window, cx),
             Request::UpdateStep(step) => set_update_step(step),
+            Request::UpdateProgress(progress) => {
+                if host::shared("update_progress") != progress {
+                    host::set_shared("update_progress", progress);
+                    host::request(Request::Refresh);
+                }
+            }
         }
     }
 
