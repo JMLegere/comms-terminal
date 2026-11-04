@@ -1714,10 +1714,11 @@ class ReplyBox(Composer, Vertical):
             title = view["thread"].title
             self.query_one(".subjectvalue").update(escape(title if title.lower().startswith("re:") else f"Re: {title}"))
             self.set_mode(mode)
-            draft = inbox.reply_draft(self.app.db, draft_key)
-            if draft is not None:  # the Reply Draft keeps its own To and Cc (decision #144)
-                self.query_one(".toinput", Input).value = draft["to"]
-                self.query_one(".ccinput", Input).value = draft["cc"]
+            if self.app._managed_console:
+                draft = inbox.reply_draft(self.app.db, draft_key)
+                if draft is not None:
+                    self.query_one(".toinput", Input).value = draft["to"]
+                    self.query_one(".ccinput", Input).value = draft["cc"]
         else:
             self.query_one(".flabel").update("To")
             self.query_one(".fromvalue").update(f"{escape(view['where'])} [#928374]· in thread[/]")

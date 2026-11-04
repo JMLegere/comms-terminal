@@ -146,7 +146,9 @@ def test_version_12_upgrade_adds_only_receipts_and_preserves_records_files_and_g
     try:
         sha = files.store_file(db, b"retained file")
         inbox.add_attachments(db, activity_id, [{"name": "retained.txt", "type": "text/plain", "size": 13, "sha": sha}])
-        inbox.stage(db, sha=sha, name="reply.txt", type="text/plain", size=13, thread_id=thread_id)
+        with db:  # a file staged on the Thread's reply, as versions 12 to 34 stored it
+            db.execute("INSERT INTO staged_attachments (thread_id, sha, name, type, size, added_at)"
+                       " VALUES (?, ?, 'reply.txt', 'text/plain', 13, ?)", (thread_id, sha, NOW.isoformat()))
         inbox.save_draft(db, {"connection_id": "1", "kind": "email", "sender": "me@x.io", "to": "ana@acme.com",
                              "cc": "", "subject": "Retained draft", "body": "Unsent"})
         raw = b"Message-ID: <retained@test>\r\n\r\nRetained raw"
@@ -166,8 +168,13 @@ def test_version_12_upgrade_adds_only_receipts_and_preserves_records_files_and_g
         schema = [tuple(r) for r in db.execute(unchanged)]
         inbox.migrate(db)
         assert db.execute("PRAGMA user_version").fetchone()[0] == inbox.SCHEMA_VERSION
-        assert unmigrated(read()) == rows  # 13-17 add tables, and NULL columns on existing Drafts and People
-        assert db.execute("SELECT count(*) FROM composition_drafts WHERE thread_id IS NOT NULL").fetchone()[0] == 0
+        moved = ("staged_attachments", "composition_drafts")  # 35 moves the Thread's file onto a new Reply Draft
+        assert {k: v for k, v in unmigrated(read()).items() if k not in moved} == {
+            k: v for k, v in rows.items() if k not in moved}  # 13-17 add tables, and NULL columns on existing Drafts and People
+        assert unmigrated(read())["composition_drafts"][:len(rows["composition_drafts"])] == rows["composition_drafts"]
+        reply = inbox.reply_draft(db, inbox.get_thread(db, db.execute("SELECT id FROM threads").fetchone()[0]).id)
+        assert reply["body"] == "" and [s["name"] for s in inbox.staged(db, draft_id=reply["id"])] == ["reply.txt"]
+        assert db.execute("SELECT count(*) FROM staged_attachments WHERE thread_id IS NOT NULL").fetchone()[0] == 0
         names = {row[1] for row in schema}  # later migrations add tables too
         assert [tuple(r) for r in db.execute(unchanged) if r[1] in names] == schema
         assert files.attachment_path(db, sha).read_bytes() == b"retained file"
