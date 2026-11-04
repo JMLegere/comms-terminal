@@ -38,10 +38,14 @@ const ROUTE = {
     "2": "tasks.pick_second" },
   drafts: { n: "drafts.new", x: "drafts.delete", y: "drafts.copy", "ctrl-s": "draft.save", "ctrl-enter": "draft.send" },
   paused: { "r": "person.resume", "f": "person.finish" },
-  unattended: {},
+  unattended: { s: "organization.stage", v: "organization.value" }, // as its Organization page
+  unattended_person: { p: "person.stage", v: "person.value" }, // a Person in Fundraising or Talent (ADR 0016)
 };
 const KEYS = [...new Set(Object.values(ROUTE).flatMap(Object.keys))];
-const NAME = { threads: "Thread", tasks: "Task", drafts: "Draft", paused: "Paused", unattended: "Unattended" };
+const NAME = { threads: "Thread", tasks: "Task", drafts: "Draft", paused: "Paused", unattended: "Unattended",
+  unattended_person: "Unattended" };
+/** A row's key set: an Unattended row holds a Person or an Organization, which take different keys. */
+const kindOf = (row) => (row.kind === "unattended" && row.r?.person_id ? "unattended_person" : row.kind);
 /** "thread.reply_sender" → "reply": a command as the bar and the dead-key toast name it. */
 export const verb = (command) => command.split(".")[1].replace("reply_sender", "reply").replace(/_/g, " ");
 /** The keys a row kind takes, as [key, label] pairs, for the bar and the dead-key toast. */
@@ -49,6 +53,7 @@ export const keysOf = (kind) => Object.entries(ROUTE[kind] ?? {}).filter(([k]) =
 
 /** Compact age, as the Console's when(): now, 5m, 3h, 2d, then a date. */
 export function when(iso, now = Date.now()) {
+  if (iso?.$dt) iso = iso.$dt; // the core tags datetimes ({ $dt }); a bare one read "undefined NaN"
   if (!iso) return "";
   const t = new Date(iso), secs = (now - t) / 1000;
   if (secs < 60) return "now";
@@ -255,7 +260,7 @@ export default class Today extends View {
     const r = row.r ?? {};
     const what = { threads: r.title, tasks: r.person ?? r.title, drafts: r.subject ?? r.title, paused: r.person,
       unattended: r.name ?? r.domain }[row.kind];
-    setShared("target", { col: "list", label: `${NAME[row.kind]} · ${what ?? ""}`, keys: [["enter", "open"], ...keysOf(row.kind)] });
+    setShared("target", { col: "list", label: `${NAME[row.kind]} · ${what ?? ""}`, keys: [["enter", "open"], ...keysOf(kindOf(row))] });
   }
 
   enter(cx) {
@@ -285,7 +290,8 @@ export default class Today extends View {
     if (c === "enter") return this.enter(cx);
     if (c === "focus_entry") return this.target();
     if (KEYS.includes(c)) { // a key goes to the row's own kind; one it does not take says what that row takes
-      const kind = this.rows()[this.at]?.kind;
+      const row = this.rows()[this.at];
+      const kind = row && kindOf(row);
       const to = kind && ROUTE[kind][c];
       if (to) return run(to);
       if (kind) toast(`${c}: ${NAME[kind]} rows take ${keysOf(kind).map(([k, l]) => `${k} ${l}`).join(" · ") || "enter"}`);

@@ -162,6 +162,20 @@ Feature: App
       | Paused     | forward      |
       | Unattended | done         |
 
+  @FR-PL-27
+  Scenario Outline: On Today, an Unattended row takes its own Stage and Value keys
+    Given Today in the App with an Unattended "<holder>" row selected
+    When Jeremy presses "<key>"
+    Then the App runs "<command>"
+    And the row's last message reads as an age, not "undefined NaN"
+
+    Examples:
+      | holder       | key | command            |
+      | Person       | p   | person.stage       |
+      | Person       | v   | person.value       |
+      | Organization | s   | organization.stage |
+      | Organization | v   | organization.value |
+
   @AS-CONF-1 @FR-CONF-1
   Scenario: On Today, a Thread key still acts on a selected Thread row
     Given Today in the App with a Thread row selected, then a "Thread" row

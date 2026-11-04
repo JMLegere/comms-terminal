@@ -495,6 +495,29 @@ def today_thread_row_done(app):
     assert acts == [{"method": "command.inbox.act", "params": {"thread_id": "thread-1", "action": {"$dc": "Done", "f": {}}}}]
 
 
+@given(parsers.parse('Today in the App with an Unattended "{holder}" row selected'))
+def app_today_unattended(app, holder):
+    app.holder = holder
+
+
+@when(parsers.parse('Jeremy presses "{key}"'))
+def press_key_on_unattended(app, key):
+    script = Path(__file__).resolve().parents[1] / "app_today_keys_view.mjs"
+    result = subprocess.run(["node", "--experimental-vm-modules", str(script), app.holder, key],
+                            capture_output=True, text=True, timeout=10, check=True)
+    app.today = json.loads(result.stdout)
+
+
+@then(parsers.parse('the App runs "{command}"'))
+def today_runs(app, command):
+    assert app.today["ran"] == [command] and app.today["toasts"] == [], app.today
+
+
+@then('the row\'s last message reads as an age, not "undefined NaN"')
+def today_unattended_age(app):
+    assert app.today["age"] == "3d", app.today
+
+
 def shell_view(case):
     script = Path(__file__).resolve().parents[1] / "app_shell_view.mjs"
     result = subprocess.run(["node", "--experimental-vm-modules", str(script), case],
