@@ -288,11 +288,11 @@ Feature: App
     When Jeremy presses a on it
     Then the card unfolds with its reply row open on the saved words, To filled from the Thread
 
-  @AS-CONF-16 @FR-CONF-10
+  @AS-CONF-16 @FR-CONF-10 @FR-UD-6
   Scenario: Enter on an email Task opens its Draft where it is edited
     Given email Tasks in the App with a Reply Draft and with a New Thread Draft
     When Jeremy presses Enter on each
-    Then the Reply Draft opens in its Thread's reply box and the New Thread Draft's editor takes the keyboard
+    Then the Reply Draft shows in place as its Thread with the Composer taking the keyboard, and the New Thread Draft's editor takes the keyboard
 
   @AS-CONF-16 @FR-CONF-10
   Scenario: Skipping a Task can be undone and the next Task is selected

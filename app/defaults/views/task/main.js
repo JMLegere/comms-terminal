@@ -2,7 +2,7 @@
 // Task (call script and voicemail, LinkedIn move, letter, If paths, Action, Enroll, flags with their guidance), the
 // hint line, and the properties column (task, enrollment, next, person, organization) with its Context sections.
 // An email Task with a New Thread Draft shows the Draft editor in place; Enter (open) focuses it, and on a Reply
-// Draft opens its Thread's reply box (D110). Element focus: the Task is the detail column's one element; j/k scroll
+// Draft shows its Thread in place with the Composer taking the keyboard (decision #144, FR-UD-6). Element focus: the Task is the detail column's one element; j/k scroll
 // it a page (its guidance and properties are lines, not a list), Enter opens it as above.
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
@@ -98,18 +98,11 @@ export default class Task extends View {
     const d = this.pane?.draft;
     if (!d) return toast("This Task has no Draft.");
     if (!d.thread_id) return run("draft.edit");
-    cx.spawn(async () => {
-      try {
-        const th = (await call("thread.view", { thread_id: d.thread_id })).view.thread, v = th?.f ?? th;
-        const view = v.status_detail === "IGNORED" ? "ignored" : { TODO: "todo", SNOOZED: "snoozed", DONE: "done" }[v.status] ?? "todo";
-        setShared("thread", d.thread_id);
-        run(`nav.${view}`);
-        run("thread.show");
-        run("thread.open_reply");
-      } catch (e) {
-        toast(String(e), "error");
-      }
-    });
+    setShared("detail", "thread"); // the Tasks page stays; a move to another Task brings the task pane back
+    setShared("thread", d.thread_id);
+    setShared("focus", "detail");
+    run("thread.show");
+    run("thread.open_reply");
   }
 
   render() {

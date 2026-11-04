@@ -565,3 +565,43 @@ def test_an_open_task_draft_shows_a_newer_stored_copy_without_unsaved_typing(tmp
 
     run(Console(path), [scenario], size=(187, 40))
     assert seen["shown"] == "an agent's newer words"
+
+
+def test_enter_on_a_task_with_a_reply_draft_opens_it_in_place(tmp_path):
+    """FR-UD-6 (decision #144): the Tasks page stays; the Reply Draft shows as its Thread with the Composer open on
+    it, and moving to another Task brings the task pane back."""
+    from comms_terminal.tui import ReplyBox, TaskPane, ThreadView
+    path, ids = seeded(tmp_path)
+    db = inbox.connect(path)
+    s = sq.create_sequence(db, "Email first")
+    sq.save_step(db, sq.add_step(db, s, "email"), subject="Hello {first_name}", body="Hi {first_name}", needs_edit=0)
+    for name in ("Ana Ruiz", "Mia Chen"):
+        sq.enroll(db, next(p["id"] for p in inbox.people(db) if p["name"] == name), s)
+    tasks = sq.tasks_due(db)
+    ana = next(t for t in tasks if t["person"] == "Ana Ruiz")
+    db.execute("UPDATE composition_drafts SET thread_id = ? WHERE id = ?", (ids["ana"], ana["draft_id"]))  # a reply Step
+    db.commit()
+    seen = {}
+
+    async def scenario(app, pilot):
+        app.main.go("tasks")
+        await pilot.pause()
+        page = app.main.current
+        table = page.query_one(DataTable)
+        table.move_cursor(row=[t and t["id"] for t in page.items].index(ana["id"]))
+        table.focus()
+        await pilot.pause()
+        await pilot.press("enter")
+        for _ in range(5):
+            await pilot.pause()
+        tv = app.main.thread_view
+        seen["in place"] = (app.main.current is page, isinstance(tv, ThreadView) and tv.thread_id,
+                            tv is not None and tv.query_one(ReplyBox).has_class("open"))
+        table.focus()
+        table.move_cursor(row=next(i for i, t in enumerate(page.items) if t and t["id"] != ana["id"]))
+        await pilot.pause()
+        seen["back"] = bool(app.main.query_one("#thread").query(TaskPane))
+
+    run(Console(path), [scenario], size=(187, 40))
+    assert seen["in place"] == (True, ids["ana"], True)
+    assert seen["back"]

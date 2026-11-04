@@ -49,12 +49,11 @@ if (kase === "join") { // D95: o toasts the link; Ctrl+click opens it
   out.selected = [state.draft, state.detail, state.task ?? null];
   task.load(cx); await settle();                          // a change arrives: the Task view reloads
   out.after = [state.draft, state.detail];
-} else if (kase === "task-enter") { // D110
+} else if (kase === "task-enter") { // FR-UD-6: a Reply Draft in place, no page change
   const Task = await load("task");
-  answers["thread.view"] = { view: { thread: { f: { status: "TODO", status_detail: "NEW_REPLY" } } } };
   make(Task, { pane: { draft: { id: "d1", thread_id: "t9" } } }).open(cx);
   await settle();
-  out.reply = ran.splice(0); out.thread = state.thread;
+  out.reply = ran.splice(0); out.thread = state.thread; out.detail = state.detail; out.focus = state.focus;
   make(Task, { pane: { draft: { id: "d2", thread_id: null } } }).open(cx);
   out.fresh = ran.splice(0);
 } else if (kase === "undo") { // D111

@@ -2504,8 +2504,12 @@ class ThreadView(Horizontal):
             yield Static(classes="detailtext")
             yield from context_sections()
 
+    reply_on_mount = False  # a Reply Draft shown from a list, with its Composer open on it (Tasks page)
+
     def on_mount(self):
         self.refresh_data(opened=True)
+        if self.reply_on_mount:
+            self.reply("all")
 
     def retarget(self, thread_id) -> bool:
         """Show another Thread in this pane without remounting it (opening a Thread stays fast); False when
@@ -5144,9 +5148,12 @@ class TasksPage(Page):
             return None
         return self.items[min(self.query_one(DataTable).cursor_row, len(self.items) - 1)]
 
+    replying = None  # the Task whose Reply Draft shows here as its Thread, with the Composer open (decision #144)
+
     def show_selected(self):
         t = self.selected()
-        showing = f"task:{t['id']}:{t['draft_id']}:{t['flag']}" if t else "task:none"
+        reply = bool(t) and t["id"] == self.replying
+        showing = f"task:{t['id']}:{t['draft_id']}:{t['flag']}:{reply}" if t else "task:none"
         view = self.app.main.draft_view
         if self.app.main.showing == showing:
             if view and t and view.draft_id == t["draft_id"]:  # follow a newer stored copy, as the Drafts list does
@@ -5164,6 +5171,10 @@ class TasksPage(Page):
         if draft and draft["thread_id"] is None:
             self.app.selected_draft = draft["id"]
             pane.mount(TaskDraftView(draft, t))
+        elif reply and draft:
+            tv = ThreadView(draft["thread_id"])
+            tv.reply_on_mount = True
+            pane.mount(tv)
         else:
             pane.mount(TaskPane(t))
 
@@ -5188,8 +5199,9 @@ class TasksPage(Page):
         if not t:
             return
         draft = inbox.get_draft(self.app.db, t["draft_id"]) if t["draft_id"] else None
-        if draft and draft["thread_id"]:
-            self.app.main.open_reply(draft["thread_id"])
+        if draft and draft["thread_id"]:  # in place, as the Drafts page shows a Reply Draft (FR-UD-6)
+            self.replying = t["id"]
+            self.show_selected()
         elif draft:
             view = self.app.main.draft_view
             if view is not None and view.query(DraftConnection):
@@ -6682,15 +6694,6 @@ class MainScreen(Screen):
             return
         self.stack.append(factory)
         self._show()
-
-    def open_reply(self, thread_id):
-        """A reply Draft's Thread, selected, with its reply box open on the Draft (Drafts and Tasks pages)."""
-        self.open_thread(thread_id)
-
-        def reply():
-            if isinstance(self.current, ThreadsPage):
-                self.current.action_reply("all")
-        self.app.call_after_refresh(lambda: self.app.call_after_refresh(reply))
 
     def open_thread(self, thread_id):
         """Show a Thread where it lives: its Status view, selected, in the thread pane."""
