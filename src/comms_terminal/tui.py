@@ -171,7 +171,7 @@ DataTable > .datatable--header { background: #f9f5d7; color: #928374; }
 .mlines { margin: 0 0 1 0; }
 .mline { width: 1fr; text-wrap: nowrap; text-overflow: ellipsis; }
 .card .msg { background: #f9f5d7; }
-.msg.react-selected { border-left: outer #45707a; background: #eee0b7; padding-left: 1; }
+.msg.react-selected { border-left: outer #45707a; background: #eee0b7; padding: 1 2 1 1; }  /* full shorthand: Textual resets the other sides of a lone padding-left */
 .reaction-chips, .reaction-choices, .reaction-feedback { height: auto; }
 .reaction-chips, .reaction-feedback { margin-top: 1; }
 .composer { height: auto; border: round #a89984; background: #f9f5d7; padding: 0 1; margin: 1 2 1 0; }
