@@ -208,3 +208,27 @@ def test_unchanged_vendored_crates_keep_their_date_so_cargo_reuses_them(tmp_path
     vendored = (m.data / "src" / "app" / "vendor" / "crate.rs").stat().st_mtime
     launcher = (m.data / "src" / "deploy" / "comms-terminal-app").stat().st_mtime
     assert vendored == int(git(m.repo, "log", "-1", "--format=%ct", m.v1)) and launcher > vendored
+
+
+def test_restart_starts_afresh_after_the_app_and_its_launcher_exit_and_switches(tmp_path):
+    m = Mani(tmp_path)
+    m.service(m.v1)
+    m.launch()
+    m.service(m.v2)
+    assert m.launch("--prepare").returncode == 0  # v2 staged while "open"
+    app = subprocess.Popen(["sh", "-c", "sleep 60; true", "comms-terminal-app"])  # the open App
+    old = subprocess.Popen(["sh", "-c", "sleep 60; true", "comms-terminal-app-launch"])  # an older launcher's loop
+    (m.data / "launch.pid").write_text(str(old.pid))
+    r = m.launch("--restart", str(app.pid), str(old.pid))  # Restart App (window.rs restart)
+    assert r.returncode == 0 and m.file("runs") == ["run", m.v1]  # returns at once; nothing opens yet
+    app.kill()
+    app.wait()
+    time.sleep(1)
+    assert m.file("runs") == ["run", m.v1]  # still waiting for the launcher that opened the window
+    old.kill()
+    old.wait()
+    for _ in range(50):
+        if m.file("runs") == ["run", m.v1, "run", m.v2]:
+            break
+        time.sleep(0.2)
+    assert m.file("runs") == ["run", m.v1, "run", m.v2] and m.current() == f"builds/{m.v2}"  # FR-UPD-4
