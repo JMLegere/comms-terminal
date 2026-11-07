@@ -62,7 +62,8 @@ def test_every_query_answers_on_the_demo_data(demo_core):
               "task_id": first("SELECT id FROM tasks WHERE state = 'DUE'"), "since": "2000-01-01",
               "enrollment_id": first("SELECT id FROM enrollments"),
               "keep": first("SELECT id FROM persons"), "value": "a", "kind": "email", "drop": first("SELECT id FROM persons ORDER BY id DESC"),
-              "id": first("SELECT id FROM organizations"), "uid": "no-such-event", "step_id": first("SELECT id FROM sequence_steps"), "fields": {}, "body": "", "voicemail": "",  # today.side: kind "email" reads as an Organization row
+              "id": first("SELECT id FROM organizations"), "uid": "no-such-event", "step_id": first("SELECT id FROM sequence_steps"), "fields": {}, "body": "", "voicemail": "",
+              "options": {}, "today": False, "issue_id": first("SELECT id FROM issues"),  # today.side: kind "email" reads as an Organization row
               "values": {"connection_id": None, "kind": "email", "sender": "", "to": "", "cc": "", "subject": "", "body": ""}}
     answered = 0
     for name, (_, spec, summary) in core.QUERIES.items():

@@ -100,6 +100,10 @@ def _shell(core, db):
     return {"today": sum(len(t[k]) for k in ("threads", "tasks", "drafts", "paused", "unattended")),
             "drafts": db.execute("SELECT count(*) FROM composition_drafts").fetchone()[0],
             "organizations": db.execute("SELECT count(*) FROM organizations").fetchone()[0],
+            "issues": db.execute("SELECT count(*) FROM issues WHERE completed_at IS NULL AND canceled_at IS NULL"
+                                 ).fetchone()[0],
+            "actions": db.execute("SELECT count(*) FROM actions WHERE state IN ('scheduled', 'running', 'unknown')"
+                                  ).fetchone()[0],
             "channels": db.execute("SELECT count(*) FROM channels WHERE kind != 'mailbox'").fetchone()[0],
             "cases": dict(Counter(c["status"] for c in inbox.case_queue(db))),
             "pipelines": {p.lower(): rail_share(db, p) for p in pipeline.PIPELINES},
@@ -138,8 +142,12 @@ def _today(core, db):
     """Today: Todo Threads, due Tasks (an email Task with its Draft until sent) and the Drafts list, each item once
     (each Draft with `recipient`, as drafts.list),
     Paused Enrollments (each with `finishing`, the label of the reason it finishes as, or null) and Unattended
-    Organizations."""
+    Organizations; and today's Planned Issues (FR-UI-2) with the day's `issues_capacity`."""
+    from . import issues
     t = dict(_shared(core, "today", inbox.today, db))
+    day = issues.view(db, {"grouping": "none", "completed": "none"}, day_only=issues.today().isoformat())
+    t["issues"] = [i for _, i in issues.flat(day)]
+    t["issues_capacity"] = issues.capacity(db, issues.today())
     t["drafts"] = [d | {"recipient": inbox.recipient_names(db, d["to"] or "", d["kind"])} for d in t["drafts"]]
     t["paused"] = [e | {"finishing": sequences.REASON_LABEL[e["reason"]] if e["reason"] else None} for e in t["paused"]]
     return t
@@ -507,6 +515,46 @@ def _task_pane(core, db, task_id):
 def _tasks(core, db):
     """The Tasks page: due Tasks, then scheduled email Tasks in group "scheduled" with their `send_at` (#146)."""
     return sequences.tasks_due(db, scheduled=True)
+
+
+@query("issues.view", options="object", today="boolean")
+def _issues_view(core, db, options=None, today=False):
+    """The Issues page (FR-UI-1) as groups of Issues under the Display options given (each missing one at its
+    default), or with `today` today's Planned Issues (FR-UI-2); each Issue has its urgency, size, warnings and
+    `not_saved`, and a Planned day group its capacity. `rows` is the same list flattened, for a virtual list."""
+    from . import issues
+    v = issues.view(db, {"grouping": "none", "completed": "none"} if today else options,
+                    day_only=issues.today().isoformat() if today else None)
+    if today:
+        v["capacity"] = issues.capacity(db, issues.today())
+    v["rows"] = [{"kind": kind, **({"issue": x} if kind == "issue" else {k: x.get(k) for k in ("title", "count",
+                                                                                              "capacity")})}
+                 for kind, x in issues.flat(v)]
+    return v
+
+
+@query("issue.detail", issue_id="string")
+def _issue_detail(core, db, issue_id):
+    """One Issue as the Console's right pane draws it (issue_markup), as segment lines, and its team's statuses for
+    the status picker."""
+    from . import issues
+    from .tui import issue_markup
+    rows = [x for _, x in issues.flat(issues.view(db, {"grouping": "none", "completed": "month", "sub_issues": True}))
+            if x.get("id") == issue_id]
+    if not rows:
+        raise ApiError(-32602, f"no Issue {issue_id}")
+    i = rows[0]
+    statuses = [dict(r) for r in db.execute("SELECT id, name FROM issue_statuses WHERE team_id = ? ORDER BY position",
+                                            (i["team_id"],))]
+    return {"lines": segments(issue_markup(i)), "issue": i, "statuses": statuses}
+
+
+@query("actions.queue")
+def _actions_queue(core, db):
+    """The Action Queue page (FR-UI-4): Actions not yet confirmed or confirmed today, and what is scheduled to
+    leave in the next week, by day."""
+    from . import actions
+    return actions.queue(db)
 
 
 @query("task.markdown", task_id="string")

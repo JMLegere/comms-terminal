@@ -248,6 +248,7 @@ def add_parsers(sub):
         t.add_argument(kind, help="a Stage name" if kind == "stage" else "CAD, e.g. 90000 or 90k")
         t.add_argument("--at", help="backdate it: YYYY-MM-DD (seeding past Stages)")
     sub.add_parser("issues", help="Jeremy's Issues (ADR 0018): identifier, status, priority, Planned day, title")
+    sub.add_parser("actions", help="the Action Queue (ADR 0019): what is waiting to leave, by day")
     t = sub.add_parser("issue", help="one Issue as Markdown; flags change it on its Platform through the Action Queue"
                                      " (ADR 0019); `issue new` makes one")
     t.add_argument("id", help="an identifier (BIZ-1426), an Issue id, or new")
@@ -375,6 +376,11 @@ def run(a, db):
                           f"{i['planned_day'] or '-'}\t{i['title']}")
         elif a.cmd == "issue":
             print(issue_cmd(db, a), end="")
+        elif a.cmd == "actions":
+            from . import actions
+            for r in actions.queue(db):
+                print(f"{r['day']}\t{r['state']}\t{r['what']}\t{r['target'] or ''}\t{r['connection'] or ''}"
+                      + (f"\t{r['error']}" if r["error"] else ""))
         elif a.cmd == "urgency":
             if a.urgency_cmd == "set":
                 issues.set_urgency(db, a.name, a.value, now=clock.now())

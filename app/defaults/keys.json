@@ -286,5 +286,28 @@
   "view:overlay": {
     "tab": "overlay.tab",
     "shift-tab": "overlay.tab"
+  },
+  "page:issues": {
+    "j": "issues.next",
+    "k": "issues.prev",
+    "down": "issues.next",
+    "up": "issues.prev",
+    "enter": "issues.enter",
+    "p": "issue.plan",
+    "s": "issue.status",
+    "i": "issue.priority",
+    "e": "issue.estimate",
+    "d": "issue.due",
+    "t": "issue.title",
+    "o": "issue.open",
+    "n": "issues.new",
+    "v": "issues.display"
+  },
+  "page:actions": {
+    "j": "actions.next",
+    "k": "actions.prev",
+    "down": "actions.next",
+    "up": "actions.prev",
+    "enter": "actions.enter"
   }
 }

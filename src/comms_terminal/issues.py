@@ -419,3 +419,125 @@ def rollover(db, now: datetime | None = None) -> int:
             update(db, i["id"], {"state_id": slip["id"]}, now=now)
         moved += 1
     return moved
+
+
+# --- The Issues page (FR-UI-1): Linear's List with its Display options, plus Planned day and Urgency -----------
+
+GROUPINGS = ("planned_day", "status", "priority", "team", "project", "none")
+ORDERINGS = ("urgency", "priority", "due_date", "planned_day", "updated")
+COMPLETED = {"none": None, "day": 1, "week": 7, "month": 30}  # closed Issues shown, by days since they closed
+PROPERTIES = ("status", "priority", "estimate", "due_date", "planned_day", "project", "labels", "team")
+DISPLAY = {"grouping": "planned_day", "subgrouping": "none", "ordering": "urgency", "completed": "day",
+           "sub_issues": True, "empty_groups": False,
+           "properties": ["status", "priority", "estimate", "due_date", "planned_day"]}
+PRIORITY_ORDER = (1, 2, 3, 4, 0)  # Linear lists Urgent first and No priority last
+
+
+def display(options: dict | None) -> dict:
+    """Display options, each unknown or missing one at its default."""
+    out = dict(DISPLAY)
+    for k, v in (options or {}).items():
+        if k in ("grouping", "subgrouping") and v in GROUPINGS or k == "ordering" and v in ORDERINGS \
+                or k == "completed" and v in COMPLETED or k in ("sub_issues", "empty_groups") and isinstance(v, bool):
+            out[k] = v
+        elif k == "properties" and isinstance(v, list):
+            out[k] = [p for p in v if p in PROPERTIES]
+    return out
+
+
+def _day_title(d: str, day: date) -> str:
+    x = date.fromisoformat(d)
+    rel = {0: "Today", 1: "Tomorrow"}.get((x - day).days)
+    return f"{rel} · {x:%a %b %-d}" if rel else f"{x:%a %b %-d}"
+
+
+def _group_key(i: dict, by: str, day: date, statuses: dict) -> tuple[tuple, str]:
+    """(sort key, title) of an Issue's group."""
+    if by == "planned_day":
+        return ((1, "") if not i["planned_day"] else (0, i["planned_day"]),
+                "Unplanned" if not i["planned_day"] else _day_title(i["planned_day"], day))
+    if by == "status":
+        s = statuses.get(i["state_id"]) or {"name": "No status", "position": 1e9, "type": "", "team_id": "~"}
+        return ((s.get("team_id") or "", s["position"], s["name"]), s["name"])
+    if by == "priority":
+        return ((PRIORITY_ORDER.index(i["priority"]),), PRIORITY_NAMES[i["priority"]].title() if i["priority"]
+                else "No priority")
+    if by == "team":
+        return ((i["data"].get("team_key") or "",), i["data"].get("team") or i["data"].get("team_key") or "No team")
+    if by == "project":
+        p = i["data"].get("project")
+        return ((p is None, p or ""), p or "No project")
+    return ((), "")
+
+
+def _order_key(i: dict, by: str):
+    if by == "urgency":
+        return (-i["urgency"], i["identifier"])
+    if by == "priority":
+        return (PRIORITY_ORDER.index(i["priority"]), -i["urgency"])
+    if by == "due_date":
+        return (i["due_date"] is None, i["due_date"] or "", -i["urgency"])
+    if by == "planned_day":
+        return (i["planned_day"] is None, i["planned_day"] or "", -i["urgency"])
+    return (-datetime.fromisoformat(i["updated_at"].replace("Z", "+00:00")).timestamp(),)  # newest change first
+
+
+def view(db, options: dict | None = None, now: datetime | None = None, day_only: str | None = None) -> dict:
+    """The Issues page as groups (and sub-groups) of Issues, each with its urgency, size, warnings and "Not saved";
+    a Planned day group carries its Day capacity. `day_only` keeps one Planned day (Today's section)."""
+    now = now or clock.now()
+    o, day = display(options), today(now)
+    c, warns = coefficients(db), warnings(db, now)
+    statuses = {r["id"]: dict(r) for r in db.execute("SELECT * FROM issue_statuses")}
+    keep = COMPLETED[o["completed"]]
+    shown = []
+    for i in issues(db):
+        closed = i["completed_at"] or i["canceled_at"]
+        if closed and (keep is None or (now - datetime.fromisoformat(closed.replace("Z", "+00:00"))).days >= keep):
+            continue
+        if not o["sub_issues"] and i["data"].get("parent"):
+            continue
+        if day_only is not None and i["planned_day"] != day_only:
+            continue
+        shown.append(i | {"urgency": urgency(i, c, day), "size": size_hours(i), "warnings": warns.get(i["id"], [])})
+
+    def groups(rows, by, level):
+        found: dict = {}
+        for i in rows:
+            key, title = _group_key(i, by, day, statuses)
+            found.setdefault((key, title), []).append(i)
+        if o["empty_groups"] and by == "status":
+            for s in statuses.values():
+                found.setdefault(((s["team_id"], s["position"], s["name"]), s["name"]), [])
+        if o["empty_groups"] and by == "planned_day":
+            for n in range(7):
+                d = (day + timedelta(days=n)).isoformat()
+                found.setdefault(((0, d), _day_title(d, day)), [])
+        out = []
+        for (key, title), members in sorted(found.items(), key=lambda kv: kv[0][0]):
+            g = {"title": title, "count": len(members)}
+            if by == "planned_day" and key[0] == 0:
+                g["capacity"] = capacity(db, date.fromisoformat(key[1]), now)
+            if level == 0 and o["subgrouping"] != "none" and o["subgrouping"] != by:
+                g["groups"] = groups(members, o["subgrouping"], 1)
+            else:
+                g["issues"] = sorted(members, key=lambda i: _order_key(i, o["ordering"]))
+            out.append(g)
+        return out
+
+    return {"options": o, "groups": groups(shown, o["grouping"], 0) if o["grouping"] != "none" else
+            [{"title": "", "count": len(shown), "issues": sorted(shown, key=lambda i: _order_key(i, o["ordering"]))}],
+            "today": day.isoformat()}
+
+
+def flat(v: dict) -> list[tuple[str, dict]]:
+    """The view's rows in order: ("group", g), ("subgroup", g), ("issue", i)."""
+    out = []
+    for g in v["groups"]:
+        if g["title"]:
+            out.append(("group", g))
+        for s in g.get("groups", []):
+            out.append(("subgroup", s))
+            out += [("issue", i) for i in s["issues"]]
+        out += [("issue", i) for i in g.get("issues", [])]
+    return out

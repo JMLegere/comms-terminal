@@ -41,7 +41,7 @@ from textual.widgets import DataTable, DirectoryTree, Input, OptionList, Static,
 from textual.widgets.option_list import Option
 from textual.worker import WorkerCancelled, get_current_worker
 
-from . import calendar as cal, clock, files, gcal, inbox, pipeline, render, sequences
+from . import actions, calendar as cal, clock, files, gcal, inbox, issues, pipeline, render, sequences
 from .health import problem
 from .icons import ICON
 from .platforms import FORMATS, PLATFORMS
@@ -130,7 +130,7 @@ Page { height: 1fr; }
 .todaypane DataTable { height: auto; max-height: 30vh; }
 #todaythreads DataTable { max-height: 50vh; }
 .todaypane.fill, .todaypane.fill Page { height: 1fr; }
-#todaythreads.fill DataTable, #todaytasks.fill DataTable, #todaydrafts.fill DataTable, #todaypaused.fill DataTable, #todayorgs.fill DataTable {
+#todaythreads.fill DataTable, #todaytasks.fill DataTable, #todayissues.fill DataTable, #todaydrafts.fill DataTable, #todaypaused.fill DataTable, #todayorgs.fill DataTable {
     height: 1fr; max-height: 100%; }
 .todaypane #legend, .todaypane #below { display: none; }
 .todaypane #table { margin-top: 0; }
@@ -490,6 +490,12 @@ HELP = [  # (group, [(keys, what it does)]) — the full key map; Gmail-style wh
                ("enter", "an email Task: edit its Draft, or open its Thread's reply box"),
                ("p", "open the person"), ("y", "copy the Task and its person as Markdown for an agent"),
                ("1 / 2", "an If that asks you (also on a Person page): take its first or second path")]),
+    ("Issues", [("p", "plan for a day: today, tomorrow, mon…sun, YYYY-MM-DD or none (stays here; never sent)"),
+                ("s / i", "status / priority (to Linear through the Action Queue)"),
+                ("e / d / t", "estimate in points (1 point = 30 minutes) / due date / title"),
+                ("n", "new Issue in a team"), ("o", "open in Linear"), ("v", "display: group, order, completed, properties"),
+                ("z", "undo the last change here (the old value goes back to Linear)")]),
+    ("Action Queue", [("enter", "open what an Action changes; rows show scheduled, running, refused or unknown")]),
     ("Sequences", [("enter", "move from a Sequence to its Steps (esc back)"), ("n", "new Sequence; in Steps, a Step after the selected one, or on the selected heading's path (✓ ✗ On start On completion)"),
                    ("a", "archive a Sequence (asks about its live Enrollments), or restore an archived one"),
                    ("x", "delete an unused Sequence, or a Step (Enrollments on it move on; z undoes)"),
@@ -791,6 +797,11 @@ class Rail(OptionList):
             icon_name, color = VIEW_ICON[name]
             opts.append(item(f"cases:{i}", icon_name, name, case_counts[name], color))
         due = len(sequences.tasks_due(db))
+        open_issues = db.execute("SELECT count(*) FROM issues WHERE completed_at IS NULL AND canceled_at IS NULL").fetchone()[0]
+        waiting = db.execute("SELECT count(*) FROM actions WHERE state IN ('scheduled', 'running', 'unknown')"
+                             ).fetchone()[0]  # what has yet to reach its Platform
+        opts += [gap, header("issues", "work"), item("issues", "issues", "Issues", open_issues or ""),
+                 item("actions", "actions", "Action Queue", waiting or "")]
         opts += [gap, header("sequence", "playbook"), item("tasks", "tasks", "Tasks", due or ""),
                  item("sequences", "sequence", "Sequences", sum(1 for q in sequences.sequences(db) if not q["archived_at"]))]
         opts += [gap, header("pipeline", "pipeline")] + [
@@ -6021,7 +6032,7 @@ class TodayPage(Page):
     TITLE = f"{ICON['today']} today"
     RAIL = "today"
     BINDINGS = [Binding("tab", "next_list", show=False)]
-    PANES = ("todaythreads", "todaytasks", "todaydrafts", "todaypaused", "todayorgs")
+    PANES = ("todaythreads", "todaytasks", "todayissues", "todaydrafts", "todaypaused", "todayorgs")
 
     def __init__(self):
         super().__init__()
@@ -6029,6 +6040,7 @@ class TodayPage(Page):
         threads.fixed_view, threads.today = 0, True
         self.threads, self.tasks = threads, TasksPage()
         self.tasks.today = True
+        self.issues = IssuesPage(today=True)
         self.drafts = DraftsPage()
         self.paused, self.orgs = PausedPage(), UnattendedPage()
         for page in self.lists:
@@ -6037,7 +6049,7 @@ class TodayPage(Page):
 
     @property
     def lists(self):
-        return [self.threads, self.tasks, self.drafts, self.paused, self.orgs]
+        return [self.threads, self.tasks, self.issues, self.drafts, self.paused, self.orgs]
 
     @property
     def active_list(self):
@@ -6085,6 +6097,8 @@ class TodayPage(Page):
         elif page is self.tasks:
             late = sum(1 for t in page.items if t and t["group"] == "overdue")
             title = pill(f"{ICON['tasks']} tasks · {n}", "blue") + (f" [b #c14a4a]{late} overdue[/]" if late else "")
+        elif page is self.issues:  # today's Planned Issues and the day's capacity (FR-UI-2)
+            title = pill(f"{ICON['issues']} issues · {n}", "blue") + " " + capacity_markup(getattr(page, "capacity", None))
         elif page is self.drafts:
             title = pill(f"{ICON['edited']} drafts · {n}", "blue")
         elif page is self.paused:
@@ -6165,10 +6179,404 @@ class TodayPage(Page):
             self.enter(target, 1)
 
 
+# --- Issues and the Action Queue (ADR 0018, ADR 0019; PRD FR-UI-1, FR-UI-2, FR-UI-4) ---------------------------
+
+ISSUE_DISPLAY = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "comms-terminal" / "issues.json"
+PROPERTY_LABEL = {"status": "Status", "priority": "Priority", "estimate": "Estimate", "due_date": "Due",
+                  "planned_day": "Planned", "project": "Project", "labels": "Labels", "team": "Team"}
+
+
+def issue_display() -> dict:
+    """The Issues page's Display options, kept on this machine (G14)."""
+    try:
+        return issues.display(json.loads(ISSUE_DISPLAY.read_text()))
+    except (OSError, ValueError):
+        return issues.display(None)
+
+
+def save_issue_display(options: dict) -> None:
+    try:
+        ISSUE_DISPLAY.parent.mkdir(parents=True, exist_ok=True)
+        ISSUE_DISPLAY.write_text(json.dumps(options, indent=1))
+    except OSError:
+        pass  # a read-only home keeps the options for this session only
+
+
+def capacity_markup(cap: dict | None) -> str:
+    if not cap:
+        return ""
+    over = cap["used"] > cap["capacity"]
+    return f"[{PALETTE['red'] if over else '#928374'}]{cap['used']:g} of {cap['capacity']:g} h[/]"
+
+
+def issue_cell(i: dict, prop: str) -> str:
+    grey = "#928374"
+    if prop == "status":
+        return escape(i.get("state_name") or "")
+    if prop == "priority":
+        return {1: f"[{PALETTE['red']}]urgent[/]", 2: "high", 3: "medium", 4: f"[{grey}]low[/]"}.get(i["priority"], "")
+    if prop == "estimate":
+        return "" if i["estimate"] is None else f"{i['estimate']:g}p"
+    if prop == "due_date":
+        return escape(i["due_date"] or "")
+    if prop == "planned_day":
+        return escape(i["planned_day"] or "")
+    if prop == "labels":
+        return escape(", ".join(i["data"].get("labels", [])))
+    if prop == "team":
+        return escape(i["data"].get("team_key") or "")
+    return escape(i["data"].get(prop) or "")
+
+
+def issue_markup(i: dict) -> str:
+    """One Issue in the right pane: its fields, warnings, a refused change, the keys, and its description."""
+    grey, red = "#928374", PALETTE["red"]
+    lines = [f"[b]{escape(i['identifier'])}[/]  {escape(i['title'])}", ""]
+    for k in ("status", "priority", "estimate", "due_date", "planned_day", "project", "labels", "team"):
+        value = issue_cell(i, k)
+        if value:
+            lines.append(f"[{grey}]{PROPERTY_LABEL[k]}[/]  {value}")
+    lines.append(f"[{grey}]Size[/]  {i['size']:g} h · [{grey}]Urgency[/]  {i['urgency']:.1f}")
+    for w in i["warnings"]:
+        lines.append(f"[{red}]{ICON['warn']} {escape(w)}[/]")
+    if i.get("not_saved"):
+        lines.append(f"[{red}]{escape(i['not_saved'])}[/]")
+    if i.get("url"):
+        lines.append(f"[link='{render.target(i['url'])}']{escape(i['url'])}[/link]")
+    lines += ["", f"[{grey}]p plan · s status · i priority · e estimate · d due · t title · n new · o open in Linear"
+                  " · v display · z undo[/]"]
+    if i.get("description"):
+        lines += ["", escape(i["description"])]
+    return "\n".join(lines)
+
+
+class IssuesPage(Page):
+    """Jeremy's Issues (FR-UI-1): Linear's List with its Display options, plus Planned day and Urgency. Today's
+    section (FR-UI-2) is this list kept to today's Planned day."""
+    TITLE = f"{ICON['issues']} issues"
+    RAIL = "issues"
+    KIND = "issues"
+    SIDE = f"{ICON['issues']} issue"
+    BINDINGS = [Binding("j", "down", "move", key_display="j/k"), Binding("k", "up", show=False),
+                Binding("p", "plan", "plan"), Binding("s", "status", "status"), Binding("i", "priority", show=False),
+                Binding("e", "estimate", show=False), Binding("d", "due", show=False), Binding("t", "title", show=False),
+                Binding("n", "new", "new"), Binding("o", "open_link", show=False), Binding("v", "display", "display"),
+                Binding("z", "undo_issue", show=False)]
+    today = False
+
+    def __init__(self, today: bool = False):
+        super().__init__()
+        self.today, self.items, self.last_action = today, [], None
+
+    def compose(self):
+        yield ClickTable(id="table", cursor_type="row", show_header=False)
+        yield Static(id="below")
+
+    def on_mount(self):
+        self.refresh_data()
+
+    def selectable_rows(self):
+        return [n for n, (kind, _) in enumerate(self.items) if kind == "issue"]
+
+    def focus_first(self):
+        table, rows = self.query_one(DataTable), self.selectable_rows()
+        table.focus()
+        if rows and table.cursor_row not in rows:
+            table.move_cursor(row=rows[0])
+        self.show_selected()
+
+    def view(self):
+        db = self.app.db
+        if self.today:
+            return issues.view(db, {"grouping": "none", "completed": "none"},
+                               day_only=issues.today().isoformat())
+        return issues.view(db, issue_display())
+
+    def refresh_data(self, select_id=None):
+        if not self.query(DataTable) or not self.on_screen:
+            return
+        table = self.query_one(DataTable)
+        keep = select_id or (self.selected() or {}).get("id")
+        v = self.view()
+        self.options = v["options"]
+        props = ["status", "planned_day"] if self.today else self.options["properties"]
+        rows = issues.flat(v)
+        shown = repr((self.size.width, props, rows))
+        rebuild = shown != getattr(self, "_shown", None)
+        if rebuild:
+            self._shown = shown
+            table.clear(columns=True)
+            table.add_columns("", "Issue", *[PROPERTY_LABEL[p] for p in props])
+        self.items = rows
+        if rebuild:
+            for kind, x in rows:
+                if kind == "issue":
+                    mark = f"[{PALETTE['red']}]{ICON['warn']}[/] " if x["warnings"] or x.get("not_saved") else ""
+                    table.add_row(f"[#928374]{escape(x['identifier'])}[/]", mark + escape(x["title"]),
+                                  *[issue_cell(x, p) for p in props])
+                else:
+                    indent = "" if kind == "group" else "  "
+                    table.add_row("", f"{indent}[b #7c6f64]{escape(x['title'].upper())}[/] [#928374]{x['count']}[/] "
+                                  + capacity_markup(x.get("capacity")), *[""] * len(props))
+            if not rows or not self.selectable_rows():
+                table.add_row("", "[#928374]No Issues here. They come from Linear: those assigned to Jeremy.[/]",
+                              *[""] * len(props))
+        table.show_cursor = bool(self.selectable_rows())
+        ids = [x["id"] if kind == "issue" else None for kind, x in rows]
+        row = ids.index(keep) if keep in ids else (self.selectable_rows() or [0])[0]
+        if rebuild or table.cursor_row != row:
+            table.move_cursor(row=row)
+        if self.today:
+            cap = issues.capacity(self.app.db, issues.today())
+            self.capacity = cap
+        else:
+            o = self.options
+            self.query_one("#below").update(
+                f"[#928374]grouped by {o['grouping'].replace('_', ' ')} · ordered by {o['ordering'].replace('_', ' ')}"
+                f" · v changes the display[/]")
+            self.app.main.query_one("#main").border_title = pill(self.TITLE, "blue")
+        if self.host is not None:
+            self.host.list_changed(self)
+        if self.active:
+            self.show_selected()
+
+    def selected(self):
+        if not self.items or not self.query(DataTable):
+            return None
+        row = self.query_one(DataTable).cursor_row
+        kind, x = self.items[min(row, len(self.items) - 1)]
+        return x if kind == "issue" else None
+
+    def show_selected(self):
+        i = self.selected()
+        if i is None:
+            return
+        self.app.main.showing = f"issue:{i['id']}"
+        self.app.main.show_side(issue_markup(i))
+
+    def on_data_table_row_highlighted(self, event):
+        event.stop()
+        if self.active:
+            self.show_selected()
+
+    def action_down(self):
+        rows, table = self.selectable_rows(), self.query_one(DataTable)
+        later = [r for r in rows if r > table.cursor_row]
+        if later:
+            table.move_cursor(row=later[0])
+
+    def action_up(self):
+        rows, table = self.selectable_rows(), self.query_one(DataTable)
+        earlier = [r for r in rows if r < table.cursor_row]
+        if earlier:
+            table.move_cursor(row=earlier[-1])
+
+    def change(self, i, fields, what):
+        try:
+            self.last_action = issues.update(self.app.db, i["id"], fields, now=clock.now())
+        except (KeyError, ValueError) as e:
+            self.app.notify(str(e.args[0] if e.args else e), severity="error")
+            return
+        self.app.notify(f"{i['identifier']}: {what}. Linear updates in a moment · z undoes")
+        self.refresh_data(i["id"])
+
+    def action_plan(self):
+        i = self.selected()
+        if i is None:
+            return
+
+        def go(text):
+            if text is None:
+                return
+            t = text.strip().lower()
+            day = {"today": issues.today(), "tomorrow": issues.today() + timedelta(days=1)}.get(t)
+            if day is None and t in ("mon", "tue", "wed", "thu", "fri", "sat", "sun"):
+                n = ("mon", "tue", "wed", "thu", "fri", "sat", "sun").index(t)
+                day = issues.today() + timedelta(days=(n - issues.today().weekday()) % 7 or 7)
+            try:
+                value = None if t == "none" else (day or date.fromisoformat(t)).isoformat()
+                issues.plan(self.app.db, i["id"], value, now=clock.now())
+            except ValueError:
+                return self.app.notify("A Planned day is YYYY-MM-DD, today, tomorrow, mon…sun, or none.", severity="error")
+            self.app.notify(f"{i['identifier']}: " + (f"planned for {value}" if value else "Unplanned"))
+            self.refresh_data(i["id"])
+        self.app.push_screen(Ask(f"Plan {i['identifier']} for", "today, tomorrow, mon…sun, YYYY-MM-DD, none"), go)
+
+    def action_status(self):
+        i = self.selected()
+        if i is None:
+            return
+        opts = [(r["id"], escape(r["name"])) for r in self.app.db.execute(
+            "SELECT id, name FROM issue_statuses WHERE team_id = ? ORDER BY position", (i["team_id"],))]
+        self.app.push_screen(Pick(f"Status of {i['identifier']}", opts),
+                             lambda sid: sid and self.change(i, {"state_id": sid}, "status changed"))
+
+    def action_priority(self):
+        i = self.selected()
+        if i is None:
+            return
+        opts = [(str(n), issues.PRIORITY_NAMES[n].title()) for n in issues.PRIORITY_ORDER]
+        self.app.push_screen(Pick(f"Priority of {i['identifier']}", opts),
+                             lambda n: n and self.change(i, {"priority": int(n)}, "priority changed"))
+
+    def ask_field(self, field, label, hint, parse):
+        i = self.selected()
+        if i is None:
+            return
+
+        def go(text):
+            if text is None:
+                return
+            try:
+                value = parse(text)
+            except ValueError:
+                return self.app.notify(f"{label}: {hint}", severity="error")
+            self.change(i, {field: value}, f"{label.lower()} changed")
+        self.app.push_screen(Ask(f"{label} of {i['identifier']}", hint), go)
+
+    def action_estimate(self):
+        self.ask_field("estimate", "Estimate", "whole points (1 point = 30 minutes), or none",
+                       lambda t: None if t.lower() == "none" else int(t))
+
+    def action_due(self):
+        self.ask_field("due_date", "Due date", "YYYY-MM-DD, or none",
+                       lambda t: None if t.lower() == "none" else date.fromisoformat(t).isoformat())
+
+    def action_title(self):
+        self.ask_field("title", "Title", "the new title", lambda t: t)
+
+    def action_new(self):
+        teams = self.app.db.execute("SELECT DISTINCT team_id, json_extract(data, '$.team_key') AS key FROM issues"
+                                    " WHERE key IS NOT NULL ORDER BY key").fetchall()
+        if not teams:
+            return self.app.notify("No team known yet: Issues arrive from Linear first.", severity="warning")
+
+        def titled(team_id):
+            if team_id is None:
+                return
+
+            def go(title):
+                if not title:
+                    return
+                import uuid
+                try:
+                    self.last_action = issues.create(self.app.db, str(uuid.uuid4()), team_id, title, now=clock.now())
+                except ValueError as e:
+                    return self.app.notify(str(e), severity="error")
+                self.app.notify("New Issue: its identifier arrives when Linear confirms.")
+                self.refresh_data()
+            self.app.push_screen(Ask("New Issue", "title"), go)
+        self.app.push_screen(Pick("New Issue in team", [(t["team_id"], escape(t["key"])) for t in teams]), titled)
+
+    def action_open_link(self):
+        i = self.selected()
+        url = i and i.get("url")
+        self.app.notify(f"[link='{render.target(url)}']{escape(url)}[/link]" if url else "No Linear link yet.")
+
+    def action_undo_issue(self):
+        if self.last_action is None:
+            return self.app.notify("Nothing to undo here.")
+        try:
+            issues.undo(self.app.db, self.last_action, now=clock.now())
+        except ValueError as e:
+            return self.app.notify(str(e), severity="error")
+        self.last_action = None
+        self.app.notify("Undone: the old value goes back to Linear.")
+        self.refresh_data()
+
+    def action_display(self):
+        o = issue_display()
+        opts = [(f"grouping={g}", f"Group by {g.replace('_', ' ')}") for g in issues.GROUPINGS]
+        opts += [(f"subgrouping={g}", f"Sub-group by {g.replace('_', ' ')}") for g in issues.GROUPINGS]
+        opts += [(f"ordering={g}", f"Order by {g.replace('_', ' ')}") for g in issues.ORDERINGS]
+        opts += [(f"completed={g}", f"Completed: {g}") for g in issues.COMPLETED]
+        opts += [("sub_issues", ("Hide" if o["sub_issues"] else "Show") + " sub-issues"),
+                 ("empty_groups", ("Hide" if o["empty_groups"] else "Show") + " empty groups")]
+        opts += [(f"property={p}", ("Hide " if p in o["properties"] else "Show ") + PROPERTY_LABEL[p].lower())
+                 for p in issues.PROPERTIES]
+
+        def go(choice):
+            if not choice:
+                return
+            if choice in ("sub_issues", "empty_groups"):
+                o[choice] = not o[choice]
+            elif choice.startswith("property="):
+                p = choice.split("=", 1)[1]
+                o["properties"] = [x for x in o["properties"] if x != p] if p in o["properties"] else o["properties"] + [p]
+            else:
+                k, v = choice.split("=", 1)
+                o[k] = v
+            save_issue_display(issues.display(o))
+            self._shown = None
+            self.refresh_data()
+        self.app.push_screen(Pick("Display options", opts), go)
+
+
+class ActionQueuePage(TablePage):
+    """The Action Queue (FR-UI-4): Actions not yet confirmed or confirmed today, and what is scheduled to leave this
+    week (scheduled Drafts, coming Tasks, Enrollment starts), by day, as Lemlist's Outreach queue."""
+    TITLE = f"{ICON['actions']} action queue"
+    RAIL = "actions"
+    SIDE = f"{ICON['actions']} action"
+    COLUMNS = ("", "What", "Target", "Source", "Connection", "State")
+    EMPTY = "Nothing is waiting to leave."
+    STATE = {"scheduled": "#928374", "running": "#45707a", "confirmed": "#6c782e", "refused": "#c14a4a",
+             "unknown": "#b47109"}
+
+    def rows(self):
+        out, day = [], None
+        found = actions.queue(self.app.db)
+        per_day = {}
+        for r in found:
+            per_day.setdefault(r["day"], {}).setdefault(r["connection"] or "console", 0)
+            per_day[r["day"]][r["connection"] or "console"] += 1
+        for r in found:
+            if r["day"] != day:
+                day = r["day"]
+                counts = " · ".join(f"{escape(k)} {n}" for k, n in per_day[day].items())
+                out.append(({"header": day}, ("", f"[b #7c6f64]{date.fromisoformat(day):%a %b %-d}[/]",
+                                              f"[#928374]{counts}[/]", "", "", "")))
+            state = f"[{self.STATE.get(r['state'], '#928374')}]{r['state']}[/]"
+            out.append((r, (f"[#928374]{datetime.fromisoformat(r['at']).astimezone(sequences.LOCAL):%H:%M}[/]",
+                            escape(r["what"]), escape(r["target"] or ""), f"[#928374]{escape(r['source'] or '')}[/]",
+                            f"[#928374]{escape(r['connection'] or '')}[/]", state)))
+        return out
+
+    def show_selected(self):
+        r = self.selected()
+        if not r or "header" in r:
+            return
+        self.app.main.show_side(f"[b]{escape(r['what'])}[/]  {escape(r['target'] or '')}\n\n"
+                                f"[#928374]State[/]  {r['state']}\n[#928374]Source[/]  {escape(r['source'] or '')}\n"
+                                + (f"[#928374]Connection[/]  {escape(r['connection'])}\n" if r["connection"] else "")
+                                + (f"\n[{PALETTE['red']}]{escape(r['error'])}[/]" if r["error"] else ""))
+
+    def on_data_table_row_highlighted(self, event):
+        event.stop()
+        self.show_selected()
+
+    def refresh_data(self):
+        super().refresh_data()
+        self.show_selected()
+
+    def open(self, r):
+        if "header" in r:
+            return
+        if r["kind"] == "action" and r["source"] == "Issue":
+            page = IssuesPage()
+            self.app.main.open(lambda: page)
+            self.app.call_after_refresh(lambda: page.refresh_data(r["target_id"]))
+        elif r["kind"] in ("task", "draft"):
+            page = TasksPage() if r["kind"] == "task" else DraftsPage()
+            self.app.main.open(lambda: page)
+            self.app.call_after_refresh(lambda: page.refresh_data(select_id=r["target_id"]))
+
+
 # --- Calendar (ADR 0005) -------------------------------------------------------
 
 CAL_LINES = 4  # Event lines in a day cell; the rest show as +N
-CAL_COUNTS = (("task", "tasks"), ("snooze", "SNOOZED"), ("draft", "edited"), ("enrollment", "sequence"))
+CAL_COUNTS = (("task", "tasks"), ("snooze", "SNOOZED"), ("draft", "edited"), ("enrollment", "sequence"),
+              ("issue", "issues"))
 CAL_WEEKS = (26, 52)  # weeks rendered before and after today; the cursor reaching an edge widens it
 
 
@@ -6377,7 +6785,7 @@ def cal_line(i) -> str:
     if i["kind"] != "event":
         icon = dict(CAL_COUNTS)[i["kind"]]
         when = "" if i["all_day"] else f"{i['at']:%H:%M}  "
-        what = {"task": "Task", "snooze": "wakes", "draft": "sends", "enrollment": "starts"}[i["kind"]]
+        what = {"task": "Task", "snooze": "wakes", "draft": "sends", "enrollment": "starts", "issue": "planned"}[i["kind"]]
         return f"[{grey}]{when}{ICON[icon]} {what}[/]  {escape(i['title'])}"
     when = "all day" if i["all_day"] else f"{clock.local(i['start']):%H:%M}–{clock.local(i['end']):%H:%M}"
     state = {"NEEDS-ACTION": "unanswered", "TENTATIVE": "maybe", "DECLINED": "declined"}.get(i["state"], "")
@@ -6399,6 +6807,10 @@ def cal_open(app, i):
         main.open_thread(i["ref"])
     elif i["kind"] == "enrollment":
         main.open_person(i["ref"])
+    elif i["kind"] == "issue":  # a planned Issue opens on the Issues page (FR-UI-3)
+        page = IssuesPage()
+        main.open(lambda: page)
+        app.call_after_refresh(lambda: app.call_after_refresh(lambda: page.refresh_data(i["ref"])))
     else:  # a Task, or a scheduled send: its Task's when it is an email Task's (decision #146), else the Draft
         task = i.get("task") or (i["ref"] if i["kind"] == "task" else None)
         page = TasksPage() if task else DraftsPage()
@@ -6573,7 +6985,7 @@ class EventPage(Page):
 
 SECTIONS = {"today": TodayPage, "threads": ThreadsPage, "people": PeoplePage, "organizations": OrganizationsPage,
             "cases": CasesPage, "channels": ChannelsPage, "tasks": TasksPage, "sequences": SequencesPage,
-            "calendar": CalendarPage}
+            "calendar": CalendarPage, "issues": IssuesPage, "actions": ActionQueuePage}
 
 
 class MainScreen(Screen):

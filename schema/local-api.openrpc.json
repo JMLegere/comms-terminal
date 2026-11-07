@@ -7,6 +7,27 @@
  },
  "methods": [
   {
+   "name": "actions.queue",
+   "summary": "The Action Queue page (FR-UI-4): Actions not yet confirmed or confirmed today, and what is scheduled to leave in the next week, by day.",
+   "params": [
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
    "name": "address.complete",
    "summary": "The Console's To/Cc completion from local addresses: [ghost text, value Tab accepts], or null.",
    "params": [
@@ -2865,6 +2886,69 @@
    }
   },
   {
+   "name": "issue.detail",
+   "summary": "One Issue as the Console's right pane draws it (issue_markup), as segment lines, and its team's statuses for the status picker.",
+   "params": [
+    {
+     "name": "issue_id",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "issues.view",
+   "summary": "The Issues page (FR-UI-1) as groups of Issues under the Display options given (each missing one at its default), or with `today` today's Planned Issues (FR-UI-2); each Issue has its urgency, size, warnings and `not_saved`, and a Planned day group its capacity. `rows` is the same list flattened, for a virtual list.",
+   "params": [
+    {
+     "name": "options",
+     "required": true,
+     "schema": {
+      "type": "object"
+     }
+    },
+    {
+     "name": "today",
+     "required": true,
+     "schema": {
+      "type": "boolean"
+     }
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
    "name": "message.body",
    "summary": "A message's HTML with every remote fetch removed (FR-7).",
    "params": [
@@ -3934,7 +4018,7 @@
   },
   {
    "name": "today.page",
-   "summary": "Today: Todo Threads, due Tasks (an email Task with its Draft until sent) and the Drafts list, each item once (each Draft with `recipient`, as drafts.list), Paused Enrollments (each with `finishing`, the label of the reason it finishes as, or null) and Unattended Organizations.",
+   "summary": "Today: Todo Threads, due Tasks (an email Task with its Draft until sent) and the Drafts list, each item once (each Draft with `recipient`, as drafts.list), Paused Enrollments (each with `finishing`, the label of the reason it finishes as, or null) and Unattended Organizations; and today's Planned Issues (FR-UI-2) with the day's `issues_capacity`.",
    "params": [
     {
      "name": "origin",

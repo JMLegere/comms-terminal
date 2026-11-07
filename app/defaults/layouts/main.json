@@ -71,7 +71,9 @@
                 "organization": null,
                 "connection": null,
                 "event": null,
-                "case": null
+                "case": null,
+                "issues": "issues",
+                "actions": "actions"
               }
             },
             {
@@ -101,7 +103,10 @@
                 "organization": "organization",
                 "connection": "connection",
                 "event": "event",
-                "case": "case"
+                "case": "case",
+                "issues": "issue",
+                "actions": null,
+                "today:issue": "issue"
               }
             }
           ]
