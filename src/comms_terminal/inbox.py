@@ -27,7 +27,7 @@ from typing import Protocol, Sequence
 from . import clock, files, platforms
 from .writers import writer
 
-SCHEMA_VERSION = 36
+SCHEMA_VERSION = 37
 WAIT = timedelta(days=4)  # Waiting for them ends after this with no reply: back to Todo to follow up (#116)
 EMAIL_CONFIRMATION_PENDING = "Email confirmation pending; wait for its sent receipt before replying."
 MIGRATIONS = {  # version -> statement that upgrades an existing database to it
@@ -763,6 +763,12 @@ BEGIN
 END;
 PRAGMA legacy_alter_table = OFF;"""
 
+MIGRATIONS[37] = """CREATE TABLE modules (  -- each Module's setting for this Service; no row means off (ADR 0017)
+  id      TEXT PRIMARY KEY CHECK (id IN ('pipelines', 'sequences', 'cases')),
+  enabled INTEGER NOT NULL CHECK (enabled IN (0, 1))
+) STRICT;
+INSERT INTO modules (id, enabled) VALUES ('pipelines', 1), ('sequences', 1), ('cases', 1);"""
+
 
 class SendUnknown(SendFailed):
     """The provider may or may not have sent the message (timeout, lost response, crash before recording)."""
@@ -782,6 +788,10 @@ class StaleThreadSnapshot(ValueError):
 
 class DraftConflict(ValueError):
     """A newer saved Draft revision exists; stale edits must not overwrite it."""
+
+
+class ModuleDisabled(Exception):
+    """A Client call into a Module that is off for this Service (ADR 0017)."""
 
 
 @dataclass(frozen=True)
@@ -983,6 +993,49 @@ def migrate(db: sqlite3.Connection) -> None:
         db.execute(f"PRAGMA foreign_keys = {fk}")
 
 
+
+
+# --- Modules (GLOSSARY, ADR 0017) --------------------------------------------
+
+MODULES = {"pipelines": "Pipelines", "sequences": "Sequences", "cases": "Cases"}  # id -> name, in rail order
+
+
+def modules_on(db) -> set[str]:
+    """The Modules that are on for this Service; a Module with no row is off."""
+    return {r[0] for r in db.execute("SELECT id FROM modules WHERE enabled = 1")}
+
+
+def disabled(module: str) -> ModuleDisabled:
+    return ModuleDisabled(f"{MODULES[module]} is disabled on this Service. Turn it on in Settings › Modules.")
+
+
+def call_module(name: str, args=(), kwargs=None) -> str | None:
+    """The Module a Client call of writer `name` needs: its tag, or Cases for Act with Set Case."""
+    from .writers import MODULE_OF
+    if name == "inbox.act":
+        action = (kwargs or {}).get("action", args[1] if len(args) > 1 else None)
+        return "cases" if isinstance(action, SetCase) else None
+    return MODULE_OF.get(name)
+
+
+def admit(db, name: str, args=(), kwargs=None) -> None:
+    """Refuse a Client call into an off Module. Only the places Client calls enter run it; the Service's own
+    calls (ingestion pausing an Enrollment) go straight to the writer."""
+    module = call_module(name, args, kwargs)
+    if module and module not in modules_on(db):
+        raise disabled(module)
+
+
+@writer("write")
+def set_module(db, module: str, enabled: bool, *, now: datetime | None = None) -> bool:
+    """Turn one Module on or off for this Service; returns whether it was on, for undo."""
+    if module not in MODULES:
+        raise KeyError(f"module {module}")
+    with db:
+        was = module in modules_on(db)
+        db.execute("INSERT INTO modules (id, enabled) VALUES (?, ?)"
+                   " ON CONFLICT (id) DO UPDATE SET enabled = excluded.enabled", (module, int(bool(enabled))))
+    return was
 
 
 def get_thread(db, thread_id: int) -> Thread:
@@ -2746,7 +2799,7 @@ def is_sole_key(domain: str) -> bool:
     return domain.startswith("person-") and domain.endswith(".sole")
 
 
-@writer("write")
+@writer("write", module="cases")
 def set_case_description(db, case_id: int, description: str, *, now: datetime | None = None) -> None:
     with db:
         old = db.execute("SELECT description FROM cases WHERE id = ?", (case_id,)).fetchone()[0]
@@ -2816,7 +2869,7 @@ def rollup(details, order=CASE_VIEWS, empty="Todo") -> str:
     return next((v for v in order if any(d in VIEWS[v] for d in details)), empty)
 
 
-@writer("create")
+@writer("create", module="cases")
 def create_case(db, title: str, *, now: datetime | None = None) -> int:
     """A Case with no Threads yet (#120)."""
     with db:
@@ -2892,10 +2945,12 @@ def today(db, now: datetime | None = None) -> dict:
         "SELECT t.due_at FROM tasks t JOIN enrollments e ON e.id = t.enrollment_id"
         " WHERE t.state = 'DUE' AND e.state IN ('ACTIVE', 'FINISHING') ORDER BY t.due_at")
         if datetime.fromisoformat(r[0]).astimezone(sequences.LOCAL).date() > day]
+    on = modules_on(db)  # an off Module's panes are empty; with Sequences off, Task Drafts list as Drafts (ADR 0017)
     return {"threads": [t for t in queue(db, "Todo") if t["detail"] != REPLY_DRAFT],
-            "tasks": sequences.tasks_due(db, now),
-            "drafts": list_drafts(db, tasks=False), "paused": sequences.paused(db),
-            "unattended": pipeline.unattended(db),
+            "tasks": sequences.tasks_due(db, now) if "sequences" in on else [],
+            "drafts": list_drafts(db, tasks="sequences" not in on),
+            "paused": sequences.paused(db) if "sequences" in on else [],
+            "unattended": pipeline.unattended(db) if "pipelines" in on else [],
             "next_wake": wake, "next_task": later[0] if later else None}
 
 
@@ -2937,8 +2992,13 @@ def queue(db, view: str) -> list[dict]:
                     "case_id": r["case_id"], "until": r["follow_up_at"] or r["snoozed_until"], "who": label, "where": _where(r, identity), "last_at": r["last_at"],
                     "waiting_since": r["last_in"] or r["last_at"], "drafted": bool(r["drafted"])})
     if view == "Todo":
-        return sorted(out, key=lambda x: x["waiting_since"])
-    return sorted(out, key=lambda x: x["last_at"], reverse=True)
+        out.sort(key=lambda x: x["waiting_since"])
+    else:
+        out.sort(key=lambda x: x["last_at"], reverse=True)
+    if "cases" not in modules_on(db):  # Cases off: no Case headers in either Client (ADR 0017)
+        for t in out:
+            t["case_id"] = None
+    return out
 
 
 def _shaped(db, m: dict, platform, channel, lan) -> dict:
@@ -3001,14 +3061,15 @@ def thread_view(db, thread_id: int, files: tuple[str, int] | None = None) -> dic
             pid = db.execute("SELECT person_id FROM identities WHERE id = ?", (first,)).fetchone()[0]
             person = person_view(db, pid, every) if pid else None
         people, others, orgs = _participants(db, acts, every)
-        case = db.execute("SELECT title FROM cases WHERE id = ?", (t.case_id,)).fetchone() if t.case_id else None
+        cases_on = "cases" in modules_on(db)  # Cases off: no Case on the Thread page in either Client (ADR 0017)
+        case = db.execute("SELECT title FROM cases WHERE id = ?", (t.case_id,)).fetchone() if t.case_id and cases_on else None
         platform = platforms.PLATFORMS[ch["platform"]]
         msgs = [_shaped(db, m, platform, ch, files) for m in msgs]
         audit = [dict(r) for r in db.execute(
             "SELECT l.*, c.title AS case_title FROM audit_log l JOIN threads t ON t.id = l.thread_id"
             " LEFT JOIN cases c ON c.id = l.case_id WHERE COALESCE(t.merged_into, t.id) = ?"
-            " ORDER BY l.occurred_at, l.id", (thread_id,))]
-        return {"thread": t, "channel": dict(ch), "messages": msgs, "audit": audit, "person": person, "people": people,
+            " ORDER BY l.occurred_at, l.id", (thread_id,)) if cases_on or r["kind"] != "CASE"]
+        return {"thread": t, "cases_on": cases_on, "channel": dict(ch), "messages": msgs, "audit": audit, "person": person, "people": people,
                 "others": others, "organizations": orgs, "members": snapshot(db, thread_id)["_members"],
                 "link": next((m["link"] for m in reversed(msgs) if m["link"]), None),
                 "case": case["title"] if case else None, "where": _where(ch, None) if ch["kind"] != "mailbox" else "email"}

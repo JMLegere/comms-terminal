@@ -22,6 +22,7 @@ COMMANDS = {
     "inbox.act": "thread --status/--case",
     "inbox.add_channel_rule": "channel-rule add",
     "inbox.add_identity": "enroll --to",
+    "inbox.set_module": "module on",
     "inbox.block": "person block",
     "inbox.create_case": "case new",
     "inbox.create_sole_proprietorship": "enroll --org sole",
@@ -76,6 +77,10 @@ CONSOLE_ONLY = {
     "sequences.undelete_sequence": UNDO,
     "sequences.undo_task": UNDO,
 }
+# The Module each command needs (ADR 0017); `thread --case` needs Cases too. An off Module's command exits 3.
+CLI_MODULE = {"case": "cases", "enroll": "sequences", "enrollment": "sequences", "sequence": "sequences",
+              "step": "sequences", "task": "sequences", "tasks": "sequences", "pipeline": "pipelines"}
+DISABLED_EXIT = 3
 STATUSES = {"done": inbox.Done(), "wait": inbox.Wait(), "investigate": inbox.Investigate(),
             "ignore": inbox.Ignore(), "unignore": inbox.Unignore(), "snooze": None, "todo": None}
 TODO_DETAILS = {"created": "CREATED", "new-reply": "NEW_REPLY", "in-progress": "IN_PROGRESS"}
@@ -83,6 +88,11 @@ IDENTITY_KINDS = ("email", "slack_user", "phone")
 
 
 def add_parsers(sub):
+    m = sub.add_parser("module", help="Modules for this Service: list, or turn one on or off (ADR 0017)")
+    ms = m.add_subparsers(dest="module_cmd", required=True)
+    ms.add_parser("list", help="each Module and whether it is on")
+    for verb in ("on", "off"):
+        ms.add_parser(verb, help=f"turn a Module {verb}").add_argument("module", choices=list(inbox.MODULES))
     t = sub.add_parser("threads", help="list Threads in a Status view: id, status detail, who and where, title")
     t.add_argument("view", nargs="?", default="Todo", choices=list(inbox.VIEWS))
     t = sub.add_parser("thread", help="one Thread as Markdown, with its Attio and Tana context; --status or --case"
@@ -245,8 +255,13 @@ def add_parsers(sub):
 
 
 def run(a, db):
+    module = CLI_MODULE.get(a.cmd) or ("cases" if a.cmd == "thread" and a.case is not None else None)
     try:
-        if a.cmd == "threads":
+        if module and module not in inbox.modules_on(db):
+            raise inbox.disabled(module)
+        if a.cmd == "module":
+            print(module_cmd(db, a), end="")
+        elif a.cmd == "threads":
             for t in inbox.queue(db, a.view):
                 print(f"{t['id']}\t{t['detail']}\t{t['who']} · {t['where']}\t{t['title']}")
         elif a.cmd == "thread":
@@ -291,8 +306,19 @@ def run(a, db):
                 changes["body"] = sys.stdin.read()
             print(draft(db, a.id, changes, a.revision, a.connection, getattr(a, "thread", None),
                         getattr(a, "needs_edit", False)), end="")
+    except inbox.ModuleDisabled as e:
+        print(f"comms-terminal {a.cmd}: {e.args[0]}", file=sys.stderr)
+        raise SystemExit(DISABLED_EXIT) from e
     except (KeyError, ValueError, inbox.DraftConflict) as e:  # Refused and sequence_md.Invalid are ValueErrors
         raise SystemExit(f"comms-terminal {a.cmd}: {e.args[0] if e.args else e}") from e
+
+
+def module_cmd(db, a) -> str:
+    if a.module_cmd == "list":
+        on = inbox.modules_on(db)
+        return "".join(f"{m}\t{'on' if m in on else 'off'}\t{name}\n" for m, name in inbox.MODULES.items())
+    inbox.set_module(db, a.module, a.module_cmd == "on")
+    return f"{inbox.MODULES[a.module]} {a.module_cmd}\n"
 
 
 def thread_change(db, a) -> str:

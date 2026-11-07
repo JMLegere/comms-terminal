@@ -41,6 +41,7 @@ def _integer_keys_sql() -> str:
 
 
 UNDO = {
+    37: "DROP TABLE modules;",
     36: """PRAGMA foreign_keys = OFF; PRAGMA legacy_alter_table = ON;
 INSERT OR IGNORE INTO organizations (domain, name, created_at)
 SELECT 'person-' || p.id || '.sole', p.display_name, min(l.recorded_at) FROM pipeline_log l JOIN persons p ON p.id = l.person_id

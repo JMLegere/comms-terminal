@@ -33,6 +33,8 @@ export function toast(message: string, severity?: "information" | "warning" | "e
 
 /** keys.json as it stands: { "global": { "j": "threads.next" }, "page:<name>": { … } }. */
 export function keys(): Record<string, Record<string, string>>;
+/** The Module an App command belongs to (ADR 0017): "pipelines", "sequences", "cases", or null for Core. */
+export function moduleOf(command: string): string | null;
 /** The installed font families (Settings › Look). */
 export function fonts(): string[];
 /** settings.json as an object. */

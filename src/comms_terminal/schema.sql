@@ -429,3 +429,8 @@ CREATE TABLE applied_mutations (  -- each laptop write applied once, by its clie
   applied_at  TEXT NOT NULL,
   PRIMARY KEY (client_id, mutation_id)
 ) STRICT;
+
+CREATE TABLE modules (  -- each Module's setting for this Service; no row means off, so a new Service starts inbox-only
+  id      TEXT PRIMARY KEY CHECK (id IN ('pipelines', 'sequences', 'cases')),
+  enabled INTEGER NOT NULL CHECK (enabled IN (0, 1))
+) STRICT;

@@ -261,11 +261,13 @@ def items(db, start: date, end: date) -> list[dict]:
         when = _when(at)
         if when is not None and lo <= when < hi:
             out.append({"kind": kind, "at": when, "all_day": when.time() == time(), "title": title, "ref": ref, **extra})
+    from . import inbox
+    seq = "sequences" in inbox.modules_on(db)  # Sequences off: no Task or Enrollment items (ADR 0017)
     # ponytail: scans every row of these small tables; filter in SQL once they grow
     for t in db.execute("SELECT t.id, t.due_at, s.kind, p.display_name, q.name FROM tasks t"
                         " JOIN sequence_steps s ON s.id = t.step_id JOIN enrollments e ON e.id = t.enrollment_id"
                         " JOIN sequences q ON q.id = e.sequence_id JOIN persons p ON p.id = e.person_id"
-                        " WHERE t.state = 'DUE'"):
+                        " WHERE t.state = 'DUE' AND ?", (seq,)):
         add("task", t["due_at"], f"{t['kind']} · {t['display_name']} · {t['name']}", t["id"])
     for t in db.execute("SELECT id, title, coalesce(snoozed_until, follow_up_at) AS at FROM threads"
                         " WHERE status = 'SNOOZED' AND merged_into IS NULL"):
@@ -273,9 +275,9 @@ def items(db, start: date, end: date) -> list[dict]:
     for d in db.execute('SELECT id, subject, "to", send_at, task_id FROM composition_drafts WHERE send_at IS NOT NULL'):
         # an email Task's scheduled send opens its Task, which lists it (decision #146)
         add("draft", d["send_at"], d["subject"] or f"message to {d['to']}", d["id"],
-            **({"task": d["task_id"]} if d["task_id"] else {}))
+            **({"task": d["task_id"]} if d["task_id"] and seq else {}))
     for e in db.execute("SELECT e.id, e.starts_at, p.id AS person_id, p.display_name, q.name FROM enrollments e"
                         " JOIN persons p ON p.id = e.person_id JOIN sequences q ON q.id = e.sequence_id"
-                        " WHERE e.starts_at IS NOT NULL AND e.state != 'FINISHED'"):
+                        " WHERE e.starts_at IS NOT NULL AND e.state != 'FINISHED' AND ?", (seq,)):
         add("enrollment", e["starts_at"], f"{e['display_name']} starts {e['name']}", e["person_id"])
     return sorted(out, key=lambda i: (not i["all_day"], i["at"]))

@@ -23,4 +23,16 @@ for (const step of ["building", "ready", "failed"]) {
   out.update[step] = texts.filter((t) => ["Building in the background", "Ready · opens when you restart",
     "Failed to build · see Diagnostics", "Update now", "Try again", "Restart App"].includes(t));
 }
+// Settings › Modules (PRD 2026-11-07-modules, FR-MOD-13): the rows, and one switch's write and undo.
+state.modules = ["pipelines", "sequences"];
+texts.splice(0);
+v.modules({});
+out.modules = texts.filter((t) => ["Pipelines", "Sequences", "Cases", "On", "Off", "For this Service"].includes(t));
+calls.splice(0);
+toasts.splice(0);
+v.turn("sequences", "Sequences", false, cx);
+await new Promise((r) => setTimeout(r, 0));
+out.turned = calls.filter((c) => c.method.startsWith("command."));
+out.undo = state.undo;
+out.turnToasts = toasts.splice(0);
 console.log(JSON.stringify(out));

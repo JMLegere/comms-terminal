@@ -106,7 +106,8 @@ def _shell(core, db):
             "connections": [{"id": c["id"], "platform": c["platform"], "name": conn_name(c), "ok": health_ok(c),
                              "writes": (c["last_error"] or "").startswith(gcal.WRITES_BROKEN),
                              "supported": c["platform"] in PLATFORMS} for c in inbox.connections(db)],
-            "calendar_broken": bool(cal.broken(db)), **events, "build": build_version()}
+            "calendar_broken": bool(cal.broken(db)), **events, "build": build_version(),
+            "modules": sorted(inbox.modules_on(db))}
 
 
 @query("search", text="string", commands="array", recent="array")
@@ -321,6 +322,16 @@ def _case_view(core, db, case_id):
             "props": segments(CasePage.props_markup(SimpleNamespace(views=views))),
             "cards": cards, "timeline": [x for _, x in timeline], "emails": emails, "domains": domains,
             "orgs": _org_ids(db, sorted({o for v in views if v["person"] for o in v["person"]["organizations"]}))}
+
+
+@query("context.page", source="string", state="string", checked="string")
+def _context_page(core, db, source, state=None, checked=None):
+    """One Context source as the Console's ContextSourcePage draws it (FR-MOD-16), as segment lines. Its state and the
+    time of its last check are the App's own (each Client checks its sources)."""
+    from .tui import CONTEXT_SOURCES, context_markup
+    if source not in CONTEXT_SOURCES:
+        raise ApiError(-32602, f"no Context source {source}")
+    return {"lines": segments(context_markup(source, state, checked, "cases" in inbox.modules_on(db)))}
 
 
 @query("connection.page", connection_id="string")
@@ -626,14 +637,15 @@ def _person(core, db, person_id):
     threads = "\n".join(f"[@click=app.open_thread({t.id!r})]{glyph(t.status_detail)} [underline]{escape(t.title)}[/][/]"
                         for t in p["threads"]) or "—"
     orgs = ", ".join(f"[@click=app.open_org('{o}')][underline]{escape(o)}[/][/]" for o in p["organizations"]) or "—"
+    on = inbox.modules_on(db)  # an off Module's sections are not drawn (ADR 0017)
     section = sequence_section(db, person_id)
-    current = pipeline.current(db, person_id=person_id)  # Fundraising and Talent (ADR 0016)
+    current = pipeline.current(db, person_id=person_id) if "pipelines" in on else {}  # Fundraising, Talent (ADR 0016)
+    cases = f"\n\n[#928374]{ICON['cases']} cases[/]\n{escape(', '.join(p['cases']) or '—')}" if "cases" in on else ""
     rest = ((f"\n{pipeline_section(db, person_id, person=True)}\n" if current else "")
             + (f"\n{section}\n" if section else "") + f"\n[#928374]{ICON['organizations']} organizations[/]\n{orgs}\n\n"
-            f"[#928374]{ICON['threads']} threads[/]\n{threads}\n\n"
-            f"[#928374]{ICON['cases']} cases[/]\n{escape(', '.join(p['cases']) or '—')}")
+            f"[#928374]{ICON['threads']} threads[/]\n{threads}" + cases)
     return {"person": p, "organizations": inbox.person_organizations(db, person_id),
-            "enrollments": sequences.enrollments(db, person_id),
+            "enrollments": sequences.enrollments(db, person_id) if "sequences" in on else [],
             "head": segments(f"[b #45707a]{ICON['person']} {escape(p['name'])}[/]\n\n[#928374]{ICON['identity']} identities[/]"),
             "rest": segments(rest), "orgs": _org_ids(db, p["organizations"]),
             "emails": [i["value"] for i in p["identities"] if i["kind"] == "email"], "domains": p["organizations"],
@@ -677,11 +689,12 @@ def _organization(core, db, domain):
     r = db.execute("SELECT id, domain, name FROM organizations WHERE domain = ?", (domain,)).fetchone()
     o = dict(r) if r else None
     people = v["people"]
-    side = (pipeline_section(db, o["id"]) + "\n\n" if o else "") + ("\n\n".join(
+    pipe = pipeline_section(db, o["id"]) if o else ""  # empty while Pipelines is off (ADR 0017)
+    side = (pipe + "\n\n" if pipe else "") + ("\n\n".join(
         f"[@click=app.open_person({p['id']!r})][b underline]{escape(p['name'])}[/][/]\n"
         + "\n".join(f"[#928374]{ICON[IDENTITY_ICON[i['kind']]]} {escape(i['value'])}[/]" for i in p["identities"])
         for p in people) or "[#928374]No people yet.[/]")
-    current = pipeline.current(db, o["id"]) if o else {}
+    current = pipeline.current(db, o["id"]) if o and pipe else {}
     return v | {"side": segments(side), "org": o,
                 "emails": [i["value"] for p in people for i in p["identities"] if i["kind"] == "email"],
                 "stages": _stages_of(current, (pipeline.REVENUE,))}
@@ -1045,6 +1058,7 @@ class Core:
 
         def run():
             try:
+                inbox.admit(self.db, name, (), kwargs)  # a call into an off Module is refused (ADR 0017)
                 result = target(self.db, **kwargs)
                 if self.proxies is None:
                     self.db.commit()

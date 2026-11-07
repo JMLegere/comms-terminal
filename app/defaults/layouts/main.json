@@ -70,6 +70,7 @@
                 "person": null,
                 "organization": null,
                 "connection": null,
+                "context": null,
                 "event": null,
                 "case": null
               }
@@ -100,6 +101,7 @@
                 "person": "person",
                 "organization": "organization",
                 "connection": "connection",
+                "context": "context",
                 "event": "event",
                 "case": "case"
               }

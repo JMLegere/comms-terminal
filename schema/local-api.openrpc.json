@@ -1117,6 +1117,43 @@
    }
   },
   {
+   "name": "command.inbox.set_module",
+   "summary": "The inbox.set_module writer (write).",
+   "params": [
+    {
+     "name": "module",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "enabled",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": true,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
    "name": "command.inbox.stage",
    "summary": "The inbox.stage writer (create).",
    "params": [
@@ -2319,6 +2356,48 @@
      "required": true,
      "schema": {
       "type": "array"
+     }
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "context.page",
+   "summary": "One Context source as the Console's ContextSourcePage draws it (FR-MOD-16), as segment lines. Its state and the time of its last check are the App's own (each Client checks its sources).",
+   "params": [
+    {
+     "name": "source",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
+    {
+     "name": "state",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
+    {
+     "name": "checked",
+     "required": true,
+     "schema": {
+      "type": "string"
      }
     },
     {

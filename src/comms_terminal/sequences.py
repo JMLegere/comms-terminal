@@ -65,7 +65,7 @@ def email_connections(db) -> list:
             if platforms.PLATFORMS.get(c["platform"]) and platforms.PLATFORMS[c["platform"]].format == "email"]
 
 
-@writer("create")
+@writer("create", module="sequences")
 def create_sequence(db, name: str, connection_id: int | None = None, *, now: datetime | None = None) -> int:
     """A new, empty Sequence; it sends from `connection_id`, else the only email Connection."""
     if not name.strip():
@@ -79,7 +79,7 @@ def create_sequence(db, name: str, connection_id: int | None = None, *, now: dat
                           (name.strip(), connection_id, at, at)).fetchone()[0]
 
 
-@writer("write")
+@writer("write", module="sequences")
 def rename_sequence(db, sequence_id: int, name: str, *, now: datetime | None = None) -> None:
     if not name.strip():
         raise ValueError("A Sequence needs a name.")
@@ -87,7 +87,7 @@ def rename_sequence(db, sequence_id: int, name: str, *, now: datetime | None = N
         db.execute("UPDATE sequences SET name = ?, updated_at = ? WHERE id = ?", (name.strip(), clock.iso((now or clock.now())), sequence_id))
 
 
-@writer("write")
+@writer("write", module="sequences")
 def describe_sequence(db, sequence_id: int, description: str, *, now: datetime | None = None) -> None:
     """Its one-line "use when", shown in the Sequence list and the enroll picker."""
     with inbox._write_snapshot(db):
@@ -95,7 +95,7 @@ def describe_sequence(db, sequence_id: int, description: str, *, now: datetime |
                    (" ".join(description.split()), clock.iso((now or clock.now())), sequence_id))
 
 
-@writer("write")
+@writer("write", module="sequences")
 def set_connection(db, sequence_id: int, connection_id: int, *, now: datetime | None = None) -> None:
     """Its email Tasks send from `connection_id`; Due Tasks flagged for having none get their Drafts on the next
     materialize."""
@@ -106,7 +106,7 @@ def set_connection(db, sequence_id: int, connection_id: int, *, now: datetime | 
                    " AND enrollment_id IN (SELECT id FROM enrollments WHERE sequence_id = ?)", (sequence_id,))
 
 
-@writer("create")
+@writer("create", module="sequences")
 def replace_sequence(db, plan: dict, dry_run: bool = False, *, now: datetime | None = None) -> list[str]:
     """Reconcile a complete Sequence tree, resolve its links, and validate the exact stored result atomically.
     `plan` has name, description, start/body/completion lists; Steps use STEP_FIELDS, source `line`, an `enroll`
@@ -240,7 +240,7 @@ def sequences(db, *, now: datetime | None = None) -> list[dict]:
     return out
 
 
-@writer("write")
+@writer("write", module="sequences")
 def archive_sequence(db, sequence_id: int, cancel_live: bool, now: datetime | None = None) -> list[dict]:
     """A used Sequence is archived, never deleted: it takes no new Enrollments and can be restored.
     `cancel_live` finishes its live Enrollments as Canceled; returns what restore_sequence needs to undo that."""
@@ -256,7 +256,7 @@ def archive_sequence(db, sequence_id: int, cancel_live: bool, now: datetime | No
     return undo
 
 
-@writer("write")
+@writer("write", module="sequences")
 def restore_sequence(db, sequence_id: int, undo: list[dict] = (), *, now: datetime | None = None) -> None:
     with db:
         _tx(db)
@@ -265,7 +265,7 @@ def restore_sequence(db, sequence_id: int, undo: list[dict] = (), *, now: dateti
             _restore_finish(db, u)
 
 
-@writer("write")
+@writer("write", module="sequences")
 def delete_sequence(db, sequence_id: int, *, now: datetime | None = None) -> dict:
     """Only a Sequence that never had an Enrollment can be deleted; returns its rows for undo."""
     with db:
@@ -280,7 +280,7 @@ def delete_sequence(db, sequence_id: int, *, now: datetime | None = None) -> dic
     return dict(sequence=seq, steps=steps)
 
 
-@writer("write")
+@writer("write", module="sequences")
 def undelete_sequence(db, rows: dict, *, now: datetime | None = None) -> None:
     with db:
         _tx(db)
@@ -387,7 +387,7 @@ def step_summary(st: dict, names: dict) -> str:
             else "") or st["body"]
 
 
-@writer("create")
+@writer("create", module="sequences")
 def add_step(db, sequence_id: int, kind: str, after: int | None = None, *, section: str = "body",
              parent_step_id: int | None = None, branch: int | None = None, action_kind: str = "enroll",
              condition: str = "jeremy_picks", front: bool = False, now: datetime | None = None) -> int:
@@ -433,7 +433,7 @@ def add_step(db, sequence_id: int, kind: str, after: int | None = None, *, secti
     return step_id
 
 
-@writer("write")
+@writer("write", module="sequences")
 def save_step(db, step_id: int, *, now: datetime | None = None, **fields) -> dict:
     """Edit a Step; Tasks already due keep their content (FR-SEQ-5)."""
     if set(fields) - set(STEP_FIELDS):
@@ -468,7 +468,7 @@ def save_step(db, step_id: int, *, now: datetime | None = None, **fields) -> dic
         return dict(db.execute("SELECT * FROM sequence_steps WHERE id = ?", (step_id,)).fetchone())
 
 
-@writer("write")
+@writer("write", module="sequences")
 def move_step(db, step_id: int, delta: int, *, now: datetime | None = None) -> None:
     """Swap a Step with its neighbour on its path (`delta` -1 up, +1 down); an If stays last on its path."""
     with db:
@@ -487,7 +487,7 @@ def move_step(db, step_id: int, delta: int, *, now: datetime | None = None) -> N
         _touch(db, st["sequence_id"], now=now)
 
 
-@writer("write")
+@writer("write", module="sequences")
 def delete_step(db, step_id: int, now: datetime | None = None) -> tuple[int, dict]:
     """Delete a Step, live (FR-SEQ-24): Enrollments that have not reached it skip it; where it is the current
     Due Task, that Task and its unsent Draft go and the next Step's Task comes due by its gap. Deleting an If
@@ -517,7 +517,7 @@ def delete_step(db, step_id: int, now: datetime | None = None) -> tuple[int, dic
     return len(open_tasks), dict(step=st, steps=gone, tasks=open_tasks, drafts=drafts, after=before, enrollments=states)
 
 
-@writer("write")
+@writer("write", module="sequences")
 def restore_step(db, undo: dict, *, now: datetime | None = None) -> None:
     """Put a deleted Step back (an If with its paths), with the Tasks and Drafts it removed; Tasks made since for
     those Enrollments go."""
@@ -701,7 +701,7 @@ def parse_start(text: str, now: datetime) -> date | None:
         return None
 
 
-@writer("create")
+@writer("create", module="sequences")
 def enroll(db, person_id: int, sequence_id: int, now: datetime | None = None, start: date | None = None,
            organization_id: int | None = None, identity_id: int | None = None) -> int:
     """One Person into one Sequence (FR-SEQ-6), for one Organization (FR-SEQ-36; default: their only one), sending
@@ -783,7 +783,7 @@ def _enroll(db, person_id: int, sequence_id: int, now: datetime, starts: str | N
                       (person_id, sequence_id, clock.iso(now), starts, organization_id, identity_id)).fetchone()[0]
 
 
-@writer("write")
+@writer("write", module="sequences")
 def unenroll(db, enrollment_id: int, *, now: datetime | None = None) -> None:
     """Undo an enroll before any Task is done: the Enrollment, its Tasks, and their unsent Drafts go."""
     with db:
@@ -795,7 +795,7 @@ def unenroll(db, enrollment_id: int, *, now: datetime | None = None) -> None:
         db.execute("DELETE FROM enrollments WHERE id = ?", (enrollment_id,))
 
 
-@writer("create")
+@writer("create", module="sequences")
 def task_new_thread(db, task_id: int, *, now: datetime | None = None) -> int:
     """A reply Task whose target was skipped starts a new Thread instead (FR-SEQ-8): a new email Draft with the
     replied-to Step's subject. Returns the Draft's id."""
@@ -823,7 +823,10 @@ def materialize(db, now: datetime | None = None) -> int:
     """Make each running Enrollment's next Task, carry out each Action and If whose time has come, and make the
     Draft of each email Task whose day has come; an Enrollment whose path runs out becomes Finishing and works that
     path's On completion, then Finished. Idempotent (one Task per Enrollment and Step, one Draft per Task), so it
-    runs every minute from wake. Returns how many Tasks or Drafts it made."""
+    runs every minute from wake. Returns how many Tasks or Drafts it made. While Sequences is off it does nothing,
+    so Steps that fall due meanwhile come due, overdue, once it is on again (ADR 0017)."""
+    if "sequences" not in inbox.modules_on(db):
+        return 0
     now = now or clock.now()
     made = 0
     with inbox._write_snapshot(db):
@@ -1062,7 +1065,7 @@ def _close(db, task_id: int, state: str, now: datetime, thread_id: int | None = 
     return undo
 
 
-@writer("create")
+@writer("create", module="sequences")
 def complete_task(db, task_id: int, now: datetime | None = None) -> dict:
     """Jeremy did a non-email Task (FR-SEQ-9); an enroll Action enrolls the Person now, whatever its flag said.
     The next Step's Task follows. Returns what undo_task needs."""
@@ -1086,7 +1089,7 @@ def complete_task(db, task_id: int, now: datetime | None = None) -> dict:
     return undo
 
 
-@writer("create")
+@writer("create", module="sequences")
 def skip_task(db, task_id: int, now: datetime | None = None) -> dict:
     """Skip a Task; its unsent Draft goes. A skip counts as done for the next Task's gap."""
     now = now or clock.now()
@@ -1098,7 +1101,7 @@ def skip_task(db, task_id: int, now: datetime | None = None) -> dict:
     return undo
 
 
-@writer("write")
+@writer("write", module="sequences")
 def undo_task(db, undo: dict, *, now: datetime | None = None) -> None:
     """Back to before complete_task or skip_task: the Task due again, its Draft and Enrollment as they were."""
     with db:
@@ -1226,7 +1229,7 @@ def pause_person(db, person_id: int, at: datetime, why: str) -> int:
                       (clock.iso(at), why, person_id, clock.iso(at))).rowcount
 
 
-@writer("write")
+@writer("write", module="sequences")
 def resume(db, enrollment_id: int, now: datetime | None = None) -> None:
     """Paused to Active, or back to Finishing when it was paused there; each Task keeps its due date, so a Step's
     wait still holds (FR-SEQ-13)."""
@@ -1243,7 +1246,7 @@ def resume(db, enrollment_id: int, now: datetime | None = None) -> None:
         materialize(db, now)
 
 
-@writer("write")
+@writer("write", module="sequences")
 def reschedule(db, enrollment_id: int, start: date, now: datetime | None = None) -> dict:
     """Put a running Enrollment on an agreed date (G1, .agents/discovery/2026-10-26-mainline-sequences.md): its Due
     Task comes due that day, at its Step's time; before any touch is done, the Start date moves too, so Day numbers
@@ -1291,7 +1294,7 @@ def _restore_finish(db, undo: dict) -> None:
         _insert(db, "composition_drafts", d)
 
 
-@writer("write")
+@writer("write", module="sequences")
 def finish(db, enrollment_id: int, reason: str, now: datetime | None = None) -> list[dict]:
     """End an Enrollment (FR-SEQ-33, FR-SEQ-34). Goal met, Not Right Now, Lost, or Completed make it Finishing: the
     current Task and its unsent Draft go, and the On completion of the path it was on runs. Canceled and
@@ -1365,7 +1368,7 @@ def _rollback(db, mark: dict) -> None:
         pipeline_mod.undo(db, r["id"])
 
 
-@writer("create")
+@writer("create", module="sequences")
 def pick(db, task_id: int, choice: int, now: datetime | None = None) -> dict:
     """Jeremy answers an If that asks him (FR-SEQ-31): 1 takes its true path, 0 its false path. Returns what
     undo_task needs."""
@@ -1399,7 +1402,7 @@ def _unsubscribe(db, person_id: int, now: datetime) -> list[dict]:
     return [dict(person=person_id, unsubscribed_at=before)] + undo
 
 
-@writer("write")
+@writer("write", module="sequences")
 def restore_finish(db, undo: list[dict], *, now: datetime | None = None) -> None:
     with db:
         _tx(db)
@@ -1475,7 +1478,9 @@ def paused(db) -> list[dict]:
 
 
 def pauses_since(db, since: str) -> list[dict]:
-    """Enrollments paused after `since`, for the console's toast (FR-SEQ-20)."""
+    """Enrollments paused after `since`, for the console's toast (FR-SEQ-20); none while Sequences is off."""
+    if "sequences" not in inbox.modules_on(db):
+        return []
     return [dict(r) for r in db.execute(
         "SELECT e.id, e.paused_at, e.pause_reason, p.display_name AS person, q.name AS sequence FROM enrollments e"
         " JOIN persons p ON p.id = e.person_id JOIN sequences q ON q.id = e.sequence_id"
