@@ -27,7 +27,7 @@ from typing import Protocol, Sequence
 from . import clock, files, platforms
 from .writers import writer
 
-SCHEMA_VERSION = 36
+SCHEMA_VERSION = 37
 WAIT = timedelta(days=4)  # Waiting for them ends after this with no reply: back to Todo to follow up (#116)
 EMAIL_CONFIRMATION_PENDING = "Email confirmation pending; wait for its sent receipt before replying."
 MIGRATIONS = {  # version -> statement that upgrades an existing database to it
@@ -761,6 +761,35 @@ CREATE TRIGGER pipeline_log_no_update BEFORE UPDATE OF id, organization_id, pipe
 BEGIN
   SELECT RAISE(ABORT, 'the pipeline log is append-only');
 END;
+PRAGMA legacy_alter_table = OFF;"""
+
+# Connections have kinds (ADR 0017): Linear, Tana and Attio become Platforms, and one account can back two
+# Connections of different kinds, so the account key is unique per kind instead of alone. The rebuild keeps ids, so
+# every reference to a Connection stays.
+MIGRATIONS[37] = """PRAGMA legacy_alter_table = ON;
+CREATE TABLE connections_new (
+  id                TEXT PRIMARY KEY NOT NULL DEFAULT (new_id()),
+  platform          TEXT NOT NULL CHECK (platform IN ('gmail', 'fastmail', 'slack', 'quo', 'gcal', 'linear', 'tana',
+                                                       'attio')),
+  kind              TEXT CHECK (kind IN ('email', 'sms', 'slack', 'calendar', 'context', 'issue')),
+  external_id       TEXT NOT NULL,
+  self_id           TEXT NOT NULL,
+  label             TEXT NOT NULL,
+  connected_at      TEXT NOT NULL,
+  auth_ok           INTEGER NOT NULL DEFAULT 1 CHECK (auth_ok IN (0, 1)),
+  last_error        TEXT,
+  probe_error       TEXT,
+  probed_at         TEXT,
+  inbound           TEXT
+) STRICT;
+INSERT INTO connections_new (id, platform, external_id, self_id, label, connected_at, auth_ok, last_error,
+  probe_error, probed_at, inbound)
+SELECT id, platform, external_id, self_id, label, connected_at, auth_ok, last_error, probe_error, probed_at, inbound
+FROM connections;
+DROP TABLE connections;
+ALTER TABLE connections_new RENAME TO connections;
+CREATE UNIQUE INDEX connections_inbound ON connections (inbound);
+CREATE UNIQUE INDEX connections_account ON connections (external_id, coalesce(kind, ''));
 PRAGMA legacy_alter_table = OFF;"""
 
 
@@ -2556,6 +2585,16 @@ def wake(db, now: datetime) -> int:
 def set_connection_error(db, connection_id: int, error: str | None) -> None:
     with db:
         db.execute("UPDATE connections SET last_error = ? WHERE id = ?", (error, connection_id))
+
+
+def ensure_connection(db, platform: str, kind: str, now: datetime) -> str:
+    """The Service's Connection for a Platform it reaches with its own credential (a Context connection, ADR 0017),
+    made on first start; the account is named by the Platform, since the credential holds one account."""
+    with db:
+        db.execute("INSERT OR IGNORE INTO connections (platform, kind, external_id, self_id, label, connected_at)"
+                   " VALUES (?, ?, ?, '', ?, ?)", (platform, kind, platform, platforms.PLATFORMS[platform].title,
+                                                   clock.iso(now)))
+    return db.execute("SELECT id FROM connections WHERE external_id = ? AND kind = ?", (platform, kind)).fetchone()[0]
 
 
 def set_auth(db, connection_id: int, ok: bool) -> None:

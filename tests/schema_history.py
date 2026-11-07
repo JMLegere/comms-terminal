@@ -41,6 +41,27 @@ def _integer_keys_sql() -> str:
 
 
 UNDO = {
+    37: """PRAGMA foreign_keys = OFF; PRAGMA legacy_alter_table = ON;
+DELETE FROM connections WHERE platform IN ('linear', 'tana', 'attio');
+CREATE TABLE connections_old (
+  id                TEXT PRIMARY KEY NOT NULL DEFAULT (new_id()),
+  platform          TEXT NOT NULL CHECK (platform IN ('gmail', 'fastmail', 'slack', 'quo', 'gcal')),
+  external_id       TEXT NOT NULL UNIQUE,
+  self_id           TEXT NOT NULL,
+  label             TEXT NOT NULL,
+  connected_at      TEXT NOT NULL,
+  auth_ok           INTEGER NOT NULL DEFAULT 1 CHECK (auth_ok IN (0, 1)),
+  last_error        TEXT,
+  probe_error       TEXT,
+  probed_at         TEXT,
+  inbound           TEXT
+) STRICT;
+INSERT INTO connections_old SELECT id, platform, external_id, self_id, label, connected_at, auth_ok, last_error,
+  probe_error, probed_at, inbound FROM connections;
+DROP TABLE connections;
+ALTER TABLE connections_old RENAME TO connections;
+CREATE UNIQUE INDEX connections_inbound ON connections (inbound);
+PRAGMA legacy_alter_table = OFF;""",
     36: """PRAGMA foreign_keys = OFF; PRAGMA legacy_alter_table = ON;
 INSERT OR IGNORE INTO organizations (domain, name, created_at)
 SELECT 'person-' || p.id || '.sole', p.display_name, min(l.recorded_at) FROM pipeline_log l JOIN persons p ON p.id = l.person_id

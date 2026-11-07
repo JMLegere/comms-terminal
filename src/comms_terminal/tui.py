@@ -810,14 +810,6 @@ class Rail(OptionList):
             name = name if len(name) <= 21 else name[:20] + "…"
             label = escape(name) if ok else f"[#c14a4a]{escape(name)}[/]"
             opts.append(Option(f"{mark}{conn_icon(c)} {label}{' ' * max(1, 22 - len(name))}{state}", id=f"conn:{c['id']}"))
-        sources = [(k, v) for k, v in getattr(self.app, "source_state", {}).items() if v]
-        if sources:  # Context sources (FR-13a, FR-13b) sit apart from Connections: they hold no Threads
-            opts += [gap, header("tana", "context")]
-        for key, st in sources:
-            title, icon = CONTEXT_SOURCES[key][:2]
-            state = {"ok": f"[#6c782e]{ICON['ok']}[/]", "checking": "[#928374]…[/]"}.get(st, f"[#c14a4a]{ICON['broken']}[/]")
-            label = title if st in ("ok", "checking") else f"[#c14a4a]{title}[/]"
-            opts.append(Option(f" [#654735]{ICON[icon]}[/] {label}{' ' * (22 - len(title))}{state}", id=f"context:{key}"))
         shown = [(o.prompt, o.id, o.disabled) for o in opts]
         if shown != getattr(self, "shown", None):  # unchanged rows: no rebuild, so no redraw (the 60 s flash)
             self.shown = shown
@@ -833,12 +825,6 @@ class Rail(OptionList):
         self.highlighted = None
 
     def on_option_list_option_selected(self, event):
-        if event.option.id.startswith("context:"):  # no page of its own; its context shows on each page
-            key = event.option.id.split(":", 1)[1]
-            title, state = CONTEXT_SOURCES[key][0], self.app.source_state[key]
-            self.app.notify(f"{title} is connected." if state == "ok" else f"Checking {title}…" if state == "checking"
-                            else f"{title} unavailable: {state}")
-            return
         self.app.main.go(event.option.id)
 
 
@@ -4437,12 +4423,6 @@ class StatusLine(Static):
                          f"[b {b['bg0']} on {b['red']}] {ICON['broken']} {escape(conn_name(c))}"
                          f"{' writes' if (c['last_error'] or '').startswith(gcal.WRITES_BROKEN) else ''} "
                          f"{'broken' if c['platform'] in PLATFORMS else 'unavailable'} [/]")
-        for key, st in app.source_state.items():  # Context sources, shown apart from Connections (FR-13a, FR-13b)
-            title, icon = CONTEXT_SOURCES[key][:2]
-            if st == "ok":
-                parts.append(f"[{b['grey1']}]{ICON[icon]}[/] [{b['green']}]{ICON['ok']}[/]")
-            elif st not in (None, "checking"):
-                parts.append(f"[b {b['bg0']} on {b['red']}] {ICON['broken']} {title} broken [/]")
         if build_version():
             parts.append(f"[{b['grey1']}]{build_version()}[/]")
         right = sep.join(parts) + " "
@@ -7129,7 +7109,8 @@ class Console(App):
 
     @work(thread=True)
     def check_source(self, key, emails):
-        """A rail row under "context": one fetch for Jeremy's own addresses says whether the source answers."""
+        """One fetch for Jeremy's own addresses at start: the Service records the answer as its Context connection's
+        health (ADR 0017), which the rail shows under connections."""
         try:
             state = "ok" if self.sources[key](emails, []) is not None else None
         except ReplyError as e:

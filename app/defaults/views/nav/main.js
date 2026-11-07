@@ -15,7 +15,8 @@ import { call, nextEvent, nextCommand, theme, shared, setShared, run, toast } fr
 const STATUS = ["Todo", "Snoozed", "Done", "Ignored"];
 const ICON = { Todo: "square", Snoozed: "clock", Done: "circle-check", Ignored: "archive" };
 const PIPELINES = [["revenue", "Revenue"], ["fundraising", "Fundraising"], ["talent", "Talent"]];
-const CONN = { gmail: "mail", fastmail: "mail", slack: "message-square", quo: "phone", gcal: "calendar" };
+const CONN = { gmail: "mail", fastmail: "mail", slack: "message-square", quo: "phone", gcal: "calendar",
+  linear: "list-checks", tana: "layers", attio: "server" };
 const KEYS = ["page", "view", "case_view", "pipeline", "detail", "thread", "draft", "person", "organization", "case",
   "connection", "event", "task", "sequence"];
 // What a page shows, once its shared keys are set: the commands that load its views.
@@ -23,7 +24,8 @@ const SHOW = { threads: ["threads.reload"], pipeline: ["pipeline.show"] };
 const TITLE = { person: "Person", organization: "Organization", connection: "Connection", event: "Event", case: "Case" };
 const FULL = new Set(Object.keys(TITLE)); // full pages: the list block is hidden (layouts/main.json)
 const NOLIST = new Set([...FULL, "pipeline"]); // pages whose list block is hidden: the focus starts in the detail
-// Context sources (FR-13a, FR-13b): no Threads, no page; the rail says whether each answers (D8).
+// Context connections (ADR 0017): one fetch each at start, so the Service records whether it answers; the rail
+// shows them under connections.
 const SOURCES = [["attio", "Attio", "server"], ["tana", "Tana", "layers"], ["linear", "Linear", "list-checks"]];
 const cap = (s) => s[0].toUpperCase() + s.slice(1);
 
@@ -154,10 +156,6 @@ export default class Nav extends View {
 
   /** One rail item: resets the stack, as the Console's go. */
   go(item) {
-    if (item.startsWith("context:")) { // no page of its own: its context shows on each page
-      const [, title] = SOURCES.find(([k]) => `context:${k}` === item), st = (shared("context_state") ?? {})[item.slice(8)];
-      return toast(st === "ok" ? `${title} is connected.` : st === "checking" ? `Checking ${title}…` : `${title} unavailable: ${st}`);
-    }
     if (item === "cases") item = "cases:Todo"; // 9 opens Cases › Todo
     let entry;
     if (STATUS.includes(cap(item))) entry = { page: "threads", view: cap(item) };
@@ -253,8 +251,6 @@ export default class Nav extends View {
     const s = this.summary, h = this.shell;
     const counts = s.counts ?? {};
     const due = (s.tasks ?? []).length;
-    const states = shared("context_state") ?? {};
-    const ctx = SOURCES.filter(([k]) => states[k]).map((x) => [...x, states[x[0]]]);
     return [
       { id: "today", icon: "sun", label: "Today", count: h.today },
       { id: "calendar", icon: "calendar", label: "Calendar" },
@@ -275,8 +271,6 @@ export default class Nav extends View {
       { header: "connections" },
       ...(h.connections ?? []).map((c) => ({ id: `conn:${c.id}`, icon: CONN[c.platform] ?? "server", conn: c,
         label: c.name.length <= 21 ? c.name : c.name.slice(0, 20) + "…" })),
-      ...(ctx.length ? [{ header: "context" }] : []),
-      ...ctx.map(([key, title, icon, st]) => ({ id: `context:${key}`, icon, label: title, ctx: st })),
     ];
   }
 
@@ -287,10 +281,8 @@ export default class Nav extends View {
     const row = (i) => {
       if (i.header) return div().px(16).h(30).pt(12).pb(2).flex_none().text_size(11.5).font_medium().text_color(t.dim).child(i.header);
       const active = i.id === at;
-      const bad = (i.conn && !i.conn.ok) || (i.ctx && i.ctx !== "ok" && i.ctx !== "checking");
-      const tail = i.ctx === "checking" ? div().flex_none().text_size(11).text_color(t.dim).child("…")
-        : i.ctx ? svg(`icons/${i.ctx === "ok" ? "circle-check" : "circle-x"}.svg`).size(12).flex_none().text_color(i.ctx === "ok" ? t.green : t.danger)
-        : i.conn
+      const bad = i.conn && !i.conn.ok;
+      const tail = i.conn
         ? svg(`icons/${i.conn.ok ? "circle-check" : "circle-x"}.svg`).size(12).flex_none().text_color(i.conn.ok ? t.green : t.danger)
         : div().flex_none().text_size(11).text_color(t.dim).child(i.count == null || i.count === "" ? "" : String(i.count));
       return h_flex().id(`rail-${i.id}`).h(28).px(8).mx(8).flex_none().rounded(8).items_center().gap(9).cursor_pointer()

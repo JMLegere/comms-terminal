@@ -112,6 +112,18 @@ def handle_linear(db, body: bytes, context) -> tuple[int, dict]:
         return 502, {"error": "Linear context could not be loaded"}
 
 
+def record_context(db, platform: str, status: int, out: dict) -> None:
+    """A Context connection's health from its last answer (ADR 0017): a failure (502) is its Last Error until the next
+    answer (200) clears it. Bad requests (400) and an unconnected source (503) say nothing about it."""
+    row = db.execute("SELECT id, last_error FROM connections WHERE platform = ? AND kind = 'context'",
+                     (platform,)).fetchone()
+    if row is None or status not in (200, 502):
+        return
+    error = None if status == 200 else out.get("error") or f"{platforms.PLATFORMS[platform].title} did not answer"
+    if error != row["last_error"]:
+        inbox.set_connection_error(db, row["id"], error)
+
+
 def handle_context(body: bytes, context: tana.Context | None, name: str = "Tana") -> tuple[int, dict]:
     """POST /tana and /attio: {"emails", "domains"} -> (status, that Context source's answer or {"error"})
     (FR-13a, FR-13b)."""
@@ -588,6 +600,7 @@ def reply_server(db_path: str, socket_path: str, senders: Senders, contexts: dic
         db = inbox.connect(db_path)
         try:
             status, out = handle_linear(db, body, contexts.get("linear"))
+            record_context(db, "linear", status, out)
         finally:
             db.close()
         return status, "application/json", json.dumps(out).encode()
@@ -595,6 +608,11 @@ def reply_server(db_path: str, socket_path: str, senders: Senders, contexts: dic
     def context_route(name):
         def route(headers, body):
             status, out = handle_context(body, contexts.get(name), name.title())
+            db = inbox.connect(db_path)
+            try:
+                record_context(db, name, status, out)
+            finally:
+                db.close()
             return status, "application/json", json.dumps(out).encode()
         return route
 
@@ -994,6 +1012,9 @@ def run(db_path: str, socket_path: str, host: str, port: int, files_host: str | 
     fm = fastmail_client(db)
     senders = Senders({"fastmail": fm} if fm is not None else {})
     contexts = {"tana": tana_context(db), "attio": attio_context(db), "linear": linear_context(db)}
+    for name, context in contexts.items():  # each connected source is a Context connection (ADR 0017)
+        if context is not None:
+            inbox.ensure_connection(db, name, "context", clock.now())
     writer = gcal_client(db)
     if credential(calendar.CREDENTIAL):
         meetings.connect(db)  # go-live: only Events first seen from now become Meeting Threads

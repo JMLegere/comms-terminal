@@ -266,7 +266,8 @@ def run(a, db):
                 print(f"{d['id']}\t{d['kind']} {kind}\t{d['to'] or '-'}\t{d['subject'] or ''}")
             print("\nConnections (draft new --connection ID):")
             for c in inbox.connections(db):
-                print(f"{c['id']}\t{connection_label(c)}")
+                if c["platform"] in PLATFORMS and PLATFORMS[c["platform"]].takes_replies:  # Context ones send nothing
+                    print(f"{c['id']}\t{connection_label(c)}")
         elif a.cmd == "tasks":
             due = sequences.tasks_due(db, scheduled=True)  # as the Tasks page: scheduled email Tasks last (#146)
             print("".join(task_markdown(db, t) + "\n" for t in due) or "No Tasks due.\n", end="")

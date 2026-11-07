@@ -36,7 +36,7 @@ Platform ─▶ Connection ─▶ Channel ─▶ Thread ◀── Activity (mess
 - **Person** is a set of Identities. **Organization** holds People through Memberships that follow company email domains; Jeremy's own changes win. A person acting on their own account gets a **Sole proprietorship**.
 - **Sequence** is ordered Steps (touches Jeremy does, Actions the console does, Ifs that choose a path) with On start and On completion. An **Enrollment** runs one Person through it for one Organization: Active, Paused, Finishing or Finished. Any inbound message from the Person pauses it. Each Step becomes a **Task** for that Enrollment; an email Task makes a Draft and is done when the Draft is sent.
 - **Pipeline** places each Organization (Revenue) or Person (Fundraising, Talent; ADR 0016) at a **Stage** with a **Value**, and works backwards from a **Target** to the **Constraint** and This week's actions. **Unattended** Organizations and People sit in an open Stage with nothing bringing them back.
-- **Context sources** (Attio, Tana, Linear) show read-only context beside Threads, People, Organizations and Cases. They hold no Threads.
+- **Connection** is one account on a Platform, of one kind: Email, SMS, Slack, Calendar, Context or Issue (ADR 0017). **Context connections** (Attio, Tana, Linear) show read-only context beside Threads, People, Organizations and Cases and hold no Threads; their health shows under connections like any other.
 - **Calendar** lays out Events, Tasks, waking Snoozes, scheduled Drafts and Enrollment starts. **Respond** sets Jeremy's Invite state through Google Calendar.
 
 ## Working with the app as an agent

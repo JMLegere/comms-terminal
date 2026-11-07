@@ -1,7 +1,10 @@
 CREATE TABLE connections (
   id                TEXT PRIMARY KEY NOT NULL DEFAULT (new_id()),
-  platform          TEXT NOT NULL CHECK (platform IN ('gmail', 'fastmail', 'slack', 'quo', 'gcal')),  -- platforms.py
-  external_id       TEXT NOT NULL UNIQUE,  -- email address, Slack team ID, or Quo Work number
+  platform          TEXT NOT NULL CHECK (platform IN ('gmail', 'fastmail', 'slack', 'quo', 'gcal', 'linear', 'tana',
+                                                       'attio')),  -- platforms.py
+  kind              TEXT CHECK (kind IN ('email', 'sms', 'slack', 'calendar', 'context', 'issue')),  -- ADR 0017;
+  --                  NULL = the Platform's only kind (platforms.kind_of); set where one account backs two (Linear)
+  external_id       TEXT NOT NULL,         -- email address, Slack team ID, Quo Work number, or the Platform's name
   self_id           TEXT NOT NULL,         -- Jeremy's address, Slack user ID, or Work number
   label             TEXT NOT NULL,
   connected_at      TEXT NOT NULL,
@@ -12,6 +15,7 @@ CREATE TABLE connections (
   inbound           TEXT                   -- email: the address its forward reaches, the Worker's X-Inbox-To
 ) STRICT;
 CREATE UNIQUE INDEX connections_inbound ON connections (inbound);
+CREATE UNIQUE INDEX connections_account ON connections (external_id, coalesce(kind, ''));  -- one per account and kind
 
 CREATE TABLE channels (
   id            TEXT PRIMARY KEY NOT NULL DEFAULT (new_id()),

@@ -10,7 +10,7 @@
 | Topic | Manage Linear Issues inside Comms Terminal (Planned day, capacity, warnings, edits) with one optimistic Action Queue for everything Comms Terminal carries out. |
 | Sources | `.agents/discovery/2026-11-07-linear-daily-scheduling.md` (approved through Phase 4); `.agents/design/2026-11-07-issues-and-action-queue.md` (proposed); ADRs 0017, 0018, 0019 (proposed); `GLOSSARY.md` (Issues section, Action, Action Queue); code at `origin/main` `85b5540`. |
 | History limits | The full conversation of 2026-11-07 was available. Earlier sessions are known only through the artifacts cited. |
-| Implementation authorization | **P0 only** (Jeremy, 2026-11-07: "P0 now, stop for review"): write the two feature files tagged `@wip`, then stop for scenario approval. Nothing else, no push, no deploy. |
+| Implementation authorization | **P0 and P1** (Jeremy, 2026-11-07: "P0 now, stop for review", then "execute the entire pd up to p1"). Local commits only; no push, no deploy. P2+ not authorized. |
 
 ## 2. Executive framing
 
@@ -226,8 +226,9 @@ Verify: existing suites `tests/test_invite_responses.py`, `tests/test_reactions.
 | Item | Impact | Evidence / status | Next | Owner | Blocks |
 |---|---|---|---|---|---|
 | Approve this PRD and ADRs 0017–0019 | All phases | Approved 2026-11-07 | — | Jeremy | No |
-| Scenario approval after P0 | P1+ | Pending | Review `features/issues.feature`, `features/actions.feature` | Jeremy | Yes |
-| Implementation go for P1+ | P1+ | Not given | Ask after P0 | Jeremy | Yes |
+| Scenario approval after P0 | P1+ | Taken as given with the P1 go (decision 39) | — | Jeremy | No |
+| Implementation go for P2+ | P2+ | Not given | Ask after P1 review | Jeremy | Yes |
+| P1 App rail not rendered natively | FR-CK-2 visual | App view tests pass; GPUI window not opened (App runs headless only on Workbox) | Look at the rail on Mani after the next App update | Jeremy | No |
 | Linear webhook creation needs admin rights | P7 | Resolved: Jeremy is a Linear admin (`whoami` isAdmin, 2026-11-07) | — | Jeremy | No |
 | Linear webhook payload/signature details | P2 | Third-party (Hookdeck) | Linear docs at implementation | Implementer | No |
 | Slip status Blocked misleads the team | S4 trust | Accepted trade-off | A week of use | Jeremy | No |
@@ -279,6 +280,9 @@ Verify: existing suites `tests/test_invite_responses.py`, `tests/test_reactions.
 | 36 | 2026-11-07 | Defaults kept: urgency coefficients, webhook spec check in P2, diagrams checked at PR, docs update in P1/P7 | Jeremy (/ask) | approved | — |
 | 37 | 2026-11-07 | Commit locally only; no push, no PR | Jeremy (/ask) | approved | — |
 | 38 | 2026-11-07 | Implementation: P0 only, stop for scenario review | Jeremy (/ask) | approved | none authorized |
+| 39 | 2026-11-07 | "execute the entire pd up to p1": P0 scenarios accepted, P1 authorized | Jeremy | approved | #38 stop |
+| 40 | 2026-11-07 | P1 stores `kind` only where one account backs two (NULL = the Platform's only kind, `platforms.kind_of`), so the 69 existing Connection inserts stay unchanged; uniqueness moves to (external_id, kind) | agent, implementation | done | step 1.1 "default from platform" |
+| 41 | 2026-11-07 | Context connection health = Last Error from its Service route answers (502 sets, 200 clears); the separate "context" rail and status-bar rows in Console and App are removed; the start-up check stays and feeds the Service | agent, implementation | done | D8 context rail section |
 
 ## 8. Work log
 
@@ -290,6 +294,7 @@ Verify: existing suites `tests/test_invite_responses.py`, `tests/test_reactions.
 | 2026-11-07T12:51-04:00 | agent | This PRD written | Draft | this file | source-observed |
 | 2026-11-07T13:20-04:00 | agent | /ask round: approvals and decisions 33–38 recorded | Approved; P0 authorized | this file | source-observed |
 | 2026-11-07T13:35-04:00 | agent | P0: `features/issues.feature` (9) and `features/actions.feature` (6) scenarios, all `@wip` | `uv run pytest tests/test_features.py`: 163 passed, 18 deselected; `-m wip`: 18 failed (15 new + 3 existing App) | the P0 commit on `jeremy/issues-design` | source-observed |
+| 2026-11-07T14:10-04:00 | agent | P1: migration 37 (connections kind, widened Platforms, account unique per kind); `platforms` kinds and Linear/Tana/Attio; `inbox.ensure_connection`; `serve.record_context`; Console and App rails; CLI `drafts` lists only sending Connections; AGENTS.md | Focused suites: 234 + 110 + 584 passed; Console rail, status line and Linear Connection page rendered as text in a Textual test run | the P1 commit on `jeremy/issues-design` | source-observed |
 
 ## 9. Sources and coverage
 
