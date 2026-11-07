@@ -637,6 +637,7 @@ def proxy(remote: Remote, module, prefix: str):
                 return value
 
             def call(db, *args, **kwargs):
+                inbox.admit(db, name, args, kwargs)  # refused here as the service would refuse it (ADR 0017)
                 remote.require_online()
                 kind = CALLS[name]
                 if "now" not in inspect.signature(value).bind_partial(db, *args, **kwargs).arguments:
@@ -652,6 +653,31 @@ def proxy(remote: Remote, module, prefix: str):
             return call
 
     return Proxy()
+
+
+def gated(module, prefix: str):
+    """A stand-in for `module` in a console on the database itself (no service between): a call into an off Module
+    is refused as the service refuses it (ADR 0017, PRD R4)."""
+
+    class Gate:
+        def __getattr__(self, attr):
+            value = getattr(module, attr)
+            name = f"{prefix}.{attr}"
+            if name not in CALLS:
+                return value
+
+            def call(db, *args, **kwargs):
+                inbox.admit(db, name, args, kwargs)
+                return value(db, *args, **kwargs)
+            return call
+
+    return Gate()
+
+
+def gate_local(tui):
+    """Point a local console's writes through `gated`."""
+    for prefix, module in (("inbox", inbox), ("sequences", sequences), ("pipeline", pipeline)):
+        setattr(tui, prefix, gated(module, prefix))
 
 
 def signed_urls(caps: dict):

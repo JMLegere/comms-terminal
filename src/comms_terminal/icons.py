@@ -94,6 +94,7 @@ ICON = {
     "quit": "\U000f0156",           # md-close
     # terms and states
     "ok": "\U000f05e0",             # md-check_circle
+    "settings": "\U000f0493",       # md-cog
     "broken": "\U000f0028",         # md-alert_circle
     "edited": "\U000f0cb6",         # md-pencil_outline
     "deleted": "\U000f09e7",        # md-delete_outline

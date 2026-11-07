@@ -18,6 +18,7 @@ THREAD = "<module>"  # THREAD_KEYS: the module-level Thread keys every Thread pa
 SCROLLS = "Panes scroll with the wheel or trackpad"  # the Thread takes space/pgdn/pgup (D55); other pages are Phase 5 and 6
 
 APP = {
+    ("MainScreen", "go('settings')"): "settings.open",
     (THREAD, "reply('sender')"): "thread.reply_sender", (THREAD, "reply('all')"): "thread.reply_all",
     (THREAD, "done"): "thread.done", (THREAD, "pause"): "thread.snooze", (THREAD, "block_sender"): "thread.block",
     (THREAD, "ignore"): "thread.ignore", (THREAD, "case"): "thread.case", (THREAD, "status"): "thread.status",
@@ -103,6 +104,7 @@ WHY = {
     ("DescriptionBox", "save"): "The description prompt saves on Enter",
     ("MainScreen", "app.quit"): "Close the window; the Local core keeps running (FR-2)",
     ("TasksPage", "filter"): "The Palette (/) replaced the Tasks filter (FR-BAR-4)",
+    ("SettingsPage", "toggle"): "App Settings › Modules switches are clicked, as every App Settings control is (FR-SET-1)",
 }
 
 
