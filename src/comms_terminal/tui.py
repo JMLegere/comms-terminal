@@ -6612,7 +6612,7 @@ class ActionQueuePage(TablePage):
     TITLE = f"{ICON['actions']} action queue"
     RAIL = "actions"
     SIDE = f"{ICON['actions']} action"
-    COLUMNS = ("", "What", "Target", "Source", "Connection", "State")
+    COLUMNS = ("", "What", "Target", "State", "Source", "Connection")  # State before what clips in a narrow pane
     EMPTY = "Nothing is waiting to leave."
     STATE = {"scheduled": "#928374", "running": "#45707a", "confirmed": "#6c782e", "refused": "#c14a4a",
              "unknown": "#b47109"}
@@ -6632,8 +6632,8 @@ class ActionQueuePage(TablePage):
                                               f"[#928374]{counts}[/]", "", "", "")))
             state = f"[{self.STATE.get(r['state'], '#928374')}]{r['state']}[/]"
             out.append((r, (f"[#928374]{datetime.fromisoformat(r['at']).astimezone(sequences.LOCAL):%H:%M}[/]",
-                            escape(r["what"]), escape(r["target"] or ""), f"[#928374]{escape(r['source'] or '')}[/]",
-                            f"[#928374]{escape(r['connection'] or '')}[/]", state)))
+                            escape(r["what"]), escape(r["target"] or ""), state,
+                            f"[#928374]{escape(r['source'] or '')}[/]", f"[#928374]{escape(r['connection'] or '')}[/]")))
         return out
 
     def show_selected(self):
