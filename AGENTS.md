@@ -66,6 +66,9 @@ Jeremy works in the console; agents read and prepare work through the CLI. On Wo
 | One Step | `comms-terminal step add\|set\|move\|delete …` |
 | Calendar | `comms-terminal events [--from] [--to] [--attendee] [--query] [--last N] [--json]` |
 | Pipelines | `comms-terminal pipeline revenue\|fundraising\|talent`; `pipeline target\|stage\|value …` (Revenue takes a domain; Fundraising and Talent take a Person's email, phone or name) |
+| Issues (ADR 0018) | `comms-terminal issues`; `issue ID` (Markdown); `issue ID --status … --priority … --estimate N --due DATE --title … --description -`; `issue ID --plan DATE\|today\|tomorrow\|none`; `issue new --team KEY --title …` |
+| Urgency coefficients | `comms-terminal urgency list`, `urgency set NAME VALUE` |
+| The Action Queue (ADR 0019) | `comms-terminal actions` |
 
 `comms-terminal <command> --help` lists every flag. Jeremy can also press `y` on a Thread or Draft to copy the same Markdown for you.
 
@@ -77,6 +80,7 @@ The CLI matches the console. Every function that changes the database (`@writer`
 - **Draft edits pass the revision you read.** Read the Draft, then pass `--revision N`. The latest save wins (ADR 0012): an edit made after the stored save applies even over a newer revision, and an earlier one is refused.
 - **Jeremy may have the Draft open.** Your later save replaces what he typed before it, and his next save replaces yours. Tell him before you change a Draft he is working, and after any edit name each changed Draft.
 - **Name things by title.** In anything Jeremy reads, name Threads, Drafts and Tasks by subject and who they are with; an ID may follow in parentheses.
+- **Issue changes go to Linear.** `issue … --status/--priority/…` and `issue new` write to Linear through the Action Queue; Jeremy's Linear rules apply (an approved change set; Issues with other people stay read-only to agents). `--plan` stays in Comms Terminal.
 - **Live writes need Jeremy's go.** Enrolling, finishing or removing Enrollments, applying or deleting Sequences, setting Stages, Values or Targets, skipping Tasks, deleting Drafts, merging or blocking People all change the live database. Get his explicit go for that change, run `sequence apply --dry-run` first, and read the result back afterwards.
 - **No opt-out lines.** Never add a "reply stop" or other opt-out line to a Draft or a Step brief. Keep the Agent Maple Inc. signature and mailing address.
 - **Slack Drafts** take `--to "#channel <C0123>"`; the ID must sit inside `<…>`.
