@@ -57,6 +57,24 @@ def test_probe_all_records_results_apart_from_last_error(monkeypatch):
         ["BROKEN", "OK", "BROKEN", "BROKEN"]
 
 
+def test_probe_loop_survives_a_failed_pass(monkeypatch, tmp_path):
+    """A locked database once killed the loop, and every Connection went stale-BROKEN for good."""
+    import sqlite3
+    import threading
+    path = str(tmp_path / "inbox.db")
+    inbox.migrate(inbox.connect(path))
+    passes, stop = [], threading.Event()
+
+    def probe_all(db, shared):
+        passes.append(1)
+        if len(passes) == 1:
+            raise sqlite3.OperationalError("database is locked")
+        stop.set()
+    monkeypatch.setattr(serve, "probe_all", probe_all)
+    serve.probe_loop(path, {}, stop, every=0)
+    assert len(passes) == 2
+
+
 def test_stale_check_is_broken():
     row = {"auth_ok": 1, "probe_error": None, "last_error": None,
            "probed_at": datetime(2026, 10, 13, 12, tzinfo=timezone.utc).isoformat()}

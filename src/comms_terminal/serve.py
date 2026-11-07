@@ -950,6 +950,8 @@ def probe_loop(db_path: str, shared: dict, stop: threading.Event, every: float =
         db = inbox.connect(db_path)
         try:
             probe_all(db, shared)
+        except Exception as e:  # noqa: BLE001 - a locked database once killed the loop and every check went stale
+            logging.getLogger("comms_terminal.health").info("health check pass failed: %s", e)
         finally:
             db.close()
         if stop.wait(every):
