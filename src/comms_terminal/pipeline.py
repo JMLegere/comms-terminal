@@ -144,7 +144,7 @@ def _held(db, subject_id, pipeline: str) -> dict:
     return _state(_entries(db, pipeline, **{_column(pipeline): subject_id})).get((subject_id, pipeline), {})
 
 
-@writer("create")
+@writer("create", module="pipelines")
 def set_stage(db, org_id: int, pipeline: str, stage: str, at=None, *, now: datetime | None = None) -> int | None:
     """Move an Organization (Revenue) or a Person (Fundraising, Talent) to a Stage; returns the log entry, or None
     when it is already there. `org_id` is the Pipeline's subject, a Person's id in Fundraising and Talent: the
@@ -155,7 +155,7 @@ def set_stage(db, org_id: int, pipeline: str, stage: str, at=None, *, now: datet
     return _append(db, org_id, pipeline, "STAGE", at, stage=stage, now=now)
 
 
-@writer("create")
+@writer("create", module="pipelines")
 def set_value(db, org_id: int, pipeline: str, value, at=None, *, now: datetime | None = None) -> int | None:
     """Set an Organization's Revenue Value or a Person's Fundraising Value; it belongs to the Pipeline, not the Stage.
     `org_id` is the Pipeline's subject, as in set_stage."""
@@ -165,7 +165,7 @@ def set_value(db, org_id: int, pipeline: str, value, at=None, *, now: datetime |
     return _append(db, org_id, pipeline, "VALUE", at, value=value, now=now)
 
 
-@writer("write")
+@writer("write", module="pipelines")
 def undo(db, entry_id: int, *, now: datetime | None = None) -> None:
     """Cancel one Stage or Value entry; the math and history skip both (FR-PL-4)."""
     e = db.execute("SELECT * FROM pipeline_log WHERE id = ?", (entry_id,)).fetchone()

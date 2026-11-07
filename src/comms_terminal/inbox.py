@@ -27,7 +27,7 @@ from typing import Protocol, Sequence
 from . import clock, files, platforms
 from .writers import writer
 
-SCHEMA_VERSION = 36
+SCHEMA_VERSION = 37
 WAIT = timedelta(days=4)  # Waiting for them ends after this with no reply: back to Todo to follow up (#116)
 EMAIL_CONFIRMATION_PENDING = "Email confirmation pending; wait for its sent receipt before replying."
 MIGRATIONS = {  # version -> statement that upgrades an existing database to it
@@ -763,6 +763,12 @@ BEGIN
 END;
 PRAGMA legacy_alter_table = OFF;"""
 
+MIGRATIONS[37] = """CREATE TABLE modules (  -- each Module's setting for this Service; no row means off (ADR 0017)
+  id      TEXT PRIMARY KEY CHECK (id IN ('pipelines', 'sequences', 'cases')),
+  enabled INTEGER NOT NULL CHECK (enabled IN (0, 1))
+) STRICT;
+INSERT INTO modules (id, enabled) VALUES ('pipelines', 1), ('sequences', 1), ('cases', 1);"""
+
 
 class SendUnknown(SendFailed):
     """The provider may or may not have sent the message (timeout, lost response, crash before recording)."""
@@ -782,6 +788,10 @@ class StaleThreadSnapshot(ValueError):
 
 class DraftConflict(ValueError):
     """A newer saved Draft revision exists; stale edits must not overwrite it."""
+
+
+class ModuleDisabled(Exception):
+    """A Client call into a Module that is off for this Service (ADR 0017)."""
 
 
 @dataclass(frozen=True)
@@ -983,6 +993,49 @@ def migrate(db: sqlite3.Connection) -> None:
         db.execute(f"PRAGMA foreign_keys = {fk}")
 
 
+
+
+# --- Modules (GLOSSARY, ADR 0017) --------------------------------------------
+
+MODULES = {"pipelines": "Pipelines", "sequences": "Sequences", "cases": "Cases"}  # id -> name, in rail order
+
+
+def modules_on(db) -> set[str]:
+    """The Modules that are on for this Service; a Module with no row is off."""
+    return {r[0] for r in db.execute("SELECT id FROM modules WHERE enabled = 1")}
+
+
+def disabled(module: str) -> ModuleDisabled:
+    return ModuleDisabled(f"{MODULES[module]} is disabled on this Service. Turn it on in Settings › Modules.")
+
+
+def call_module(name: str, args=(), kwargs=None) -> str | None:
+    """The Module a Client call of writer `name` needs: its tag, or Cases for Act with Set Case."""
+    from .writers import MODULE_OF
+    if name == "inbox.act":
+        action = (kwargs or {}).get("action", args[1] if len(args) > 1 else None)
+        return "cases" if isinstance(action, SetCase) else None
+    return MODULE_OF.get(name)
+
+
+def admit(db, name: str, args=(), kwargs=None) -> None:
+    """Refuse a Client call into an off Module. Only the places Client calls enter run it; the Service's own
+    calls (ingestion pausing an Enrollment) go straight to the writer."""
+    module = call_module(name, args, kwargs)
+    if module and module not in modules_on(db):
+        raise disabled(module)
+
+
+@writer("write")
+def set_module(db, module: str, enabled: bool, *, now: datetime | None = None) -> bool:
+    """Turn one Module on or off for this Service; returns whether it was on, for undo."""
+    if module not in MODULES:
+        raise KeyError(f"module {module}")
+    with db:
+        was = module in modules_on(db)
+        db.execute("INSERT INTO modules (id, enabled) VALUES (?, ?)"
+                   " ON CONFLICT (id) DO UPDATE SET enabled = excluded.enabled", (module, int(bool(enabled))))
+    return was
 
 
 def get_thread(db, thread_id: int) -> Thread:
@@ -2746,7 +2799,7 @@ def is_sole_key(domain: str) -> bool:
     return domain.startswith("person-") and domain.endswith(".sole")
 
 
-@writer("write")
+@writer("write", module="cases")
 def set_case_description(db, case_id: int, description: str, *, now: datetime | None = None) -> None:
     with db:
         old = db.execute("SELECT description FROM cases WHERE id = ?", (case_id,)).fetchone()[0]
@@ -2816,7 +2869,7 @@ def rollup(details, order=CASE_VIEWS, empty="Todo") -> str:
     return next((v for v in order if any(d in VIEWS[v] for d in details)), empty)
 
 
-@writer("create")
+@writer("create", module="cases")
 def create_case(db, title: str, *, now: datetime | None = None) -> int:
     """A Case with no Threads yet (#120)."""
     with db:

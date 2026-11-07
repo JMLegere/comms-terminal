@@ -316,6 +316,7 @@ def handle_call(db_path: str, body: bytes) -> tuple[int, dict]:
 
 def _apply(db, name, module, fn, args, kwargs) -> tuple[int, dict]:
     try:
+        inbox.admit(db, name, args, kwargs)  # a Client call into an off Module is refused (ADR 0017)
         result = getattr(MODULES[module], fn)(db, *args, **kwargs)
         return 200, {"result": encode(result)}
     except tuple(ERRORS.values()) as e:
@@ -606,7 +607,9 @@ class Remote:
                 LOG.info("write %s not applied: %s", name, e)
                 with self.lock:  # refused or lost: the next sync shows the service's state without it
                     self.unconfirmed = [w for w in self.unconfirmed if w[3] != mutation]
-                self.say(f"Not saved on the inbox service · {e}. Showing its state.", error=True)
+                said = (f"{str(e).split(' is disabled')[0]} is disabled · not saved"
+                        if isinstance(e, inbox.ModuleDisabled) else f"Not saved on the inbox service · {e}. Showing its state.")
+                self.say(said, error=True)
             finally:
                 with self.lock:
                     self.busy -= 1

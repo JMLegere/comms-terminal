@@ -30,7 +30,7 @@ pythonpath = ["src"]
 bdd_features_base_dir = "features/"
 # Scenarios tagged @wip have no passing steps yet; run them with `-m wip`.
 addopts = "-m 'not wip'"
-markers = ["wip: scenario not yet implemented"]
+markers = ["wip: scenario not yet implemented", "modules_off: a fresh database keeps every Module off (ADR 0017)"]
 # Gherkin traceability tags (@AS-n, @FR-n, @NFR-n, @I-n) become marks; select them with -m.
 filterwarnings = ["ignore:Unknown pytest.mark.(AS|FR|NFR|I)-:pytest.PytestUnknownMarkWarning"]
 
