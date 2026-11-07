@@ -10,7 +10,7 @@
 | Topic | Manage Linear Issues inside Comms Terminal (Planned day, capacity, warnings, edits) with one optimistic Action Queue for everything Comms Terminal carries out. |
 | Sources | `.agents/discovery/2026-11-07-linear-daily-scheduling.md` (approved through Phase 4); `.agents/design/2026-11-07-issues-and-action-queue.md` (proposed); ADRs 0017, 0018, 0019 (proposed); `GLOSSARY.md` (Issues section, Action, Action Queue); code at `origin/main` `85b5540`. |
 | History limits | The full conversation of 2026-11-07 was available. Earlier sessions are known only through the artifacts cited. |
-| Implementation authorization | **P0–P2** (Jeremy, 2026-11-07: "P0 now, stop for review", "execute the entire pd up to p1", "execute the entire pd up to p2"). Local commits only; no push, no deploy, no credential or webhook. P3+ not authorized. |
+| Implementation authorization | **P0–P3** (Jeremy, 2026-11-07: "P0 now, stop for review", then "execute the entire pd up to p1", "… p2", "… p3"). Local commits only; no push, no deploy, no credential, webhook or live Linear write. P4+ not authorized. |
 
 ## 2. Executive framing
 
@@ -105,7 +105,7 @@ Status: **C** confirmed by Jeremy (G-number from design §2), **P** proposed her
 - **AS-IQ-6** An Issue planned after its due date shows the deadline warning.
 - **AS-IQ-7** Jeremy sets status "Making It Happen"; it shows at once; Linear refuses (status of another team); it snaps back with "Not saved: …".
 - **AS-IQ-8** The Linear key is revoked; the next Action marks the Issue connection broken; the App's bottom bar shows the Problem; Actions wait.
-- **AS-IQ-9** A create times out; the resend with the same id makes one Issue.
+- **AS-IQ-9** A create times out; before sending it again the Action looks the Issue up by its id, finds it, and confirms: one Issue. (Revised 2026-11-07, decision 48.)
 - **AS-IQ-10** A Draft send with unknown outcome stays locked exactly as today, now listed on the Action Queue page.
 - **AS-IQ-11** An Unplanned Issue due in 5 days shows the due-soon warning; one due in 9 days does not.
 
@@ -227,7 +227,8 @@ Verify: existing suites `tests/test_invite_responses.py`, `tests/test_reactions.
 |---|---|---|---|---|---|
 | Approve this PRD and ADRs 0017–0019 | All phases | Approved 2026-11-07 | — | Jeremy | No |
 | Scenario approval after P0 | P1+ | Taken as given with the P1 go (decision 39) | — | Jeremy | No |
-| Implementation go for P3+ | P3+ | Not given | Ask after P2 review | Jeremy | Yes |
+| Implementation go for P4+ | P4+ | Not given | Ask after P3 review | Jeremy | Yes |
+| Live Linear writes unexercised | P3 confirm path | Mutations checked against Linear's live schema by introspection only; no write sent (key is Read-only, writes need P7) | First confirmed Action after P7 | Jeremy | No |
 | P1 App rail not rendered natively | FR-CK-2 visual | App view tests pass; GPUI window not opened (App runs headless only on Workbox) | Look at the rail on Mani after the next App update | Jeremy | No |
 | Linear webhook creation needs admin rights | P7 | Resolved: Jeremy is a Linear admin (`whoami` isAdmin, 2026-11-07) | — | Jeremy | No |
 | Linear webhook payload/signature details | P2 | Resolved: verified against linear.app/developers/webhooks (hex HMAC-SHA256 of raw body in `Linear-Signature`; `webhookTimestamp` ms within 60 s; non-200 retried after 1 min, 1 h, 6 h; admins create webhooks) | — | Implementer | No |
@@ -289,6 +290,11 @@ Verify: existing suites `tests/test_invite_responses.py`, `tests/test_reactions.
 | 44 | 2026-11-07 | Full read uses three plain filters (open, completed since, canceled since): live check showed Linear's `or` beside `assignee` returned all 812 assigned Issues and `assignee` inside each branch returned 2534 | agent, live read-only check on Oracle | done | one `or` filter |
 | 45 | 2026-11-07 | A webhook arriving before the first full read (Jeremy's Linear id unknown) is answered 200 and skipped; the read at start copies the Issue | agent, implementation | done | — |
 | 46 | 2026-11-07 | P2 adds `linear-webhook-secret` to the container's optional credentials and `/hooks/linear` to the Email Worker's routes; deploying the Worker and installing the secret stay in P7 | agent, implementation | done | — |
+| 47 | 2026-11-07 | "execute the entire pd up to p3": P3 authorized | Jeremy | approved | #42 stop |
+| 48 | 2026-11-07 | A create whose outcome was unknown is looked up by its id before any resend (a found Issue confirms it); AS-IQ-9 reworded from "two creates with the same id" | agent, implementation | done | resend-only create |
+| 49 | 2026-11-07 | Linear's `estimate` is an Int (live introspection): estimates are whole points; the CLI and writers refuse fractions | agent, live read-only check | done | REAL estimate sent as is |
+| 50 | 2026-11-07 | The CLI's `issues` and `issue ID / issue new` land in P3, since every writer needs a command or a console-only reason (`tests/test_cli_parity.py`); `issues.undo` is console-only | agent, implementation | done | CLI in P5 |
+| 51 | 2026-11-07 | A laptop write wakes the Service's loop at once (`/call` sets the kick), so an Action runs in about a second, not a minute | agent, implementation | done | — |
 
 ## 8. Work log
 
@@ -302,6 +308,7 @@ Verify: existing suites `tests/test_invite_responses.py`, `tests/test_reactions.
 | 2026-11-07T13:35-04:00 | agent | P0: `features/issues.feature` (9) and `features/actions.feature` (6) scenarios, all `@wip` | `uv run pytest tests/test_features.py`: 163 passed, 18 deselected; `-m wip`: 18 failed (15 new + 3 existing App) | the P0 commit on `jeremy/issues-design` | source-observed |
 | 2026-11-07T14:10-04:00 | agent | P1: migration 37 (connections kind, widened Platforms, account unique per kind); `platforms` kinds and Linear/Tana/Attio; `inbox.ensure_connection`; `serve.record_context`; Console and App rails; CLI `drafts` lists only sending Connections; AGENTS.md | Focused suites: 234 + 110 + 584 passed; Console rail, status line and Linear Connection page rendered as text in a Textual test run | the P1 commit on `jeremy/issues-design` | source-observed |
 | 2026-11-07T15:05-04:00 | agent | P2: migration 38 (`issues`, `issue_statuses`); `issues.py`; `linear.full_read`, `normal`, `verify`, `handle_hook`; `serve.read_issues` in the 30-minute probe loop, Issue connection at start, `/hooks/linear` (Context connections take no hooks); container credential and Worker route; 3 scenarios un-`@wip` (AS-IQ-3 ×2, AS-IQ-4) | `tests/test_issues.py` 13 passed; focused suites 665 passed; live read-only run of the new queries on Oracle: viewer found, 99 Issues (57 open, 30 completed and 12 canceled in 30 days), every state id among 26 team statuses | the P2 commit on `jeremy/issues-design` | source-observed |
+| 2026-11-07T16:20-04:00 | agent | P3: migration 39 (`actions`); `actions.py` (enqueue, run, latest_refusal); `linear.mutate` and `Client.write` (confirmed, refused, broken, unknown); `issues.update`, `create`, `undo` writers with carriers, snap-back and "Not saved"; Service runs the queue in `wake_loop`, kicked by laptop writes; `remote.MODULES` and Local API (`command.issues.*`); CLI `issues`, `issue`; 5 scenarios un-`@wip` | `tests/test_actions.py` 18 passed; focused suites 575 passed; laptop and service mint the same Action id; live read-only introspection: `IssueUpdateInput`/`IssueCreateInput` fields, `id` on create, `estimate` Int | the P3 commit on `jeremy/issues-design` | source-observed |
 
 ## 9. Sources and coverage
 

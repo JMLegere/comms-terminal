@@ -1206,6 +1206,142 @@
    }
   },
   {
+   "name": "command.issues.create",
+   "summary": "The issues.create writer (write).",
+   "params": [
+    {
+     "name": "issue_id",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "team_id",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "title",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "description",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "state_id",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "priority",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "estimate",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "due_date",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": true,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.issues.undo",
+   "summary": "The issues.undo writer (write).",
+   "params": [
+    {
+     "name": "action_id",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": false,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.issues.update",
+   "summary": "The issues.update writer (write).",
+   "params": [
+    {
+     "name": "issue_id",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "fields",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": true,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
    "name": "command.pipeline.set_stage",
    "summary": "The pipeline.set_stage writer (create).",
    "params": [

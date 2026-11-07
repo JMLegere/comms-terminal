@@ -23,8 +23,8 @@ from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from . import (attio, calendar, clock, email, fastmail, files, gcal, inbox, issues, linear, mcp, meetings, platforms, quo,
-               slack, tana)
+from . import (actions, attio, calendar, clock, email, fastmail, files, gcal, inbox, issues, linear, mcp, meetings,
+               platforms, quo, slack, tana)
 
 
 def credential(name: str) -> bytes | None:
@@ -548,7 +548,7 @@ class UnixHTTPServer(socketserver.ThreadingUnixStreamServer):
 
 
 def reply_server(db_path: str, socket_path: str, senders: Senders, contexts: dict | None = None,
-                 writer: gcal.Client | None = None) -> UnixHTTPServer:
+                 writer: gcal.Client | None = None, kick: threading.Event | None = None) -> UnixHTTPServer:
     """The local socket: POST /reply, POST /send-draft, POST /slack-conversations, POST /respond (through `writer`),
     and POST /<source> for each Context source in `contexts` ({"tana": …})."""
     # Reactions are a provider operation, not a remote /call ledger write.
@@ -633,11 +633,18 @@ def reply_server(db_path: str, socket_path: str, senders: Senders, contexts: dic
         return UnixHTTPServer(socket_path, _handler({"/reply": reply, "/send-draft": send_draft,
                                                          "/slack-conversations": slack_conversations, "/attio-people": attio_people, "/tana": context_route("tana"), "/attio": context_route("attio"), "/linear": linear_route,
                                                          "/slack-reactions": slack_reactions, "/respond": respond,
-                                                         "/call": json_route(lambda b: remote.handle_call(db_path, b)),
+                                                         "/call": json_route(lambda b: _kicked(remote.handle_call(db_path, b), kick)),
                                                          "/sync": json_route(lambda b: remote.handle_sync(db_path, changes, b)),
                                                          "/raw": json_route(lambda b: remote.handle_raw(db_path, b))}))
     finally:
         os.umask(old)
+
+
+def _kicked(answer, kick: threading.Event | None):
+    """A laptop write may have enqueued an Action: wake the loop that runs them now, not in a minute (ADR 0019)."""
+    if kick is not None:
+        kick.set()
+    return answer
 
 
 def hooks_server(db_path: str, host: str, port: int, client=None,
@@ -938,6 +945,7 @@ def wake_loop(db_path: str, stop: threading.Event, every: float = 60, kick: thre
             if senders is not None:
                 send_due(db, senders, now)
             inbox.reconcile_resend_receipts(db)
+            actions.run(db, action_clients(), now)  # the Action Queue (ADR 0019)
             fetch_pending(db, get or {})
             if expired is None or now - expired >= timedelta(days=1):
                 expired = now
@@ -963,6 +971,12 @@ def probe_all(db, shared: dict, cred=credential) -> None:
             error = f"health check crashed: {e}"
         inbox.set_probe(db, c["id"], error)
         logging.getLogger("comms_terminal.health").info("health check %s: %s", c["platform"], error or "ok")
+
+
+def action_clients(cred=credential) -> dict:
+    """The Platforms the Action Queue can write to now, by Platform name (ADR 0019)."""
+    token = cred("linear-token")
+    return {"linear": linear.Client(token.decode())} if token else {}
 
 
 def read_issues(db, cred=credential, now: datetime | None = None) -> int | None:
@@ -1046,7 +1060,8 @@ def run(db_path: str, socket_path: str, host: str, port: int, files_host: str | 
         meetings.connect(db)  # go-live: only Events first seen from now become Meeting Threads
     db.close()
     stop, kick = threading.Event(), threading.Event()
-    servers = [hooks_server(db_path, host, port, kick=kick), reply_server(db_path, socket_path, senders, contexts, writer=writer)]
+    servers = [hooks_server(db_path, host, port, kick=kick), reply_server(db_path, socket_path, senders, contexts, writer=writer,
+                                                                        kick=kick)]
     if files_host:  # LAN address only (NFR-A2); without it, chips keep their Platform links
         servers.append(files_server(db_path, files_host, files_port))
     threads = [threading.Thread(target=s.serve_forever, daemon=True) for s in servers]

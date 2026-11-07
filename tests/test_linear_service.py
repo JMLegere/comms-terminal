@@ -250,7 +250,7 @@ def test_run_composes_linear_context(database, monkeypatch):
         monkeypatch.setattr(serve, f"{name}_context", lambda db, name=name: name)
     monkeypatch.setattr(serve, "hooks_server", lambda *args, **kwargs: server)
 
-    def reply_server(db_path, socket_path, senders, contexts, writer=None):
+    def reply_server(db_path, socket_path, senders, contexts, writer=None, kick=None):
         seen.update(contexts, writer=writer)
         return server
 

@@ -70,6 +70,60 @@ class Client:
             raise LinearError("Linear returned an invalid response")
         return result["data"]
 
+    def write(self, name: str, variables: dict) -> dict:
+        """One of WRITES, for the Action Queue only (ADR 0019); its outcome, never an exception."""
+        return mutate(self.token, name, variables, self.opener)
+
+
+WRITES = {  # the only mutations Comms Terminal sends (ADR 0019): Jeremy's Issue changes, never a delete
+    "issueUpdate": """mutation IssueUpdate($id: String!, $input: IssueUpdateInput!) {
+  issueUpdate(id: $id, input: $input) { success issue { id identifier url createdAt updatedAt } }
+}""",
+    "issueCreate": """mutation IssueCreate($input: IssueCreateInput!) {
+  issueCreate(input: $input) { success issue { id identifier url createdAt updatedAt } }
+}""",
+}
+ISSUE_BY_ID = """query IssueById($id: String!) { issue(id: $id) { id identifier url createdAt updatedAt } }"""
+
+
+def _said(error) -> str:
+    return " ".join(str(error.get("message") or "Linear refused it").split())[:200] if isinstance(error, dict) \
+        else "Linear refused it"
+
+
+def mutate(client_token: str, name: str, variables: dict, opener=urllib.request.urlopen) -> dict:
+    """One write (WRITES[name]) and its outcome for the Action Queue (ADR 0019): {"outcome": "confirmed", "issue"},
+    {"outcome": "refused", "error"} (Linear said no), {"outcome": "broken", "error"} (the key was refused), or
+    {"outcome": "unknown", "error"} (no answer: it may or may not have happened)."""
+    try:
+        request = urllib.request.Request(API, json.dumps({"query": WRITES[name], "variables": variables}).encode(),
+                                         {"Authorization": client_token, "Content-Type": "application/json",
+                                          "User-Agent": USER_AGENT}, method="POST")
+        with opener(request, timeout=30) as response:
+            result = json.load(response)
+    except urllib.error.HTTPError as error:
+        if error.code in (401, 403):
+            return {"outcome": "broken", "error": f"Linear HTTP {error.code}"}
+        if 400 <= error.code < 500 and error.code != 429:
+            try:
+                return {"outcome": "refused", "error": _said((json.load(error).get("errors") or [None])[0])}
+            except (ValueError, AttributeError, UnicodeError):
+                return {"outcome": "refused", "error": f"Linear HTTP {error.code}"}
+        return {"outcome": "unknown", "error": f"Linear HTTP {error.code}"}
+    except (urllib.error.URLError, OSError, http.client.HTTPException, ValueError, UnicodeError):
+        return {"outcome": "unknown", "error": "Linear did not answer"}
+    errors = result.get("errors") if isinstance(result, dict) else None
+    if errors:
+        first = errors[0] if isinstance(errors[0], dict) else {}
+        code = str((first.get("extensions") or {}).get("type") or (first.get("extensions") or {}).get("code") or "")
+        if "authentication" in code.casefold() or "forbidden" in code.casefold():
+            return {"outcome": "broken", "error": _said(first)}
+        return {"outcome": "refused", "error": _said(first)}
+    out = ((result.get("data") or {}).get(name) or {}) if isinstance(result, dict) else {}
+    if not out.get("success") or not isinstance(out.get("issue"), dict):
+        return {"outcome": "refused", "error": "Linear did not save it"}
+    return {"outcome": "confirmed", "issue": out["issue"]}
+
 
 def _pages(client, document, field, filter_):
     after, seen = None, set()

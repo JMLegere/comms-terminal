@@ -41,6 +41,7 @@ def _integer_keys_sql() -> str:
 
 
 UNDO = {
+    39: "DROP INDEX actions_target; DROP INDEX actions_due; DROP TABLE actions;",
     38: "DROP INDEX issues_planned; DROP TABLE issues; DROP TABLE issue_statuses;",
     37: """PRAGMA foreign_keys = OFF; PRAGMA legacy_alter_table = ON;
 DELETE FROM connections WHERE platform IN ('linear', 'tana', 'attio');

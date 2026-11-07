@@ -11,7 +11,7 @@ Feature: Actions
     And the team "Business" has statuses "Todo", "Making It Happen", "Blocked" and "Done"
     And an Issue "BIZ-10 Send the data room link" assigned to Jeremy with status "Todo"
 
-  @wip @AS-IQ-7 @FR-AQ-1 @FR-AQ-2 @NFR-1
+  @AS-IQ-7 @FR-AQ-1 @FR-AQ-2 @NFR-1
   Scenario: A refused status change snaps back with its reason
     Given Linear will refuse the next request with "invalid state for team"
     When Jeremy Updates "BIZ-10" to status "Making It Happen"
@@ -20,14 +20,14 @@ Feature: Actions
     Then "BIZ-10" has status "Todo"
     And "BIZ-10" shows "Not saved: invalid state for team"
 
-  @wip @AS-IQ-7 @FR-AQ-1
+  @AS-IQ-7 @FR-AQ-1
   Scenario: A confirmed status change stays
     When Jeremy Updates "BIZ-10" to status "Done"
     And the Action Queue runs
     Then Linear received one update setting "BIZ-10" to status "Done"
     And the Action is "confirmed"
 
-  @wip @AS-IQ-8 @FR-AQ-3 @FR-CK-3
+  @AS-IQ-8 @FR-AQ-3 @FR-CK-3
   Scenario: A refused sign-in marks the Issue connection broken and holds its Actions
     Given Linear will refuse every request with HTTP 401
     When Jeremy Updates "BIZ-10" to status "Done"
@@ -39,15 +39,16 @@ Feature: Actions
     Then the Action is "confirmed"
     And the Issue connection has no Last Error
 
-  @wip @AS-IQ-9 @FR-AQ-4 @FR-AQ-5
-  Scenario: A create whose outcome is unknown is sent again with the same id and makes one Issue
+  @AS-IQ-9 @FR-AQ-4 @FR-AQ-5
+  Scenario: A create whose outcome is unknown is looked up by its id before it is sent again, and makes one Issue
     Given Linear will time out on the next request after creating the Issue
     When Jeremy Creates an Issue "Book the closing call" in team "Business"
     And the Action Queue runs twice
-    Then Linear received two creates with the same id
+    Then Linear received one create and then a lookup by the same id
     And Linear holds one Issue "Book the closing call"
+    And the Action is "confirmed"
 
-  @wip @AS-IQ-9 @FR-AQ-6
+  @AS-IQ-9 @FR-AQ-6
   Scenario: Undo is a new Action that puts the old value back
     Given Jeremy Updated "BIZ-10" to status "Done" and the Action was confirmed
     When Jeremy undoes that change
