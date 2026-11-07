@@ -823,7 +823,10 @@ def materialize(db, now: datetime | None = None) -> int:
     """Make each running Enrollment's next Task, carry out each Action and If whose time has come, and make the
     Draft of each email Task whose day has come; an Enrollment whose path runs out becomes Finishing and works that
     path's On completion, then Finished. Idempotent (one Task per Enrollment and Step, one Draft per Task), so it
-    runs every minute from wake. Returns how many Tasks or Drafts it made."""
+    runs every minute from wake. Returns how many Tasks or Drafts it made. While Sequences is off it does nothing,
+    so Steps that fall due meanwhile come due, overdue, once it is on again (ADR 0017)."""
+    if "sequences" not in inbox.modules_on(db):
+        return 0
     now = now or clock.now()
     made = 0
     with inbox._write_snapshot(db):
@@ -1475,7 +1478,9 @@ def paused(db) -> list[dict]:
 
 
 def pauses_since(db, since: str) -> list[dict]:
-    """Enrollments paused after `since`, for the console's toast (FR-SEQ-20)."""
+    """Enrollments paused after `since`, for the console's toast (FR-SEQ-20); none while Sequences is off."""
+    if "sequences" not in inbox.modules_on(db):
+        return []
     return [dict(r) for r in db.execute(
         "SELECT e.id, e.paused_at, e.pause_reason, p.display_name AS person, q.name AS sequence FROM enrollments e"
         " JOIN persons p ON p.id = e.person_id JOIN sequences q ON q.id = e.sequence_id"

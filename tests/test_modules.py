@@ -123,3 +123,71 @@ def test_a_refused_laptop_write_says_its_module_is_disabled():  # FR-MOD-12, R5
     r.queue("inbox.create_case", ("X",), {}, 1)
     r.drain()
     assert said == ["Cases is disabled · not saved"]
+
+
+# --- Phase 2: the Sequence engine and the shared reads -------------------------------------------------------
+
+from datetime import timedelta  # noqa: E402
+
+from test_sequences import DAY, ME, MONDAY, draft_of, due, secret  # noqa: E402
+
+from comms_terminal import calendar, search  # noqa: E402
+
+
+def enrolled(db):
+    s, _ = secret(db)
+    dana = person(db, "dana@harbourline.example", "Dana Roy", org="Harbourline")
+    sequences.enroll(db, dana, s, MONDAY)
+    (t,) = sequences.tasks_due(db, MONDAY)
+    return dana, t
+
+
+def test_with_sequences_off_a_reply_still_pauses_and_no_task_or_draft_is_made(db):  # AS-MOD-3, FR-MOD-5
+    dana, t = enrolled(db)
+    inbox.set_module(db, "sequences", False)
+    sequences.skip_task(db, t["id"], MONDAY)  # the Service's own call: ungated, but the engine makes nothing
+    inbox.ingest(db, inbox.Incoming("1", ME, "mailbox", "MESSAGE", "<dana-reply@x>",
+                                    inbox.Identity("email", "dana@harbourline.example", "Dana Roy"),
+                                    MONDAY + timedelta(hours=1), "Interested!", title="Re: Pilot"))
+    (e,) = sequences.enrollments(db, dana)
+    assert e["state"] == "PAUSED"
+    assert sequences.materialize(db, MONDAY + 2 * DAY) == 0
+    assert db.execute("SELECT count(*) FROM tasks WHERE state = 'DUE'").fetchone()[0] == 0
+    assert sequences.pauses_since(db, MONDAY.isoformat()) == []  # no Enrollment-paused toast
+
+
+def test_turning_sequences_back_on_brings_steps_that_fell_due_as_overdue(db):  # AS-MOD-4, FR-MOD-6
+    _, t = enrolled(db)
+    inbox.set_module(db, "sequences", False)
+    sequences.skip_task(db, t["id"], MONDAY)
+    assert due(db, MONDAY + 4 * DAY) == []
+    inbox.set_module(db, "sequences", True)
+    sequences.materialize(db, MONDAY + 4 * DAY)
+    assert [(k, g) for _, k, g, _ in due(db, MONDAY + 4 * DAY)] == [("call", "overdue")]
+
+
+def test_today_and_the_calendar_drop_an_off_modules_parts(db):  # FR-MOD-7, FR-MOD-8
+    _, t = enrolled(db)
+    d = draft_of(db, t["id"])
+    assert inbox.today(db, MONDAY)["tasks"] and d["id"] not in [x["id"] for x in inbox.today(db, MONDAY)["drafts"]]
+    inbox.set_module(db, "sequences", False)
+    inbox.set_module(db, "pipelines", False)
+    page = inbox.today(db, MONDAY)
+    assert (page["tasks"], page["paused"], page["unattended"]) == ([], [], [])
+    assert d["id"] in [x["id"] for x in page["drafts"]]  # a Task's Draft lists as a Draft while Sequences is off
+    kinds = {i["kind"] for i in calendar.items(db, MONDAY.date() - timedelta(days=1), MONDAY.date() + timedelta(days=30))}
+    assert not kinds & {"task", "enrollment"}
+
+
+def test_cases_off_drops_case_ids_and_case_search_and_keeps_the_data(db):  # AS-MOD-7, FR-MOD-7
+    person(db, "logan@agentmaple.example", "Logan")
+    tid = db.execute("SELECT id FROM threads ORDER BY id DESC").fetchone()[0]
+    case = inbox.create_case(db, "Logan onboarding")
+    inbox.act(db, tid, inbox.SetCase(case_id=case))
+    before = db.execute("SELECT (SELECT count(*) FROM cases), (SELECT count(*) FROM threads WHERE case_id IS NOT NULL)").fetchone()
+    inbox.set_module(db, "cases", False)
+    assert {t["case_id"] for t in inbox.queue(db, "Todo")} == {None}
+    assert not [d for d in search._docs(db) if d["kind"] == "Case"]
+    inbox.set_module(db, "cases", True)
+    assert db.execute("SELECT (SELECT count(*) FROM cases), (SELECT count(*) FROM threads WHERE case_id IS NOT NULL)").fetchone() == before
+    assert {t["case_id"] for t in inbox.queue(db, "Todo")} == {case}

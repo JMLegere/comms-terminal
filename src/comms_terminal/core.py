@@ -106,7 +106,8 @@ def _shell(core, db):
             "connections": [{"id": c["id"], "platform": c["platform"], "name": conn_name(c), "ok": health_ok(c),
                              "writes": (c["last_error"] or "").startswith(gcal.WRITES_BROKEN),
                              "supported": c["platform"] in PLATFORMS} for c in inbox.connections(db)],
-            "calendar_broken": bool(cal.broken(db)), **events, "build": build_version()}
+            "calendar_broken": bool(cal.broken(db)), **events, "build": build_version(),
+            "modules": sorted(inbox.modules_on(db))}
 
 
 @query("search", text="string", commands="array", recent="array")

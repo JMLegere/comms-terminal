@@ -2945,10 +2945,12 @@ def today(db, now: datetime | None = None) -> dict:
         "SELECT t.due_at FROM tasks t JOIN enrollments e ON e.id = t.enrollment_id"
         " WHERE t.state = 'DUE' AND e.state IN ('ACTIVE', 'FINISHING') ORDER BY t.due_at")
         if datetime.fromisoformat(r[0]).astimezone(sequences.LOCAL).date() > day]
+    on = modules_on(db)  # an off Module's panes are empty; with Sequences off, Task Drafts list as Drafts (ADR 0017)
     return {"threads": [t for t in queue(db, "Todo") if t["detail"] != REPLY_DRAFT],
-            "tasks": sequences.tasks_due(db, now),
-            "drafts": list_drafts(db, tasks=False), "paused": sequences.paused(db),
-            "unattended": pipeline.unattended(db),
+            "tasks": sequences.tasks_due(db, now) if "sequences" in on else [],
+            "drafts": list_drafts(db, tasks="sequences" not in on),
+            "paused": sequences.paused(db) if "sequences" in on else [],
+            "unattended": pipeline.unattended(db) if "pipelines" in on else [],
             "next_wake": wake, "next_task": later[0] if later else None}
 
 
@@ -2990,8 +2992,13 @@ def queue(db, view: str) -> list[dict]:
                     "case_id": r["case_id"], "until": r["follow_up_at"] or r["snoozed_until"], "who": label, "where": _where(r, identity), "last_at": r["last_at"],
                     "waiting_since": r["last_in"] or r["last_at"], "drafted": bool(r["drafted"])})
     if view == "Todo":
-        return sorted(out, key=lambda x: x["waiting_since"])
-    return sorted(out, key=lambda x: x["last_at"], reverse=True)
+        out.sort(key=lambda x: x["waiting_since"])
+    else:
+        out.sort(key=lambda x: x["last_at"], reverse=True)
+    if "cases" not in modules_on(db):  # Cases off: no Case headers in either Client (ADR 0017)
+        for t in out:
+            t["case_id"] = None
+    return out
 
 
 def _shaped(db, m: dict, platform, channel, lan) -> dict:

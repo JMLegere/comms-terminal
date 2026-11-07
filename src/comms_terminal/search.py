@@ -99,10 +99,11 @@ def _docs(db) -> list[dict]:
         out.append({"kind": "Organization", "id": r["id"], "title": r["name"], "sub": sub,
                     "open": {"page": "organization", "organization": {"id": r["id"], "domain": r["domain"]}, "title": r["name"]},
                     "fields": [r["name"], r["domain"], ""]})
-    for r in db.execute("SELECT id, title, description FROM cases"):
+    on = inbox.modules_on(db)  # an off Module's records are not found (ADR 0017)
+    for r in db.execute("SELECT id, title, description FROM cases") if "cases" in on else []:
         out.append({"kind": "Case", "id": r["id"], "title": r["title"], "sub": "",
                     "open": {"page": "case", "case": r["id"], "title": r["title"]}, "fields": [r["title"], r["description"], ""]})
-    for r in db.execute("SELECT id, name, description FROM sequences WHERE archived_at IS NULL"):
+    for r in db.execute("SELECT id, name, description FROM sequences WHERE archived_at IS NULL") if "sequences" in on else []:
         out.append({"kind": "Sequence", "id": r["id"], "title": r["name"], "sub": r["description"],
                     "open": {"page": "sequences", "sequence": r["id"]}, "fields": [r["name"], r["description"], ""]})
     for c in inbox.connections(db):
