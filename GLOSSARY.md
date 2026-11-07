@@ -158,11 +158,11 @@ The Steps at the end of one path through a Sequence, run when an Enrollment on t
 _Avoid_: Exit step, Goal, Finally
 
 **Step**:
-One item in a Sequence, of one kind: a touch (email, call, LinkedIn, or letter) that Jeremy does, an Action that the console does, or an If that chooses a path. A Step is the template; each Enrollment works it as a Task.
-_Avoid_: Touch (for an Action or If), Task (for one Person's copy)
+One item in a Sequence, of one kind: a touch (email, call, LinkedIn, or letter) that Jeremy does, an Action Step, or an If that chooses a path. A Step is the template; each Enrollment works it as a Task.
+_Avoid_: Touch (for an Action Step or If), Task (for one Person's copy)
 
-**Action**:
-A Step the console carries out itself, such as setting a Stage or enrolling the Person in another Sequence. It checks no condition. An enrolling Action waits for Jeremy when the Person responded during this Enrollment or already went through that Sequence, unless the Sequence is enrolling them in itself to repeat.
+**Action Step**:
+A Step whose work is an Action, such as setting a Stage or enrolling the Person in another Sequence. It checks no condition. An enrolling Action Step waits for Jeremy when the Person responded during this Enrollment or already went through that Sequence, unless the Sequence is enrolling them in itself to repeat.
 _Avoid_: Automation, Update, Enrollment Step
 
 **If**:
@@ -333,8 +333,8 @@ _Avoid_: Dashboard, Execution view
 ## Sources
 
 **Platform**:
-The service a Connection runs through: Gmail, Fastmail, Slack, Quo, or Google Calendar (Meetings come in; the only thing that goes out is Jeremy's Response to an invite); later WhatsApp, LinkedIn, or tool comments. Each Platform has one adapter.
-_Avoid_: Medium, Channel (when meaning the service), Email (Gmail and Fastmail are separate Platforms)
+An outside service Comms Terminal connects to: Gmail, Fastmail, Slack, Quo, Google Calendar, Linear, Tana, or Attio; later Jira, WhatsApp, or LinkedIn. Each Platform has one adapter.
+_Avoid_: Medium, Channel (when meaning the service), Email (Gmail and Fastmail are separate Platforms), Tool
 
 **Message format**:
 The shape of a message that Platforms can share: email (Gmail, Fastmail), Slack message, or SMS (Quo). Email addresses, mailbox threading by Message-ID and References, and reply-all belong to the email format, so one address is one Identity on every email Platform.
@@ -345,12 +345,50 @@ A container of Threads on a Platform, such as a Slack channel or DM.
 _Avoid_: Space, Room, Inbox
 
 **Connection**:
-One connected account on a Platform, such as one forwarded Gmail address, one Slack workspace, or one Quo number. Jeremy can connect any number of email addresses; each email Connection has its own Inbound address, the `inbox.agentmaple.com` address its forward reaches, which files its mail under it.
+One connected account on a Platform, of one kind: an Email, SMS, Slack, Calendar, Context, or Issue connection. One account can back two Connections, such as Linear's Context connection and Issue connection. Jeremy can connect any number of email addresses; each Email connection has its own Inbound address, the `inbox.agentmaple.com` address its forward reaches, which files its mail under it.
 _Avoid_: Source, Account, Integration
 
-**Context source**:
-An outside tool that Comms Terminal reads to show context beside Threads, Persons, Organizations, and Cases, such as Tana, Attio, or Linear. It holds no Threads and is not a Platform.
-_Avoid_: Integration, Connection, Platform (for Tana, Attio, or Linear)
+**Action**:
+One thing Comms Terminal carries out itself, on Jeremy's word or on a schedule: a send, a Respond, a reaction, an Issue change, or an Action Step's effect. Each is either safe to repeat or not; a send is not, so one whose outcome is unknown is never repeated by itself.
+_Avoid_: Job, Operation, Action item (that is a Task Jeremy does)
+
+**Action Queue**:
+Every Action that is scheduled, running, refused, or of unknown outcome, by day and by Connection, so Jeremy sees what is about to leave and what did not.
+_Avoid_: Outbox, Outreach queue, Send queue
+
+**Context connection**:
+A Connection that Comms Terminal only reads, to show context beside Threads, Persons, Organizations, and Cases: Tana, Attio, or Linear. It holds no Threads.
+_Avoid_: Context source, Integration
+
+## Issues
+
+**Issue**:
+A work item assigned to Jeremy on a Platform that has an Issue connection, such as a Linear issue. That Platform owns it and every field on it; Comms Terminal keeps a copy and passes Jeremy's changes through.
+_Avoid_: Task (that is a Sequence Task), Case, Ticket, To-do
+
+**Issue connection**:
+A Connection to a tracker that is the source of truth for Issues, with changes going both ways: Linear now, Jira later. Each has its own Slip status and estimate unit.
+_Avoid_: Issue provider, Context connection (read-only), Integration
+
+**Planned day**:
+The day Jeremy intends to work an Issue. It lives only in Comms Terminal, is never sent to the Issue's Platform, and is never the Issue's due date.
+_Avoid_: Scheduled date, Do date, Due date (for this), Day plan (there is none: a day's Issues are just the Issues with that Planned day)
+
+**Day capacity**:
+How much Issue work one workday fits: 9 hours less the hours Jeremy is busy on his calendar. An Issue counts 1 hour unless its estimate says otherwise; weekends hold none unless Jeremy plans there.
+_Avoid_: Load, Bandwidth, WIP limit
+
+**Unplanned**:
+An open Issue with no Planned day.
+_Avoid_: Backlog (that is a Linear status), Unscheduled
+
+**Rollover**:
+The automatic move of an unfinished Issue from a passed Planned day to the next workday, which also sets its Slip status.
+_Avoid_: Carry-over, Reschedule, Slip (for the move)
+
+**Slip status**:
+The status a Rollover sets on the Issue's Platform, chosen per Issue connection: Blocked in Linear.
+_Avoid_: Blocked (alone; that flags an Identity)
 
 ## Calendar
 
