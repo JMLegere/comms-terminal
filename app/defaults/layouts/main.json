@@ -72,7 +72,9 @@
                 "connection": null,
                 "context": null,
                 "event": null,
-                "case": null
+                "case": null,
+                "issues": "issues",
+                "actions": "actions"
               }
             },
             {
@@ -103,7 +105,10 @@
                 "connection": "connection",
                 "context": "context",
                 "event": "event",
-                "case": "case"
+                "case": "case",
+                "issues": "issue",
+                "actions": null,
+                "today:issue": "issue"
               }
             }
           ]

@@ -65,7 +65,7 @@ export default {
   },
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
-    if (!["/hooks/email", "/hooks/slack", "/hooks/quo", "/hooks/resend"].includes(url.pathname)) {
+    if (!["/hooks/email", "/hooks/slack", "/hooks/quo", "/hooks/resend", "/hooks/linear"].includes(url.pathname)) {
       return new Response("Not found", { status: 404 });
     }
     if (request.method !== "POST") {

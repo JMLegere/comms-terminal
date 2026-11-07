@@ -23,7 +23,8 @@ from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from . import attio, calendar, clock, email, fastmail, files, gcal, inbox, linear, mcp, meetings, platforms, quo, slack, tana
+from . import (actions, attio, calendar, clock, email, fastmail, files, gcal, inbox, issues, linear, mcp, meetings,
+               platforms, quo, slack, tana)
 
 
 def credential(name: str) -> bytes | None:
@@ -112,6 +113,18 @@ def handle_linear(db, body: bytes, context) -> tuple[int, dict]:
         return 502, {"error": "Linear context could not be loaded"}
 
 
+def record_context(db, platform: str, status: int, out: dict) -> None:
+    """A Context connection's health from its last answer (ADR 0018): a failure (502) is its Last Error until the next
+    answer (200) clears it. Bad requests (400) and an unconnected source (503) say nothing about it."""
+    row = db.execute("SELECT id, last_error FROM connections WHERE platform = ? AND kind = 'context'",
+                     (platform,)).fetchone()
+    if row is None or status not in (200, 502):
+        return
+    error = None if status == 200 else out.get("error") or f"{platforms.PLATFORMS[platform].title} did not answer"
+    if error != row["last_error"]:
+        inbox.set_connection_error(db, row["id"], error)
+
+
 def handle_context(body: bytes, context: tana.Context | None, name: str = "Tana") -> tuple[int, dict]:
     """POST /tana and /attio: {"emails", "domains"} -> (status, that Context source's answer or {"error"})
     (FR-13a, FR-13b)."""
@@ -166,6 +179,12 @@ class Senders:
 RESPOND_STATUS = {"confirmed": 200, "refused": 400, "unknown": 502, "unavailable": 503}
 
 
+def _event_title(db, uid: str) -> str:
+    row = db.execute("SELECT ics FROM events WHERE uid = ? AND recurrence_id = ''", (uid,)).fetchone()
+    m = row and re.search(r"^SUMMARY:(.*)$", row["ics"], re.M)
+    return m.group(1).strip() if m else "Event"
+
+
 def handle_respond(db, body: bytes, client: gcal.Client | None) -> tuple[int, dict]:
     """POST /respond: exactly {thread_id, answer} or {event_uid, answer}; accept|maybe|decline (FR-13e).
     Event UID targets cover the whole Event or series, as Meeting Threads do.
@@ -195,7 +214,19 @@ def handle_respond(db, body: bytes, client: gcal.Client | None) -> tuple[int, di
     if client is None:
         return 503, {"outcome": "unavailable", "error": "Google Calendar writes are not connected"}
     uid, rid = target
-    out = client.respond(uid, rid, req["answer"])
+    c0 = meetings._connection(db)
+    with db:  # on the Action Queue with its outcome (ADR 0020, PRD P6), committed before Google is asked
+        action = c0 and actions.journal(db, c0["id"], "respond", uid,
+                                        f"{req['answer'].title()} · {_event_title(db, uid)}", clock.now())
+    try:
+        out = client.respond(uid, rid, req["answer"])
+    except Exception:
+        if action:
+            actions.settle(db, action, "unknown", "Respond did not finish", clock.now())
+        raise
+    if action:
+        actions.settle(db, action, out["outcome"] if out["outcome"] in ("confirmed", "refused") else "unknown",
+                       out.get("error"), clock.now())
     if (c := meetings._connection(db)) is not None:  # writes health (FR-IR-10), apart from the feed's
         if out.get("broken"):
             inbox.set_connection_error(db, c["id"], gcal.WRITES_BROKEN + out["error"])
@@ -535,7 +566,7 @@ class UnixHTTPServer(socketserver.ThreadingUnixStreamServer):
 
 
 def reply_server(db_path: str, socket_path: str, senders: Senders, contexts: dict | None = None,
-                 writer: gcal.Client | None = None) -> UnixHTTPServer:
+                 writer: gcal.Client | None = None, kick: threading.Event | None = None) -> UnixHTTPServer:
     """The local socket: POST /reply, POST /send-draft, POST /slack-conversations, POST /respond (through `writer`),
     and POST /<source> for each Context source in `contexts` ({"tana": …})."""
     # Reactions are a provider operation, not a remote /call ledger write.
@@ -588,6 +619,7 @@ def reply_server(db_path: str, socket_path: str, senders: Senders, contexts: dic
         db = inbox.connect(db_path)
         try:
             status, out = handle_linear(db, body, contexts.get("linear"))
+            record_context(db, "linear", status, out)
         finally:
             db.close()
         return status, "application/json", json.dumps(out).encode()
@@ -595,6 +627,11 @@ def reply_server(db_path: str, socket_path: str, senders: Senders, contexts: dic
     def context_route(name):
         def route(headers, body):
             status, out = handle_context(body, contexts.get(name), name.title())
+            db = inbox.connect(db_path)
+            try:
+                record_context(db, name, status, out)
+            finally:
+                db.close()
             return status, "application/json", json.dumps(out).encode()
         return route
 
@@ -614,11 +651,18 @@ def reply_server(db_path: str, socket_path: str, senders: Senders, contexts: dic
         return UnixHTTPServer(socket_path, _handler({"/reply": reply, "/send-draft": send_draft,
                                                          "/slack-conversations": slack_conversations, "/attio-people": attio_people, "/tana": context_route("tana"), "/attio": context_route("attio"), "/linear": linear_route,
                                                          "/slack-reactions": slack_reactions, "/respond": respond,
-                                                         "/call": json_route(lambda b: remote.handle_call(db_path, b)),
+                                                         "/call": json_route(lambda b: _kicked(remote.handle_call(db_path, b), kick)),
                                                          "/sync": json_route(lambda b: remote.handle_sync(db_path, changes, b)),
                                                          "/raw": json_route(lambda b: remote.handle_raw(db_path, b))}))
     finally:
         os.umask(old)
+
+
+def _kicked(answer, kick: threading.Event | None):
+    """A laptop write may have enqueued an Action: wake the loop that runs them now, not in a minute (ADR 0020)."""
+    if kick is not None:
+        kick.set()
+    return answer
 
 
 def hooks_server(db_path: str, host: str, port: int, client=None,
@@ -689,6 +733,7 @@ HOOKS = {
     "/hooks/email": lambda h: "fastmail" if (h.get("X-Inbox-To") or "").lower() == fastmail.INBOUND else "gmail",
     "/hooks/slack": lambda h: "slack",
     "/hooks/quo": lambda h: "quo",
+    "/hooks/linear": lambda h: "linear",  # Issue events for the Issue connection (ADR 0019)
 }
 
 
@@ -702,7 +747,8 @@ def intake(db, platform: str, headers, body: bytes, secret: bytes, now: datetime
     first: every email Connection's forward reaches the same Worker and signing secret."""
     to = (headers.get("X-Inbox-To") or "").lower() if platform in platforms.EMAIL else ""
     connection = (to and db.execute("SELECT * FROM connections WHERE inbound = ?", (to,)).fetchone()) or db.execute(
-        "SELECT * FROM connections WHERE platform = ? ORDER BY id", (platform,)).fetchone()
+        "SELECT * FROM connections WHERE platform = ? AND coalesce(kind, '') != 'context' ORDER BY id",
+        (platform,)).fetchone()  # a Context connection takes no hooks (ADR 0018)
     if connection is None:
         return 503, f"no {platforms.PLATFORMS[platform].title} Connection"
     p = platforms.PLATFORMS[connection["platform"]]
@@ -917,6 +963,8 @@ def wake_loop(db_path: str, stop: threading.Event, every: float = 60, kick: thre
             if senders is not None:
                 send_due(db, senders, now)
             inbox.reconcile_resend_receipts(db)
+            issues.rollover(db, now)  # unfinished Issues from a passed Planned day move on (FR-IS-10)
+            actions.run(db, action_clients(), now)  # the Action Queue (ADR 0020)
             fetch_pending(db, get or {})
             if expired is None or now - expired >= timedelta(days=1):
                 expired = now
@@ -944,12 +992,39 @@ def probe_all(db, shared: dict, cred=credential) -> None:
         logging.getLogger("comms_terminal.health").info("health check %s: %s", c["platform"], error or "ok")
 
 
+def action_clients(cred=credential) -> dict:
+    """The Platforms the Action Queue can write to now, by Platform name (ADR 0020)."""
+    token = cred("linear-token")
+    return {"linear": linear.Client(token.decode())} if token else {}
+
+
+def read_issues(db, cred=credential, now: datetime | None = None) -> int | None:
+    """The Issue connection's full read (FR-IS-3): the copy, Jeremy's Linear id and the team statuses; a failure
+    is the Connection's Last Error until a read succeeds. None when Linear is not connected."""
+    token, connection = cred("linear-token"), issues.issue_connection(db, "linear")
+    if token is None or connection is None:
+        return None
+    now = now or clock.now()
+    try:
+        account, found, statuses = linear.full_read(linear.Client(token.decode()), now)
+    except linear.LinearError as e:
+        issues.record_read(db, connection["id"], str(e))
+        logging.getLogger("comms_terminal.issues").info("Issue read failed: %s", e)
+        return None
+    issues.set_account(db, connection["id"], account)
+    issues.replace_statuses(db, connection["id"], statuses)
+    count = issues.apply_read(db, connection["id"], found, now)
+    issues.record_read(db, connection["id"], None)
+    return count
+
+
 def probe_loop(db_path: str, shared: dict, stop: threading.Event, every: float = 1800) -> None:
     # ponytail: one failed check shows BROKEN for 30 minutes; retry once inside probe_all if blips annoy
     while True:
         db = inbox.connect(db_path)
         try:
             probe_all(db, shared)
+            read_issues(db)  # the Issue copy's full read rides the same 30 minutes (ADR 0019)
         except Exception as e:  # noqa: BLE001 - a locked database once killed the loop and every check went stale
             logging.getLogger("comms_terminal.health").info("health check pass failed: %s", e)
         finally:
@@ -994,12 +1069,18 @@ def run(db_path: str, socket_path: str, host: str, port: int, files_host: str | 
     fm = fastmail_client(db)
     senders = Senders({"fastmail": fm} if fm is not None else {})
     contexts = {"tana": tana_context(db), "attio": attio_context(db), "linear": linear_context(db)}
+    for name, context in contexts.items():  # each connected source is a Context connection (ADR 0018)
+        if context is not None:
+            inbox.ensure_connection(db, name, "context", clock.now())
+    if credential("linear-token"):  # the same key backs the Issue connection (ADR 0019)
+        inbox.ensure_connection(db, "linear", "issue", clock.now())
     writer = gcal_client(db)
     if credential(calendar.CREDENTIAL):
         meetings.connect(db)  # go-live: only Events first seen from now become Meeting Threads
     db.close()
     stop, kick = threading.Event(), threading.Event()
-    servers = [hooks_server(db_path, host, port, kick=kick), reply_server(db_path, socket_path, senders, contexts, writer=writer)]
+    servers = [hooks_server(db_path, host, port, kick=kick), reply_server(db_path, socket_path, senders, contexts, writer=writer,
+                                                                        kick=kick)]
     if files_host:  # LAN address only (NFR-A2); without it, chips keep their Platform links
         servers.append(files_server(db_path, files_host, files_port))
     threads = [threading.Thread(target=s.serve_forever, daemon=True) for s in servers]

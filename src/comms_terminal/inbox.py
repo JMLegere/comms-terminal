@@ -27,7 +27,7 @@ from typing import Protocol, Sequence
 from . import clock, files, platforms
 from .writers import writer
 
-SCHEMA_VERSION = 37
+SCHEMA_VERSION = 42
 WAIT = timedelta(days=4)  # Waiting for them ends after this with no reply: back to Todo to follow up (#116)
 EMAIL_CONFIRMATION_PENDING = "Email confirmation pending; wait for its sent receipt before replying."
 MIGRATIONS = {  # version -> statement that upgrades an existing database to it
@@ -769,6 +769,120 @@ MIGRATIONS[37] = """CREATE TABLE modules (  -- each Module's setting for this Se
 ) STRICT;
 INSERT INTO modules (id, enabled) VALUES ('pipelines', 1), ('sequences', 1), ('cases', 1);"""
 
+# Connections have kinds (ADR 0018): Linear, Tana and Attio become Platforms, and one account can back two
+# Connections of different kinds, so the account key is unique per kind instead of alone. The rebuild keeps ids, so
+# every reference to a Connection stays.
+MIGRATIONS[38] = """PRAGMA legacy_alter_table = ON;
+CREATE TABLE connections_new (
+  id                TEXT PRIMARY KEY NOT NULL DEFAULT (new_id()),
+  platform          TEXT NOT NULL CHECK (platform IN ('gmail', 'fastmail', 'slack', 'quo', 'gcal', 'linear', 'tana',
+                                                       'attio')),
+  kind              TEXT CHECK (kind IN ('email', 'sms', 'slack', 'calendar', 'context', 'issue')),
+  external_id       TEXT NOT NULL,
+  self_id           TEXT NOT NULL,
+  label             TEXT NOT NULL,
+  connected_at      TEXT NOT NULL,
+  auth_ok           INTEGER NOT NULL DEFAULT 1 CHECK (auth_ok IN (0, 1)),
+  last_error        TEXT,
+  probe_error       TEXT,
+  probed_at         TEXT,
+  inbound           TEXT
+) STRICT;
+INSERT INTO connections_new (id, platform, external_id, self_id, label, connected_at, auth_ok, last_error,
+  probe_error, probed_at, inbound)
+SELECT id, platform, external_id, self_id, label, connected_at, auth_ok, last_error, probe_error, probed_at, inbound
+FROM connections;
+DROP TABLE connections;
+ALTER TABLE connections_new RENAME TO connections;
+CREATE UNIQUE INDEX connections_inbound ON connections (inbound);
+CREATE UNIQUE INDEX connections_account ON connections (external_id, coalesce(kind, ''));
+PRAGMA legacy_alter_table = OFF;"""
+
+# Issues (ADR 0019): the copy of Jeremy's assigned Issues, with a local Planned day, and their teams' statuses.
+MIGRATIONS[39] = """CREATE TABLE issue_statuses (  -- each team's statuses on an Issue connection's Platform (ADR 0019); issues.py
+  id            TEXT PRIMARY KEY NOT NULL,  -- the Platform's own id
+  connection_id TEXT NOT NULL REFERENCES connections (id),
+  team_id       TEXT NOT NULL,
+  name          TEXT NOT NULL,
+  type          TEXT NOT NULL,              -- the Platform's status type (Linear: backlog, unstarted, started, ...)
+  position      REAL NOT NULL DEFAULT 0
+) STRICT;
+CREATE TABLE issues (  -- a copy of each Issue assigned to Jeremy; the Platform owns every field but planned_day
+  id            TEXT PRIMARY KEY NOT NULL,  -- the Platform's own id
+  connection_id TEXT NOT NULL REFERENCES connections (id),
+  identifier    TEXT NOT NULL,              -- BIZ-1426
+  title         TEXT NOT NULL,
+  description   TEXT,
+  url           TEXT,
+  team_id       TEXT NOT NULL,
+  state_id      TEXT,                       -- issue_statuses.id
+  priority      INTEGER NOT NULL DEFAULT 0, -- Linear: 0 none, 1 urgent, 2 high, 3 medium, 4 low
+  estimate      REAL,
+  due_date      TEXT,                       -- a date
+  created_at    TEXT NOT NULL,
+  updated_at    TEXT NOT NULL,              -- the Platform's last change
+  completed_at  TEXT,
+  canceled_at   TEXT,
+  data          TEXT NOT NULL DEFAULT '{}', -- display-only extras (project, cycle, labels, parent, team key)
+  planned_day   TEXT,                       -- local only, never sent (ADR 0019)
+  copied_at     TEXT NOT NULL               -- when the copy last took the Platform's version
+) STRICT;
+CREATE INDEX issues_planned ON issues (planned_day);"""
+
+# The Action Queue (ADR 0020): everything Comms Terminal carries out itself, Issue changes first.
+MIGRATIONS[40] = """CREATE TABLE actions (  -- the Action Queue (ADR 0020): each thing Comms Terminal carries out itself; actions.py
+  id            TEXT PRIMARY KEY NOT NULL DEFAULT (new_id()),
+  connection_id TEXT NOT NULL REFERENCES connections (id),
+  kind          TEXT NOT NULL CHECK (kind IN ('issue_update', 'issue_create')),
+  target        TEXT NOT NULL,              -- the record it changes (an Issue's id)
+  payload       TEXT NOT NULL,              -- JSON: the values it sets
+  previous      TEXT,                       -- JSON: the values they replaced, for a refusal and for undo
+  safe          INTEGER NOT NULL CHECK (safe IN (0, 1)),  -- safe to repeat when its outcome is unknown
+  state         TEXT NOT NULL CHECK (state IN ('scheduled', 'running', 'confirmed', 'refused', 'unknown')),
+  error         TEXT,                       -- why it was refused or is unknown
+  attempts      INTEGER NOT NULL DEFAULT 0,
+  due_at        TEXT NOT NULL,              -- not before this moment
+  created_at    TEXT NOT NULL,
+  done_at       TEXT,                       -- when it was confirmed or refused
+  CHECK ((state IN ('confirmed', 'refused')) = (done_at IS NOT NULL))
+) STRICT;
+CREATE INDEX actions_due ON actions (state, due_at);
+CREATE INDEX actions_target ON actions (target, created_at);"""
+
+# Urgency coefficients (PRD FR-IS-8): Taskwarrior and Obsidian Tasks defaults, settable.
+MIGRATIONS[41] = """CREATE TABLE urgency (  -- Taskwarrior-style coefficients for an Issue's urgency (PRD FR-IS-8), settable
+  name  TEXT PRIMARY KEY NOT NULL,
+  value REAL NOT NULL
+) STRICT;
+INSERT INTO urgency (name, value) VALUES ('due', 12), ('priority.urgent', 9), ('priority.high', 6),
+  ('priority.medium', 3.9), ('priority.none', 1.95), ('priority.low', 0), ('started', 4), ('blocking', 8),
+  ('blocked', -5), ('age', 2);"""
+
+# Sends and Responds join the Action Queue (ADR 0020, PRD P6): its kind check widens.
+MIGRATIONS[42] = """PRAGMA legacy_alter_table = ON;
+CREATE TABLE actions_new (  -- the Action Queue (ADR 0020): each thing Comms Terminal carries out itself; actions.py
+  id            TEXT PRIMARY KEY NOT NULL DEFAULT (new_id()),
+  connection_id TEXT NOT NULL REFERENCES connections (id),
+  kind          TEXT NOT NULL CHECK (kind IN ('issue_update', 'issue_create', 'send', 'respond')),
+  target        TEXT NOT NULL,              -- the record it changes (an Issue's id)
+  payload       TEXT NOT NULL,              -- JSON: the values it sets
+  previous      TEXT,                       -- JSON: the values they replaced, for a refusal and for undo
+  safe          INTEGER NOT NULL CHECK (safe IN (0, 1)),  -- safe to repeat when its outcome is unknown
+  state         TEXT NOT NULL CHECK (state IN ('scheduled', 'running', 'confirmed', 'refused', 'unknown')),
+  error         TEXT,                       -- why it was refused or is unknown
+  attempts      INTEGER NOT NULL DEFAULT 0,
+  due_at        TEXT NOT NULL,              -- not before this moment
+  created_at    TEXT NOT NULL,
+  done_at       TEXT,                       -- when it was confirmed or refused
+  CHECK ((state IN ('confirmed', 'refused')) = (done_at IS NOT NULL))
+) STRICT;
+INSERT INTO actions_new (id, connection_id, kind, target, payload, previous, safe, state, error, attempts, due_at, created_at, done_at) SELECT id, connection_id, kind, target, payload, previous, safe, state, error, attempts, due_at, created_at, done_at FROM actions;
+DROP TABLE actions;
+ALTER TABLE actions_new RENAME TO actions;
+CREATE INDEX actions_due ON actions (state, due_at);
+CREATE INDEX actions_target ON actions (target, created_at);
+PRAGMA legacy_alter_table = OFF;"""
+
 
 class SendUnknown(SendFailed):
     """The provider may or may not have sent the message (timeout, lost response, crash before recording)."""
@@ -1398,14 +1512,21 @@ def send_draft(db, draft_id: int, revision: int, sender: Sender, *, again: bool 
             connection_id, fmt = d["connection_id"], d["kind"]
             call, record, settle = _new_send(db, d, files, sender, started, at)
         db.execute("UPDATE composition_drafts SET sending_at = ? WHERE id = ?", (at, draft_id))
+        from . import actions  # the send shows on the Action Queue with its outcome (ADR 0020, PRD P6)
+        action = actions.journal(db, connection_id, "send", draft_id,
+                                 d["subject"] or f"message to {d['to'] or 'nobody'}", started)
     try:
-        return _send(db, connection_id, fmt, files, call, record, settle=settle, draft_id=draft_id)
-    except SendUnknown:
+        thread = _send(db, connection_id, fmt, files, call, record, settle=settle, draft_id=draft_id)
+    except SendUnknown as e:  # the Draft stays locked, as before; the Action says unknown and is never resent
+        actions.settle(db, action, "unknown", str(e)[:200], clock.now())
         raise
-    except SendFailed:
+    except SendFailed as e:
         with db:
             db.execute("UPDATE composition_drafts SET sending_at = NULL WHERE id = ?", (draft_id,))
+        actions.settle(db, action, "refused", str(e)[:200], clock.now())
         raise
+    actions.settle(db, action, "confirmed", None, clock.now())
+    return thread
 
 
 def _new_send(db, d, files, sender, started, at):
@@ -2609,6 +2730,16 @@ def wake(db, now: datetime) -> int:
 def set_connection_error(db, connection_id: int, error: str | None) -> None:
     with db:
         db.execute("UPDATE connections SET last_error = ? WHERE id = ?", (error, connection_id))
+
+
+def ensure_connection(db, platform: str, kind: str, now: datetime) -> str:
+    """The Service's Connection for a Platform it reaches with its own credential (a Context connection, ADR 0018),
+    made on first start; the account is named by the Platform, since the credential holds one account."""
+    with db:
+        db.execute("INSERT OR IGNORE INTO connections (platform, kind, external_id, self_id, label, connected_at)"
+                   " VALUES (?, ?, ?, '', ?, ?)", (platform, kind, platform, platforms.PLATFORMS[platform].title,
+                                                   clock.iso(now)))
+    return db.execute("SELECT id FROM connections WHERE external_id = ? AND kind = ?", (platform, kind)).fetchone()[0]
 
 
 def set_auth(db, connection_id: int, ok: bool) -> None:

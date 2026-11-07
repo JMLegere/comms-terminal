@@ -76,6 +76,9 @@ const DEFAULTS: &[(&str, &str, bool)] = &[
     ("icons/circle-x.svg", include_str!("../defaults/icons/circle-x.svg"), true),
     ("views/toasts/main.js", include_str!("../defaults/views/toasts/main.js"), true),
     ("views/settings/main.js", include_str!("../defaults/views/settings/main.js"), true),
+    ("views/issues/main.js", include_str!("../defaults/views/issues/main.js"), true),
+    ("views/issue/main.js", include_str!("../defaults/views/issue/main.js"), true),
+    ("views/actions/main.js", include_str!("../defaults/views/actions/main.js"), true),
     ("layouts/main.json", include_str!("../defaults/layouts/main.json"), false),
     ("keys.json", include_str!("../defaults/keys.json"), false),
     ("settings.json", include_str!("../defaults/settings.json"), false),
@@ -139,7 +142,8 @@ const PREVIOUS: &[(&str, u64)] = &[
     ("keys.json", 0x8628f3383aace4af),
     ("keys.json", 0x515d848d3bd681db),
     ("keys.json", 0xb4f6fe76e1ac3b7d),
-    ("keys.json", 0xb4244a89c7ab0dd3),
+    ("keys.json", 0xb4244a89c7ab0dd3),    ("layouts/main.json", 0x486a0e4aec1ea574),
+    ("keys.json", 0x8fad973448474b78),
 ];
 
 fn fnv(bytes: &[u8]) -> u64 {

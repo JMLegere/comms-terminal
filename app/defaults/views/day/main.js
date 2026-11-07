@@ -9,7 +9,7 @@ import { call, nextCommand, theme, shared, setShared, run, toast, focusMain } fr
 
 const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
-const KIND = { event: "Event", task: "Task", draft: "Draft", enrollment: "Enrollment" }; // else a Snoozed Thread waking
+const KIND = { event: "Event", task: "Task", draft: "Draft", enrollment: "Enrollment", issue: "Issue" }; // else a Snoozed Thread waking
 const GREY = { "#928374": "muted", "#a89984": "dim", "#7c6f64": "muted" };
 
 /** "Monday, November 3" for a YYYY-MM-DD day. */
@@ -20,6 +20,7 @@ export function opens(i) {
   if (i.kind === "event") return ["push", { page: "event", event: i.event }, "nav.push"];
   if (i.kind === "enrollment") return ["push", { page: "person", person: i.ref }, "nav.push"];
   if (i.kind === "task") return ["task", i.ref, "nav.tasks"];
+  if (i.kind === "issue") return ["issue", i.ref, "nav.issues"]; // a planned Issue, on the Issues page (FR-UI-3)
   if (i.kind === "draft") return i.task ? ["task", i.task, "nav.tasks"] : ["draft", i.ref, "nav.drafts"]; // an email Task's send: its Task (#146)
   return ["thread", i.ref, null]; // a Snoozed wake: the Thread where it lives
 }

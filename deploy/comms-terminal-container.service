@@ -37,6 +37,7 @@ LoadCredentialEncrypted=slack-user-token:/etc/credstore.encrypted/comms-terminal
 # Encrypt with the destination ID, not the source-store filename.
 LoadCredentialEncrypted=tana-oauth:comms-terminal.independent-tana-oauth
 LoadCredentialEncrypted=linear-token:comms-terminal.linear-token
+LoadCredentialEncrypted=linear-webhook-secret:comms-terminal.linear-webhook-secret
 LoadCredentialEncrypted=resend-webhook-secret:comms-terminal.resend-webhook-secret
 LoadCredentialEncrypted=google-calendar-ics:comms-terminal.google-calendar-ics
 LoadCredentialEncrypted=google-calendar-oauth:comms-terminal.google-calendar-oauth

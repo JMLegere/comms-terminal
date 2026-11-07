@@ -41,14 +41,14 @@ export default class Context extends View {
 
   target() {
     if (shared("page") !== "context" || shared("focus") !== "detail" || !this.page) return;
-    setShared("target", { col: "detail", label: `Context source · ${(this.page.lines?.[0] ?? []).map((g) => g[0]).join("").trim()}`,
+    setShared("target", { col: "detail", label: `Context connection · ${(this.page.lines?.[0] ?? []).map((g) => g[0]).join("").trim()}`,
       keys: [["esc", "back"]] });
   }
 
   render() {
     const t = theme();
     const pane = v_flex().size_full().min_h(0).bg(t.background).text_size(13);
-    if (!this.page) return pane.child(div().p(24).text_color(t.muted).child(this.error ?? "No Context source selected"));
+    if (!this.page) return pane.child(div().p(24).text_color(t.muted).child(this.error ?? "No Context connection selected"));
     const color = (hex) => (hex ? t[GREY[hex]] ?? hex : t.foreground);
     return pane.child(v_flex().id("context").flex_1().min_h(0).overflow_y_scroll().px(20).py(14).gap(2)
       .children(this.page.lines.map((segs) => (segs.length ? h_flex().w_full().flex_wrap()

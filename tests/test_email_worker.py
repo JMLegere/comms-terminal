@@ -86,7 +86,7 @@ def test_worker_routes_preserve_legacy_hooks_and_add_resend():
     assert config["name"] == "universal-inbox-email"
     assert config["routes"] == [
         {"pattern": f"https://hooks.agentmaple.com/hooks/{name}*", "zone_name": "agentmaple.com"}
-        for name in ("email", "slack", "quo", "resend")
+        for name in ("email", "slack", "quo", "resend", "linear")
     ]
     assert config["vars"] == {
         "HOOK_URL": "https://hooks.agentmaple.com/hooks/email",

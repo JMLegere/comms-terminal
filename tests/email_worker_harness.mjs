@@ -165,7 +165,7 @@ async function checks() {
       "X-Inbox-Timestamp": timestamp, "webhook-id": "event-1", "webhook-timestamp": timestamp,
       "webhook-signature": "v1,upstream", "Content-Type": "application/octet-stream",
       "svix-id": svixID, "svix-timestamp": timestamp, "svix-signature": svixSignature };
-    for (const path of ["/hooks/email", "/hooks/quo", "/hooks/resend"]) {
+    for (const path of ["/hooks/email", "/hooks/quo", "/hooks/resend", "/hooks/linear"]) {
       reset((call) => {
         assert.deepEqual(call.body, raw);
         assert.deepEqual([...call.headers], [...new Headers(signed)]);

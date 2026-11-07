@@ -1,0 +1,168 @@
+"""Planning (PRD FR-IS-5–10, FR-IS-13): Planned day, Day capacity, urgency, warnings, Rollover, and their CLI."""
+
+import io
+import json
+import sys
+from datetime import date, datetime, time, timezone
+from zoneinfo import ZoneInfo
+
+import pytest
+
+from comms_terminal import agent, calendar, inbox, issues, linear
+
+LOCAL = ZoneInfo("America/Halifax")
+MONDAY = datetime(2026, 11, 9, 14, 0, tzinfo=timezone.utc)  # 10:00 Halifax
+ME = "jeremy@agentmaple.example"
+
+
+@pytest.fixture
+def db():
+    db = inbox.connect()
+    inbox.migrate(db)
+    cid = inbox.ensure_connection(db, "linear", "issue", MONDAY)
+    with db:
+        db.execute("INSERT INTO connections (platform, external_id, self_id, label, connected_at)"
+                   " VALUES ('gmail', ?, ?, 'Gmail', ?)", (ME, ME, MONDAY.isoformat()))
+    issues.replace_statuses(db, cid, [{"id": s, "team_id": "team", "name": n, "type": t} for s, n, t in (
+        ("todo", "Todo", "unstarted"), ("doing", "Making It Happen", "started"), ("blocked", "Blocked", "unstarted"),
+        ("done", "Done", "completed"))])
+    yield db
+    db.close()
+
+
+def add(db, n, **fields):
+    cid = issues.issue_connection(db, "linear")["id"]
+    issues.upsert(db, cid, {"id": f"id-{n}", "identifier": n, "title": n, "team_id": "team", "state_id": "todo",
+                               "priority": 0, "created_at": "2026-11-01T00:00:00Z", "updated_at": "2026-11-01"}
+                  | fields, MONDAY)
+
+
+def event(db, uid, day, start, end, extra=""):
+    at = lambda t: datetime.combine(day, time.fromisoformat(t), LOCAL).astimezone(timezone.utc).strftime(
+        "%Y%m%dT%H%M%SZ")
+    ics = f"BEGIN:VEVENT\r\nUID:{uid}\r\nSUMMARY:{uid}\r\nDTSTART:{at(start)}\r\nDTEND:{at(end)}\r\n{extra}END:VEVENT\r\n"
+    with db:
+        db.execute("INSERT INTO events (uid, ics, first_seen_at, changed_at) VALUES (?, ?, ?, ?)",
+                   (uid, ics, MONDAY.isoformat(), MONDAY.isoformat()))
+
+
+TUESDAY = date(2026, 11, 10)
+
+
+def test_capacity_merges_overlaps_and_skips_free_and_declined(db):
+    event(db, "a", TUESDAY, "09:00", "11:00")
+    event(db, "b", TUESDAY, "10:00", "12:00")  # overlaps a: 3 hours in all
+    event(db, "free", TUESDAY, "13:00", "15:00", "TRANSP:TRANSPARENT\r\n")
+    event(db, "no", TUESDAY, "15:00", "16:00", f"ORGANIZER:mailto:x@y.example\r\nATTENDEE;PARTSTAT=DECLINED:mailto:{ME}\r\n")
+    add(db, "BIZ-1", estimate=4)
+    issues.plan(db, "BIZ-1", TUESDAY.isoformat(), now=MONDAY)
+    assert issues.capacity(db, TUESDAY, MONDAY) == {"capacity": 6.0, "used": 2.0, "left": 4.0}
+
+
+def test_today_counts_only_what_is_left(db):
+    event(db, "past", MONDAY.astimezone(LOCAL).date(), "08:00", "09:30")
+    event(db, "later", MONDAY.astimezone(LOCAL).date(), "15:00", "16:00")
+    at_22 = datetime(2026, 11, 10, 2, 0, tzinfo=timezone.utc)  # Monday 22:00 Halifax: 2 hours left today
+    assert issues.capacity(db, date(2026, 11, 9), MONDAY)["capacity"] == 8.0  # 9 less the hour still to come
+    assert issues.capacity(db, date(2026, 11, 9), at_22)["capacity"] == 2.0
+
+
+def test_weekends_and_busy_all_day_events_hold_none(db):
+    saturday = date(2026, 11, 14)
+    assert issues.capacity(db, saturday, MONDAY)["capacity"] == 0
+    add(db, "BIZ-1")
+    issues.plan(db, "BIZ-1", saturday.isoformat(), now=MONDAY)
+    assert issues.capacity(db, saturday, MONDAY)["capacity"] == 9  # planned there: the day counts
+    with db:
+        db.execute("INSERT INTO events (uid, ics, first_seen_at, changed_at) VALUES ('off', ?, ?, ?)",
+                   ("BEGIN:VEVENT\r\nUID:off\r\nSUMMARY:Off\r\nDTSTART;VALUE=DATE:20261110\r\n"
+                    "DTEND;VALUE=DATE:20261111\r\nEND:VEVENT\r\n", MONDAY.isoformat(), MONDAY.isoformat()))
+    assert issues.capacity(db, TUESDAY, MONDAY)["capacity"] == 0
+
+
+def test_urgency_follows_the_taskwarrior_factors(db):
+    c = issues.coefficients(db)
+    day = date(2026, 11, 9)
+    base = {"priority": 0, "due_date": None, "state_type": "unstarted", "data": {}, "created_at": "2026-11-09"}
+    assert issues.urgency(base, c, day) == 1.95
+    assert issues.urgency(base | {"priority": 1}, c, day) == 9
+    assert issues.urgency(base | {"due_date": "2026-11-02"}, c, day) == 1.95 + 12  # 7 days late: the full ramp
+    assert issues.urgency(base | {"due_date": "2026-11-30"}, c, day) == round(1.95 + 12 * 0.2, 4)
+    assert issues.urgency(base | {"state_type": "started"}, c, day) == 5.95
+    assert issues.urgency(base | {"data": {"blocking": 2, "blocked": 1}}, c, day) == round(1.95 + 8 - 5, 4)
+    assert issues.urgency(base | {"created_at": "2025-11-09"}, c, day) == 3.95  # a year old: the full age
+
+
+def test_warnings_far_out_oversized_and_due(db):
+    add(db, "BIZ-1", priority=1, due_date="2026-11-10")  # most urgent
+    add(db, "BIZ-2")
+    add(db, "BIZ-3", estimate=20)  # ten hours
+    issues.plan(db, "BIZ-1", "2026-11-11", now=MONDAY)  # top percentile two days out, after its due date
+    issues.plan(db, "BIZ-2", "2026-11-10", now=MONDAY)
+    issues.plan(db, "BIZ-3", "2026-11-12", now=MONDAY)
+    w = issues.warnings(db, MONDAY)
+    assert w["id-BIZ-1"] == ["Planned after its due date", "Planned too far out for its urgency"]
+    assert w["id-BIZ-3"] == ["Larger than a day"] and "id-BIZ-2" not in w
+
+
+def test_rollover_moves_to_the_next_workday_once_and_writes_the_slip_status(db):
+    add(db, "BIZ-1", state_id="doing")
+    add(db, "BIZ-2", state_id="done", completed_at="2026-11-12")
+    add(db, "BIZ-3", state_id="blocked")
+    for n in ("BIZ-1", "BIZ-2", "BIZ-3"):
+        issues.plan(db, n, "2026-11-13", now=MONDAY)  # Friday
+    saturday = datetime.combine(date(2026, 11, 14), time(9), LOCAL).astimezone(timezone.utc)
+    assert issues.rollover(db, saturday) == 2
+    assert [issues.find(db, n)["planned_day"] for n in ("BIZ-1", "BIZ-2", "BIZ-3")] == \
+        ["2026-11-16", "2026-11-13", "2026-11-16"]
+    acts = db.execute("SELECT target, payload FROM actions").fetchall()
+    assert [(a["target"], json.loads(a["payload"])) for a in acts] == [("id-BIZ-1", {"state_id": "blocked"})]
+    assert issues.rollover(db, saturday) == 0  # each pass moves only what has passed
+
+
+def test_a_webhook_keeps_the_last_reads_relations(db):
+    add(db, "BIZ-1", data={"blocking": 1, "blocked": 0})
+    add(db, "BIZ-1", updated_at="2026-11-02", data={"team_key": "BIZ"})
+    assert issues.issues(db)[0]["data"] == {"blocking": 1, "blocked": 0, "team_key": "BIZ"}
+    node = {"id": "x", "identifier": "BIZ-1", "createdAt": "c", "updatedAt": "u",
+            "relations": {"nodes": [{"type": "blocks", "relatedIssue": {"completedAt": None}},
+                                    {"type": "blocks", "relatedIssue": {"completedAt": "done"}},
+                                    {"type": "related", "relatedIssue": {}}]},
+            "inverseRelations": {"nodes": [{"type": "blocks", "issue": {"canceledAt": None}}]}}
+    assert linear.normal(node)["data"] == {"blocking": 1, "blocked": 1}
+
+
+def test_planned_issues_are_calendar_items(db):
+    add(db, "BIZ-1")
+    issues.plan(db, "BIZ-1", "2026-11-10", now=MONDAY)
+    items = [i for i in calendar.items(db, TUESDAY, date(2026, 11, 11)) if i["kind"] == "issue"]
+    assert [(i["title"], i["all_day"], i["ref"]) for i in items] == [("BIZ-1 · BIZ-1", True, "id-BIZ-1")]
+
+
+def cli(db, *argv):
+    import argparse
+    p = argparse.ArgumentParser()
+    agent.add_parsers(p.add_subparsers(dest="cmd"))
+    a = p.parse_args(argv)
+    for name in ("delete", "attach", "detach"):
+        setattr(a, name, getattr(a, name, None))
+    old, sys.stdin = sys.stdin, io.StringIO("")
+    try:
+        agent.run(a, db)
+    finally:
+        sys.stdin = old
+
+
+def test_cli_plans_and_sets_urgency(db, capsys, monkeypatch):
+    monkeypatch.setattr(agent.clock, "now", lambda: MONDAY)
+    monkeypatch.setattr(issues.clock, "now", lambda: MONDAY)
+    add(db, "BIZ-1")
+    cli(db, "issue", "BIZ-1", "--plan", "tomorrow")
+    assert "Planned day: 2026-11-10" in capsys.readouterr().out
+    cli(db, "issue", "BIZ-1", "--plan", "none")
+    assert issues.find(db, "BIZ-1")["planned_day"] is None
+    assert db.execute("SELECT count(*) FROM actions").fetchone()[0] == 0  # local only
+    cli(db, "urgency", "set", "due", "10")
+    assert "due\t10" in capsys.readouterr().out.splitlines()
+    with pytest.raises(SystemExit):
+        cli(db, "urgency", "set", "nope", "1")

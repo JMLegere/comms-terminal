@@ -15,17 +15,18 @@ import { call, nextEvent, nextCommand, theme, shared, setShared, run, toast } fr
 const STATUS = ["Todo", "Snoozed", "Done", "Ignored"];
 const ICON = { Todo: "square", Snoozed: "clock", Done: "circle-check", Ignored: "archive" };
 const PIPELINES = [["revenue", "Revenue"], ["fundraising", "Fundraising"], ["talent", "Talent"]];
-const CONN = { gmail: "mail", fastmail: "mail", slack: "message-square", quo: "phone", gcal: "calendar" };
+const CONN = { gmail: "mail", fastmail: "mail", slack: "message-square", quo: "phone", gcal: "calendar",
+  linear: "list-checks", tana: "layers", attio: "server" };
 const KEYS = ["page", "view", "case_view", "pipeline", "detail", "thread", "draft", "person", "organization", "case",
   "connection", "event", "task", "sequence", "source"];
 // What a page shows, once its shared keys are set: the commands that load its views.
 const SHOW = { threads: ["threads.reload"], pipeline: ["pipeline.show"] };
 const TITLE = { person: "Person", organization: "Organization", connection: "Connection", event: "Event", case: "Case",
-  context: "Context source" };
+  context: "Context connection" };
 const FULL = new Set(Object.keys(TITLE)); // full pages: the list block is hidden (layouts/main.json)
 const NOLIST = new Set([...FULL, "pipeline"]); // pages whose list block is hidden: the focus starts in the detail
-// Context sources (FR-13a, FR-13b): no Threads; the rail says whether each answers (D8), and each opens its own
-// read-only page (FR-MOD-16).
+// Context connections (ADR 0018, FR-13a, FR-13b): no Threads; one fetch each at start says whether each answers
+// (D8), and the Service records it; the rail lists them under context, each with its own read-only page (FR-MOD-16).
 const SOURCES = [["attio", "Attio", "server"], ["tana", "Tana", "layers"], ["linear", "Linear", "list-checks"]];
 const cap = (s) => s[0].toUpperCase() + s.slice(1);
 // Modules (ADR 0017): the pages each owns; an off Module's rail rows hide and its pages close (FR-MOD-9, FR-MOD-10).
@@ -295,6 +296,9 @@ export default class Nav extends View {
       { id: "drafts", icon: "square-pen", label: "Drafts", count: h.drafts },
       { header: "cases", module: "cases" },
       ...STATUS.map((n) => ({ id: `cases:${n}`, icon: ICON[n], label: n, count: (h.cases ?? {})[n] ?? 0, module: "cases" })),
+      { header: "work" },
+      { id: "issues", icon: "list-checks", label: "Issues", count: h.issues || "" },
+      { id: "actions", icon: "clock", label: "Action Queue", count: h.actions || "" },
       { header: "playbook", module: "sequences" },
       { id: "tasks", icon: "list-checks", label: "Tasks", count: due || "", module: "sequences" },
       { id: "sequences", icon: "workflow", label: "Sequences", module: "sequences",
@@ -306,7 +310,7 @@ export default class Nav extends View {
       { id: "organizations", icon: "building-2", label: "Organizations", count: h.organizations },
       { id: "channels", icon: "hash", label: "Channels", count: h.channels },
       { header: "connections" },
-      ...(h.connections ?? []).map((c) => ({ id: `conn:${c.id}`, icon: CONN[c.platform] ?? "server", conn: c,
+      ...(h.connections ?? []).filter((c) => c.kind !== "context").map((c) => ({ id: `conn:${c.id}`, icon: CONN[c.platform] ?? "server", conn: c,
         label: c.name.length <= 21 ? c.name : c.name.slice(0, 20) + "…" })),
       ...(ctx.length ? [{ header: "context" }] : []),
       ...ctx.map(([key, title, icon, st]) => ({ id: `context:${key}`, icon, label: title, ctx: st })),

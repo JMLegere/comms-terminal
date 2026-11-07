@@ -41,6 +41,54 @@ def _integer_keys_sql() -> str:
 
 
 UNDO = {
+    42: """PRAGMA foreign_keys = OFF; PRAGMA legacy_alter_table = ON;
+DELETE FROM actions WHERE kind IN ('send', 'respond');
+CREATE TABLE actions_old (  -- the Action Queue (ADR 0020): each thing Comms Terminal carries out itself; actions.py
+  id            TEXT PRIMARY KEY NOT NULL DEFAULT (new_id()),
+  connection_id TEXT NOT NULL REFERENCES connections (id),
+  kind          TEXT NOT NULL CHECK (kind IN ('issue_update', 'issue_create')),
+  target        TEXT NOT NULL,              -- the record it changes (an Issue's id)
+  payload       TEXT NOT NULL,              -- JSON: the values it sets
+  previous      TEXT,                       -- JSON: the values they replaced, for a refusal and for undo
+  safe          INTEGER NOT NULL CHECK (safe IN (0, 1)),  -- safe to repeat when its outcome is unknown
+  state         TEXT NOT NULL CHECK (state IN ('scheduled', 'running', 'confirmed', 'refused', 'unknown')),
+  error         TEXT,                       -- why it was refused or is unknown
+  attempts      INTEGER NOT NULL DEFAULT 0,
+  due_at        TEXT NOT NULL,              -- not before this moment
+  created_at    TEXT NOT NULL,
+  done_at       TEXT,                       -- when it was confirmed or refused
+  CHECK ((state IN ('confirmed', 'refused')) = (done_at IS NOT NULL))
+) STRICT;
+INSERT INTO actions_old (id, connection_id, kind, target, payload, previous, safe, state, error, attempts, due_at, created_at, done_at) SELECT id, connection_id, kind, target, payload, previous, safe, state, error, attempts, due_at, created_at, done_at FROM actions;
+DROP TABLE actions;
+ALTER TABLE actions_old RENAME TO actions;
+CREATE INDEX actions_due ON actions (state, due_at);
+CREATE INDEX actions_target ON actions (target, created_at);
+PRAGMA legacy_alter_table = OFF;""",
+    41: "DROP TABLE urgency;",
+    40: "DROP INDEX actions_target; DROP INDEX actions_due; DROP TABLE actions;",
+    39: "DROP INDEX issues_planned; DROP TABLE issues; DROP TABLE issue_statuses;",
+    38: """PRAGMA foreign_keys = OFF; PRAGMA legacy_alter_table = ON;
+DELETE FROM connections WHERE platform IN ('linear', 'tana', 'attio');
+CREATE TABLE connections_old (
+  id                TEXT PRIMARY KEY NOT NULL DEFAULT (new_id()),
+  platform          TEXT NOT NULL CHECK (platform IN ('gmail', 'fastmail', 'slack', 'quo', 'gcal')),
+  external_id       TEXT NOT NULL UNIQUE,
+  self_id           TEXT NOT NULL,
+  label             TEXT NOT NULL,
+  connected_at      TEXT NOT NULL,
+  auth_ok           INTEGER NOT NULL DEFAULT 1 CHECK (auth_ok IN (0, 1)),
+  last_error        TEXT,
+  probe_error       TEXT,
+  probed_at         TEXT,
+  inbound           TEXT
+) STRICT;
+INSERT INTO connections_old SELECT id, platform, external_id, self_id, label, connected_at, auth_ok, last_error,
+  probe_error, probed_at, inbound FROM connections;
+DROP TABLE connections;
+ALTER TABLE connections_old RENAME TO connections;
+CREATE UNIQUE INDEX connections_inbound ON connections (inbound);
+PRAGMA legacy_alter_table = OFF;""",
     37: "DROP TABLE modules;",
     36: """PRAGMA foreign_keys = OFF; PRAGMA legacy_alter_table = ON;
 INSERT OR IGNORE INTO organizations (domain, name, created_at)

@@ -50,6 +50,11 @@ APP = {
     ("ChannelsPage", "add"): "connection.add", ("ChannelsPage", "delete"): "connection.delete",
     ("CasePage", "down"): "case.next", ("CasePage", "up"): "case.prev", ("CasePage", "toggle"): "case.toggle",
     ("CasePage", "describe"): "case.describe",
+    ("IssuesPage", "down"): "issues.next", ("IssuesPage", "up"): "issues.prev", ("IssuesPage", "plan"): "issue.plan",
+    ("IssuesPage", "status"): "issue.status", ("IssuesPage", "priority"): "issue.priority",
+    ("IssuesPage", "estimate"): "issue.estimate", ("IssuesPage", "due"): "issue.due", ("IssuesPage", "title"): "issue.title",
+    ("IssuesPage", "new"): "issues.new", ("IssuesPage", "open_link"): "issue.open", ("IssuesPage", "display"): "issues.display",
+    ("IssuesPage", "undo_issue"): "nav.undo",
     ("TasksPage", "down"): "tasks.next", ("TasksPage", "up"): "tasks.prev", ("TasksPage", "done"): "tasks.done",
     ("TasksPage", "skip"): "tasks.skip", ("TasksPage", "new_thread"): "tasks.new_thread",
     ("TasksPage", "person"): "tasks.person", ("TasksPage", "copy"): "tasks.copy",
@@ -164,3 +169,11 @@ def test_rejected_app_differences_are_removed():
     assert "folded" not in (views / "threads" / "main.js").read_text()
     for name in ("drafts", "sequences"):
         assert "delete-picked" not in (views / name / "main.js").read_text(), name
+
+
+def test_every_shipped_view_is_written_to_the_apps_home():
+    """A view in app/defaults/views must be in workspace.rs DEFAULTS, or the App never installs it."""
+    listed = (ROOT / "app" / "src" / "workspace.rs").read_text()
+    missing = [v.name for v in (DEFAULTS / "views").iterdir()
+               if v.is_dir() and f'"views/{v.name}/main.js"' not in listed]
+    assert not missing

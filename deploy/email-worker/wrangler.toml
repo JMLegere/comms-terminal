@@ -8,6 +8,7 @@ routes = [
   { pattern = "https://hooks.agentmaple.com/hooks/slack*", zone_name = "agentmaple.com" },
   { pattern = "https://hooks.agentmaple.com/hooks/quo*", zone_name = "agentmaple.com" },
   { pattern = "https://hooks.agentmaple.com/hooks/resend*", zone_name = "agentmaple.com" },
+  { pattern = "https://hooks.agentmaple.com/hooks/linear*", zone_name = "agentmaple.com" },
 ]
 
 [vars]

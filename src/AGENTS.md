@@ -1,6 +1,6 @@
 # src/comms_terminal
 
-The app in `comms_terminal/`: domain modules, Platform adapters, Context sources, the service, and the console. `docs/design/api-and-database.md` describes the interface and schema; `docs/design/console.md` the console.
+The app in `comms_terminal/`: domain modules, Platform adapters (Context connections included), the service, and the console. `docs/design/api-and-database.md` describes the interface and schema; `docs/design/console.md` the console.
 
 ## Modules
 
@@ -12,7 +12,7 @@ The app in `comms_terminal/`: domain modules, Platform adapters, Context sources
 | `pipeline.py` | Stages, Values, Targets and the Bowtie math behind the Pipeline pages. |
 | `calendar.py`, `meetings.py`, `gcal.py` | The iCal feed into Events, Meetings as Thread Activities, invite Responses through Google Calendar. |
 | `email.py`, `fastmail.py`, `slack.py`, `quo.py` | One adapter per Platform: parse inbound, send outbound. `platforms.py` lists them. |
-| `attio.py`, `tana.py`, `linear.py` | Read-only Context sources. `mcp.py` is the MCP client Tana and Fastmail share. |
+| `attio.py`, `tana.py`, `linear.py` | Context connections (read-only; ADR 0018). `mcp.py` is the MCP client Tana and Fastmail share. |
 | `serve.py` | The service: public `/hooks/*`, the local socket (`/reply`, `/respond`, `/call`, `/sync`, `/raw`), the wake timer, the file server. The only process with credentials. |
 | `tui.py` | The console. Renders and calls domain functions; holds no business rules and no credentials. |
 | `remote.py`, `writers.py` | Unix-socket/SSH clients and their outcomes, the laptop database copy, and the allowlist of writes sent to the service. |

@@ -23,12 +23,13 @@ const TODO = ["CREATED", "NEW_REPLY", "IN_PROGRESS", "REPLY_DRAFT"];
 const I = { TODO: "\u{f0766}", tasks: "\u{f05c7}", edited: "\u{f0cb6}", sequence: "\u{f027b}", organization: "\u{f01d7}",
   today: "\u{f05a8}", done: "\u{f012c}", SNOOZED: "\u{f04b2}", warn: "\u{f002a}", case: "\u{f0814}",
   email: "\u{f01f0}", slack: "\u{f04b1}", sms: "\u{f011c}", time: "\u{f0150}",
-  call: "\u{f0df0}", linkedin: "\u{f033b}", letter: "\u{f0d8c}", action: "\u{f027b}", if: "\u{f0641}", meeting: "\u{f0ed8}" };
+  call: "\u{f0df0}", linkedin: "\u{f033b}", letter: "\u{f0d8c}", action: "\u{f027b}", if: "\u{f0641}", meeting: "\u{f0ed8}",
+  issues: "\u{f0756}" };
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const pad = (n) => String(n).padStart(2, "0");
-const PANES = ["threads", "tasks", "drafts", "paused", "unattended"];
-const DETAIL = { threads: null, tasks: "task", drafts: "draft", paused: "paused", unattended: "unattended" };
+const PANES = ["threads", "tasks", "issues", "drafts", "paused", "unattended"];
+const DETAIL = { threads: null, tasks: "task", issues: "issue", drafts: "draft", paused: "paused", unattended: "unattended" };
 // What each key does on each kind of row (the Console's Today hands a key to the list that holds the cursor).
 const THREAD_KEYS = { r: "reply_sender", a: "reply_all", e: "done", g: "snooze", b: "block", m: "ignore", x: "ignore", l: "case",
   s: "status", p: "person", o: "link", y: "copy", f: "forward", v: "react", i: "respond", delete: "unstage" };
@@ -38,11 +39,13 @@ const ROUTE = {
     "2": "tasks.pick_second" },
   drafts: { n: "drafts.new", x: "drafts.delete", y: "drafts.copy", "ctrl-s": "draft.save", "ctrl-enter": "draft.send" },
   paused: { "r": "person.resume", "f": "person.finish" },
+  issues: { p: "issue.plan", s: "issue.status", i: "issue.priority", e: "issue.estimate", d: "issue.due", t: "issue.title",
+    o: "issue.open" }, // today's Planned Issues (FR-UI-2), as the Issues page
   unattended: { s: "organization.stage", v: "organization.value" }, // as its Organization page
   unattended_person: { p: "person.stage", v: "person.value" }, // a Person in Fundraising or Talent (ADR 0016)
 };
 const KEYS = [...new Set(Object.values(ROUTE).flatMap(Object.keys))];
-const NAME = { threads: "Thread", tasks: "Task", drafts: "Draft", paused: "Paused", unattended: "Unattended",
+const NAME = { threads: "Thread", tasks: "Task", issues: "Issue", drafts: "Draft", paused: "Paused", unattended: "Unattended",
   unattended_person: "Unattended" };
 /** A row's key set: an Unattended row holds a Person or an Organization, which take different keys. */
 const kindOf = (row) => (row.kind === "unattended" && row.r?.person_id ? "unattended_person" : row.kind);
@@ -101,7 +104,7 @@ export function paneItems(data, cases) {
     if (r.group !== group) out.tasks.push({ groupHeader: (group = r.group).toUpperCase() });
     out.tasks.push({ row: r, pick: true });
   }
-  for (const k of ["drafts", "paused", "unattended"]) out[k] = (d[k] ?? []).map((r) => ({ row: r, pick: true }));
+  for (const k of ["issues", "drafts", "paused", "unattended"]) out[k] = (d[k] ?? []).map((r) => ({ row: r, pick: true }));
   const rank = (r) => r.send_error ? "0" : r.send_at ? `2${r.send_at}` : "1"; // the Drafts order (drafts/main.js)
   out.drafts.sort((a, b) => (rank(a.row) < rank(b.row) ? -1 : rank(a.row) > rank(b.row) ? 1 : 0));
   for (const k of PANES) out[k].forEach((it, i) => { it.pane = k; it.key = keyOf(k, it, i); });
@@ -238,6 +241,7 @@ export default class Today extends View {
     setShared("task", row.kind === "tasks" ? r.id : null); // as the Thread: a Task off screen never acts or reloads (D87)
     if (row.kind === "tasks") { run("task.show"); run("tasks.show"); }
     if (row.kind === "drafts") { setShared("draft", r.id); run(inPlace ? "thread.show" : "draft.show"); if (inPlace) run("thread.show_reply"); }
+    if (row.kind === "issues") { setShared("issue", r.id); run("issue.show"); }
     if (row.kind === "paused") { setShared("person", r.person_id); setShared("side", { kind: "paused", id: r.person_id }); run("person.show"); run("side.show"); }
     if (row.kind === "unattended" && r.person_id) { // a Person in Fundraising or Talent (ADR 0016)
       setShared("person", r.person_id);
@@ -258,7 +262,7 @@ export default class Today extends View {
     const row = this.rows()[this.at];
     if (!row || shared("page") !== "today" || shared("focus") === "detail") return;
     const r = row.r ?? {};
-    const what = { threads: r.title, tasks: r.person ?? r.title, drafts: r.subject ?? r.title, paused: r.person,
+    const what = { threads: r.title, tasks: r.person ?? r.title, issues: `${r.identifier} ${r.title}`, drafts: r.subject ?? r.title, paused: r.person,
       unattended: r.name ?? r.domain }[row.kind];
     setShared("target", { col: "list", label: `${NAME[row.kind]} · ${what ?? ""}`, keys: [["enter", "open"], ...keysOf(kindOf(row))] });
   }
@@ -274,6 +278,7 @@ export default class Today extends View {
         if (r) run("nav.focus_right"); // into the Thread: its newest message takes the focus
         return;
       case "tasks": return run("task.open");
+      case "issues": return run("nav.focus_right"); // into the Issue: its keys act there
       case "drafts":
         setShared("focus", "detail"); // the Draft's Composer takes the keyboard, where it is shown
         return run(r.thread_id ? "thread.open_reply" : "draft.edit");
@@ -311,6 +316,10 @@ export default class Today extends View {
       tasks: [pill(`${I.tasks} tasks · ${counts.tasks}`, t.blue), ...(() => {
         const late = (this.data?.tasks ?? []).filter((x) => x.group === "overdue").length;
         return late ? [div().font_semibold().text_color(t.red).child(`${late} overdue`)] : [];
+      })()],
+      issues: [pill(`${I.issues} issues · ${counts.issues}`, t.blue), ...(() => { // with the day's capacity (FR-UI-2)
+        const c = this.data?.issues_capacity;
+        return c ? [div().text_color(c.used > c.capacity ? t.red : t.muted).child(`${c.used} of ${c.capacity} h`)] : [];
       })()],
       drafts: [pill(`${I.edited} drafts · ${counts.drafts}`, t.blue)],
       paused: [pill(`${I.sequence} paused · ${counts.paused}`, t.yellow)],
@@ -366,6 +375,12 @@ export default class Today extends View {
               .child(div().flex_1().min_w(0).truncate().text_color(t.foreground).child((r.subject || r.body || "New draft").replace(/\r?\n/g, " "))))
             .child(div().w(56).flex_none().text_color(t[word[1]]).child(word[0]));
         }
+        case "issues":
+          return el.child(div().w(16).flex_none().text_color((r.warnings ?? []).length || r.not_saved ? t.red : t.muted)
+            .child((r.warnings ?? []).length || r.not_saved ? I.warn : I.issues))
+            .child(div().w(80).flex_none().text_color(t.muted).child(r.identifier ?? ""))
+            .child(div().flex_1().min_w(0).truncate().text_color(t.foreground).child(r.title ?? ""))
+            .child(div().flex_none().text_color(t.muted).child(r.state_name ?? ""));
         case "paused":
           return el.child(div().w(16).flex_none().text_color(t.yellow).child(I.sequence)).child(name(r.person))
             .child(div().flex_1().min_w(0).truncate().text_color(t.muted).child(`${r.sequence ?? ""}${r.finishing ? ` · finishing as ${r.finishing}` : ""}`))

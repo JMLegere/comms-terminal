@@ -36,7 +36,7 @@ Platform ─▶ Connection ─▶ Channel ─▶ Thread ◀── Activity (mess
 - **Person** is a set of Identities. **Organization** holds People through Memberships that follow company email domains; Jeremy's own changes win. A person acting on their own account gets a **Sole proprietorship**.
 - **Sequence** is ordered Steps (touches Jeremy does, Actions the console does, Ifs that choose a path) with On start and On completion. An **Enrollment** runs one Person through it for one Organization: Active, Paused, Finishing or Finished. Any inbound message from the Person pauses it. Each Step becomes a **Task** for that Enrollment; an email Task makes a Draft and is done when the Draft is sent.
 - **Pipeline** places each Organization (Revenue) or Person (Fundraising, Talent; ADR 0016) at a **Stage** with a **Value**, and works backwards from a **Target** to the **Constraint** and This week's actions. **Unattended** Organizations and People sit in an open Stage with nothing bringing them back.
-- **Context sources** (Attio, Tana, Linear) show read-only context beside Threads, People, Organizations and Cases. They hold no Threads.
+- **Connection** is one account on a Platform, of one kind: Email, SMS, Slack, Calendar, Context or Issue (ADR 0018). **Context connections** (Attio, Tana, Linear) show read-only context beside Threads, People, Organizations and Cases and hold no Threads; their health shows under connections like any other.
 - **Calendar** lays out Events, Tasks, waking Snoozes, scheduled Drafts and Enrollment starts. **Respond** sets Jeremy's Invite state through Google Calendar.
 
 ## Working with the app as an agent
@@ -66,6 +66,9 @@ Jeremy works in the console; agents read and prepare work through the CLI. On Wo
 | One Step | `comms-terminal step add\|set\|move\|delete …` |
 | Calendar | `comms-terminal events [--from] [--to] [--attendee] [--query] [--last N] [--json]` |
 | Pipelines | `comms-terminal pipeline revenue\|fundraising\|talent`; `pipeline target\|stage\|value …` (Revenue takes a domain; Fundraising and Talent take a Person's email, phone or name) |
+| Issues (ADR 0019) | `comms-terminal issues`; `issue ID` (Markdown); `issue ID --status … --priority … --estimate N --due DATE --title … --description -`; `issue ID --plan DATE\|today\|tomorrow\|none`; `issue new --team KEY --title …` |
+| Urgency coefficients | `comms-terminal urgency list`, `urgency set NAME VALUE` |
+| The Action Queue (ADR 0020) | `comms-terminal actions` |
 
 `comms-terminal <command> --help` lists every flag. Jeremy can also press `y` on a Thread or Draft to copy the same Markdown for you.
 
@@ -77,6 +80,7 @@ The CLI matches the console. Every function that changes the database (`@writer`
 - **Draft edits pass the revision you read.** Read the Draft, then pass `--revision N`. The latest save wins (ADR 0012): an edit made after the stored save applies even over a newer revision, and an earlier one is refused.
 - **Jeremy may have the Draft open.** Your later save replaces what he typed before it, and his next save replaces yours. Tell him before you change a Draft he is working, and after any edit name each changed Draft.
 - **Name things by title.** In anything Jeremy reads, name Threads, Drafts and Tasks by subject and who they are with; an ID may follow in parentheses.
+- **Issue changes go to Linear.** `issue … --status/--priority/…` and `issue new` write to Linear through the Action Queue; Jeremy's Linear rules apply (an approved change set; Issues with other people stay read-only to agents). `--plan` stays in Comms Terminal.
 - **Live writes need Jeremy's go.** Enrolling, finishing or removing Enrollments, applying or deleting Sequences, setting Stages, Values or Targets, skipping Tasks, deleting Drafts, merging or blocking People all change the live database. Get his explicit go for that change, run `sequence apply --dry-run` first, and read the result back afterwards.
 - **No opt-out lines.** Never add a "reply stop" or other opt-out line to a Draft or a Step brief. Keep the Agent Maple Inc. signature and mailing address.
 - **Slack Drafts** take `--to "#channel <C0123>"`; the ID must sit inside `<…>`.

@@ -1,6 +1,7 @@
 """Linear Context uses the existing source socket, page sections, health, and clipboard paths."""
 
 import threading
+from datetime import datetime, timezone
 
 import pytest
 from rich.text import Text
@@ -202,8 +203,16 @@ def test_linear_context_and_match_evidence_on_all_four_surfaces(tmp_path, surfac
 
 
 @pytest.mark.parametrize("outcome", ["ok", "error", "disconnected"])
-def test_linear_health_uses_generic_rail_footer_and_unavailable_section(tmp_path, outcome):
+def test_linear_health_shows_as_its_context_connection(tmp_path, outcome):
+    """ADR 0018, FR-MOD-16: Linear's Context connection is listed once, under context with its own page, not again
+    under connections; the page's section still says when its answer failed."""
     path, ids = seeded(tmp_path)
+    if outcome != "disconnected":
+        db = inbox.connect(path)
+        cid = inbox.ensure_connection(db, "linear", "context", datetime.now(timezone.utc))
+        if outcome == "error":
+            inbox.set_connection_error(db, cid, "Linear context could not be loaded")
+        db.close()
 
     def fetch(emails, domains):
         if outcome == "error":
@@ -219,21 +228,17 @@ def test_linear_health_uses_generic_rail_footer_and_unavailable_section(tmp_path
         rail = app.main.rail
         option_ids = [rail.get_option_at_index(i).id for i in range(rail.option_count)]
         footer = str(app.main.query_one("#statusline").render())
+        assert f"conn:{cid}" not in option_ids if outcome != "disconnected" else True  # listed once, under context
         if outcome == "disconnected":
-            assert app.source_state["linear"] is None and not current.display
-            assert "context:linear" not in option_ids and "Linear broken" not in footer
+            assert not current.display and "Linear broken" not in footer
+            return
+        prompt = str(rail.get_option("context:linear").prompt)
+        assert "Linear" in prompt and ICON["task"] in prompt and current.display
+        if outcome == "error":
+            assert ICON["broken"] in prompt and "Linear broken" in footer
+            assert "Linear unavailable:" in " ".join(str(current.render()).split())
         else:
-            assert current.display and "context:linear" in option_ids
-            prompt = str(rail.get_option("context:linear").prompt)
-            assert "Linear" in prompt and ICON["task"] in prompt
-            if outcome == "error":
-                assert app.source_state["linear"] == "Linear request failed"
-                assert ICON["broken"] in prompt and "Linear broken" in footer
-                assert "Linear unavailable:" in " ".join(str(current.render()).split())
-            else:
-                assert app.source_state["linear"] == "ok" and ICON["ok"] in prompt
-                assert ICON["task"] in footer and "Linear broken" not in footer
-                assert "no matching open issues" in str(current.render())
+            assert ICON["ok"] in prompt and "Linear broken" not in footer
 
     run(app, [scenario], size=(190, 52))
 

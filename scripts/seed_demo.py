@@ -69,9 +69,32 @@ def seed(db, broken=False):
     inbox.act(db, spec.id, inbox.SetCase(case_id=inbox.get_thread(db, ana.id).case_id))
     inbox.add_identity(db, db.execute("SELECT person_id FROM identities WHERE value = 'ana@acme.com'").fetchone()[0], "email", "ana.ruiz@gmail.com")
     inbox.block(db, "email", "ana.ruiz@gmail.com")
+    issues_demo(db, now)
     if broken:
         inbox.set_auth(db, 2, False)
     return {"ana": ana.id, "logan": logan.id, "spec": spec.id, "raj": edited.id, "lee": gone.id}
+
+
+def issues_demo(db, now):
+    """Synthetic Linear Issues (ADR 0019): none planned for today, so Today stays as it was; one refused change."""
+    from comms_terminal import actions, issues
+    cid = inbox.ensure_connection(db, "linear", "issue", now)
+    issues.replace_statuses(db, cid, [{"id": f"demo-{n}", "team_id": "demo-team", "name": n, "type": t, "position": p}
+                                      for p, (n, t) in enumerate((("Todo", "unstarted"), ("Making It Happen", "started"),
+                                                                  ("Blocked", "unstarted"), ("Done", "completed")))])
+    for n, (title, priority, estimate, due, planned) in enumerate((
+            ("Accept the term sheet", 1, 2, 3, 2), ("Closing packages", 2, 8, None, 3), ("Board update", 3, None, 5, None))):
+        issues.upsert(db, cid, {"id": f"demo-issue-{n}", "identifier": f"DEMO-{n + 1}", "title": title, "team_id": "demo-team",
+                                "state_id": "demo-Todo", "priority": priority, "estimate": estimate,
+                                "due_date": (now + timedelta(days=due)).date().isoformat() if due else None,
+                                "created_at": (now - timedelta(days=20)).isoformat(), "updated_at": now.isoformat(),
+                                "data": {"team_key": "DEMO", "team": "Demo", "project": "Pre-seed round"}}, now)
+        if planned:
+            issues.plan(db, f"demo-issue-{n}", (now + timedelta(days=planned)).date().isoformat(), now=now)
+    action = issues.update(db, "demo-issue-2", {"title": "Board update for November"}, now=now)
+    actions.run(db, {"linear": type("Refuses", (), {"write": lambda self, name, v: {"outcome": "refused",
+                                                                                  "error": "demo refusal"}})()}, now)
+    return action
 
 
 if __name__ == "__main__":

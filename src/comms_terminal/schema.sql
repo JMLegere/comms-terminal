@@ -1,7 +1,10 @@
 CREATE TABLE connections (
   id                TEXT PRIMARY KEY NOT NULL DEFAULT (new_id()),
-  platform          TEXT NOT NULL CHECK (platform IN ('gmail', 'fastmail', 'slack', 'quo', 'gcal')),  -- platforms.py
-  external_id       TEXT NOT NULL UNIQUE,  -- email address, Slack team ID, or Quo Work number
+  platform          TEXT NOT NULL CHECK (platform IN ('gmail', 'fastmail', 'slack', 'quo', 'gcal', 'linear', 'tana',
+                                                       'attio')),  -- platforms.py
+  kind              TEXT CHECK (kind IN ('email', 'sms', 'slack', 'calendar', 'context', 'issue')),  -- ADR 0018;
+  --                  NULL = the Platform's only kind (platforms.kind_of); set where one account backs two (Linear)
+  external_id       TEXT NOT NULL,         -- email address, Slack team ID, Quo Work number, or the Platform's name
   self_id           TEXT NOT NULL,         -- Jeremy's address, Slack user ID, or Work number
   label             TEXT NOT NULL,
   connected_at      TEXT NOT NULL,
@@ -12,6 +15,7 @@ CREATE TABLE connections (
   inbound           TEXT                   -- email: the address its forward reaches, the Worker's X-Inbox-To
 ) STRICT;
 CREATE UNIQUE INDEX connections_inbound ON connections (inbound);
+CREATE UNIQUE INDEX connections_account ON connections (external_id, coalesce(kind, ''));  -- one per account and kind
 
 CREATE TABLE channels (
   id            TEXT PRIMARY KEY NOT NULL DEFAULT (new_id()),
@@ -434,3 +438,63 @@ CREATE TABLE modules (  -- each Module's setting for this Service; no row means 
   id      TEXT PRIMARY KEY CHECK (id IN ('pipelines', 'sequences', 'cases')),
   enabled INTEGER NOT NULL CHECK (enabled IN (0, 1))
 ) STRICT;
+
+-- Issues (ADR 0019): the copy of Jeremy's assigned Issues and their teams' statuses
+CREATE TABLE issue_statuses (  -- each team's statuses on an Issue connection's Platform (ADR 0019); issues.py
+  id            TEXT PRIMARY KEY NOT NULL,  -- the Platform's own id
+  connection_id TEXT NOT NULL REFERENCES connections (id),
+  team_id       TEXT NOT NULL,
+  name          TEXT NOT NULL,
+  type          TEXT NOT NULL,              -- the Platform's status type (Linear: backlog, unstarted, started, ...)
+  position      REAL NOT NULL DEFAULT 0
+) STRICT;
+CREATE TABLE issues (  -- a copy of each Issue assigned to Jeremy; the Platform owns every field but planned_day
+  id            TEXT PRIMARY KEY NOT NULL,  -- the Platform's own id
+  connection_id TEXT NOT NULL REFERENCES connections (id),
+  identifier    TEXT NOT NULL,              -- BIZ-1426
+  title         TEXT NOT NULL,
+  description   TEXT,
+  url           TEXT,
+  team_id       TEXT NOT NULL,
+  state_id      TEXT,                       -- issue_statuses.id
+  priority      INTEGER NOT NULL DEFAULT 0, -- Linear: 0 none, 1 urgent, 2 high, 3 medium, 4 low
+  estimate      REAL,
+  due_date      TEXT,                       -- a date
+  created_at    TEXT NOT NULL,
+  updated_at    TEXT NOT NULL,              -- the Platform's last change
+  completed_at  TEXT,
+  canceled_at   TEXT,
+  data          TEXT NOT NULL DEFAULT '{}', -- display-only extras (project, cycle, labels, parent, team key)
+  planned_day   TEXT,                       -- local only, never sent (ADR 0019)
+  copied_at     TEXT NOT NULL               -- when the copy last took the Platform's version
+) STRICT;
+CREATE INDEX issues_planned ON issues (planned_day);
+
+-- Action Queue (ADR 0020)
+CREATE TABLE actions (  -- the Action Queue (ADR 0020): each thing Comms Terminal carries out itself; actions.py
+  id            TEXT PRIMARY KEY NOT NULL DEFAULT (new_id()),
+  connection_id TEXT NOT NULL REFERENCES connections (id),
+  kind          TEXT NOT NULL CHECK (kind IN ('issue_update', 'issue_create', 'send', 'respond')),
+  target        TEXT NOT NULL,              -- the record it changes (an Issue's id)
+  payload       TEXT NOT NULL,              -- JSON: the values it sets
+  previous      TEXT,                       -- JSON: the values they replaced, for a refusal and for undo
+  safe          INTEGER NOT NULL CHECK (safe IN (0, 1)),  -- safe to repeat when its outcome is unknown
+  state         TEXT NOT NULL CHECK (state IN ('scheduled', 'running', 'confirmed', 'refused', 'unknown')),
+  error         TEXT,                       -- why it was refused or is unknown
+  attempts      INTEGER NOT NULL DEFAULT 0,
+  due_at        TEXT NOT NULL,              -- not before this moment
+  created_at    TEXT NOT NULL,
+  done_at       TEXT,                       -- when it was confirmed or refused
+  CHECK ((state IN ('confirmed', 'refused')) = (done_at IS NOT NULL))
+) STRICT;
+CREATE INDEX actions_due ON actions (state, due_at);
+CREATE INDEX actions_target ON actions (target, created_at);
+
+-- Urgency (PRD FR-IS-8)
+CREATE TABLE urgency (  -- Taskwarrior-style coefficients for an Issue's urgency (PRD FR-IS-8), settable
+  name  TEXT PRIMARY KEY NOT NULL,
+  value REAL NOT NULL
+) STRICT;
+INSERT INTO urgency (name, value) VALUES ('due', 12), ('priority.urgent', 9), ('priority.high', 6),
+  ('priority.medium', 3.9), ('priority.none', 1.95), ('priority.low', 0), ('started', 4), ('blocking', 8),
+  ('blocked', -5), ('age', 2);

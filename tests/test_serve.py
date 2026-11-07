@@ -362,7 +362,7 @@ def test_resend_config_optional_without_changing_other_hooks(tmp_path, monkeypat
     monkeypatch.setattr(serve.quo, "handle_hook", lambda db, c, *a: seen.append(("quo", c["id"])) or 204)
     routes = hook_routes(monkeypatch, path, {"email-hook-secret": b"forward", "slack-signing-secret": b"slack",
                                            "quo-webhook-secret": b"quo", "resend-webhook-secret": secret})
-    assert set(routes) == {"/hooks/email", "/hooks/slack", "/hooks/quo", "/hooks/resend"}
+    assert set(routes) == {"/hooks/email", "/hooks/slack", "/hooks/quo", "/hooks/resend", "/hooks/linear"}
     assert routes["/hooks/resend"](HTTPMessage(), b"{}")[0] == 503
     assert routes["/hooks/email"](HTTPMessage(), b"raw")[0] == 204
     headers = HTTPMessage()

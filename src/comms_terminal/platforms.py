@@ -143,6 +143,12 @@ class Platform:
     hook_secret: str | None = None  # credential that signs its inbound webhook (serve.HOOKS); None = no webhook
     receipts: bool = False       # it sends through Resend: a sent message's Message-ID arrives later in a receipt,
     #                              and its mailbox Threads reconcile against those ids
+    kinds: tuple[str, ...] = ()  # its Connections' kinds (ADR 0018), the first when the row stores none; () = format
+
+    @property
+    def kind(self) -> str:
+        """The kind of a Connection on this Platform that stores none: its only one (ADR 0018)."""
+        return self.kinds[0] if self.kinds else self.format
 
     @property
     def takes_replies(self) -> bool:
@@ -178,7 +184,28 @@ PLATFORMS = {p.name: p for p in (
     Platform("gcal", "Google Calendar", "calendar", None, "calendar", False,
              "Reading Google Calendar every 30 seconds; Meetings with someone outside Agent Maple become Threads.",
              "[#c14a4a]Google Calendar is not being read.[/] Check the google-calendar-ics credential; "
-             "this clears on the next successful read.", _gcal),
+             "this clears on the next successful read.", _gcal, kinds=("calendar",)),
+    # Context connections (ADR 0018): read beside Threads, People, Organizations and Cases; they hold no Threads
+    Platform("linear", "Linear", "task", None, "linear", False,
+             "Showing open Linear issues beside Threads, People, Organizations and Cases.",
+             "[#c14a4a]Linear is not answering.[/] Check the linear-token credential; "
+             "this clears on the next successful answer.", lambda m, ch: None, kinds=("context", "issue"),
+             hook_secret="linear-webhook-secret"),
+    Platform("tana", "Tana", "tana", None, "tana", False,
+             "Showing Tana notes beside Threads, People, Organizations and Cases.",
+             "[#c14a4a]Tana is not answering.[/] Re-run scripts/oauth_mcp.py for Tana if the sign-in expired; "
+             "this clears on the next successful answer.", lambda m, ch: None, kinds=("context",)),
+    Platform("attio", "Attio", "attio", None, "attio", False,
+             "Showing Attio records beside Threads, People, Organizations and Cases.",
+             "[#c14a4a]Attio is not answering.[/] Check the attio-token credential; "
+             "this clears on the next successful answer.", lambda m, ch: None, kinds=("context",)),
 )}
+CONTEXT = tuple(n for n, p in PLATFORMS.items() if "context" in p.kinds)  # Linear, Tana, Attio
+
+
+def kind_of(connection) -> str:
+    """A Connection's kind (ADR 0018): stored where one account backs two, else its Platform's only kind."""
+    platform = PLATFORMS.get(connection["platform"])  # a newer Service's Platform: no kind known here
+    return connection["kind"] or (platform.kind if platform else None)
 
 EMAIL = tuple(n for n, p in PLATFORMS.items() if p.format == "email")

@@ -161,6 +161,19 @@ Linear is a read-only Context source (FR-13c, decision #125), after Attio and Ta
 
 The local route defaults omitted arrays to `[]`; explicit `null`, non-array values, and non-string entries return 400. An unconnected source returns 503, connected empty keys return `{"issues":[]}` without a provider call, and adapter failures return a safe 502 error. Linear reads leave Connections, Threads, Activities, and Inbox Status unchanged. The socket remains private; public hook routes are unchanged.
 
+### 3e-2. Linear Issues: write key, webhook, Worker route (ADR 0019, ADR 0020)
+
+The same `linear-token` now backs two Connections: Linear's Context connection and its Issue connection (ADR 0018). The Issue connection keeps a copy of Jeremy's assigned Issues (open, plus those closed in 30 days), reads them all every 30 minutes, takes signed Issue events at `/hooks/linear`, and sends Jeremy's changes (status, priority, estimate, due date, title, description, new Issues, and the Slip status on Rollover) through the Action Queue. The Planned day never goes to Linear.
+
+Each step below needs Jeremy's explicit go; none runs with a push.
+
+1. **You**, in Linear (Settings → Account → Security & access): replace the "Comms Terminal" key with one that has **Read and Write**, limited to Business and Engineering. Changes then show in Linear as made by Jeremy.
+2. **You**, in Linear (Settings → API → Webhooks; workspace admins only): add a webhook to `https://hooks.agentmaple.com/hooks/linear` for **Issues** on Business and Engineering. Copy its signing secret.
+3. **Oracle**: install both credentials from stdin, never as arguments: `sudo systemd-creds encrypt --name=linear-token - /etc/credstore.encrypted/comms-terminal.linear-token` and `sudo systemd-creds encrypt --name=linear-webhook-secret - /etc/credstore.encrypted/comms-terminal.linear-webhook-secret` (the container unit loads them by name, `deploy/comms-terminal-container.service`), then `sudo systemctl daemon-reload && sudo systemctl restart comms-terminal-container`.
+4. **Worker**: `cd deploy/email-worker && npx wrangler deploy` adds the `/hooks/linear` route (`wrangler.toml`). Until then the hook answers 404 at Cloudflare and only the 30-minute read updates the copy.
+5. **Check**: `comms-terminal issues` lists the open assigned Issues (about 57 on 2026-11-07); change one Issue's priority with `comms-terminal issue BIZ-… --priority low`, see it in Linear within a minute, and set it back; `comms-terminal actions` shows both Actions confirmed. Change an Issue in Linear and see `comms-terminal issue BIZ-…` follow within seconds.
+6. **Failure**: a refused key marks the Issue connection broken ("Writes refused: …"), and its Actions wait; a failed read shows "Issue read failed: …". Both clear on the next success. An unsigned or stale webhook answers 401 and shows as a signature error on the Issue connection.
+
 ## 3f. Attachments and the file server
 
 Attachments (#127–#137): received files are copied into `~/.local/share/comms-terminal/files/<sha256>` (0600). Gmail parts are stored at ingest; Slack and Quo files download on the service's wake loop, up to 5 tries, after which the chip says "not copied" and keeps its Platform link. Files over 100 MB stay link-only. A file expires a year after its newest Attachment unless it is staged (checked daily).

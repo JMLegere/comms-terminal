@@ -1,10 +1,13 @@
 """Linear issues and Customer Requests, queried only within a page's matching keys."""
 
+import hashlib
+import hmac
 import http.client
 import json
 import re
 import urllib.error
 import urllib.request
+from datetime import datetime, timedelta
 from urllib.parse import urlsplit
 
 from . import tana
@@ -66,6 +69,60 @@ class Client:
         if not isinstance(result.get("data"), dict):
             raise LinearError("Linear returned an invalid response")
         return result["data"]
+
+    def write(self, name: str, variables: dict) -> dict:
+        """One of WRITES, for the Action Queue only (ADR 0020); its outcome, never an exception."""
+        return mutate(self.token, name, variables, self.opener)
+
+
+WRITES = {  # the only mutations Comms Terminal sends (ADR 0020): Jeremy's Issue changes, never a delete
+    "issueUpdate": """mutation IssueUpdate($id: String!, $input: IssueUpdateInput!) {
+  issueUpdate(id: $id, input: $input) { success issue { id identifier url createdAt updatedAt } }
+}""",
+    "issueCreate": """mutation IssueCreate($input: IssueCreateInput!) {
+  issueCreate(input: $input) { success issue { id identifier url createdAt updatedAt } }
+}""",
+}
+ISSUE_BY_ID = """query IssueById($id: String!) { issue(id: $id) { id identifier url createdAt updatedAt } }"""
+
+
+def _said(error) -> str:
+    return " ".join(str(error.get("message") or "Linear refused it").split())[:200] if isinstance(error, dict) \
+        else "Linear refused it"
+
+
+def mutate(client_token: str, name: str, variables: dict, opener=urllib.request.urlopen) -> dict:
+    """One write (WRITES[name]) and its outcome for the Action Queue (ADR 0020): {"outcome": "confirmed", "issue"},
+    {"outcome": "refused", "error"} (Linear said no), {"outcome": "broken", "error"} (the key was refused), or
+    {"outcome": "unknown", "error"} (no answer: it may or may not have happened)."""
+    try:
+        request = urllib.request.Request(API, json.dumps({"query": WRITES[name], "variables": variables}).encode(),
+                                         {"Authorization": client_token, "Content-Type": "application/json",
+                                          "User-Agent": USER_AGENT}, method="POST")
+        with opener(request, timeout=30) as response:
+            result = json.load(response)
+    except urllib.error.HTTPError as error:
+        if error.code in (401, 403):
+            return {"outcome": "broken", "error": f"Linear HTTP {error.code}"}
+        if 400 <= error.code < 500 and error.code != 429:
+            try:
+                return {"outcome": "refused", "error": _said((json.load(error).get("errors") or [None])[0])}
+            except (ValueError, AttributeError, UnicodeError):
+                return {"outcome": "refused", "error": f"Linear HTTP {error.code}"}
+        return {"outcome": "unknown", "error": f"Linear HTTP {error.code}"}
+    except (urllib.error.URLError, OSError, http.client.HTTPException, ValueError, UnicodeError):
+        return {"outcome": "unknown", "error": "Linear did not answer"}
+    errors = result.get("errors") if isinstance(result, dict) else None
+    if errors:
+        first = errors[0] if isinstance(errors[0], dict) else {}
+        code = str((first.get("extensions") or {}).get("type") or (first.get("extensions") or {}).get("code") or "")
+        if "authentication" in code.casefold() or "forbidden" in code.casefold():
+            return {"outcome": "broken", "error": _said(first)}
+        return {"outcome": "refused", "error": _said(first)}
+    out = ((result.get("data") or {}).get(name) or {}) if isinstance(result, dict) else {}
+    if not out.get("success") or not isinstance(out.get("issue"), dict):
+        return {"outcome": "refused", "error": "Linear did not save it"}
+    return {"outcome": "confirmed", "issue": out["issue"]}
 
 
 def _pages(client, document, field, filter_):
@@ -226,3 +283,121 @@ def context(client, emails, domains, person_names=(), organization_names=()) -> 
 
 def Context(client, clock=None):  # noqa: N802  share the existing five-minute Context cache
     return tana.Context(client, **({"clock": clock} if clock is not None else {}), fetch=context)
+
+
+# --- Issue connection (ADR 0019): the copy of Jeremy's assigned Issues ------------------------------------------
+
+CLOSED_KEPT_DAYS = 30  # closed Issues stay in the copy this long, for the Issues page's completed window
+VIEWER = "query Viewer { viewer { id } }"
+ASSIGNED = """query AssignedIssues($filter: IssueFilter!, $after: String) {
+  issues(filter: $filter, first: 100, after: $after, includeArchived: false) {
+    nodes {
+      id identifier title description url priority estimate dueDate createdAt updatedAt completedAt canceledAt
+      state { id } team { id key name } project { name } cycle { number } parent { identifier }
+      labels { nodes { name } }
+      relations { nodes { type relatedIssue { completedAt canceledAt } } }
+      inverseRelations { nodes { type issue { completedAt canceledAt } } }
+    }
+    pageInfo { hasNextPage endCursor }
+  }
+}"""
+TEAMS = """query TeamStatuses($after: String) {
+  teams(first: 50, after: $after) {
+    nodes { id states { nodes { id name type position } } }
+    pageInfo { hasNextPage endCursor }
+  }
+}"""
+
+
+def _label_names(labels) -> list[str]:
+    """Labels arrive as a GraphQL connection ({"nodes": [...]}) from a read, and as a list from a webhook."""
+    items = labels.get("nodes") if isinstance(labels, dict) else labels
+    return sorted(str(x["name"]) for x in items or () if isinstance(x, dict) and x.get("name"))
+
+
+def normal(node: dict) -> dict:
+    """One Linear Issue, from a read or a webhook's `data`, as issues.upsert takes it."""
+    state, team = node.get("state") or {}, node.get("team") or {}
+    def open_blocks(relations, side):  # open Issues this one blocks, or that block it (urgency, FR-IS-8)
+        return sum(1 for r in (relations or {}).get("nodes", ()) if r.get("type") == "blocks"
+                   and not ((r.get(side) or {}).get("completedAt") or (r.get(side) or {}).get("canceledAt")))
+    data = {"team_key": team.get("key"), "team": team.get("name"), "project": (node.get("project") or {}).get("name"),
+            "cycle": (node.get("cycle") or {}).get("number"), "parent": (node.get("parent") or {}).get("identifier"),
+            "labels": _label_names(node.get("labels"))}
+    if "relations" in node:  # a read carries relations; a webhook does not, and the copy keeps the last read's
+        data |= {"blocking": open_blocks(node.get("relations"), "relatedIssue"),
+                 "blocked": open_blocks(node.get("inverseRelations"), "issue")}
+    return {"id": node["id"], "identifier": node["identifier"], "title": node.get("title") or "",
+            "description": node.get("description"), "url": node.get("url"),
+            "team_id": team.get("id") or node.get("teamId"), "state_id": state.get("id") or node.get("stateId"),
+            "priority": int(node.get("priority") or 0), "estimate": node.get("estimate"),
+            "due_date": node.get("dueDate"), "created_at": node["createdAt"], "updated_at": node["updatedAt"],
+            "completed_at": node.get("completedAt"), "canceled_at": node.get("canceledAt"),
+            "data": {k: v for k, v in data.items() if v not in (None, [])}}
+
+
+def full_read(client, now: datetime) -> tuple[str, list[dict], list[dict]]:
+    """Jeremy's Linear user id, every Issue assigned to him that is open or closed within CLOSED_KEPT_DAYS, and
+    every team status (FR-IS-1, FR-IS-3)."""
+    since = (now - timedelta(days=CLOSED_KEPT_DAYS)).isoformat()
+    me = {"assignee": {"isMe": {"eq": True}}}
+    # Three plain filters: Linear answered every assigned Issue (812 for 57 open) to `or` beside `assignee`, and
+    # more than that with `assignee` inside each branch (live check, 2026-11-07)
+    filters = ({**me, "completedAt": {"null": True}, "canceledAt": {"null": True}},
+               {**me, "completedAt": {"gt": since}}, {**me, "canceledAt": {"gt": since}})
+    viewer = client.query(VIEWER).get("viewer") or {}
+    if not viewer.get("id"):
+        raise LinearError("Linear returned no viewer")
+    found = {node["id"]: node for f in filters for node in _pages(client, ASSIGNED, "issues", f)}
+    issues = [normal(node) for node in found.values()]
+    statuses, after, seen = [], None, set()
+    while True:  # teams page like _pages, but take no filter
+        result = client.query(TEAMS, {"after": after}).get("teams")
+        if not isinstance(result, dict) or not isinstance(result.get("nodes"), list):
+            raise LinearError("Linear returned an invalid connection")
+        for team in result["nodes"]:
+            statuses += [{"id": s["id"], "team_id": team["id"], "name": s["name"], "type": s["type"],
+                          "position": s.get("position") or 0} for s in (team.get("states") or {}).get("nodes", ())]
+        page = result.get("pageInfo") or {}
+        if not page.get("hasNextPage"):
+            break
+        after = page.get("endCursor")
+        if not after or after in seen:
+            raise LinearError("Linear pagination did not advance")
+        seen.add(after)
+    return viewer["id"], issues, statuses
+
+
+def verify(headers, body: bytes, secret: bytes, now: datetime) -> str | None:
+    """None when Linear signed this body (hex HMAC-SHA256 of the raw body in Linear-Signature) within the last
+    minute (webhookTimestamp, ms), else why not (linear.app/developers/webhooks, "Securing Webhooks")."""
+    signature = headers.get("Linear-Signature") or ""
+    expected = hmac.new(secret, body, hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(signature.strip().lower(), expected):
+        return "bad signature"
+    try:
+        sent = json.loads(body)["webhookTimestamp"] / 1000
+    except (ValueError, KeyError, TypeError):
+        return "no webhookTimestamp"
+    if abs(now.timestamp() - sent) > 60:
+        return "stale webhookTimestamp"
+    return None
+
+
+def handle_hook(db, connection, headers, body: bytes, secret: bytes, now: datetime) -> int | tuple[int, str]:
+    """POST /hooks/linear (through serve.intake): an Issue event updates the copy (FR-IS-2). Linear retries any
+    non-200, so everything verified answers 200, including events about other people's Issues."""
+    from . import issues
+    if (why := verify(headers, body, secret, now)) is not None:
+        return 401, why
+    event = json.loads(body)
+    data = event.get("data")
+    if event.get("type") != "Issue" or not isinstance(data, dict) or not data.get("id"):
+        return 200
+    mine = connection["self_id"] and data.get("assigneeId") == connection["self_id"]
+    if event.get("action") == "remove" or data.get("archivedAt") or (connection["self_id"] and not mine):
+        issues.remove(db, data["id"])
+    elif mine:
+        issues.upsert(db, connection["id"], normal(data), now)
+    # before the first full read Jeremy's Linear id is unknown: that read copies the Issue instead
+    return 200

@@ -179,7 +179,8 @@ def _occurrence(o, mine: set[str], series: set[str], deleted: dict) -> dict:
     return {"id": f"{uid}|{rid}", "uid": uid, "kind": kind, "start": start, "end": end, "all_day": all_day,
             "title": str(o.get("SUMMARY", "")) or "(no title)", "location": str(o.get("LOCATION", "")),
             "description": str(o.get("DESCRIPTION", "")), "organizer": organizer, "attendees": attendees,
-            "state": state, "join_url": join, "repeats": uid in series, "deleted_at": deleted_at}
+            "state": state, "join_url": join, "repeats": uid in series, "deleted_at": deleted_at,
+            "busy": state != "DECLINED" and str(o.get("TRANSP", "OPAQUE")).upper() != "TRANSPARENT"}  # FR-IS-6
 
 
 def expand(db, start: date, end: date, deleted: bool = True) -> list[dict]:
@@ -280,4 +281,8 @@ def items(db, start: date, end: date) -> list[dict]:
                         " JOIN persons p ON p.id = e.person_id JOIN sequences q ON q.id = e.sequence_id"
                         " WHERE e.starts_at IS NOT NULL AND e.state != 'FINISHED' AND ?", (seq,)):
         add("enrollment", e["starts_at"], f"{e['display_name']} starts {e['name']}", e["person_id"])
+    for i in db.execute("SELECT id, identifier, title, planned_day FROM issues WHERE planned_day >= ? AND planned_day < ?"
+                        " AND completed_at IS NULL AND canceled_at IS NULL", (start.isoformat(), end.isoformat())):
+        add("issue", clock.local(date.fromisoformat(i["planned_day"])).isoformat(),  # on its Planned day (FR-UI-3)
+            f"{i['identifier']} · {i['title']}", i["id"])
     return sorted(out, key=lambda i: (not i["all_day"], i["at"]))

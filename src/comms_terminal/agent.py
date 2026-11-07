@@ -9,7 +9,7 @@ import mimetypes
 import sys
 from datetime import date, timedelta
 
-from . import calendar, clock, files, inbox, pipeline, sequence_md, sequences
+from . import calendar, clock, files, inbox, issues, pipeline, sequence_md, sequences
 from .platforms import PLATFORMS
 from .remote import ReplyError, socket_context
 from .tui import (CONTEXT_SOURCES, DRAFT_FIELDS, connection_label, draft_history, draft_text, parse_time,
@@ -38,6 +38,10 @@ COMMANDS = {
     "inbox.set_membership": "person member",
     "inbox.stage": "draft --attach",
     "inbox.unstage": "draft --detach",
+    "issues.create": "issue new",
+    "issues.plan": "issue ID --plan",
+    "issues.set_urgency": "urgency set",
+    "issues.update": "issue ID --title/--description/--status/--priority/--estimate/--due",
     "pipeline.set_stage": "pipeline stage",
     "pipeline.set_value": "pipeline value",
     "sequences.add_step": "step add",
@@ -68,6 +72,7 @@ CONSOLE_ONLY = {
     "inbox.restore_draft": UNDO,
     "inbox.schedule_draft": SENDS,
     "inbox.schedule_reply": SENDS,
+    "issues.undo": "the console's undo; set the field again instead",
     "pipeline.undo": UNDO + "; set the Stage or Value again instead",
     "sequences.complete_task": JEREMYS_TASK,
     "sequences.pick": JEREMYS_TASK,
@@ -252,6 +257,85 @@ def add_parsers(sub):
         t.add_argument("pipeline")
         t.add_argument(kind, help="a Stage name" if kind == "stage" else "CAD, e.g. 90000 or 90k")
         t.add_argument("--at", help="backdate it: YYYY-MM-DD (seeding past Stages)")
+    sub.add_parser("issues", help="Jeremy's Issues (ADR 0019): identifier, status, priority, Planned day, title")
+    sub.add_parser("actions", help="the Action Queue (ADR 0020): what is waiting to leave, by day")
+    t = sub.add_parser("issue", help="one Issue as Markdown; flags change it on its Platform through the Action Queue"
+                                     " (ADR 0020); `issue new` makes one")
+    t.add_argument("id", help="an identifier (BIZ-1426), an Issue id, or new")
+    t.add_argument("--team", help="new: the team key, e.g. BIZ")
+    t.add_argument("--title")
+    t.add_argument("--description", help="the text, or - to read it from stdin")
+    t.add_argument("--status", help="a status name of the Issue's team")
+    t.add_argument("--priority", choices=list(PRIORITY), help="urgent, high, medium, low or none")
+    t.add_argument("--estimate", help="points (Linear: 1 point = 30 minutes), or none")
+    t.add_argument("--due", help="YYYY-MM-DD, or none")
+    t.add_argument("--plan", help="the Planned day: YYYY-MM-DD, today, tomorrow, or none (local only)")
+    u = sub.add_parser("urgency", help="the urgency coefficients (Taskwarrior-style), or set one")
+    us = u.add_subparsers(dest="urgency_cmd", required=True)
+    us.add_parser("list", help="every coefficient and its value")
+    t = us.add_parser("set", help="set one coefficient")
+    t.add_argument("name")
+    t.add_argument("value", type=float)
+
+
+PRIORITY = {"none": 0, "urgent": 1, "high": 2, "medium": 3, "low": 4}
+
+
+def issue_fields(db, a, team_id: str) -> dict:
+    fields = {}
+    if a.title is not None:
+        fields["title"] = a.title
+    if a.description is not None:
+        fields["description"] = sys.stdin.read() if a.description == "-" else a.description
+    if a.status is not None:
+        st = db.execute("SELECT id FROM issue_statuses WHERE team_id = ? AND name = ? COLLATE NOCASE",
+                        (team_id, a.status)).fetchone()
+        if st is None:
+            raise ValueError(f"no status {a.status!r} in this Issue's team")
+        fields["state_id"] = st["id"]
+    if a.priority is not None:
+        fields["priority"] = PRIORITY[a.priority]
+    if a.estimate is not None:
+        fields["estimate"] = None if a.estimate == "none" else int(a.estimate)
+    if a.due is not None:
+        fields["due_date"] = None if a.due == "none" else date.fromisoformat(a.due).isoformat()
+    return fields
+
+
+def issue_markdown(i: dict) -> str:
+    name = {v: k for k, v in PRIORITY.items()}[i["priority"]]
+    lines = [f"# {i['identifier']} · {i['title']}", "",
+             f"- Status: {i['state_name'] or '-'} · Priority: {name} · Estimate: {i['estimate'] or '-'}"
+             f" · Due: {i['due_date'] or '-'} · Planned day: {i['planned_day'] or '-'}"]
+    if i.get("not_saved"):
+        lines.append(f"- {i['not_saved']}")
+    if i.get("url"):
+        lines.append(f"- {i['url']}")
+    return "\n".join(lines + (["", i["description"]] if i.get("description") else [])) + "\n"
+
+
+def issue_cmd(db, a) -> str:
+    import uuid
+    if a.id == "new":
+        team = db.execute("SELECT DISTINCT team_id FROM issues WHERE json_extract(data, '$.team_key') = ?"
+                          " COLLATE NOCASE", (a.team or "",)).fetchone()
+        if team is None or not a.title:
+            raise ValueError("issue new needs --team (a team key with Issues here) and --title")
+        fields = issue_fields(db, a, team["team_id"])
+        issue_id = str(uuid.uuid4())  # Linear takes this id, so a repeated create makes one Issue (FR-AQ-5)
+        issues.create(db, issue_id, team["team_id"], fields.pop("title"), **fields, now=clock.now())
+        return f"Created {issue_id} (its identifier arrives when Linear confirms)\n"
+    row = issues.find(db, a.id)
+    if row is None:
+        raise KeyError(f"no Issue {a.id}")
+    fields = issue_fields(db, a, row["team_id"])
+    if fields:
+        issues.update(db, row["id"], fields, now=clock.now())
+    if a.plan is not None:
+        day = {"today": issues.today(), "tomorrow": issues.today() + timedelta(days=1)}.get(a.plan)
+        issues.plan(db, row["id"], None if a.plan == "none" else (day or date.fromisoformat(a.plan)).isoformat(),
+                    now=clock.now())
+    return issue_markdown(next(i for i in issues.issues(db) if i["id"] == row["id"]))
 
 
 def run(a, db):
@@ -281,7 +365,8 @@ def run(a, db):
                 print(f"{d['id']}\t{d['kind']} {kind}\t{d['to'] or '-'}\t{d['subject'] or ''}")
             print("\nConnections (draft new --connection ID):")
             for c in inbox.connections(db):
-                print(f"{c['id']}\t{connection_label(c)}")
+                if c["platform"] in PLATFORMS and PLATFORMS[c["platform"]].takes_replies:  # Context ones send nothing
+                    print(f"{c['id']}\t{connection_label(c)}")
         elif a.cmd == "tasks":
             due = sequences.tasks_due(db, scheduled=True)  # as the Tasks page: scheduled email Tasks last (#146)
             print("".join(task_markdown(db, t) + "\n" for t in due) or "No Tasks due.\n", end="")
@@ -298,6 +383,24 @@ def run(a, db):
             print(events(db, a), end="")
         elif a.cmd == "pipeline":
             print(pipeline_cmd(db, a), end="")
+        elif a.cmd == "issues":
+            name = {v: k for k, v in PRIORITY.items()}
+            for i in issues.issues(db):
+                if not (i["completed_at"] or i["canceled_at"]):
+                    print(f"{i['identifier']}\t{i['state_name'] or '-'}\t{name[i['priority']]}\t"
+                          f"{i['planned_day'] or '-'}\t{i['title']}")
+        elif a.cmd == "issue":
+            print(issue_cmd(db, a), end="")
+        elif a.cmd == "actions":
+            from . import actions
+            for r in actions.queue(db):
+                print(f"{r['day']}\t{r['state']}\t{r['what']}\t{r['target'] or ''}\t{r['connection'] or ''}"
+                      + (f"\t{r['error']}" if r["error"] else ""))
+        elif a.cmd == "urgency":
+            if a.urgency_cmd == "set":
+                issues.set_urgency(db, a.name, a.value, now=clock.now())
+            for name, value in issues.coefficients(db).items():
+                print(f"{name}\t{value:g}")
         elif a.delete or a.attach or a.detach:
             print(draft_files(db, a), end="")
         else:
