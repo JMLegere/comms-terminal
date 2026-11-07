@@ -1,4 +1,4 @@
-"""The Issue copy (ADR 0018, PRD FR-IS-1–4, FR-IS-12): upserts, full reads, statuses, the signed Linear hook."""
+"""The Issue copy (ADR 0019, PRD FR-IS-1–4, FR-IS-12): upserts, full reads, statuses, the signed Linear hook."""
 
 import hashlib
 import hmac

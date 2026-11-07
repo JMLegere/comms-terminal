@@ -27,7 +27,7 @@ from typing import Protocol, Sequence
 from . import clock, files, platforms
 from .writers import writer
 
-SCHEMA_VERSION = 41
+SCHEMA_VERSION = 42
 WAIT = timedelta(days=4)  # Waiting for them ends after this with no reply: back to Todo to follow up (#116)
 EMAIL_CONFIRMATION_PENDING = "Email confirmation pending; wait for its sent receipt before replying."
 MIGRATIONS = {  # version -> statement that upgrades an existing database to it
@@ -763,10 +763,10 @@ BEGIN
 END;
 PRAGMA legacy_alter_table = OFF;"""
 
-# Connections have kinds (ADR 0017): Linear, Tana and Attio become Platforms, and one account can back two
+# Connections have kinds (ADR 0018): Linear, Tana and Attio become Platforms, and one account can back two
 # Connections of different kinds, so the account key is unique per kind instead of alone. The rebuild keeps ids, so
 # every reference to a Connection stays.
-MIGRATIONS[37] = """PRAGMA legacy_alter_table = ON;
+MIGRATIONS[38] = """PRAGMA legacy_alter_table = ON;
 CREATE TABLE connections_new (
   id                TEXT PRIMARY KEY NOT NULL DEFAULT (new_id()),
   platform          TEXT NOT NULL CHECK (platform IN ('gmail', 'fastmail', 'slack', 'quo', 'gcal', 'linear', 'tana',
@@ -792,8 +792,8 @@ CREATE UNIQUE INDEX connections_inbound ON connections (inbound);
 CREATE UNIQUE INDEX connections_account ON connections (external_id, coalesce(kind, ''));
 PRAGMA legacy_alter_table = OFF;"""
 
-# Issues (ADR 0018): the copy of Jeremy's assigned Issues, with a local Planned day, and their teams' statuses.
-MIGRATIONS[38] = """CREATE TABLE issue_statuses (  -- each team's statuses on an Issue connection's Platform (ADR 0018); issues.py
+# Issues (ADR 0019): the copy of Jeremy's assigned Issues, with a local Planned day, and their teams' statuses.
+MIGRATIONS[39] = """CREATE TABLE issue_statuses (  -- each team's statuses on an Issue connection's Platform (ADR 0019); issues.py
   id            TEXT PRIMARY KEY NOT NULL,  -- the Platform's own id
   connection_id TEXT NOT NULL REFERENCES connections (id),
   team_id       TEXT NOT NULL,
@@ -818,13 +818,13 @@ CREATE TABLE issues (  -- a copy of each Issue assigned to Jeremy; the Platform 
   completed_at  TEXT,
   canceled_at   TEXT,
   data          TEXT NOT NULL DEFAULT '{}', -- display-only extras (project, cycle, labels, parent, team key)
-  planned_day   TEXT,                       -- local only, never sent (ADR 0018)
+  planned_day   TEXT,                       -- local only, never sent (ADR 0019)
   copied_at     TEXT NOT NULL               -- when the copy last took the Platform's version
 ) STRICT;
 CREATE INDEX issues_planned ON issues (planned_day);"""
 
-# The Action Queue (ADR 0019): everything Comms Terminal carries out itself, Issue changes first.
-MIGRATIONS[39] = """CREATE TABLE actions (  -- the Action Queue (ADR 0019): each thing Comms Terminal carries out itself; actions.py
+# The Action Queue (ADR 0020): everything Comms Terminal carries out itself, Issue changes first.
+MIGRATIONS[40] = """CREATE TABLE actions (  -- the Action Queue (ADR 0020): each thing Comms Terminal carries out itself; actions.py
   id            TEXT PRIMARY KEY NOT NULL DEFAULT (new_id()),
   connection_id TEXT NOT NULL REFERENCES connections (id),
   kind          TEXT NOT NULL CHECK (kind IN ('issue_update', 'issue_create')),
@@ -844,7 +844,7 @@ CREATE INDEX actions_due ON actions (state, due_at);
 CREATE INDEX actions_target ON actions (target, created_at);"""
 
 # Urgency coefficients (PRD FR-IS-8): Taskwarrior and Obsidian Tasks defaults, settable.
-MIGRATIONS[40] = """CREATE TABLE urgency (  -- Taskwarrior-style coefficients for an Issue's urgency (PRD FR-IS-8), settable
+MIGRATIONS[41] = """CREATE TABLE urgency (  -- Taskwarrior-style coefficients for an Issue's urgency (PRD FR-IS-8), settable
   name  TEXT PRIMARY KEY NOT NULL,
   value REAL NOT NULL
 ) STRICT;
@@ -852,9 +852,9 @@ INSERT INTO urgency (name, value) VALUES ('due', 12), ('priority.urgent', 9), ('
   ('priority.medium', 3.9), ('priority.none', 1.95), ('priority.low', 0), ('started', 4), ('blocking', 8),
   ('blocked', -5), ('age', 2);"""
 
-# Sends and Responds join the Action Queue (ADR 0019, PRD P6): its kind check widens.
-MIGRATIONS[41] = """PRAGMA legacy_alter_table = ON;
-CREATE TABLE actions_new (  -- the Action Queue (ADR 0019): each thing Comms Terminal carries out itself; actions.py
+# Sends and Responds join the Action Queue (ADR 0020, PRD P6): its kind check widens.
+MIGRATIONS[42] = """PRAGMA legacy_alter_table = ON;
+CREATE TABLE actions_new (  -- the Action Queue (ADR 0020): each thing Comms Terminal carries out itself; actions.py
   id            TEXT PRIMARY KEY NOT NULL DEFAULT (new_id()),
   connection_id TEXT NOT NULL REFERENCES connections (id),
   kind          TEXT NOT NULL CHECK (kind IN ('issue_update', 'issue_create', 'send', 'respond')),
@@ -1459,7 +1459,7 @@ def send_draft(db, draft_id: int, revision: int, sender: Sender, *, again: bool 
             connection_id, fmt = d["connection_id"], d["kind"]
             call, record, settle = _new_send(db, d, files, sender, started, at)
         db.execute("UPDATE composition_drafts SET sending_at = ? WHERE id = ?", (at, draft_id))
-        from . import actions  # the send shows on the Action Queue with its outcome (ADR 0019, PRD P6)
+        from . import actions  # the send shows on the Action Queue with its outcome (ADR 0020, PRD P6)
         action = actions.journal(db, connection_id, "send", draft_id,
                                  d["subject"] or f"message to {d['to'] or 'nobody'}", started)
     try:
@@ -2680,7 +2680,7 @@ def set_connection_error(db, connection_id: int, error: str | None) -> None:
 
 
 def ensure_connection(db, platform: str, kind: str, now: datetime) -> str:
-    """The Service's Connection for a Platform it reaches with its own credential (a Context connection, ADR 0017),
+    """The Service's Connection for a Platform it reaches with its own credential (a Context connection, ADR 0018),
     made on first start; the account is named by the Platform, since the credential holds one account."""
     with db:
         db.execute("INSERT OR IGNORE INTO connections (platform, kind, external_id, self_id, label, connected_at)"

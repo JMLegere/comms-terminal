@@ -143,11 +143,11 @@ class Platform:
     hook_secret: str | None = None  # credential that signs its inbound webhook (serve.HOOKS); None = no webhook
     receipts: bool = False       # it sends through Resend: a sent message's Message-ID arrives later in a receipt,
     #                              and its mailbox Threads reconcile against those ids
-    kinds: tuple[str, ...] = ()  # its Connections' kinds (ADR 0017), the first when the row stores none; () = format
+    kinds: tuple[str, ...] = ()  # its Connections' kinds (ADR 0018), the first when the row stores none; () = format
 
     @property
     def kind(self) -> str:
-        """The kind of a Connection on this Platform that stores none: its only one (ADR 0017)."""
+        """The kind of a Connection on this Platform that stores none: its only one (ADR 0018)."""
         return self.kinds[0] if self.kinds else self.format
 
     @property
@@ -185,7 +185,7 @@ PLATFORMS = {p.name: p for p in (
              "Reading Google Calendar every 30 seconds; Meetings with someone outside Agent Maple become Threads.",
              "[#c14a4a]Google Calendar is not being read.[/] Check the google-calendar-ics credential; "
              "this clears on the next successful read.", _gcal, kinds=("calendar",)),
-    # Context connections (ADR 0017): read beside Threads, People, Organizations and Cases; they hold no Threads
+    # Context connections (ADR 0018): read beside Threads, People, Organizations and Cases; they hold no Threads
     Platform("linear", "Linear", "task", None, "linear", False,
              "Showing open Linear issues beside Threads, People, Organizations and Cases.",
              "[#c14a4a]Linear is not answering.[/] Check the linear-token credential; "
@@ -204,7 +204,7 @@ CONTEXT = tuple(n for n, p in PLATFORMS.items() if "context" in p.kinds)  # Line
 
 
 def kind_of(connection) -> str:
-    """A Connection's kind (ADR 0017): stored where one account backs two, else its Platform's only kind."""
+    """A Connection's kind (ADR 0018): stored where one account backs two, else its Platform's only kind."""
     return connection["kind"] or PLATFORMS[connection["platform"]].kind
 
 EMAIL = tuple(n for n, p in PLATFORMS.items() if p.format == "email")

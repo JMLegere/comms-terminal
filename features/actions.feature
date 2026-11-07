@@ -1,5 +1,5 @@
 Feature: Actions
-  Everything Comms Terminal carries out itself goes through the Action Queue (ADR 0019; requirements FR-AQ-1–7 in
+  Everything Comms Terminal carries out itself goes through the Action Queue (ADR 0020; requirements FR-AQ-1–7 in
   .agents/prd/2026-11-07-issues-and-action-queue.md). Update Issue (issues.update) and Create Issue (issues.create)
   change the copy at once and Enqueue (actions.enqueue) an Action; Run (actions.run) carries Actions out in order
   per Connection. An Action is confirmed, refused, or of unknown outcome; one that is safe to repeat is sent again,

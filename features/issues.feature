@@ -1,5 +1,5 @@
 Feature: Issues
-  Jeremy's Linear Issues live in Comms Terminal as a copy; Linear stays the source of truth (ADR 0018; requirements
+  Jeremy's Linear Issues live in Comms Terminal as a copy; Linear stays the source of truth (ADR 0019; requirements
   FR-IS-1–13 in .agents/prd/2026-11-07-issues-and-action-queue.md). Full Read (linear.full_read) and the Linear
   hook (linear.handle_hook) keep the copy (issues.upsert). Plan (issues.plan) sets or clears a Planned day, which
   never goes to Linear. Day Capacity (issues.capacity) is 9 hours less Jeremy's busy calendar time; an Issue's

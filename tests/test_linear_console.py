@@ -204,7 +204,7 @@ def test_linear_context_and_match_evidence_on_all_four_surfaces(tmp_path, surfac
 
 @pytest.mark.parametrize("outcome", ["ok", "error", "disconnected"])
 def test_linear_health_shows_as_its_context_connection(tmp_path, outcome):
-    """ADR 0017: Linear's health is its Context connection's, listed under connections like any other; the
+    """ADR 0018: Linear's health is its Context connection's, listed under connections like any other; the
     page's section still says when its answer failed."""
     path, ids = seeded(tmp_path)
     if outcome != "disconnected":

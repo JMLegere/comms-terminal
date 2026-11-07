@@ -161,9 +161,9 @@ Linear is a read-only Context source (FR-13c, decision #125), after Attio and Ta
 
 The local route defaults omitted arrays to `[]`; explicit `null`, non-array values, and non-string entries return 400. An unconnected source returns 503, connected empty keys return `{"issues":[]}` without a provider call, and adapter failures return a safe 502 error. Linear reads leave Connections, Threads, Activities, and Inbox Status unchanged. The socket remains private; public hook routes are unchanged.
 
-### 3e-2. Linear Issues: write key, webhook, Worker route (ADR 0018, ADR 0019)
+### 3e-2. Linear Issues: write key, webhook, Worker route (ADR 0019, ADR 0020)
 
-The same `linear-token` now backs two Connections: Linear's Context connection and its Issue connection (ADR 0017). The Issue connection keeps a copy of Jeremy's assigned Issues (open, plus those closed in 30 days), reads them all every 30 minutes, takes signed Issue events at `/hooks/linear`, and sends Jeremy's changes (status, priority, estimate, due date, title, description, new Issues, and the Slip status on Rollover) through the Action Queue. The Planned day never goes to Linear.
+The same `linear-token` now backs two Connections: Linear's Context connection and its Issue connection (ADR 0018). The Issue connection keeps a copy of Jeremy's assigned Issues (open, plus those closed in 30 days), reads them all every 30 minutes, takes signed Issue events at `/hooks/linear`, and sends Jeremy's changes (status, priority, estimate, due date, title, description, new Issues, and the Slip status on Rollover) through the Action Queue. The Planned day never goes to Linear.
 
 Each step below needs Jeremy's explicit go; none runs with a push.
 

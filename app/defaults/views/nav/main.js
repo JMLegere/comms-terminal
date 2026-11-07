@@ -24,7 +24,7 @@ const SHOW = { threads: ["threads.reload"], pipeline: ["pipeline.show"] };
 const TITLE = { person: "Person", organization: "Organization", connection: "Connection", event: "Event", case: "Case" };
 const FULL = new Set(Object.keys(TITLE)); // full pages: the list block is hidden (layouts/main.json)
 const NOLIST = new Set([...FULL, "pipeline"]); // pages whose list block is hidden: the focus starts in the detail
-// Context connections (ADR 0017): one fetch each at start, so the Service records whether it answers; the rail
+// Context connections (ADR 0018): one fetch each at start, so the Service records whether it answers; the rail
 // shows them under connections.
 const SOURCES = [["attio", "Attio", "server"], ["tana", "Tana", "layers"], ["linear", "Linear", "list-checks"]];
 const cap = (s) => s[0].toUpperCase() + s.slice(1);

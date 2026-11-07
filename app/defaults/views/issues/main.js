@@ -1,4 +1,4 @@
-// Issues, as the Console's IssuesPage (ADR 0018, PRD FR-UI-1): Linear's List with its Display options (grouping,
+// Issues, as the Console's IssuesPage (ADR 0019, PRD FR-UI-1): Linear's List with its Display options (grouping,
 // sub-grouping, ordering, completed window, sub-issues, empty groups, properties), plus Planned day (a grouping whose
 // headers show "used of capacity", an ordering and a property) and Urgency (an ordering). Options are kept on this
 // machine (localStorage). j/k move and the Issue fills the right pane, where its keys change it; n makes a new Issue;

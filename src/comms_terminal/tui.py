@@ -6179,7 +6179,7 @@ class TodayPage(Page):
             self.enter(target, 1)
 
 
-# --- Issues and the Action Queue (ADR 0018, ADR 0019; PRD FR-UI-1, FR-UI-2, FR-UI-4) ---------------------------
+# --- Issues and the Action Queue (ADR 0019, ADR 0020; PRD FR-UI-1, FR-UI-2, FR-UI-4) ---------------------------
 
 ISSUE_DISPLAY = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "comms-terminal" / "issues.json"
 PROPERTY_LABEL = {"status": "Status", "priority": "Priority", "estimate": "Estimate", "due_date": "Due",
@@ -7522,7 +7522,7 @@ class Console(App):
     @work(thread=True)
     def check_source(self, key, emails):
         """One fetch for Jeremy's own addresses at start: the Service records the answer as its Context connection's
-        health (ADR 0017), which the rail shows under connections."""
+        health (ADR 0018), which the rail shows under connections."""
         try:
             state = "ok" if self.sources[key](emails, []) is not None else None
         except ReplyError as e:

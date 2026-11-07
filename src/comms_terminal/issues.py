@@ -1,11 +1,11 @@
-"""Issues (ADR 0018; .agents/prd/2026-11-07-issues-and-action-queue.md): the copy of every Issue assigned to Jeremy
+"""Issues (ADR 0019; .agents/prd/2026-11-07-issues-and-action-queue.md): the copy of every Issue assigned to Jeremy
 on a Platform with an Issue connection, and its teams' statuses. The Platform owns every field; the copy keeps
 only `planned_day` of its own, across every update. Adapters hand in Issues already normalized:
 
     {"id", "identifier", "title", "description", "url", "team_id", "state_id", "priority", "estimate", "due_date",
      "created_at", "updated_at", "completed_at", "canceled_at", "data": {...}}
 
-Jeremy's changes (update, create, undo) apply to the copy at once and go to the Platform as Actions (ADR 0019);
+Jeremy's changes (update, create, undo) apply to the copy at once and go to the Platform as Actions (ADR 0020);
 carry_update and carry_create send them.
 
 Interface: issue_connection, upsert, remove, apply_read, replace_statuses, set_account, record_read, issues,
@@ -112,7 +112,7 @@ def find(db, key: str):
     return db.execute("SELECT * FROM issues WHERE id = ? OR identifier = ? COLLATE NOCASE", (key, key)).fetchone()
 
 
-# --- Jeremy's changes (ADR 0019) -------------------------------------------------------------------------------
+# --- Jeremy's changes (ADR 0020) -------------------------------------------------------------------------------
 
 EDITABLE = ("title", "description", "state_id", "priority", "estimate", "due_date")  # the core fields (FR-IS-11)
 LINEAR_INPUT = {"title": "title", "description": "description", "state_id": "stateId", "priority": "priority",

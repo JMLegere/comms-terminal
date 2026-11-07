@@ -1,4 +1,4 @@
-// The Action Queue, as the Console's ActionQueuePage (ADR 0019, PRD FR-UI-4): Actions not yet confirmed (or confirmed
+// The Action Queue, as the Console's ActionQueuePage (ADR 0020, PRD FR-UI-4): Actions not yet confirmed (or confirmed
 // today) and what is scheduled to leave this week (scheduled Drafts, coming Tasks, Enrollment starts), by day, each
 // day headed by its count per Connection, as Lemlist's Outreach queue. j/k move; Enter opens what an Action changes
 // (an Issue on the Issues page, a Task, a Draft).

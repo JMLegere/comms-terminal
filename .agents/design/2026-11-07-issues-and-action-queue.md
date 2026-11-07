@@ -15,7 +15,7 @@ Jeremy manages his Linear Issues inside Comms Terminal the way Super Productivit
 
 | # | Decision |
 |---|---|
-| G1 | A Platform is any outside service; a Connection is one account of one kind: Email, SMS, Slack, Calendar, Context, Issue (ADR 0017). |
+| G1 | A Platform is any outside service; a Connection is one account of one kind: Email, SMS, Slack, Calendar, Context, Issue (ADR 0018). |
 | G2 | Linear: one Jeremy-owned key with Read and Write; two Connections on it (Context, Issue). Changes show in Linear as Jeremy. |
 | G3 | The copy holds what Linear's "assigned to me" filter returns. |
 | G4 | Status changes use a picker of the Issue's team statuses. Nothing else is mapped except the Slip status. |
@@ -26,7 +26,7 @@ Jeremy manages his Linear Issues inside Comms Terminal the way Super Productivit
 | G9 | Warnings as SuperPlan: planned after due date; planned more than 100 − p days out at urgency percentile p; larger than a whole day. |
 | G10 | Urgency: Taskwarrior-style sum, coefficients stored in the database and settable (CLI and a Settings section). |
 | G11 | Linear changes arrive by signed webhook (`/hooks/linear`) plus a full read every 30 min. |
-| G12 | All Actions are optimistic and go through one Action Queue (ADR 0019). A failed write marks the Issue connection broken. |
+| G12 | All Actions are optimistic and go through one Action Queue (ADR 0020). A failed write marks the Issue connection broken. |
 | G13 | Undo of an Action is a new Action restoring the old value. |
 | G14 | Issues page = Linear's List view with Display options; Planned day added as grouping, ordering and property; Urgency as ordering; no Board; options saved locally. |
 | G15 | Today shows today's Issues with capacity; Calendar shows planned Issues on their day. |
@@ -170,9 +170,9 @@ Existing pieces reused: `remote.py` Mutations and Change sets (ADR 0012); `core.
 
 ## 7. Rollout order (proposed)
 
-1. Connection kinds (ADR 0017): widen `connections`, move Context sources onto Context connections.
+1. Connection kinds (ADR 0018): widen `connections`, move Context sources onto Context connections.
 2. Issue copy: tables, full read, `/hooks/linear`, new key with Write, webhook created in Linear.
-3. Action Queue (ADR 0019) with Issue Actions first; then Respond, reactions, sends.
+3. Action Queue (ADR 0020) with Issue Actions first; then Respond, reactions, sends.
 4. Planned day, capacity, urgency, warnings, Rollover.
 5. Issues page, Today, Calendar, Action Queue page (Console and App together); CLI.
 

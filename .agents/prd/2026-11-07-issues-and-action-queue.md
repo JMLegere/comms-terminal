@@ -4,8 +4,8 @@
 
 | Field | Value |
 |---|---|
-| Status | **Approved** by Jeremy 2026-11-07 (/ask round: "Approve all"), with ADRs 0017–0019 and the glossary changes. Step detail stays Proposed until built. |
-| Owner / authority | Jeremy. Authority chain: Jeremy's instructions, then `AGENTS.md` (repository), then accepted ADRs in `docs/adr/`, then `.agents/` discovery, design and PRDs. ADRs 0017–0019 **accepted** 2026-11-07. |
+| Status | **Approved** by Jeremy 2026-11-07 (/ask round: "Approve all"), with ADRs 0018–0020 and the glossary changes. Step detail stays Proposed until built. |
+| Owner / authority | Jeremy. Authority chain: Jeremy's instructions, then `AGENTS.md` (repository), then accepted ADRs in `docs/adr/`, then `.agents/` discovery, design and PRDs. ADRs 0018–0020 **accepted** 2026-11-07. |
 | Created / updated | 2026-11-07T12:51-04:00 / 2026-11-07T13:20-04:00 (America/Halifax) |
 | Topic | Manage Linear Issues inside Comms Terminal (Planned day, capacity, warnings, edits) with one optimistic Action Queue for everything Comms Terminal carries out. |
 | Sources | `.agents/discovery/2026-11-07-linear-daily-scheduling.md` (approved through Phase 4); `.agents/design/2026-11-07-issues-and-action-queue.md` (proposed); ADRs 0017, 0018, 0019 (proposed); `GLOSSARY.md` (Issues section, Action, Action Queue); code at `origin/main` `85b5540`. |
@@ -58,10 +58,10 @@ Status: **C** confirmed by Jeremy (G-number from design §2), **P** proposed her
 | FR-CK-1 | A Connection has a kind: Email, SMS, Slack, Calendar, Context, Issue. Platforms include Linear, Tana, Attio. | C (G1) | P1 | `tests/test_platforms.py`, `tests/test_schema.py` |
 | FR-CK-2 | Tana, Attio and Linear context run as Context connections with Connection health and a Problem when broken. | C (G1) | P1 | `tests/test_linear_service.py`, `tests/test_tana.py`, `tests/test_attio.py` |
 | FR-CK-3 | Linear has one key backing two Connections, Context and Issue, each with its own health. | C (G2) | P1, P2 | `tests/test_platforms.py` |
-| FR-IS-1 | The Service keeps a copy of every Issue Linear's "assigned to me" filter returns, with its team's statuses. | C (G3, ADR 0018) | P2 | `tests/test_issues.py` (new) |
+| FR-IS-1 | The Service keeps a copy of every Issue Linear's "assigned to me" filter returns, with its team's statuses. | C (G3, ADR 0019) | P2 | `tests/test_issues.py` (new) |
 | FR-IS-2 | A signed Linear webhook at `/hooks/linear` updates the copy within seconds; a bad signature or stale `webhookTimestamp` is refused (401) and marks the Issue connection. | C (G11) | P2 | `tests/test_issues.py`, `tests/test_serve.py` |
 | FR-IS-3 | A full read every 30 minutes adds, updates and removes copied Issues. | C (G11) | P2 | `tests/test_issues.py` |
-| FR-IS-4 | Linear fields in the copy always come from Linear; the Planned day is kept across updates and never sent. | C (ADR 0018) | P2, P4 | `tests/test_issues.py` |
+| FR-IS-4 | Linear fields in the copy always come from Linear; the Planned day is kept across updates and never sent. | C (ADR 0019) | P2, P4 | `tests/test_issues.py` |
 | FR-IS-5 | Jeremy sets or clears a Planned day; it is instant and local. | C (G6, G12) | P4 | `tests/test_issues.py`, `features/issues.feature` |
 | FR-IS-6 | Day capacity = 9 h minus busy time; today counts only the rest of today; busy = Event not declined and not `TRANSP:TRANSPARENT`; a busy All-day Event zeroes the day; weekends 0 unless planned. | C (G8) | P4 | `tests/test_issues.py` |
 | FR-IS-7 | An Issue's size is its estimate × 30 min, else 1 h. | C (G8) | P4 | `tests/test_issues.py` |
@@ -71,13 +71,13 @@ Status: **C** confirmed by Jeremy (G-number from design §2), **P** proposed her
 | FR-IS-11 | Jeremy and the CLI create Issues and update title, description, status (team picker), priority, estimate, due date. | C (G4, G5) | P3, P5 | `tests/test_issues.py`, `tests/test_cli_parity.py` |
 | FR-IS-12 | An Issue no longer assigned to Jeremy leaves the copy after its pending Actions finish. | C (discovery: follow Linear) | P2 | `tests/test_issues.py` |
 | FR-IS-13 | An Unplanned open Issue due within 7 days shows a due-soon warning on Today and the Issues page. | C (/ask: "Warn at 7 days") | P4, P5 | `tests/test_issues.py`, `features/issues.feature` |
-| FR-AQ-1 | Every Action applies to the copy at once and is carried out by the Service in order per Connection. | C (G12, ADR 0019) | P3 | `tests/test_actions.py` (new) |
-| FR-AQ-2 | Refused: the Platform's value returns and the record shows "Not saved: reason". | C (ADR 0019) | P3 | `tests/test_actions.py` |
+| FR-AQ-1 | Every Action applies to the copy at once and is carried out by the Service in order per Connection. | C (G12, ADR 0020) | P3 | `tests/test_actions.py` (new) |
+| FR-AQ-2 | Refused: the Platform's value returns and the record shows "Not saved: reason". | C (ADR 0020) | P3 | `tests/test_actions.py` |
 | FR-AQ-3 | Refused sign-in (401/403): the Connection is marked broken (Problem); its Actions wait until a later success clears it. | C (G12) | P3 | `tests/test_actions.py` |
-| FR-AQ-4 | Unknown outcome: an Action safe to repeat is resent; one that is not (a send) keeps the Send outcome unknown lock. | C (ADR 0019) | P3, P6 | `tests/test_actions.py`, `tests/test_send_draft.py` |
+| FR-AQ-4 | Unknown outcome: an Action safe to repeat is resent; one that is not (a send) keeps the Send outcome unknown lock. | C (ADR 0020) | P3, P6 | `tests/test_actions.py`, `tests/test_send_draft.py` |
 | FR-AQ-5 | Issue creates carry a Client-chosen id (`IssueCreateInput.id`, verified live 2026-11-07). | C | P3 | `tests/test_actions.py` |
 | FR-AQ-6 | Undo of an Action is a new Action restoring the old value. | C (G13) | P3 | `tests/test_actions.py` |
-| FR-AQ-7 | Respond, Slack reactions and sends run through the Action Queue with their current outcomes unchanged. As built: sends and Responds are journaled on the queue and still run inline; reactions stay off it (decisions 60, 61). | C (G17, ADR 0019); partly met | P6 | `tests/test_invite_responses.py`, `tests/test_reactions.py`, `tests/test_send_draft.py` |
+| FR-AQ-7 | Respond, Slack reactions and sends run through the Action Queue with their current outcomes unchanged. As built: sends and Responds are journaled on the queue and still run inline; reactions stay off it (decisions 60, 61). | C (G17, ADR 0020); partly met | P6 | `tests/test_invite_responses.py`, `tests/test_reactions.py`, `tests/test_send_draft.py` |
 | FR-UI-1 | Issues page in the rail: Linear's List with Display options (grouping, sub-grouping, ordering, completed window, sub-issues, empty groups, properties), plus Planned day (grouping with "used of capacity", ordering, property) and Urgency (ordering). Options saved locally. | C (G14) | P5 | `tests/test_issues_ui.py` (new), App view test |
 | FR-UI-2 | Today lists today's Issues with "used of capacity" and warnings. | C (G15) | P5 | `tests/test_today_ui.py`, `tests/app_today_view.mjs` |
 | FR-UI-3 | Calendar places each planned Issue on its day as a Calendar Item. | C (G15) | P5 | `tests/test_calendar.py` |
@@ -171,16 +171,16 @@ Each phase is its own PR from a worktree off `main`, focused tests per phase, fu
 
 0.1 `features/issues.feature`, `features/actions.feature` (Proposed): scenarios 1–10 above tagged `wip`. Verify: `uv run pytest -m wip` collects them. Exit: Jeremy approves the scenarios. Auth: implementation go.
 
-### P1 — Connection kinds (FR-CK-1–3, ADR 0017)
+### P1 — Connection kinds (FR-CK-1–3, ADR 0018)
 
-1.1 `schema.sql` `connections` + `inbox.MIGRATIONS[37]`, `SCHEMA_VERSION` 37, `tests/schema_history.py` inverse: add `kind` (default from platform), widen platform CHECK. Verify: `uv run pytest tests/test_schema.py tests/test_schema_equivalence.py`. Rollback: inverse migration.
+1.1 `schema.sql` `connections` + `inbox.MIGRATIONS[38]`, `SCHEMA_VERSION` 38, `tests/schema_history.py` inverse: add `kind` (default from platform), widen platform CHECK. Verify: `uv run pytest tests/test_schema.py tests/test_schema_equivalence.py`. Rollback: inverse migration.
 1.2 `platforms.py`: `Platform.kinds`; entries for Linear, Tana, Attio. Verify: `tests/test_platforms.py`.
 1.3 `serve.py` `linear_context`, `tana_context`, `attio_context`: read keys through their Context connection; failures set its `last_error`. Verify: `tests/test_linear_service.py`, `tests/test_tana.py`, `tests/test_attio.py`. Compatibility: existing credentials keep working.
 1.4 Connection page (Console and App) lists all kinds. Verify: `tests/test_app_parity.py`.
 
 ### P2 — Issue copy (FR-IS-1–4, 12; NFR-2)
 
-2.1 `schema.sql` `issues` (Linear id, identifier, team, fields, `planned_day`), `issue_statuses`; migration 38. Verify: schema tests.
+2.1 `schema.sql` `issues` (Linear id, identifier, team, fields, `planned_day`), `issue_statuses`; migration 39. Verify: schema tests.
 2.2 `linear.py` `full_read(client)` → Issues assigned to me + team statuses; `issues.upsert` keeps `planned_day`. Verify: `tests/test_issues.py` with recorded GraphQL fixtures.
 2.3 `linear.py` `handle_hook` (HMAC-SHA256 hex of raw body in `Linear-Signature`; `webhookTimestamp` within 60 s) and `serve.HOOKS["/hooks/linear"]`. Verify: `tests/test_serve.py` signed and unsigned cases.
 2.4 `serve.probe_loop` (30 min) runs the full read for the Issue connection. Verify: `tests/test_issues.py`.
@@ -188,7 +188,7 @@ Exit: copy matches Linear for fixtures. Auth: none beyond implementation; live k
 
 ### P3 — Action Queue, Issue Actions (FR-AQ-1–6, FR-IS-11)
 
-3.1 `schema.sql` `actions` (id, connection, kind, target, payload, safe_to_repeat, state, error, timestamps); migration 39.
+3.1 `schema.sql` `actions` (id, connection, kind, target, payload, safe_to_repeat, state, error, timestamps); migration 40.
 3.2 `actions.py` `enqueue(db, kind, target, payload, safe)` applies the optimistic change and records the Action; writer kind `write` so the laptop paints at once.
 3.3 `actions.py` `run(db, clients, now)` in `wake_loop` and kicked after enqueue: per-Connection order; outcomes per FR-AQ-2–4.
 3.4 `linear.py` `Client.mutate` for `issueUpdate`/`issueCreate` (with `id`); `issues.create`, `issues.update`, `issues.set_status`.
@@ -198,7 +198,7 @@ Verify: `tests/test_actions.py` (refused, broken, unknown + resend, create id, u
 
 4.1 `issues.plan(db, issue_id, day | None)` writer `write`.
 4.2 `calendar._occurrence` adds `busy` from `TRANSP` and Jeremy's `PARTSTAT`; `issues.capacity(db, day, now)`.
-4.3 `schema.sql` `urgency` (name, value) seeded with defaults; migration 40; `issues.urgency`, `issues.warnings`.
+4.3 `schema.sql` `urgency` (name, value) seeded with defaults; migration 41; `issues.urgency`, `issues.warnings`.
 4.4 `issues.rollover(db, now)` in `wake_loop` on Halifax date change, using Sequences' business-day helper; enqueues Slip status Actions.
 Verify: `tests/test_issues.py` (capacity cases incl. All-day, remaining today; percentile; Friday → Monday). Exit: scenarios 1, 2, 5, 6 pass.
 
@@ -225,7 +225,7 @@ Verify: existing suites `tests/test_invite_responses.py`, `tests/test_reactions.
 
 | Item | Impact | Evidence / status | Next | Owner | Blocks |
 |---|---|---|---|---|---|
-| Approve this PRD and ADRs 0017–0019 | All phases | Approved 2026-11-07 | — | Jeremy | No |
+| Approve this PRD and ADRs 0018–0020 | All phases | Approved 2026-11-07 | — | Jeremy | No |
 | Scenario approval after P0 | P1+ | Taken as given with the P1 go (decision 39) | — | Jeremy | No |
 | P7 release go ("ship it", key, webhook, Worker deploy) | Live | Not given | Ask after P6 | Jeremy | Yes |
 | Live Linear writes unexercised | P3 confirm path | Mutations checked against Linear's live schema by introspection only; no write sent (key is Read-only, writes need P7) | First confirmed Action after P7 | Jeremy | No |
@@ -276,7 +276,7 @@ Verify: existing suites `tests/test_invite_responses.py`, `tests/test_reactions.
 | 30 | 2026-11-07 | ADRs for kinds, Issue copy, queue; undo = new Action | Jeremy (Q35, assumption 2) | approved | — |
 | 31 | 2026-11-07 | Queue doubles as Lemlist Outreach queue; named Outbound queue, then "Action Queue" with Action widened after research | Jeremy | Action Queue approved | Outbound queue |
 | 32 | 2026-11-07 | Branch for design from `origin/main` (checkout was 100 commits behind) | agent, disclosed | done | stale checkout |
-| 33 | 2026-11-07 | Approve PRD, ADRs 0017–0019, glossary | Jeremy (/ask) | approved | Draft status |
+| 33 | 2026-11-07 | Approve PRD, ADRs 0018–0020, glossary | Jeremy (/ask) | approved | Draft status |
 | 34 | 2026-11-07 | Unplanned Issue due within 7 days warns (FR-IS-13) | Jeremy (/ask) | approved | open gap |
 | 35 | 2026-11-07 | P6 sends gated on unchanged send tests, per-kind switch back | Jeremy (/ask) | approved | — |
 | 36 | 2026-11-07 | Defaults kept: urgency coefficients, webhook spec check in P2, diagrams checked at PR, docs update in P1/P7 | Jeremy (/ask) | approved | — |
@@ -311,7 +311,7 @@ Verify: existing suites `tests/test_invite_responses.py`, `tests/test_reactions.
 | Time | Actor | Activity | Result | Evidence | Kind |
 |---|---|---|---|---|---|
 | 2026-11-07 (undated within day) | agent | Discovery run, Phases 1–4 | approved | discovery doc | source-observed |
-| 2026-11-07 (undated within day) | agent | Grilling; glossary and ADRs 0017–0019; design doc | written, uncommitted | worktree `jeremy/issues-design` | source-observed |
+| 2026-11-07 (undated within day) | agent | Grilling; glossary and ADRs 0018–0020; design doc | written, uncommitted | worktree `jeremy/issues-design` | source-observed |
 | 2026-11-07 (undated within day) | agent | Live check `IssueCreateInput.id` on Oracle (read-only introspection) | `id` present | session output | source-observed |
 | 2026-11-07T12:51-04:00 | agent | This PRD written | Draft | this file | source-observed |
 | 2026-11-07T13:20-04:00 | agent | /ask round: approvals and decisions 33–38 recorded | Approved; P0 authorized | this file | source-observed |

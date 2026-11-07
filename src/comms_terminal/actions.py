@@ -1,4 +1,4 @@
-"""The Action Queue (ADR 0019; .agents/prd/2026-11-07-issues-and-action-queue.md FR-AQ-1–6): everything Comms
+"""The Action Queue (ADR 0020; .agents/prd/2026-11-07-issues-and-action-queue.md FR-AQ-1–6): everything Comms
 Terminal carries out itself. A writer changes the copy at once and enqueues an Action; the Service runs Actions in
 order per Connection. Confirmed: the copy already matches. Refused: the record takes its old values back and shows
 "Not saved: reason". A refused key: the Connection is broken and its Actions wait. No answer: an Action safe to

@@ -1,4 +1,4 @@
-"""The Action Queue (ADR 0019, PRD FR-AQ-1–6): Linear write outcomes, the runner's order and recovery, Issue writers
+"""The Action Queue (ADR 0020, PRD FR-AQ-1–6): Linear write outcomes, the runner's order and recovery, Issue writers
 and the CLI. Linear here is a fake; nothing leaves the test."""
 
 import io

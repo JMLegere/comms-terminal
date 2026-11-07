@@ -74,7 +74,7 @@ def seed(db, broken=False):
 
 
 def issues_demo(db, now):
-    """Synthetic Linear Issues (ADR 0018): none planned for today, so Today stays as it was; one refused change."""
+    """Synthetic Linear Issues (ADR 0019): none planned for today, so Today stays as it was; one refused change."""
     from comms_terminal import actions, issues
     cid = inbox.ensure_connection(db, "linear", "issue", now)
     issues.replace_statuses(db, cid, [{"id": f"demo-{n}", "team_id": "demo-team", "name": n, "type": t, "position": p}

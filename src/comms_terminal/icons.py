@@ -81,8 +81,8 @@ ICON = {
     "letter": "\U000f0d8c",         # md-mailbox_outline
     "archive": "\U000f120e",        # md-archive_outline
     "warn": "\U000f002a",           # md-alert_outline
-    "issues": "\U000f0756",         # md-format_list_checks: Issues (ADR 0018)
-    "actions": "\U000f048a",        # md-send: the Action Queue (ADR 0019)
+    "issues": "\U000f0756",         # md-format_list_checks: Issues (ADR 0019)
+    "actions": "\U000f048a",        # md-send: the Action Queue (ADR 0020)
     "status": "\U000f0996",         # md-progress_clock
     "ignore": "\U000f06d1",         # md-eye_off_outline
     "add_case": "\U000f0c40",       # md-briefcase_plus_outline

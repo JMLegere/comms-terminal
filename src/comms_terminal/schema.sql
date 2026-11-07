@@ -2,7 +2,7 @@ CREATE TABLE connections (
   id                TEXT PRIMARY KEY NOT NULL DEFAULT (new_id()),
   platform          TEXT NOT NULL CHECK (platform IN ('gmail', 'fastmail', 'slack', 'quo', 'gcal', 'linear', 'tana',
                                                        'attio')),  -- platforms.py
-  kind              TEXT CHECK (kind IN ('email', 'sms', 'slack', 'calendar', 'context', 'issue')),  -- ADR 0017;
+  kind              TEXT CHECK (kind IN ('email', 'sms', 'slack', 'calendar', 'context', 'issue')),  -- ADR 0018;
   --                  NULL = the Platform's only kind (platforms.kind_of); set where one account backs two (Linear)
   external_id       TEXT NOT NULL,         -- email address, Slack team ID, Quo Work number, or the Platform's name
   self_id           TEXT NOT NULL,         -- Jeremy's address, Slack user ID, or Work number
@@ -434,8 +434,8 @@ CREATE TABLE applied_mutations (  -- each laptop write applied once, by its clie
   PRIMARY KEY (client_id, mutation_id)
 ) STRICT;
 
--- Issues (ADR 0018): the copy of Jeremy's assigned Issues and their teams' statuses
-CREATE TABLE issue_statuses (  -- each team's statuses on an Issue connection's Platform (ADR 0018); issues.py
+-- Issues (ADR 0019): the copy of Jeremy's assigned Issues and their teams' statuses
+CREATE TABLE issue_statuses (  -- each team's statuses on an Issue connection's Platform (ADR 0019); issues.py
   id            TEXT PRIMARY KEY NOT NULL,  -- the Platform's own id
   connection_id TEXT NOT NULL REFERENCES connections (id),
   team_id       TEXT NOT NULL,
@@ -460,13 +460,13 @@ CREATE TABLE issues (  -- a copy of each Issue assigned to Jeremy; the Platform 
   completed_at  TEXT,
   canceled_at   TEXT,
   data          TEXT NOT NULL DEFAULT '{}', -- display-only extras (project, cycle, labels, parent, team key)
-  planned_day   TEXT,                       -- local only, never sent (ADR 0018)
+  planned_day   TEXT,                       -- local only, never sent (ADR 0019)
   copied_at     TEXT NOT NULL               -- when the copy last took the Platform's version
 ) STRICT;
 CREATE INDEX issues_planned ON issues (planned_day);
 
--- Action Queue (ADR 0019)
-CREATE TABLE actions (  -- the Action Queue (ADR 0019): each thing Comms Terminal carries out itself; actions.py
+-- Action Queue (ADR 0020)
+CREATE TABLE actions (  -- the Action Queue (ADR 0020): each thing Comms Terminal carries out itself; actions.py
   id            TEXT PRIMARY KEY NOT NULL DEFAULT (new_id()),
   connection_id TEXT NOT NULL REFERENCES connections (id),
   kind          TEXT NOT NULL CHECK (kind IN ('issue_update', 'issue_create', 'send', 'respond')),

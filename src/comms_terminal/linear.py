@@ -71,11 +71,11 @@ class Client:
         return result["data"]
 
     def write(self, name: str, variables: dict) -> dict:
-        """One of WRITES, for the Action Queue only (ADR 0019); its outcome, never an exception."""
+        """One of WRITES, for the Action Queue only (ADR 0020); its outcome, never an exception."""
         return mutate(self.token, name, variables, self.opener)
 
 
-WRITES = {  # the only mutations Comms Terminal sends (ADR 0019): Jeremy's Issue changes, never a delete
+WRITES = {  # the only mutations Comms Terminal sends (ADR 0020): Jeremy's Issue changes, never a delete
     "issueUpdate": """mutation IssueUpdate($id: String!, $input: IssueUpdateInput!) {
   issueUpdate(id: $id, input: $input) { success issue { id identifier url createdAt updatedAt } }
 }""",
@@ -92,7 +92,7 @@ def _said(error) -> str:
 
 
 def mutate(client_token: str, name: str, variables: dict, opener=urllib.request.urlopen) -> dict:
-    """One write (WRITES[name]) and its outcome for the Action Queue (ADR 0019): {"outcome": "confirmed", "issue"},
+    """One write (WRITES[name]) and its outcome for the Action Queue (ADR 0020): {"outcome": "confirmed", "issue"},
     {"outcome": "refused", "error"} (Linear said no), {"outcome": "broken", "error"} (the key was refused), or
     {"outcome": "unknown", "error"} (no answer: it may or may not have happened)."""
     try:
@@ -285,7 +285,7 @@ def Context(client, clock=None):  # noqa: N802  share the existing five-minute C
     return tana.Context(client, **({"clock": clock} if clock is not None else {}), fetch=context)
 
 
-# --- Issue connection (ADR 0018): the copy of Jeremy's assigned Issues ------------------------------------------
+# --- Issue connection (ADR 0019): the copy of Jeremy's assigned Issues ------------------------------------------
 
 CLOSED_KEPT_DAYS = 30  # closed Issues stay in the copy this long, for the Issues page's completed window
 VIEWER = "query Viewer { viewer { id } }"

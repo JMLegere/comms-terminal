@@ -36,7 +36,7 @@ Platform ─▶ Connection ─▶ Channel ─▶ Thread ◀── Activity (mess
 - **Person** is a set of Identities. **Organization** holds People through Memberships that follow company email domains; Jeremy's own changes win. A person acting on their own account gets a **Sole proprietorship**.
 - **Sequence** is ordered Steps (touches Jeremy does, Actions the console does, Ifs that choose a path) with On start and On completion. An **Enrollment** runs one Person through it for one Organization: Active, Paused, Finishing or Finished. Any inbound message from the Person pauses it. Each Step becomes a **Task** for that Enrollment; an email Task makes a Draft and is done when the Draft is sent.
 - **Pipeline** places each Organization (Revenue) or Person (Fundraising, Talent; ADR 0016) at a **Stage** with a **Value**, and works backwards from a **Target** to the **Constraint** and This week's actions. **Unattended** Organizations and People sit in an open Stage with nothing bringing them back.
-- **Connection** is one account on a Platform, of one kind: Email, SMS, Slack, Calendar, Context or Issue (ADR 0017). **Context connections** (Attio, Tana, Linear) show read-only context beside Threads, People, Organizations and Cases and hold no Threads; their health shows under connections like any other.
+- **Connection** is one account on a Platform, of one kind: Email, SMS, Slack, Calendar, Context or Issue (ADR 0018). **Context connections** (Attio, Tana, Linear) show read-only context beside Threads, People, Organizations and Cases and hold no Threads; their health shows under connections like any other.
 - **Calendar** lays out Events, Tasks, waking Snoozes, scheduled Drafts and Enrollment starts. **Respond** sets Jeremy's Invite state through Google Calendar.
 
 ## Working with the app as an agent
@@ -66,9 +66,9 @@ Jeremy works in the console; agents read and prepare work through the CLI. On Wo
 | One Step | `comms-terminal step add\|set\|move\|delete …` |
 | Calendar | `comms-terminal events [--from] [--to] [--attendee] [--query] [--last N] [--json]` |
 | Pipelines | `comms-terminal pipeline revenue\|fundraising\|talent`; `pipeline target\|stage\|value …` (Revenue takes a domain; Fundraising and Talent take a Person's email, phone or name) |
-| Issues (ADR 0018) | `comms-terminal issues`; `issue ID` (Markdown); `issue ID --status … --priority … --estimate N --due DATE --title … --description -`; `issue ID --plan DATE\|today\|tomorrow\|none`; `issue new --team KEY --title …` |
+| Issues (ADR 0019) | `comms-terminal issues`; `issue ID` (Markdown); `issue ID --status … --priority … --estimate N --due DATE --title … --description -`; `issue ID --plan DATE\|today\|tomorrow\|none`; `issue new --team KEY --title …` |
 | Urgency coefficients | `comms-terminal urgency list`, `urgency set NAME VALUE` |
-| The Action Queue (ADR 0019) | `comms-terminal actions` |
+| The Action Queue (ADR 0020) | `comms-terminal actions` |
 
 `comms-terminal <command> --help` lists every flag. Jeremy can also press `y` on a Thread or Draft to copy the same Markdown for you.
 

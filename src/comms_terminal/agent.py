@@ -247,10 +247,10 @@ def add_parsers(sub):
         t.add_argument("pipeline")
         t.add_argument(kind, help="a Stage name" if kind == "stage" else "CAD, e.g. 90000 or 90k")
         t.add_argument("--at", help="backdate it: YYYY-MM-DD (seeding past Stages)")
-    sub.add_parser("issues", help="Jeremy's Issues (ADR 0018): identifier, status, priority, Planned day, title")
-    sub.add_parser("actions", help="the Action Queue (ADR 0019): what is waiting to leave, by day")
+    sub.add_parser("issues", help="Jeremy's Issues (ADR 0019): identifier, status, priority, Planned day, title")
+    sub.add_parser("actions", help="the Action Queue (ADR 0020): what is waiting to leave, by day")
     t = sub.add_parser("issue", help="one Issue as Markdown; flags change it on its Platform through the Action Queue"
-                                     " (ADR 0019); `issue new` makes one")
+                                     " (ADR 0020); `issue new` makes one")
     t.add_argument("id", help="an identifier (BIZ-1426), an Issue id, or new")
     t.add_argument("--team", help="new: the team key, e.g. BIZ")
     t.add_argument("--title")

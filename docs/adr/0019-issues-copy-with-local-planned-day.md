@@ -7,7 +7,7 @@ Jeremy works comms in Comms Terminal but his ~57 Linear issues only in Linear, w
 Decision:
 
 - **Copy, not pull.** The Service keeps a copy of every Issue Linear's "assigned to me" filter returns, fed by a signed webhook at `/hooks/linear` and a full read every 30 minutes. The copy reaches Clients through Change sets like every other row (ADR 0012), so the Issues page renders from the laptop copy within the 100 ms target and works offline.
-- **The Platform owns every Issue field.** Title, description, status, priority, estimate and due date change only by an Action that Linear confirms (ADR 0019). Console, App and CLI can create and update those fields; agents still follow Jeremy's Linear rules.
+- **The Platform owns every Issue field.** Title, description, status, priority, estimate and due date change only by an Action that Linear confirms (ADR 0020). Console, App and CLI can create and update those fields; agents still follow Jeremy's Linear rules.
 - **Comms Terminal owns the Planned day**, as it owns Stage (ADR 0006). It is never written to Linear and is never the due date. There is no stored day list: a day's Issues are the Issues with that Planned day.
 - **Rollover.** When Jeremy's day (America/Halifax, Monday to Friday, as Sequences count business days) changes, every unfinished Issue planned before it moves to the next workday and its Slip status (Blocked in Linear) is written back.
 - **Day capacity** is 9 hours less the rest of today's busy calendar time (Events not declined and not free); an Issue counts its estimate (Linear: 1 point = 30 minutes) or 1 hour.

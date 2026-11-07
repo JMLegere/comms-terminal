@@ -264,7 +264,7 @@ def test_run_composes_linear_context(database, monkeypatch):
     monkeypatch.setattr(serve, "time", SimpleNamespace(sleep=interrupt))
     serve.run(path, "/unused-synthetic.sock", "127.0.0.1", 0)
     assert seen == {"tana": "tana", "attio": "attio", "linear": "linear", "writer": None}  # no Google sign-in
-    db = inbox.connect(path)  # each connected source became its Context connection (ADR 0017)
+    db = inbox.connect(path)  # each connected source became its Context connection (ADR 0018)
     rows = [(r["platform"], r["kind"], r["external_id"]) for r in db.execute(
         "SELECT * FROM connections WHERE kind = 'context' ORDER BY platform")]
     db.close()
@@ -272,7 +272,7 @@ def test_run_composes_linear_context(database, monkeypatch):
 
 
 def test_context_answers_set_and_clear_the_context_connections_last_error(database):
-    """ADR 0017: a failed answer (502) is the Context connection's Last Error until an answer (200) clears it;
+    """ADR 0018: a failed answer (502) is the Context connection's Last Error until an answer (200) clears it;
     a bad request (400) or an unconnected source (503) leaves it alone."""
     _, db = database
     cid = inbox.ensure_connection(db, "linear", "context", datetime.now(timezone.utc))

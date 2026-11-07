@@ -1,5 +1,5 @@
-// One Issue in the right pane, as the Console's issue_markup (ADR 0018, PRD FR-UI-1): its fields, warnings, a refused
-// change ("Not saved: …") and its description. Its keys change it through the Action Queue (ADR 0019): p plan (local
+// One Issue in the right pane, as the Console's issue_markup (ADR 0019, PRD FR-UI-1): its fields, warnings, a refused
+// change ("Not saved: …") and its description. Its keys change it through the Action Queue (ADR 0020): p plan (local
 // only), s status, i priority, e estimate, d due, t title, o opens it in Linear; z undoes the last change (nav's undo).
 // Shared "issue" names the Issue; the Issues page and Today's issues pane set it.
 import { View, div } from "gpui-kit";

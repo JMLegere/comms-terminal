@@ -24,7 +24,7 @@ def test_files_quiet_windows_and_draft_fields_per_format():
 
 
 def test_connection_kinds():
-    """ADR 0017: every Connection has a kind; one account can back two (Linear: Context and Issue)."""
+    """ADR 0018: every Connection has a kind; one account can back two (Linear: Context and Issue)."""
     assert {n: p.kind for n, p in PLATFORMS.items()} == {
         "gmail": "email", "fastmail": "email", "slack": "slack", "quo": "sms", "gcal": "calendar",
         "linear": "context", "tana": "context", "attio": "context"}
