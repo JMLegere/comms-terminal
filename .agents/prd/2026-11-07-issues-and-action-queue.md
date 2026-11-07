@@ -289,6 +289,7 @@ Verify: existing suites `tests/test_invite_responses.py`, `tests/test_reactions.
 | 2026-11-07 (undated within day) | agent | Live check `IssueCreateInput.id` on Oracle (read-only introspection) | `id` present | session output | source-observed |
 | 2026-11-07T12:51-04:00 | agent | This PRD written | Draft | this file | source-observed |
 | 2026-11-07T13:20-04:00 | agent | /ask round: approvals and decisions 33–38 recorded | Approved; P0 authorized | this file | source-observed |
+| 2026-11-07T13:35-04:00 | agent | P0: `features/issues.feature` (9) and `features/actions.feature` (6) scenarios, all `@wip` | `uv run pytest tests/test_features.py`: 163 passed, 18 deselected; `-m wip`: 18 failed (15 new + 3 existing App) | the P0 commit on `jeremy/issues-design` | source-observed |
 
 ## 9. Sources and coverage
 
