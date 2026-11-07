@@ -23,7 +23,8 @@ from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from . import attio, calendar, clock, email, fastmail, files, gcal, inbox, linear, mcp, meetings, platforms, quo, slack, tana
+from . import (attio, calendar, clock, email, fastmail, files, gcal, inbox, issues, linear, mcp, meetings, platforms, quo,
+               slack, tana)
 
 
 def credential(name: str) -> bytes | None:
@@ -707,6 +708,7 @@ HOOKS = {
     "/hooks/email": lambda h: "fastmail" if (h.get("X-Inbox-To") or "").lower() == fastmail.INBOUND else "gmail",
     "/hooks/slack": lambda h: "slack",
     "/hooks/quo": lambda h: "quo",
+    "/hooks/linear": lambda h: "linear",  # Issue events for the Issue connection (ADR 0018)
 }
 
 
@@ -720,7 +722,8 @@ def intake(db, platform: str, headers, body: bytes, secret: bytes, now: datetime
     first: every email Connection's forward reaches the same Worker and signing secret."""
     to = (headers.get("X-Inbox-To") or "").lower() if platform in platforms.EMAIL else ""
     connection = (to and db.execute("SELECT * FROM connections WHERE inbound = ?", (to,)).fetchone()) or db.execute(
-        "SELECT * FROM connections WHERE platform = ? ORDER BY id", (platform,)).fetchone()
+        "SELECT * FROM connections WHERE platform = ? AND coalesce(kind, '') != 'context' ORDER BY id",
+        (platform,)).fetchone()  # a Context connection takes no hooks (ADR 0017)
     if connection is None:
         return 503, f"no {platforms.PLATFORMS[platform].title} Connection"
     p = platforms.PLATFORMS[connection["platform"]]
@@ -962,12 +965,33 @@ def probe_all(db, shared: dict, cred=credential) -> None:
         logging.getLogger("comms_terminal.health").info("health check %s: %s", c["platform"], error or "ok")
 
 
+def read_issues(db, cred=credential, now: datetime | None = None) -> int | None:
+    """The Issue connection's full read (FR-IS-3): the copy, Jeremy's Linear id and the team statuses; a failure
+    is the Connection's Last Error until a read succeeds. None when Linear is not connected."""
+    token, connection = cred("linear-token"), issues.issue_connection(db, "linear")
+    if token is None or connection is None:
+        return None
+    now = now or clock.now()
+    try:
+        account, found, statuses = linear.full_read(linear.Client(token.decode()), now)
+    except linear.LinearError as e:
+        issues.record_read(db, connection["id"], str(e))
+        logging.getLogger("comms_terminal.issues").info("Issue read failed: %s", e)
+        return None
+    issues.set_account(db, connection["id"], account)
+    issues.replace_statuses(db, connection["id"], statuses)
+    count = issues.apply_read(db, connection["id"], found, now)
+    issues.record_read(db, connection["id"], None)
+    return count
+
+
 def probe_loop(db_path: str, shared: dict, stop: threading.Event, every: float = 1800) -> None:
     # ponytail: one failed check shows BROKEN for 30 minutes; retry once inside probe_all if blips annoy
     while True:
         db = inbox.connect(db_path)
         try:
             probe_all(db, shared)
+            read_issues(db)  # the Issue copy's full read rides the same 30 minutes (ADR 0018)
         except Exception as e:  # noqa: BLE001 - a locked database once killed the loop and every check went stale
             logging.getLogger("comms_terminal.health").info("health check pass failed: %s", e)
         finally:
@@ -1015,6 +1039,8 @@ def run(db_path: str, socket_path: str, host: str, port: int, files_host: str | 
     for name, context in contexts.items():  # each connected source is a Context connection (ADR 0017)
         if context is not None:
             inbox.ensure_connection(db, name, "context", clock.now())
+    if credential("linear-token"):  # the same key backs the Issue connection (ADR 0018)
+        inbox.ensure_connection(db, "linear", "issue", clock.now())
     writer = gcal_client(db)
     if credential(calendar.CREDENTIAL):
         meetings.connect(db)  # go-live: only Events first seen from now become Meeting Threads

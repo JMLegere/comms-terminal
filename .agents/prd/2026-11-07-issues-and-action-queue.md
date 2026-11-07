@@ -10,7 +10,7 @@
 | Topic | Manage Linear Issues inside Comms Terminal (Planned day, capacity, warnings, edits) with one optimistic Action Queue for everything Comms Terminal carries out. |
 | Sources | `.agents/discovery/2026-11-07-linear-daily-scheduling.md` (approved through Phase 4); `.agents/design/2026-11-07-issues-and-action-queue.md` (proposed); ADRs 0017, 0018, 0019 (proposed); `GLOSSARY.md` (Issues section, Action, Action Queue); code at `origin/main` `85b5540`. |
 | History limits | The full conversation of 2026-11-07 was available. Earlier sessions are known only through the artifacts cited. |
-| Implementation authorization | **P0 and P1** (Jeremy, 2026-11-07: "P0 now, stop for review", then "execute the entire pd up to p1"). Local commits only; no push, no deploy. P2+ not authorized. |
+| Implementation authorization | **P0–P2** (Jeremy, 2026-11-07: "P0 now, stop for review", "execute the entire pd up to p1", "execute the entire pd up to p2"). Local commits only; no push, no deploy, no credential or webhook. P3+ not authorized. |
 
 ## 2. Executive framing
 
@@ -227,10 +227,11 @@ Verify: existing suites `tests/test_invite_responses.py`, `tests/test_reactions.
 |---|---|---|---|---|---|
 | Approve this PRD and ADRs 0017–0019 | All phases | Approved 2026-11-07 | — | Jeremy | No |
 | Scenario approval after P0 | P1+ | Taken as given with the P1 go (decision 39) | — | Jeremy | No |
-| Implementation go for P2+ | P2+ | Not given | Ask after P1 review | Jeremy | Yes |
+| Implementation go for P3+ | P3+ | Not given | Ask after P2 review | Jeremy | Yes |
 | P1 App rail not rendered natively | FR-CK-2 visual | App view tests pass; GPUI window not opened (App runs headless only on Workbox) | Look at the rail on Mani after the next App update | Jeremy | No |
 | Linear webhook creation needs admin rights | P7 | Resolved: Jeremy is a Linear admin (`whoami` isAdmin, 2026-11-07) | — | Jeremy | No |
-| Linear webhook payload/signature details | P2 | Third-party (Hookdeck) | Linear docs at implementation | Implementer | No |
+| Linear webhook payload/signature details | P2 | Resolved: verified against linear.app/developers/webhooks (hex HMAC-SHA256 of raw body in `Linear-Signature`; `webhookTimestamp` ms within 60 s; non-200 retried after 1 min, 1 h, 6 h; admins create webhooks) | — | Implementer | No |
+| Issue webhook `data` field names (`assigneeId`, `stateId`, `teamId`, `labels` list) | P2 hook | Docs give the envelope, not every Issue field; not seen in a live delivery | First live delivery after P7; `normal` also takes the read shape | Implementer | No |
 | Slip status Blocked misleads the team | S4 trust | Accepted trade-off | A week of use | Jeremy | No |
 | No capacity buffer | S1 | Planning fallacy | Two weeks planned vs done | Jeremy | No |
 | Unplanned Issues near due date warn nothing | S3 | Resolved: FR-IS-13, 7 days | — | Jeremy | No |
@@ -283,6 +284,11 @@ Verify: existing suites `tests/test_invite_responses.py`, `tests/test_reactions.
 | 39 | 2026-11-07 | "execute the entire pd up to p1": P0 scenarios accepted, P1 authorized | Jeremy | approved | #38 stop |
 | 40 | 2026-11-07 | P1 stores `kind` only where one account backs two (NULL = the Platform's only kind, `platforms.kind_of`), so the 69 existing Connection inserts stay unchanged; uniqueness moves to (external_id, kind) | agent, implementation | done | step 1.1 "default from platform" |
 | 41 | 2026-11-07 | Context connection health = Last Error from its Service route answers (502 sets, 200 clears); the separate "context" rail and status-bar rows in Console and App are removed; the start-up check stays and feeds the Service | agent, implementation | done | D8 context rail section |
+| 42 | 2026-11-07 | "execute the entire pd up to p2": P2 authorized | Jeremy | approved | #39 stop |
+| 43 | 2026-11-07 | The copy holds open assigned Issues plus those closed in the last 30 days (`linear.CLOSED_KEPT_DAYS`), for the Issues page's completed window | agent, implementation | done | "every Issue the assigned filter returns" (812 with all history) |
+| 44 | 2026-11-07 | Full read uses three plain filters (open, completed since, canceled since): live check showed Linear's `or` beside `assignee` returned all 812 assigned Issues and `assignee` inside each branch returned 2534 | agent, live read-only check on Oracle | done | one `or` filter |
+| 45 | 2026-11-07 | A webhook arriving before the first full read (Jeremy's Linear id unknown) is answered 200 and skipped; the read at start copies the Issue | agent, implementation | done | — |
+| 46 | 2026-11-07 | P2 adds `linear-webhook-secret` to the container's optional credentials and `/hooks/linear` to the Email Worker's routes; deploying the Worker and installing the secret stay in P7 | agent, implementation | done | — |
 
 ## 8. Work log
 
@@ -295,6 +301,7 @@ Verify: existing suites `tests/test_invite_responses.py`, `tests/test_reactions.
 | 2026-11-07T13:20-04:00 | agent | /ask round: approvals and decisions 33–38 recorded | Approved; P0 authorized | this file | source-observed |
 | 2026-11-07T13:35-04:00 | agent | P0: `features/issues.feature` (9) and `features/actions.feature` (6) scenarios, all `@wip` | `uv run pytest tests/test_features.py`: 163 passed, 18 deselected; `-m wip`: 18 failed (15 new + 3 existing App) | the P0 commit on `jeremy/issues-design` | source-observed |
 | 2026-11-07T14:10-04:00 | agent | P1: migration 37 (connections kind, widened Platforms, account unique per kind); `platforms` kinds and Linear/Tana/Attio; `inbox.ensure_connection`; `serve.record_context`; Console and App rails; CLI `drafts` lists only sending Connections; AGENTS.md | Focused suites: 234 + 110 + 584 passed; Console rail, status line and Linear Connection page rendered as text in a Textual test run | the P1 commit on `jeremy/issues-design` | source-observed |
+| 2026-11-07T15:05-04:00 | agent | P2: migration 38 (`issues`, `issue_statuses`); `issues.py`; `linear.full_read`, `normal`, `verify`, `handle_hook`; `serve.read_issues` in the 30-minute probe loop, Issue connection at start, `/hooks/linear` (Context connections take no hooks); container credential and Worker route; 3 scenarios un-`@wip` (AS-IQ-3 ×2, AS-IQ-4) | `tests/test_issues.py` 13 passed; focused suites 665 passed; live read-only run of the new queries on Oracle: viewer found, 99 Issues (57 open, 30 completed and 12 canceled in 30 days), every state id among 26 team statuses | the P2 commit on `jeremy/issues-design` | source-observed |
 
 ## 9. Sources and coverage
 

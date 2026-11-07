@@ -27,7 +27,7 @@ from typing import Protocol, Sequence
 from . import clock, files, platforms
 from .writers import writer
 
-SCHEMA_VERSION = 37
+SCHEMA_VERSION = 38
 WAIT = timedelta(days=4)  # Waiting for them ends after this with no reply: back to Todo to follow up (#116)
 EMAIL_CONFIRMATION_PENDING = "Email confirmation pending; wait for its sent receipt before replying."
 MIGRATIONS = {  # version -> statement that upgrades an existing database to it
@@ -791,6 +791,37 @@ ALTER TABLE connections_new RENAME TO connections;
 CREATE UNIQUE INDEX connections_inbound ON connections (inbound);
 CREATE UNIQUE INDEX connections_account ON connections (external_id, coalesce(kind, ''));
 PRAGMA legacy_alter_table = OFF;"""
+
+# Issues (ADR 0018): the copy of Jeremy's assigned Issues, with a local Planned day, and their teams' statuses.
+MIGRATIONS[38] = """CREATE TABLE issue_statuses (  -- each team's statuses on an Issue connection's Platform (ADR 0018); issues.py
+  id            TEXT PRIMARY KEY NOT NULL,  -- the Platform's own id
+  connection_id TEXT NOT NULL REFERENCES connections (id),
+  team_id       TEXT NOT NULL,
+  name          TEXT NOT NULL,
+  type          TEXT NOT NULL,              -- the Platform's status type (Linear: backlog, unstarted, started, ...)
+  position      REAL NOT NULL DEFAULT 0
+) STRICT;
+CREATE TABLE issues (  -- a copy of each Issue assigned to Jeremy; the Platform owns every field but planned_day
+  id            TEXT PRIMARY KEY NOT NULL,  -- the Platform's own id
+  connection_id TEXT NOT NULL REFERENCES connections (id),
+  identifier    TEXT NOT NULL,              -- BIZ-1426
+  title         TEXT NOT NULL,
+  description   TEXT,
+  url           TEXT,
+  team_id       TEXT NOT NULL,
+  state_id      TEXT,                       -- issue_statuses.id
+  priority      INTEGER NOT NULL DEFAULT 0, -- Linear: 0 none, 1 urgent, 2 high, 3 medium, 4 low
+  estimate      REAL,
+  due_date      TEXT,                       -- a date
+  created_at    TEXT NOT NULL,
+  updated_at    TEXT NOT NULL,              -- the Platform's last change
+  completed_at  TEXT,
+  canceled_at   TEXT,
+  data          TEXT NOT NULL DEFAULT '{}', -- display-only extras (project, cycle, labels, parent, team key)
+  planned_day   TEXT,                       -- local only, never sent (ADR 0018)
+  copied_at     TEXT NOT NULL               -- when the copy last took the Platform's version
+) STRICT;
+CREATE INDEX issues_planned ON issues (planned_day);"""
 
 
 class SendUnknown(SendFailed):

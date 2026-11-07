@@ -28,20 +28,20 @@ Feature: Issues
     When Jeremy Plans "BIZ-2" for Monday
     Then the Size of "BIZ-2" is "2 h"
 
-  @wip @AS-IQ-3 @FR-IS-2 @FR-IS-4
+  @AS-IQ-3 @FR-IS-2 @FR-IS-4
   Scenario: A change made in Linear arrives by hook and keeps the Planned day
     Given an Issue "BIZ-3 Upload bank letters" assigned to Jeremy with status "Todo" and Planned day "2026-11-10"
     When the Linear hook receives a signed update setting "BIZ-3" to status "Done"
     Then "BIZ-3" has status "Done"
     And "BIZ-3" has Planned day "2026-11-10"
 
-  @wip @AS-IQ-3 @FR-IS-2
+  @AS-IQ-3 @FR-IS-2
   Scenario: An unsigned hook is refused and marks the Issue connection
     When the Linear hook receives an update with a wrong signature
     Then the hook answers 401
     And the Issue connection has a Last Error
 
-  @wip @AS-IQ-4 @FR-IS-3 @FR-IS-12
+  @AS-IQ-4 @FR-IS-3 @FR-IS-12
   Scenario: An Issue reassigned in Linear leaves the copy
     Given an Issue "BIZ-4 Give Tony tool access" assigned to Jeremy
     When Full Read finds "BIZ-4" assigned to "Logan"

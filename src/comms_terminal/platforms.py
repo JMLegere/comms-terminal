@@ -189,7 +189,8 @@ PLATFORMS = {p.name: p for p in (
     Platform("linear", "Linear", "task", None, "linear", False,
              "Showing open Linear issues beside Threads, People, Organizations and Cases.",
              "[#c14a4a]Linear is not answering.[/] Check the linear-token credential; "
-             "this clears on the next successful answer.", lambda m, ch: None, kinds=("context", "issue")),
+             "this clears on the next successful answer.", lambda m, ch: None, kinds=("context", "issue"),
+             hook_secret="linear-webhook-secret"),
     Platform("tana", "Tana", "tana", None, "tana", False,
              "Showing Tana notes beside Threads, People, Organizations and Cases.",
              "[#c14a4a]Tana is not answering.[/] Re-run scripts/oauth_mcp.py for Tana if the sign-in expired; "
