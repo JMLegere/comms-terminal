@@ -484,3 +484,12 @@ CREATE TABLE actions (  -- the Action Queue (ADR 0019): each thing Comms Termina
 ) STRICT;
 CREATE INDEX actions_due ON actions (state, due_at);
 CREATE INDEX actions_target ON actions (target, created_at);
+
+-- Urgency (PRD FR-IS-8)
+CREATE TABLE urgency (  -- Taskwarrior-style coefficients for an Issue's urgency (PRD FR-IS-8), settable
+  name  TEXT PRIMARY KEY NOT NULL,
+  value REAL NOT NULL
+) STRICT;
+INSERT INTO urgency (name, value) VALUES ('due', 12), ('priority.urgent', 9), ('priority.high', 6),
+  ('priority.medium', 3.9), ('priority.none', 1.95), ('priority.low', 0), ('started', 4), ('blocking', 8),
+  ('blocked', -5), ('age', 2);

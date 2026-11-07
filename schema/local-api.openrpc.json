@@ -1273,6 +1273,80 @@
    }
   },
   {
+   "name": "command.issues.plan",
+   "summary": "The issues.plan writer (write).",
+   "params": [
+    {
+     "name": "issue_id",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "day",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": true,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.issues.set_urgency",
+   "summary": "The issues.set_urgency writer (write).",
+   "params": [
+    {
+     "name": "name",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "value",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": true,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
    "name": "command.issues.undo",
    "summary": "The issues.undo writer (write).",
    "params": [

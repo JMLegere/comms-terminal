@@ -27,7 +27,7 @@ from typing import Protocol, Sequence
 from . import clock, files, platforms
 from .writers import writer
 
-SCHEMA_VERSION = 39
+SCHEMA_VERSION = 40
 WAIT = timedelta(days=4)  # Waiting for them ends after this with no reply: back to Todo to follow up (#116)
 EMAIL_CONFIRMATION_PENDING = "Email confirmation pending; wait for its sent receipt before replying."
 MIGRATIONS = {  # version -> statement that upgrades an existing database to it
@@ -842,6 +842,15 @@ MIGRATIONS[39] = """CREATE TABLE actions (  -- the Action Queue (ADR 0019): each
 ) STRICT;
 CREATE INDEX actions_due ON actions (state, due_at);
 CREATE INDEX actions_target ON actions (target, created_at);"""
+
+# Urgency coefficients (PRD FR-IS-8): Taskwarrior and Obsidian Tasks defaults, settable.
+MIGRATIONS[40] = """CREATE TABLE urgency (  -- Taskwarrior-style coefficients for an Issue's urgency (PRD FR-IS-8), settable
+  name  TEXT PRIMARY KEY NOT NULL,
+  value REAL NOT NULL
+) STRICT;
+INSERT INTO urgency (name, value) VALUES ('due', 12), ('priority.urgent', 9), ('priority.high', 6),
+  ('priority.medium', 3.9), ('priority.none', 1.95), ('priority.low', 0), ('started', 4), ('blocking', 8),
+  ('blocked', -5), ('age', 2);"""
 
 
 class SendUnknown(SendFailed):

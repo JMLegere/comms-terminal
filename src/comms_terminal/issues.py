@@ -13,7 +13,7 @@ find, update, create, undo, carry_update, carry_create.
 """
 
 import json
-from datetime import datetime
+from datetime import date, datetime, time, timedelta
 
 from . import actions, clock, inbox
 from .writers import writer
@@ -34,7 +34,11 @@ def upsert(db, connection_id: str, issue: dict, now: datetime) -> None:
         old = db.execute("SELECT updated_at FROM issues WHERE id = ?", (issue["id"],)).fetchone()
         if old is not None and issue["updated_at"] < old["updated_at"]:
             return  # a late or replayed event: the copy already holds something newer
-        values = [issue.get(f) for f in FIELDS] + [json.dumps(issue.get("data") or {}, sort_keys=True), clock.iso(now)]
+        data = dict(issue.get("data") or {})
+        if old is not None and "blocking" not in data:  # a webhook carries no relations: keep the last read's
+            kept = json.loads(db.execute("SELECT data FROM issues WHERE id = ?", (issue["id"],)).fetchone()[0])
+            data |= {k: kept[k] for k in ("blocking", "blocked") if k in kept}
+        values = [issue.get(f) for f in FIELDS] + [json.dumps(data, sort_keys=True), clock.iso(now)]
         if old is None:
             db.execute(f"INSERT INTO issues (id, connection_id, {', '.join(FIELDS)}, data, copied_at)"
                        f" VALUES (?, ?, {', '.join('?' * len(FIELDS))}, ?, ?)", [issue["id"], connection_id, *values])
@@ -240,3 +244,178 @@ def carry_create(db, a, client, now: datetime) -> dict:
 
 
 ISSUE_BY_ID = """query IssueById($id: String!) { issue(id: $id) { id identifier url createdAt updatedAt } }"""
+
+
+# --- Planning (PRD FR-IS-5–10, FR-IS-13): Planned day, Day capacity, urgency, warnings, Rollover ----------------
+
+DAY_HOURS = 9                # a workday's capacity before busy time (FR-IS-6)
+DEFAULT_HOURS = 1            # an Issue with no estimate (FR-IS-7)
+POINT_HOURS = {"linear": 0.5}  # one estimate point, per Issue connection's Platform: Linear 1 point = 30 minutes
+SLIP_STATUS = {"linear": "Blocked"}  # the status a Rollover sets, per Platform (GLOSSARY: Slip status)
+DUE_SOON_DAYS = 7            # an Unplanned Issue due this soon warns (FR-IS-13)
+
+
+def _open(i) -> bool:
+    return not (i["completed_at"] or i["canceled_at"])
+
+
+def today(now: datetime | None = None) -> date:
+    """Jeremy's day (America/Halifax, as Sequences count days)."""
+    from .sequences import LOCAL
+    return (now or clock.now()).astimezone(LOCAL).date()
+
+
+def next_workday(d: date) -> date:
+    while d.weekday() >= 5:
+        d += timedelta(days=1)
+    return d
+
+
+@writer("write")
+def plan(db, issue_id: str, day: str | None, *, now: datetime | None = None) -> None:
+    """Sets or clears an Issue's Planned day (FR-IS-5). Local only: no Action, nothing goes to the Platform."""
+    row = find(db, issue_id)
+    if row is None:
+        raise KeyError(f"no Issue {issue_id}")
+    if day is not None:
+        day = date.fromisoformat(day).isoformat()
+    with inbox._write_snapshot(db):
+        db.execute("UPDATE issues SET planned_day = ? WHERE id = ?", (day, row["id"]))
+
+
+def size_hours(issue, platform: str = "linear") -> float:
+    """Its estimate in hours, else DEFAULT_HOURS (FR-IS-7)."""
+    return DEFAULT_HOURS if issue["estimate"] is None else issue["estimate"] * POINT_HOURS[platform]
+
+
+def _busy_hours(db, day: date, now: datetime) -> float | None:
+    """Busy calendar hours on `day` (Jeremy's time), merged where Events overlap; today counts only what is still
+    to come. None when a busy All-day Event takes the whole day."""
+    from . import calendar
+    from .sequences import LOCAL
+    lo = datetime.combine(day, time(), LOCAL)
+    hi = lo + timedelta(days=1)
+    if day == today(now):
+        lo = max(lo, now.astimezone(LOCAL))
+    spans = []
+    for e in calendar.expand(db, day, day + timedelta(days=1), deleted=False):
+        if not e["busy"]:
+            continue
+        if e["all_day"]:
+            return None
+        start, end = max(clock.local(e["start"]), lo), min(clock.local(e["end"]), hi)
+        if end > start:
+            spans.append((start, end))
+    total, last = 0.0, None
+    for start, end in sorted(spans):
+        if last is not None and start < last:
+            start = last
+        if end > start:
+            total += (end - start).total_seconds() / 3600
+            last = end if last is None else max(last, end)
+    return total
+
+
+def capacity(db, day: date, now: datetime | None = None) -> dict:
+    """A day's capacity and use (FR-IS-6): {"capacity", "used", "left"} in hours. Weekends hold none unless an
+    Issue is planned there; a busy All-day Event makes the day 0."""
+    from .sequences import LOCAL
+    now = now or clock.now()
+    planned = [i for i in issues(db) if i["planned_day"] == day.isoformat() and _open(i)]
+    used = sum(size_hours(i) for i in planned)
+    busy = _busy_hours(db, day, now)
+    if busy is None or (day.weekday() >= 5 and not planned) or day < today(now):
+        cap = 0.0
+    else:
+        hours_left = DAY_HOURS if day > today(now) else min(DAY_HOURS, (datetime.combine(
+            day + timedelta(days=1), time(), LOCAL) - now.astimezone(LOCAL)).total_seconds() / 3600)
+        cap = max(0.0, hours_left - busy)
+    return {"capacity": round(cap, 2), "used": round(used, 2), "left": round(cap - used, 2)}
+
+
+def coefficients(db) -> dict:
+    return {r["name"]: r["value"] for r in db.execute("SELECT name, value FROM urgency")}
+
+
+@writer("write")
+def set_urgency(db, name: str, value: float, *, now: datetime | None = None) -> None:
+    """Changes one urgency coefficient (FR-IS-8)."""
+    if db.execute("SELECT 1 FROM urgency WHERE name = ?", (name,)).fetchone() is None:
+        raise KeyError(f"no urgency coefficient {name}; see `comms-terminal urgency list`")
+    with inbox._write_snapshot(db):
+        db.execute("UPDATE urgency SET value = ? WHERE name = ?", (float(value), name))
+
+
+PRIORITY_NAMES = {0: "none", 1: "urgent", 2: "high", 3: "medium", 4: "low"}
+
+
+def _due_ramp(due: str, day: date) -> float:
+    """Taskwarrior's due factor: 1.0 at 7+ days late, 0.2 at 14+ days out, linear between."""
+    days = (date.fromisoformat(due) - day).days
+    if days <= -7:
+        return 1.0
+    if days >= 14:
+        return 0.2
+    return round(1.0 - (days + 7) * 0.8 / 21, 4)
+
+
+def urgency(i: dict, c: dict, day: date) -> float:
+    """Sum of coefficient × factor (FR-IS-8). The Planned day and the Slip status do not count."""
+    score = c[f"priority.{PRIORITY_NAMES[i['priority']]}"]
+    if i["due_date"]:
+        score += c["due"] * _due_ramp(i["due_date"], day)
+    if i.get("state_type") == "started":
+        score += c["started"]
+    data = i["data"]
+    score += c["blocking"] * bool(data.get("blocking")) + c["blocked"] * bool(data.get("blocked"))
+    created = date.fromisoformat(i["created_at"][:10])
+    score += c["age"] * min(1.0, max(0, (day - created).days) / 365)
+    return round(score, 4)
+
+
+def warnings(db, now: datetime | None = None) -> dict[str, list[str]]:
+    """Each open Issue's warnings by id (FR-IS-9, FR-IS-13), as SuperPlan gave them."""
+    now = now or clock.now()
+    day, c = today(now), coefficients(db)
+    open_ = [i for i in issues(db) if _open(i)]
+    out: dict[str, list[str]] = {}
+    planned = sorted((i for i in open_ if i["planned_day"]), key=lambda i: urgency(i, c, day))
+    caps: dict[str, dict] = {}
+    for n, i in enumerate(planned):
+        found = []
+        if i["due_date"] and i["planned_day"] > i["due_date"]:
+            found.append("Planned after its due date")
+        if len(planned) > 1:  # SuperPlan: an item at percentile p may sit at most 100 - p days out
+            p = n / (len(planned) - 1) * 100
+            if (date.fromisoformat(i["planned_day"]) - day).days > 100 - p:
+                found.append("Planned too far out for its urgency")
+        cap = caps.setdefault(i["planned_day"], capacity(db, date.fromisoformat(i["planned_day"]), now))
+        if size_hours(i) > cap["capacity"]:
+            found.append("Larger than a day")
+        if found:
+            out[i["id"]] = found
+    for i in open_:
+        if not i["planned_day"] and i["due_date"] and (date.fromisoformat(i["due_date"]) - day).days <= DUE_SOON_DAYS:
+            out.setdefault(i["id"], []).append("Due soon and Unplanned")
+    return out
+
+
+def rollover(db, now: datetime | None = None) -> int:
+    """Each unfinished Issue planned before Jeremy's today moves to the next workday, and its Slip status goes to
+    the Platform as an Action (FR-IS-10). Run each pass of the Service's loop; it moves only what has passed.
+    Returns how many moved."""
+    now = now or clock.now()
+    target = next_workday(today(now))
+    moved = 0
+    for i in issues(db):
+        if not i["planned_day"] or i["planned_day"] >= today(now).isoformat() or not _open(i):
+            continue
+        with inbox._write_snapshot(db):
+            db.execute("UPDATE issues SET planned_day = ? WHERE id = ?", (target.isoformat(), i["id"]))
+        platform = db.execute("SELECT platform FROM connections WHERE id = ?", (i["connection_id"],)).fetchone()[0]
+        slip = db.execute("SELECT id FROM issue_statuses WHERE team_id = ? AND name = ?",
+                          (i["team_id"], SLIP_STATUS.get(platform))).fetchone()
+        if slip is not None and i["state_id"] != slip["id"]:
+            update(db, i["id"], {"state_id": slip["id"]}, now=now)
+        moved += 1
+    return moved

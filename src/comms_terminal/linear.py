@@ -295,6 +295,8 @@ ASSIGNED = """query AssignedIssues($filter: IssueFilter!, $after: String) {
       id identifier title description url priority estimate dueDate createdAt updatedAt completedAt canceledAt
       state { id } team { id key name } project { name } cycle { number } parent { identifier }
       labels { nodes { name } }
+      relations { nodes { type relatedIssue { completedAt canceledAt } } }
+      inverseRelations { nodes { type issue { completedAt canceledAt } } }
     }
     pageInfo { hasNextPage endCursor }
   }
@@ -316,9 +318,15 @@ def _label_names(labels) -> list[str]:
 def normal(node: dict) -> dict:
     """One Linear Issue, from a read or a webhook's `data`, as issues.upsert takes it."""
     state, team = node.get("state") or {}, node.get("team") or {}
+    def open_blocks(relations, side):  # open Issues this one blocks, or that block it (urgency, FR-IS-8)
+        return sum(1 for r in (relations or {}).get("nodes", ()) if r.get("type") == "blocks"
+                   and not ((r.get(side) or {}).get("completedAt") or (r.get(side) or {}).get("canceledAt")))
     data = {"team_key": team.get("key"), "team": team.get("name"), "project": (node.get("project") or {}).get("name"),
             "cycle": (node.get("cycle") or {}).get("number"), "parent": (node.get("parent") or {}).get("identifier"),
             "labels": _label_names(node.get("labels"))}
+    if "relations" in node:  # a read carries relations; a webhook does not, and the copy keeps the last read's
+        data |= {"blocking": open_blocks(node.get("relations"), "relatedIssue"),
+                 "blocked": open_blocks(node.get("inverseRelations"), "issue")}
     return {"id": node["id"], "identifier": node["identifier"], "title": node.get("title") or "",
             "description": node.get("description"), "url": node.get("url"),
             "team_id": team.get("id") or node.get("teamId"), "state_id": state.get("id") or node.get("stateId"),

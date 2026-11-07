@@ -10,7 +10,7 @@
 | Topic | Manage Linear Issues inside Comms Terminal (Planned day, capacity, warnings, edits) with one optimistic Action Queue for everything Comms Terminal carries out. |
 | Sources | `.agents/discovery/2026-11-07-linear-daily-scheduling.md` (approved through Phase 4); `.agents/design/2026-11-07-issues-and-action-queue.md` (proposed); ADRs 0017, 0018, 0019 (proposed); `GLOSSARY.md` (Issues section, Action, Action Queue); code at `origin/main` `85b5540`. |
 | History limits | The full conversation of 2026-11-07 was available. Earlier sessions are known only through the artifacts cited. |
-| Implementation authorization | **P0–P3** (Jeremy, 2026-11-07: "P0 now, stop for review", then "execute the entire pd up to p1", "… p2", "… p3"). Local commits only; no push, no deploy, no credential, webhook or live Linear write. P4+ not authorized. |
+| Implementation authorization | **The entire PRD** (Jeremy, 2026-11-07: "execute the entire prd", after P0–P3 gates). P7's push to `main`, Worker deploy, Linear key and webhook still need Jeremy's explicit go and hands (PRD §5 P7). |
 
 ## 2. Executive framing
 
@@ -227,7 +227,7 @@ Verify: existing suites `tests/test_invite_responses.py`, `tests/test_reactions.
 |---|---|---|---|---|---|
 | Approve this PRD and ADRs 0017–0019 | All phases | Approved 2026-11-07 | — | Jeremy | No |
 | Scenario approval after P0 | P1+ | Taken as given with the P1 go (decision 39) | — | Jeremy | No |
-| Implementation go for P4+ | P4+ | Not given | Ask after P3 review | Jeremy | Yes |
+| P7 release go ("ship it", key, webhook, Worker deploy) | Live | Not given | Ask after P6 | Jeremy | Yes |
 | Live Linear writes unexercised | P3 confirm path | Mutations checked against Linear's live schema by introspection only; no write sent (key is Read-only, writes need P7) | First confirmed Action after P7 | Jeremy | No |
 | P1 App rail not rendered natively | FR-CK-2 visual | App view tests pass; GPUI window not opened (App runs headless only on Workbox) | Look at the rail on Mani after the next App update | Jeremy | No |
 | Linear webhook creation needs admin rights | P7 | Resolved: Jeremy is a Linear admin (`whoami` isAdmin, 2026-11-07) | — | Jeremy | No |
@@ -295,6 +295,11 @@ Verify: existing suites `tests/test_invite_responses.py`, `tests/test_reactions.
 | 49 | 2026-11-07 | Linear's `estimate` is an Int (live introspection): estimates are whole points; the CLI and writers refuse fractions | agent, live read-only check | done | REAL estimate sent as is |
 | 50 | 2026-11-07 | The CLI's `issues` and `issue ID / issue new` land in P3, since every writer needs a command or a console-only reason (`tests/test_cli_parity.py`); `issues.undo` is console-only | agent, implementation | done | CLI in P5 |
 | 51 | 2026-11-07 | A laptop write wakes the Service's loop at once (`/call` sets the kick), so an Action runs in about a second, not a minute | agent, implementation | done | — |
+| 52 | 2026-11-07 | "execute the entire prd": P4–P7 authorized; P7's release steps keep their own gates | Jeremy | approved | #47 stop |
+| 53 | 2026-11-07 | Today's capacity: the hours left in Jeremy's day (at most 9) less busy time still to come; a weekend day counts like a weekday once an Issue is planned on it | agent, implementation (interprets G8) | done | — |
+| 54 | 2026-11-07 | "Larger than a day" means larger than its Planned day's capacity; blocking and blocked come from Linear relations of type blocks to open Issues (read only; a webhook keeps the last read's counts) | agent, implementation | done | — |
+| 55 | 2026-11-07 | Rollover runs every pass of the Service's loop and moves only Issues whose Planned day has passed, so it needs no record of the last day it ran | agent, implementation | done | "on Halifax day change" trigger |
+| 56 | 2026-11-07 | CLI: Planned day is `issue ID --plan DATE|today|tomorrow|none`; coefficients are `urgency list|set` | agent, implementation | done | `issue plan ID DATE` |
 
 ## 8. Work log
 
@@ -309,6 +314,7 @@ Verify: existing suites `tests/test_invite_responses.py`, `tests/test_reactions.
 | 2026-11-07T14:10-04:00 | agent | P1: migration 37 (connections kind, widened Platforms, account unique per kind); `platforms` kinds and Linear/Tana/Attio; `inbox.ensure_connection`; `serve.record_context`; Console and App rails; CLI `drafts` lists only sending Connections; AGENTS.md | Focused suites: 234 + 110 + 584 passed; Console rail, status line and Linear Connection page rendered as text in a Textual test run | the P1 commit on `jeremy/issues-design` | source-observed |
 | 2026-11-07T15:05-04:00 | agent | P2: migration 38 (`issues`, `issue_statuses`); `issues.py`; `linear.full_read`, `normal`, `verify`, `handle_hook`; `serve.read_issues` in the 30-minute probe loop, Issue connection at start, `/hooks/linear` (Context connections take no hooks); container credential and Worker route; 3 scenarios un-`@wip` (AS-IQ-3 ×2, AS-IQ-4) | `tests/test_issues.py` 13 passed; focused suites 665 passed; live read-only run of the new queries on Oracle: viewer found, 99 Issues (57 open, 30 completed and 12 canceled in 30 days), every state id among 26 team statuses | the P2 commit on `jeremy/issues-design` | source-observed |
 | 2026-11-07T16:20-04:00 | agent | P3: migration 39 (`actions`); `actions.py` (enqueue, run, latest_refusal); `linear.mutate` and `Client.write` (confirmed, refused, broken, unknown); `issues.update`, `create`, `undo` writers with carriers, snap-back and "Not saved"; Service runs the queue in `wake_loop`, kicked by laptop writes; `remote.MODULES` and Local API (`command.issues.*`); CLI `issues`, `issue`; 5 scenarios un-`@wip` | `tests/test_actions.py` 18 passed; focused suites 575 passed; laptop and service mint the same Action id; live read-only introspection: `IssueUpdateInput`/`IssueCreateInput` fields, `id` on create, `estimate` Int | the P3 commit on `jeremy/issues-design` | source-observed |
+| 2026-11-07T17:10-04:00 | agent | P4: migration 40 (`urgency`); `issues.plan`, `capacity`, `size_hours`, `urgency`, `warnings`, `rollover`, `set_urgency`; calendar `busy` and planned Issues as Calendar Items; Rollover in `wake_loop`; relations in the full read; CLI `--plan`, `urgency`; 6 scenarios un-`@wip` | `tests/test_planning.py` 9 passed; focused suites 337 passed; live read-only relations query: 57 open Issues, 4 blocking and 8 blocked | the P4 commit on `jeremy/issues-design` | source-observed |
 
 ## 9. Sources and coverage
 

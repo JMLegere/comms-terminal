@@ -38,6 +38,8 @@ COMMANDS = {
     "inbox.stage": "draft --attach",
     "inbox.unstage": "draft --detach",
     "issues.create": "issue new",
+    "issues.plan": "issue ID --plan",
+    "issues.set_urgency": "urgency set",
     "issues.update": "issue ID --title/--description/--status/--priority/--estimate/--due",
     "pipeline.set_stage": "pipeline stage",
     "pipeline.set_value": "pipeline value",
@@ -256,6 +258,13 @@ def add_parsers(sub):
     t.add_argument("--priority", choices=list(PRIORITY), help="urgent, high, medium, low or none")
     t.add_argument("--estimate", help="points (Linear: 1 point = 30 minutes), or none")
     t.add_argument("--due", help="YYYY-MM-DD, or none")
+    t.add_argument("--plan", help="the Planned day: YYYY-MM-DD, today, tomorrow, or none (local only)")
+    u = sub.add_parser("urgency", help="the urgency coefficients (Taskwarrior-style), or set one")
+    us = u.add_subparsers(dest="urgency_cmd", required=True)
+    us.add_parser("list", help="every coefficient and its value")
+    t = us.add_parser("set", help="set one coefficient")
+    t.add_argument("name")
+    t.add_argument("value", type=float)
 
 
 PRIORITY = {"none": 0, "urgent": 1, "high": 2, "medium": 3, "low": 4}
@@ -311,6 +320,10 @@ def issue_cmd(db, a) -> str:
     fields = issue_fields(db, a, row["team_id"])
     if fields:
         issues.update(db, row["id"], fields, now=clock.now())
+    if a.plan is not None:
+        day = {"today": issues.today(), "tomorrow": issues.today() + timedelta(days=1)}.get(a.plan)
+        issues.plan(db, row["id"], None if a.plan == "none" else (day or date.fromisoformat(a.plan)).isoformat(),
+                    now=clock.now())
     return issue_markdown(next(i for i in issues.issues(db) if i["id"] == row["id"]))
 
 
@@ -362,6 +375,11 @@ def run(a, db):
                           f"{i['planned_day'] or '-'}\t{i['title']}")
         elif a.cmd == "issue":
             print(issue_cmd(db, a), end="")
+        elif a.cmd == "urgency":
+            if a.urgency_cmd == "set":
+                issues.set_urgency(db, a.name, a.value, now=clock.now())
+            for name, value in issues.coefficients(db).items():
+                print(f"{name}\t{value:g}")
         elif a.delete or a.attach or a.detach:
             print(draft_files(db, a), end="")
         else:

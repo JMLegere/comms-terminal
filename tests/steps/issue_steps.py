@@ -5,7 +5,8 @@ import hmac
 import json
 import re
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timezone
+from zoneinfo import ZoneInfo
 from email.message import Message
 from types import SimpleNamespace
 
@@ -31,11 +32,12 @@ def linear_issues(monkeypatch):
     db.close()
 
 
-def node(ctx, identifier, title, state="Todo", assignee=JEREMY, updated="2026-11-08T12:00:00.000Z"):
+def node(ctx, identifier, title, state="Todo", assignee=JEREMY, updated="2026-11-08T12:00:00.000Z", **extra):
     """A Linear Issue as a read returns it and a webhook's `data` carries it."""
     return {"id": f"id-{identifier}", "identifier": identifier, "title": title, "priority": 0,
             "createdAt": "2026-11-01T12:00:00.000Z", "updatedAt": updated, "assigneeId": assignee,
-            "state": {"id": ctx.statuses[state]}, "team": {"id": TEAM, "key": "BIZ", "name": "Business"}}
+            "state": {"id": ctx.statuses[state]}, "team": {"id": TEAM, "key": "BIZ", "name": "Business"},
+            "completedAt": "2026-11-08T12:00:00.000Z" if state == "Done" else None} | extra
 
 
 def by_identifier(ctx, identifier):
@@ -57,9 +59,9 @@ def team_statuses(linear_issues, team, names):
         for i, n in enumerate(found)])
 
 
-def _given_issue(ctx, name, state="Todo", day=None):
+def _given_issue(ctx, name, state="Todo", day=None, **extra):
     identifier, title = name.split(" ", 1)
-    issues.upsert(ctx.db, ctx.cid, linear.normal(node(ctx, identifier, title, state)), NOW)
+    issues.upsert(ctx.db, ctx.cid, linear.normal(node(ctx, identifier, title, state, **extra)), NOW)
     if day:
         with ctx.db:
             ctx.db.execute("UPDATE issues SET planned_day = ? WHERE identifier = ?", (day, identifier))
@@ -281,6 +283,97 @@ def linear_holds(linear_issues, title):
 
 @then(parsers.parse('an Action sets "{identifier}" to status "{state}"'))
 def action_sets(linear_issues, identifier, state):
-    a = linear_issues.db.execute("SELECT * FROM actions WHERE id = ?", (linear_issues.action,)).fetchone()
+    a = linear_issues.db.execute("SELECT * FROM actions WHERE target = ? ORDER BY created_at DESC, id DESC LIMIT 1",
+                                 (by_identifier(linear_issues, identifier)["id"],)).fetchone()
     assert (a["kind"], json.loads(a["payload"])) == ("issue_update", {"state_id": linear_issues.statuses[state]})
     assert a["target"] == by_identifier(linear_issues, identifier)["id"] and a["state"] == "scheduled"
+
+
+# --- Planning (features/issues.feature) -------------------------------------------------------------------------
+
+DAYS = {"Monday": "2026-11-09", "Tuesday": "2026-11-10", "Friday": "2026-11-13"}
+LOCAL = ZoneInfo("America/Halifax")
+
+
+@given(parsers.parse('an Issue "{name}" assigned to Jeremy with no Estimate'))
+def issue_no_estimate(linear_issues, name):
+    _given_issue(linear_issues, name)
+
+
+@given(parsers.parse('an Issue "{name}" assigned to Jeremy with Estimate {points:d}'))
+def issue_estimate(linear_issues, name, points):
+    _given_issue(linear_issues, name, estimate=points)
+
+
+@given(parsers.parse('an Issue "{name}" assigned to Jeremy due "{due}"'))
+def issue_due(linear_issues, name, due):
+    _given_issue(linear_issues, name, dueDate=due)
+
+
+@given(parsers.parse('an Issue "{name}" assigned to Jeremy due "{due}" with no Planned day'))
+def issue_due_unplanned(linear_issues, name, due):
+    _given_issue(linear_issues, name, dueDate=due)
+
+
+@given(parsers.parse('Jeremy has a Meeting on {day} from {start} to {end} with Invite state "{state}"'))
+def meeting(linear_issues, day, start, end, state):
+    me = "jeremy@agentmaple.example"
+    with linear_issues.db:
+        linear_issues.db.execute("INSERT INTO connections (platform, external_id, self_id, label, connected_at)"
+                                 " VALUES ('gmail', ?, ?, 'Gmail', ?)", (me, me, NOW.isoformat()))
+    when = lambda t: datetime.combine(date.fromisoformat(DAYS[day]), time.fromisoformat(t), LOCAL).astimezone(
+        timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    ics = (f"BEGIN:VEVENT\r\nUID:pitch\r\nSUMMARY:Pitch\r\nDTSTART:{when(start)}\r\nDTEND:{when(end)}\r\n"
+           f"ORGANIZER:mailto:ana@acme.example\r\nATTENDEE;PARTSTAT={'ACCEPTED' if state == 'Accepted' else 'DECLINED'}"
+           f":mailto:{me}\r\nEND:VEVENT\r\n")
+    with linear_issues.db:
+        linear_issues.db.execute("INSERT INTO events (uid, ics, first_seen_at, changed_at) VALUES ('pitch', ?, ?, ?)",
+                                 (ics, NOW.isoformat(), NOW.isoformat()))
+
+
+@when(parsers.re(r'Jeremy Plans "(?P<identifier>[^"]+)" for "?(?P<day>[^"]+)"?'))
+def jeremy_plans(linear_issues, identifier, day):
+    issues.plan(linear_issues.db, identifier, DAYS.get(day, day), now=NOW)
+
+
+@then(parsers.parse('Day Capacity for {day} is "{used} h of {capacity} h"'))
+def day_capacity(linear_issues, day, used, capacity):
+    cap = issues.capacity(linear_issues.db, date.fromisoformat(DAYS[day]), NOW)
+    assert (cap["used"], cap["capacity"]) == (float(used), float(capacity))
+
+
+@then("Linear received no request")
+def no_request(linear_issues):
+    assert linear_issues.db.execute("SELECT count(*) FROM actions").fetchone()[0] == 0
+
+
+@then(parsers.parse('the Size of "{identifier}" is "{hours} h"'))
+def size(linear_issues, identifier, hours):
+    assert issues.size_hours(by_identifier(linear_issues, identifier)) == float(hours)
+
+
+@when(parsers.parse("Jeremy's day changes to Saturday {day}"))
+def day_changes(linear_issues, day):
+    linear_issues.moved = issues.rollover(linear_issues.db, datetime.combine(
+        date.fromisoformat(day), time(0, 1), LOCAL).astimezone(timezone.utc))
+
+
+@then("no Action was made")
+def no_action(linear_issues):
+    no_request(linear_issues)
+
+
+@when("Warnings are read on Monday")
+def read_warnings(linear_issues):
+    linear_issues.warnings = issues.warnings(linear_issues.db, NOW)
+
+
+@then(parsers.parse('"{identifier}" has the warning "{text}"'))
+def has_warning(linear_issues, identifier, text):
+    warnings = getattr(linear_issues, "warnings", None) or issues.warnings(linear_issues.db, NOW)
+    assert text in warnings.get(by_identifier(linear_issues, identifier)["id"], [])
+
+
+@then(parsers.parse('"{identifier}" has no warning'))
+def has_no_warning(linear_issues, identifier):
+    assert by_identifier(linear_issues, identifier)["id"] not in linear_issues.warnings

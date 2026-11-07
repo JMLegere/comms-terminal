@@ -13,7 +13,7 @@ Feature: Issues
     Given an Issue connection to Linear for Jeremy
     And the team "Business" has statuses "Todo", "Making It Happen", "Blocked" and "Done"
 
-  @wip @AS-IQ-1 @FR-IS-5 @FR-IS-6 @FR-IS-7 @FR-UI-1
+  @AS-IQ-1 @FR-IS-5 @FR-IS-6 @FR-IS-7 @FR-UI-1
   Scenario: A planned Issue counts against its day's capacity
     Given an Issue "BIZ-1 Draft the NBIF reply" assigned to Jeremy with no Estimate
     And Jeremy has a Meeting on Tuesday from 10:00 to 13:00 with Invite state "Accepted"
@@ -22,7 +22,7 @@ Feature: Issues
     And Day Capacity for Tuesday is "1 h of 6 h"
     And Linear received no request
 
-  @wip @AS-IQ-2 @FR-IS-7
+  @AS-IQ-2 @FR-IS-7
   Scenario: An Estimate in points sets an Issue's size
     Given an Issue "BIZ-2 Closing packages" assigned to Jeremy with Estimate 4
     When Jeremy Plans "BIZ-2" for Monday
@@ -47,27 +47,27 @@ Feature: Issues
     When Full Read finds "BIZ-4" assigned to "Logan"
     Then the copy has no Issue "BIZ-4"
 
-  @wip @AS-IQ-5 @FR-IS-10
+  @AS-IQ-5 @FR-IS-10
   Scenario: Rollover moves Friday's unfinished Issue to Monday and sets its Slip status
     Given an Issue "BIZ-5 Accept NBIF term sheet" assigned to Jeremy with status "Making It Happen" and Planned day "2026-11-13"
     When Jeremy's day changes to Saturday 2026-11-14
     Then "BIZ-5" has Planned day "2026-11-16"
     And an Action sets "BIZ-5" to status "Blocked"
 
-  @wip @AS-IQ-5 @FR-IS-10
+  @AS-IQ-5 @FR-IS-10
   Scenario: Rollover leaves finished Issues alone
     Given an Issue "BIZ-6 Stop End-session alerts" assigned to Jeremy with status "Done" and Planned day "2026-11-13"
     When Jeremy's day changes to Saturday 2026-11-14
     Then "BIZ-6" has Planned day "2026-11-13"
     And no Action was made
 
-  @wip @AS-IQ-6 @FR-IS-9
+  @AS-IQ-6 @FR-IS-9
   Scenario: An Issue planned after its due date is flagged
     Given an Issue "BIZ-7 Vision Coaching invoice" assigned to Jeremy due "2026-11-10"
     When Jeremy Plans "BIZ-7" for "2026-11-12"
     Then "BIZ-7" has the warning "Planned after its due date"
 
-  @wip @AS-IQ-11 @FR-IS-13
+  @AS-IQ-11 @FR-IS-13
   Scenario: An Unplanned Issue due within 7 days is flagged
     Given an Issue "BIZ-8 Chestnut agreement" assigned to Jeremy due "2026-11-14" with no Planned day
     And an Issue "BIZ-9 Board update" assigned to Jeremy due "2026-11-18" with no Planned day
