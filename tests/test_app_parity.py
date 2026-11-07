@@ -169,3 +169,11 @@ def test_rejected_app_differences_are_removed():
     assert "folded" not in (views / "threads" / "main.js").read_text()
     for name in ("drafts", "sequences"):
         assert "delete-picked" not in (views / name / "main.js").read_text(), name
+
+
+def test_every_shipped_view_is_written_to_the_apps_home():
+    """A view in app/defaults/views must be in workspace.rs DEFAULTS, or the App never installs it."""
+    listed = (ROOT / "app" / "src" / "workspace.rs").read_text()
+    missing = [v.name for v in (DEFAULTS / "views").iterdir()
+               if v.is_dir() and f'"views/{v.name}/main.js"' not in listed]
+    assert not missing
