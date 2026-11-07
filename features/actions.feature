@@ -54,7 +54,7 @@ Feature: Actions
     When Jeremy undoes that change
     Then an Action sets "BIZ-10" to status "Todo"
 
-  @wip @AS-IQ-10 @FR-AQ-4 @FR-AQ-7
+  @AS-IQ-10 @FR-AQ-4 @FR-AQ-7
   Scenario: A send whose outcome is unknown stays locked and is not sent again
     Given a New Thread Draft "Data room" to "ana@acme.com"
     And the email provider will time out

@@ -469,7 +469,7 @@ CREATE INDEX issues_planned ON issues (planned_day);
 CREATE TABLE actions (  -- the Action Queue (ADR 0019): each thing Comms Terminal carries out itself; actions.py
   id            TEXT PRIMARY KEY NOT NULL DEFAULT (new_id()),
   connection_id TEXT NOT NULL REFERENCES connections (id),
-  kind          TEXT NOT NULL CHECK (kind IN ('issue_update', 'issue_create')),
+  kind          TEXT NOT NULL CHECK (kind IN ('issue_update', 'issue_create', 'send', 'respond')),
   target        TEXT NOT NULL,              -- the record it changes (an Issue's id)
   payload       TEXT NOT NULL,              -- JSON: the values it sets
   previous      TEXT,                       -- JSON: the values they replaced, for a refusal and for undo

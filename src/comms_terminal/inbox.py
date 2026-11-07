@@ -27,7 +27,7 @@ from typing import Protocol, Sequence
 from . import clock, files, platforms
 from .writers import writer
 
-SCHEMA_VERSION = 40
+SCHEMA_VERSION = 41
 WAIT = timedelta(days=4)  # Waiting for them ends after this with no reply: back to Todo to follow up (#116)
 EMAIL_CONFIRMATION_PENDING = "Email confirmation pending; wait for its sent receipt before replying."
 MIGRATIONS = {  # version -> statement that upgrades an existing database to it
@@ -852,6 +852,31 @@ INSERT INTO urgency (name, value) VALUES ('due', 12), ('priority.urgent', 9), ('
   ('priority.medium', 3.9), ('priority.none', 1.95), ('priority.low', 0), ('started', 4), ('blocking', 8),
   ('blocked', -5), ('age', 2);"""
 
+# Sends and Responds join the Action Queue (ADR 0019, PRD P6): its kind check widens.
+MIGRATIONS[41] = """PRAGMA legacy_alter_table = ON;
+CREATE TABLE actions_new (  -- the Action Queue (ADR 0019): each thing Comms Terminal carries out itself; actions.py
+  id            TEXT PRIMARY KEY NOT NULL DEFAULT (new_id()),
+  connection_id TEXT NOT NULL REFERENCES connections (id),
+  kind          TEXT NOT NULL CHECK (kind IN ('issue_update', 'issue_create', 'send', 'respond')),
+  target        TEXT NOT NULL,              -- the record it changes (an Issue's id)
+  payload       TEXT NOT NULL,              -- JSON: the values it sets
+  previous      TEXT,                       -- JSON: the values they replaced, for a refusal and for undo
+  safe          INTEGER NOT NULL CHECK (safe IN (0, 1)),  -- safe to repeat when its outcome is unknown
+  state         TEXT NOT NULL CHECK (state IN ('scheduled', 'running', 'confirmed', 'refused', 'unknown')),
+  error         TEXT,                       -- why it was refused or is unknown
+  attempts      INTEGER NOT NULL DEFAULT 0,
+  due_at        TEXT NOT NULL,              -- not before this moment
+  created_at    TEXT NOT NULL,
+  done_at       TEXT,                       -- when it was confirmed or refused
+  CHECK ((state IN ('confirmed', 'refused')) = (done_at IS NOT NULL))
+) STRICT;
+INSERT INTO actions_new (id, connection_id, kind, target, payload, previous, safe, state, error, attempts, due_at, created_at, done_at) SELECT id, connection_id, kind, target, payload, previous, safe, state, error, attempts, due_at, created_at, done_at FROM actions;
+DROP TABLE actions;
+ALTER TABLE actions_new RENAME TO actions;
+CREATE INDEX actions_due ON actions (state, due_at);
+CREATE INDEX actions_target ON actions (target, created_at);
+PRAGMA legacy_alter_table = OFF;"""
+
 
 class SendUnknown(SendFailed):
     """The provider may or may not have sent the message (timeout, lost response, crash before recording)."""
@@ -1434,14 +1459,21 @@ def send_draft(db, draft_id: int, revision: int, sender: Sender, *, again: bool 
             connection_id, fmt = d["connection_id"], d["kind"]
             call, record, settle = _new_send(db, d, files, sender, started, at)
         db.execute("UPDATE composition_drafts SET sending_at = ? WHERE id = ?", (at, draft_id))
+        from . import actions  # the send shows on the Action Queue with its outcome (ADR 0019, PRD P6)
+        action = actions.journal(db, connection_id, "send", draft_id,
+                                 d["subject"] or f"message to {d['to'] or 'nobody'}", started)
     try:
-        return _send(db, connection_id, fmt, files, call, record, settle=settle, draft_id=draft_id)
-    except SendUnknown:
+        thread = _send(db, connection_id, fmt, files, call, record, settle=settle, draft_id=draft_id)
+    except SendUnknown as e:  # the Draft stays locked, as before; the Action says unknown and is never resent
+        actions.settle(db, action, "unknown", str(e)[:200], clock.now())
         raise
-    except SendFailed:
+    except SendFailed as e:
         with db:
             db.execute("UPDATE composition_drafts SET sending_at = NULL WHERE id = ?", (draft_id,))
+        actions.settle(db, action, "refused", str(e)[:200], clock.now())
         raise
+    actions.settle(db, action, "confirmed", None, clock.now())
+    return thread
 
 
 def _new_send(db, d, files, sender, started, at):

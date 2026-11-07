@@ -377,3 +377,55 @@ def has_warning(linear_issues, identifier, text):
 @then(parsers.parse('"{identifier}" has no warning'))
 def has_no_warning(linear_issues, identifier):
     assert by_identifier(linear_issues, identifier)["id"] not in linear_issues.warnings
+
+
+# --- a send on the Action Queue (features/actions.feature AS-IQ-10) ----------------------------------------------
+
+class TimingOutSender:
+    def __init__(self):
+        self.calls = []
+
+    def start(self, to, cc, subject, body, key, files=()):
+        self.calls.append(subject)
+        raise inbox.SendUnknown("email send outcome unknown: timed out")
+
+
+@given(parsers.parse('a New Thread Draft "{subject}" to "{to}"'))
+def new_thread_draft(linear_issues, subject, to):
+    me = "jeremy@agentmaple.example"
+    with linear_issues.db:
+        linear_issues.db.execute("INSERT INTO connections (id, platform, external_id, self_id, label, connected_at)"
+                                 " VALUES ('fm', 'fastmail', ?, ?, 'Fastmail', ?)", (me, me, NOW.isoformat()))
+    linear_issues.draft = inbox.save_draft(linear_issues.db, {"connection_id": "fm", "kind": "email", "sender": me,
+                                                              "to": to, "cc": "", "subject": subject, "body": "Hi"},
+                                           now=NOW)
+
+
+@given("the email provider will time out")
+def provider_times_out(linear_issues):
+    linear_issues.sender = TimingOutSender()
+
+
+@when("Jeremy sends the Draft")
+def jeremy_sends(linear_issues):
+    d = linear_issues.draft
+    with pytest.raises(inbox.SendUnknown):
+        inbox.send_draft(linear_issues.db, d["id"], d["revision"], linear_issues.sender)
+
+
+@then("the email provider received one send")
+def one_send(linear_issues):
+    assert linear_issues.sender.calls == [linear_issues.draft["subject"]]
+
+
+@then(parsers.parse('the Draft is locked with "{text}"'))
+def draft_locked(linear_issues, text):
+    d = linear_issues.draft
+    with pytest.raises(inbox.SendUnknown, match=text):
+        inbox.send_draft(linear_issues.db, d["id"], d["revision"], linear_issues.sender)
+
+
+@then(parsers.parse('the Action Queue lists the send with outcome "{state}"'))
+def queue_lists_send(linear_issues, state):
+    rows = [r for r in actions.queue(linear_issues.db, NOW) if r["what"] == "Send"]
+    assert [(r["target"], r["state"], r["source"]) for r in rows] == [(linear_issues.draft["subject"], state, "Draft")]

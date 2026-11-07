@@ -41,6 +41,30 @@ def _integer_keys_sql() -> str:
 
 
 UNDO = {
+    41: """PRAGMA foreign_keys = OFF; PRAGMA legacy_alter_table = ON;
+DELETE FROM actions WHERE kind IN ('send', 'respond');
+CREATE TABLE actions_old (  -- the Action Queue (ADR 0019): each thing Comms Terminal carries out itself; actions.py
+  id            TEXT PRIMARY KEY NOT NULL DEFAULT (new_id()),
+  connection_id TEXT NOT NULL REFERENCES connections (id),
+  kind          TEXT NOT NULL CHECK (kind IN ('issue_update', 'issue_create')),
+  target        TEXT NOT NULL,              -- the record it changes (an Issue's id)
+  payload       TEXT NOT NULL,              -- JSON: the values it sets
+  previous      TEXT,                       -- JSON: the values they replaced, for a refusal and for undo
+  safe          INTEGER NOT NULL CHECK (safe IN (0, 1)),  -- safe to repeat when its outcome is unknown
+  state         TEXT NOT NULL CHECK (state IN ('scheduled', 'running', 'confirmed', 'refused', 'unknown')),
+  error         TEXT,                       -- why it was refused or is unknown
+  attempts      INTEGER NOT NULL DEFAULT 0,
+  due_at        TEXT NOT NULL,              -- not before this moment
+  created_at    TEXT NOT NULL,
+  done_at       TEXT,                       -- when it was confirmed or refused
+  CHECK ((state IN ('confirmed', 'refused')) = (done_at IS NOT NULL))
+) STRICT;
+INSERT INTO actions_old (id, connection_id, kind, target, payload, previous, safe, state, error, attempts, due_at, created_at, done_at) SELECT id, connection_id, kind, target, payload, previous, safe, state, error, attempts, due_at, created_at, done_at FROM actions;
+DROP TABLE actions;
+ALTER TABLE actions_old RENAME TO actions;
+CREATE INDEX actions_due ON actions (state, due_at);
+CREATE INDEX actions_target ON actions (target, created_at);
+PRAGMA legacy_alter_table = OFF;""",
     40: "DROP TABLE urgency;",
     39: "DROP INDEX actions_target; DROP INDEX actions_due; DROP TABLE actions;",
     38: "DROP INDEX issues_planned; DROP TABLE issues; DROP TABLE issue_statuses;",

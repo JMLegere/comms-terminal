@@ -24,10 +24,29 @@ def enqueue(db, connection_id: str, kind: str, target: str, payload: dict, previ
                        clock.iso(now), clock.iso(now))).fetchone()[0]
 
 
+CARRIED = ("issue_update", "issue_create")  # what run() carries out; sends and Responds run inline (journal)
+
+
 def _due(db, now: datetime) -> list:
     return db.execute("SELECT a.*, c.platform FROM actions a JOIN connections c ON c.id = a.connection_id"
                       " WHERE (a.state = 'scheduled' OR (a.state = 'unknown' AND a.safe = 1)) AND a.due_at <= ?"
-                      " ORDER BY a.created_at, a.id", (clock.iso(now),)).fetchall()
+                      f" AND a.kind IN ({', '.join('?' * len(CARRIED))}) ORDER BY a.created_at, a.id",
+                      (clock.iso(now), *CARRIED)).fetchall()
+
+
+def journal(db, connection_id: str, kind: str, target: str, label: str, now: datetime) -> str:
+    """An Action carried out inline where it already was (a send, a Respond): recorded running, never resent by
+    run() (PRD P6). settle() records its outcome."""
+    return db.execute("INSERT INTO actions (connection_id, kind, target, payload, safe, state, attempts, due_at,"
+                      " created_at) VALUES (?, ?, ?, ?, 0, 'running', 1, ?, ?) RETURNING id",
+                      (connection_id, kind, str(target), json.dumps({"label": label}), clock.iso(now),
+                       clock.iso(now))).fetchone()[0]
+
+
+def settle(db, action_id: str, outcome: str, error: str | None, now: datetime) -> None:
+    with db:
+        db.execute("UPDATE actions SET state = ?, error = ?, done_at = ? WHERE id = ?",
+                   (outcome, error, clock.iso(now) if outcome in ("confirmed", "refused") else None, action_id))
 
 
 def _carriers():
@@ -39,7 +58,8 @@ def run(db, clients: dict, now: datetime) -> int:
     """One pass: each due Action in order, per Connection; a broken or unanswered one holds that Connection's later
     Actions to keep their order. `clients` maps a Platform to its writer. Returns how many were carried out."""
     with db:  # a pass that died mid-Action left it running: whether it happened is unknown
-        db.execute("UPDATE actions SET state = 'unknown', error = 'interrupted' WHERE state = 'running'")
+        db.execute("UPDATE actions SET state = 'unknown', error = 'interrupted' WHERE state = 'running'"
+                   f" AND kind IN ({', '.join('?' * len(CARRIED))})", CARRIED)
     carriers, held, done = _carriers(), set(), 0
     for a in _due(db, now):
         client = clients.get(a["platform"])
@@ -78,7 +98,7 @@ def latest_refusal(db, target: str) -> str | None:
 
 # --- The Action Queue page (FR-UI-4): Actions, and what is scheduled to leave, as Lemlist's Outreach queue -------
 
-LABEL = {"issue_update": "Issue change", "issue_create": "New Issue"}
+LABEL = {"issue_update": "Issue change", "issue_create": "New Issue", "send": "Send", "respond": "Respond"}
 
 
 def queue(db, now: datetime | None = None, days: int = 7) -> list[dict]:
@@ -98,10 +118,13 @@ def queue(db, now: datetime | None = None, days: int = 7) -> list[dict]:
             " JOIN connections c ON c.id = a.connection_id LEFT JOIN issues i ON i.id = a.target"
             " WHERE a.state != 'confirmed' OR a.done_at >= ? ORDER BY a.created_at, a.id",
             (clock.iso(datetime.combine(day, datetime.min.time(), LOCAL)),)):
+        issue = a["kind"].startswith("issue_")
         rows.append({"kind": "action", "id": a["id"], "day": local_day(a["due_at"]), "at": a["due_at"],
-                     "what": LABEL.get(a["kind"], a["kind"]), "target": f"{a['identifier'] or ''} {a['title'] or ''}".strip(),
-                     "target_id": a["target"], "source": "Issue", "connection": a["label"], "state": a["state"],
-                     "error": a["error"]})
+                     "what": LABEL.get(a["kind"], a["kind"]),
+                     "target": f"{a['identifier'] or ''} {a['title'] or ''}".strip() if issue
+                     else json.loads(a["payload"]).get("label", ""),
+                     "target_id": a["target"], "source": "Issue" if issue else "Draft" if a["kind"] == "send"
+                     else "Calendar", "connection": a["label"], "state": a["state"], "error": a["error"]})
     for d in db.execute('SELECT d.id, d.subject, d."to", d.send_at, c.label FROM composition_drafts d'
                         " LEFT JOIN connections c ON c.id = d.connection_id WHERE d.send_at IS NOT NULL AND d.send_at < ?",
                         (until,)):

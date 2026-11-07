@@ -179,6 +179,12 @@ class Senders:
 RESPOND_STATUS = {"confirmed": 200, "refused": 400, "unknown": 502, "unavailable": 503}
 
 
+def _event_title(db, uid: str) -> str:
+    row = db.execute("SELECT ics FROM events WHERE uid = ? AND recurrence_id = ''", (uid,)).fetchone()
+    m = row and re.search(r"^SUMMARY:(.*)$", row["ics"], re.M)
+    return m.group(1).strip() if m else "Event"
+
+
 def handle_respond(db, body: bytes, client: gcal.Client | None) -> tuple[int, dict]:
     """POST /respond: exactly {thread_id, answer} or {event_uid, answer}; accept|maybe|decline (FR-13e).
     Event UID targets cover the whole Event or series, as Meeting Threads do.
@@ -208,7 +214,19 @@ def handle_respond(db, body: bytes, client: gcal.Client | None) -> tuple[int, di
     if client is None:
         return 503, {"outcome": "unavailable", "error": "Google Calendar writes are not connected"}
     uid, rid = target
-    out = client.respond(uid, rid, req["answer"])
+    c0 = meetings._connection(db)
+    with db:  # on the Action Queue with its outcome (ADR 0019, PRD P6), committed before Google is asked
+        action = c0 and actions.journal(db, c0["id"], "respond", uid,
+                                        f"{req['answer'].title()} · {_event_title(db, uid)}", clock.now())
+    try:
+        out = client.respond(uid, rid, req["answer"])
+    except Exception:
+        if action:
+            actions.settle(db, action, "unknown", "Respond did not finish", clock.now())
+        raise
+    if action:
+        actions.settle(db, action, out["outcome"] if out["outcome"] in ("confirmed", "refused") else "unknown",
+                       out.get("error"), clock.now())
     if (c := meetings._connection(db)) is not None:  # writes health (FR-IR-10), apart from the feed's
         if out.get("broken"):
             inbox.set_connection_error(db, c["id"], gcal.WRITES_BROKEN + out["error"])
