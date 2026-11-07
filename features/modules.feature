@@ -6,14 +6,14 @@ Feature: Modules
   makes each Enrollment's next Task. Tags name the Modules PRD's acceptance scenarios (AS-MOD-n) and requirements
   (FR-MOD-n, NFR-MOD-n), numbered as AS-n, FR-n and NFR-n in that PRD.
 
-  @wip @AS-MOD-1 @FR-MOD-1 @FR-MOD-2 @FR-MOD-9
+  @AS-MOD-1 @FR-MOD-1 @FR-MOD-2 @FR-MOD-9
   Scenario: A new Service shows only Core in the rail
     Given a new Service with no Module setting
     When the Console opens
     Then the rail shows "Today", "Calendar", "Todo", "Snoozed", "Done", "Ignored", "Drafts", "People", "Organizations", "Channels" and "Settings"
     And the rail shows no "Cases", "Tasks", "Sequences" or Pipeline rows
 
-  @wip @AS-MOD-2 @FR-MOD-3 @FR-MOD-4 @FR-MOD-7 @FR-MOD-9
+  @AS-MOD-2 @FR-MOD-3 @FR-MOD-4 @FR-MOD-7 @FR-MOD-9
   Scenario: With Cases off, Threads lose their Case headers and the CLI refuses Set Case
     Given Cases is on
     And an email Thread 12 in the Case "Logan onboarding"
@@ -25,7 +25,7 @@ Feature: Modules
     And the CLI exits with code 3
     And Thread 12 is still in the Case "Logan onboarding"
 
-  @wip @AS-MOD-3 @FR-MOD-5 @FR-MOD-7
+  @AS-MOD-3 @FR-MOD-5 @FR-MOD-7
   Scenario: With Sequences off, a reply still pauses the Enrollment and no Task is made
     Given Sequences is on
     And "ana@acme.com" has an Active Enrollment whose next Step is due tomorrow
@@ -36,7 +36,7 @@ Feature: Modules
     When Materialize runs the day after tomorrow
     Then no Task or Draft is made for the Enrollment
 
-  @wip @AS-MOD-4 @FR-MOD-6
+  @AS-MOD-4 @FR-MOD-6
   Scenario: Turning Sequences back on brings Steps that fell due meanwhile as overdue
     Given Sequences is off
     And an Active Enrollment whose next Step fell due 3 days ago
@@ -45,7 +45,7 @@ Feature: Modules
     Then the Enrollment has a Task with State "DUE" due 3 days ago
     And Today shows "1 overdue"
 
-  @wip @AS-MOD-5 @FR-MOD-10
+  @AS-MOD-5 @FR-MOD-10
   Scenario: A Client showing a page of a Module turned off elsewhere goes back to Today
     Given Cases is on
     And the Console shows the Case "Logan onboarding"
@@ -54,19 +54,19 @@ Feature: Modules
     Then the Console shows Today
     And the Console shows the toast "Cases turned off"
 
-  @wip @AS-MOD-6 @FR-MOD-11
+  @AS-MOD-6 @FR-MOD-11
   Scenario: Undo into an off Module is refused and kept
     Given Pipelines is on
-    And Jeremy set the Stage of "Acme" in the Revenue Pipeline to "Proposal"
+    And Jeremy set the Stage of "Acme" in the Revenue Pipeline to "Selection"
     When Set Module turns Pipelines off
     And Jeremy presses undo
     Then the toast "Pipelines is disabled" shows
-    And "Acme" is at Stage "Proposal"
+    And "Acme" is at Stage "Selection"
     When Set Module turns Pipelines on
     And Jeremy presses undo
-    Then "Acme" is at its Stage before "Proposal"
+    Then "Acme" is at its Stage before "Selection"
 
-  @wip @AS-MOD-7 @FR-MOD-1
+  @AS-MOD-7 @FR-MOD-1
   Scenario: Turning a Module off and on keeps its data
     Given Cases is on
     And 2 Cases holding 5 Threads
@@ -74,7 +74,7 @@ Feature: Modules
     And Set Module turns Cases on
     Then there are 2 Cases holding 5 Threads
 
-  @wip @AS-MOD-8 @FR-MOD-16
+  @AS-MOD-8 @FR-MOD-16
   Scenario: A Context source page shows its problem and what it adds context to
     Given the Context source "Tana" fails with "401 Unauthorized"
     When Jeremy opens "Tana" from the rail
