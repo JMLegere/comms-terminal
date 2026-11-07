@@ -17,15 +17,23 @@ const ICON = { Todo: "square", Snoozed: "clock", Done: "circle-check", Ignored: 
 const PIPELINES = [["revenue", "Revenue"], ["fundraising", "Fundraising"], ["talent", "Talent"]];
 const CONN = { gmail: "mail", fastmail: "mail", slack: "message-square", quo: "phone", gcal: "calendar" };
 const KEYS = ["page", "view", "case_view", "pipeline", "detail", "thread", "draft", "person", "organization", "case",
-  "connection", "event", "task", "sequence"];
+  "connection", "event", "task", "sequence", "source"];
 // What a page shows, once its shared keys are set: the commands that load its views.
 const SHOW = { threads: ["threads.reload"], pipeline: ["pipeline.show"] };
-const TITLE = { person: "Person", organization: "Organization", connection: "Connection", event: "Event", case: "Case" };
+const TITLE = { person: "Person", organization: "Organization", connection: "Connection", event: "Event", case: "Case",
+  context: "Context source" };
 const FULL = new Set(Object.keys(TITLE)); // full pages: the list block is hidden (layouts/main.json)
 const NOLIST = new Set([...FULL, "pipeline"]); // pages whose list block is hidden: the focus starts in the detail
-// Context sources (FR-13a, FR-13b): no Threads, no page; the rail says whether each answers (D8).
+// Context sources (FR-13a, FR-13b): no Threads; the rail says whether each answers (D8), and each opens its own
+// read-only page (FR-MOD-16).
 const SOURCES = [["attio", "Attio", "server"], ["tana", "Tana", "layers"], ["linear", "Linear", "list-checks"]];
 const cap = (s) => s[0].toUpperCase() + s.slice(1);
+// Modules (ADR 0017): the pages each owns; an off Module's rail rows hide and its pages close (FR-MOD-9, FR-MOD-10).
+const MODULES = { pipelines: "Pipelines", sequences: "Sequences", cases: "Cases" };
+export const PAGE_MODULE = { cases: "cases", case: "cases", tasks: "sequences", task: "sequences",
+  sequences: "sequences", sequence: "sequences", pipeline: "pipelines" };
+/** The Modules on, as shell.summary last said (all of them until it answers). */
+export const modulesOn = () => new Set(shared("modules") ?? Object.keys(MODULES));
 
 /** The rail item for what is on screen: the bottom entry of the stack, as the Console's `section`. */
 export function current() {
@@ -34,6 +42,7 @@ export function current() {
   if (base.page === "cases") return `cases:${base.case_view ?? "Todo"}`;
   if (base.page === "pipeline") return base.pipeline ?? "revenue";
   if (base.page === "connection") return `conn:${base.connection}`;
+  if (base.page === "context") return `context:${base.source}`;
   return base.page;
 }
 
@@ -58,6 +67,7 @@ export default class Nav extends View {
       try {
         [this.summary, this.shell] = await Promise.all([call("rail.summary"), call("shell.summary")]);
         this.error = null;
+        this.modules();
         if (first) this.checkSources(cx);
       } catch (e) {
         this.error = String(e);
@@ -67,6 +77,21 @@ export default class Nav extends View {
     });
   }
 
+  /** shell.summary's Modules: a Module turned off here or elsewhere closes its pages, back to Today if none remain. */
+  modules() {
+    const before = modulesOn(), now = this.shell.modules ?? Object.keys(MODULES);
+    setShared("modules", now);
+    const lost = [...before].filter((m) => !now.includes(m));
+    if (!lost.length) return;
+    for (const m of lost) if (shared("undo")?.module !== m) toast(`${MODULES[m]} turned off`); // Settings said it here
+    const stack = shared("stack") ?? [];
+    const kept = stack.filter((e) => !lost.includes(PAGE_MODULE[e.page]));
+    if (kept.length === stack.length) return;
+    if (!kept.length) return this.go("today");
+    setShared("stack", kept);
+    this.show(kept[kept.length - 1]);
+  }
+
   /** One fetch per Context source for Jeremy's own addresses says whether it answers, as the Console's check_source. */
   checkSources(cx) {
     const emails = (this.shell.connections ?? []).map((c) => c.name).filter((n) => n.includes("@"));
@@ -74,6 +99,7 @@ export default class Nav extends View {
     for (const [key] of SOURCES) call("context", { source: key, emails, domains: [] }).then((r) => {
       const st = r?.error ?? (r?.answer ? "ok" : null);
       if ((shared("context_state") ?? {})[key] === "checking") setShared("context_state", { ...shared("context_state"), [key]: st });
+      setShared("context_checked", { ...shared("context_checked"), [key]: new Date().toISOString() }); // its page says when
       cx.notify();
     }).catch(() => { setShared("context_state", { ...shared("context_state"), [key]: null }); cx.notify(); });
   }
@@ -154,15 +180,14 @@ export default class Nav extends View {
 
   /** One rail item: resets the stack, as the Console's go. */
   go(item) {
-    if (item.startsWith("context:")) { // no page of its own: its context shows on each page
-      const [, title] = SOURCES.find(([k]) => `context:${k}` === item), st = (shared("context_state") ?? {})[item.slice(8)];
-      return toast(st === "ok" ? `${title} is connected.` : st === "checking" ? `Checking ${title}…` : `${title} unavailable: ${st}`);
-    }
     if (item === "cases") item = "cases:Todo"; // 9 opens Cases › Todo
+    const module = item.startsWith("cases:") ? "cases" : PIPELINES.some(([p]) => p === item) ? "pipelines" : PAGE_MODULE[item];
+    if (module && !modulesOn().has(module)) return toast(`${MODULES[module]} is disabled · turn it on in Settings`, "warning");
     let entry;
     if (STATUS.includes(cap(item))) entry = { page: "threads", view: cap(item) };
     else if (item.startsWith("cases:")) entry = { page: "cases", case_view: item.slice(6) };
     else if (PIPELINES.some(([p]) => p === item)) entry = { page: "pipeline", pipeline: item };
+    else if (item.startsWith("context:")) entry = { page: "context", source: item.slice(8) };
     else if (item.startsWith("conn:")) // the Connection's id as the core gives it (a number)
       entry = { page: "connection", connection: (this.shell.connections ?? []).find((c) => `conn:${c.id}` === item)?.id ?? item.slice(5) };
     else entry = { page: item };
@@ -180,6 +205,8 @@ export default class Nav extends View {
   /** A full page on top of the stack: the entry below keeps what its page showed. */
   push(entry) {
     if (!entry?.page) return;
+    const module = PAGE_MODULE[entry.page];
+    if (module && !modulesOn().has(module)) return toast(`${MODULES[module]} is disabled · turn it on in Settings`, "warning");
     const stack = [...(shared("stack") ?? [])];
     // The Breadcrumb keeps each full page's name, as its view published it (shared "crumb").
     stack[stack.length - 1] = { ...this.snapshot(), title: stack[stack.length - 1]?.title ?? (stack.length > 1 ? shared("crumb") : null) };
@@ -243,6 +270,11 @@ export default class Nav extends View {
         for (const [method, params] of u.steps) await call(`command.${method}`, params);
         toast("Undone: back to how it was.");
       } catch (e) {
+        const off = String(e).match(/(\w+) is disabled/);
+        if (off) { // kept: it undoes once the Module is on again (FR-MOD-11)
+          if (!shared("undo")) setShared("undo", u);
+          return toast(`${off[1]} is disabled`, "warning");
+        }
         toast(/Stale/i.test(String(e)) ? "Cannot undo: this thread was reconciled. Current state kept." : String(e), "error");
       }
     });
@@ -261,13 +293,14 @@ export default class Nav extends View {
       { header: "threads" },
       ...STATUS.map((n) => ({ id: n.toLowerCase(), icon: ICON[n], label: n, count: counts[n] })),
       { id: "drafts", icon: "square-pen", label: "Drafts", count: h.drafts },
-      { header: "cases" },
-      ...STATUS.map((n) => ({ id: `cases:${n}`, icon: ICON[n], label: n, count: (h.cases ?? {})[n] ?? 0 })),
-      { header: "playbook" },
-      { id: "tasks", icon: "list-checks", label: "Tasks", count: due || "" },
-      { id: "sequences", icon: "workflow", label: "Sequences", count: (s.sequences ?? []).filter((q) => !q.archived_at).length },
-      { header: "pipeline" },
-      ...PIPELINES.map(([id, label]) => ({ id, icon: "trending-up", label, count: (h.pipelines ?? {})[id] })),
+      { header: "cases", module: "cases" },
+      ...STATUS.map((n) => ({ id: `cases:${n}`, icon: ICON[n], label: n, count: (h.cases ?? {})[n] ?? 0, module: "cases" })),
+      { header: "playbook", module: "sequences" },
+      { id: "tasks", icon: "list-checks", label: "Tasks", count: due || "", module: "sequences" },
+      { id: "sequences", icon: "workflow", label: "Sequences", module: "sequences",
+        count: (s.sequences ?? []).filter((q) => !q.archived_at).length },
+      { header: "pipeline", module: "pipelines" },
+      ...PIPELINES.map(([id, label]) => ({ id, icon: "trending-up", label, count: (h.pipelines ?? {})[id], module: "pipelines" })),
       { header: "browse" },
       { id: "people", icon: "users", label: "People", count: s.people },
       { id: "organizations", icon: "building-2", label: "Organizations", count: h.organizations },
@@ -277,7 +310,7 @@ export default class Nav extends View {
         label: c.name.length <= 21 ? c.name : c.name.slice(0, 20) + "…" })),
       ...(ctx.length ? [{ header: "context" }] : []),
       ...ctx.map(([key, title, icon, st]) => ({ id: `context:${key}`, icon, label: title, ctx: st })),
-    ];
+    ].filter((i) => !i.module || modulesOn().has(i.module));
   }
 
   render() {

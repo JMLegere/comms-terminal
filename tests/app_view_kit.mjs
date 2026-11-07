@@ -38,7 +38,7 @@ const comms = {
   async call(method, params) { calls.push({ method, params }); return answers[method] ?? null; },
   nextEvent: () => new Promise(() => {}), nextCommand: () => new Promise(() => {}), theme: () => ({}),
   shared: (key) => state[key], setShared: (key, value) => { state[key] = value; }, run(c) { ran.push(c); }, open() {},
-  focusMain() {}, mark() {}, toast(m) { toasts.push(m); }, keys: () => ({}), status: () => state.status ?? {},
+  focusMain() {}, mark() {}, toast(m) { toasts.push(m); }, keys: () => ({}), moduleOf: () => null, status: () => state.status ?? {},
   fonts: () => ["Alpha Mono", "Beta Sans"], settings: () => state.settingsFile ?? {}, logTail: () => state.log ?? [],
   setting(key, value) { calls.push({ method: "setting", params: { key, value } }); return true; },
 };

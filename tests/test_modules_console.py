@@ -101,3 +101,56 @@ def test_undo_into_an_off_module_is_refused_and_kept(tmp_path, monkeypatch):  # 
         app.refresh_modules()
     run(app, [offer, "z", back_on, "z"])
     assert inbox.connect(path).execute("SELECT count(*) FROM cases WHERE title = 'Logan onboarding'").fetchone()[0] == 1
+
+
+def app_module_commands() -> list[tuple[str, str]]:
+    """app/src/window.rs MODULE_COMMANDS: (command or view prefix, Module)."""
+    import re
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[1] / "app" / "src" / "window.rs").read_text()
+    block = src[src.index("const MODULE_COMMANDS"):src.index("];", src.index("const MODULE_COMMANDS"))]
+    return re.findall(r'\("([\w.]+)", "(\w+)"\)', block)
+
+
+def app_module(command: str) -> str | None:
+    return next((m for c, m in app_module_commands() if (command.startswith(c) if c.endswith(".") else command == c)), None)
+
+
+def test_console_and_app_tag_the_same_keys_with_the_same_module():  # NFR-MOD-1
+    from test_app_parity import APP
+    for (cls, action), command in APP.items():
+        page = getattr(tui, cls, None)
+        console = tui.target_module(action[4:-2]) if action.startswith("go(") else tui.MODULE_ACTIONS.get(action)
+        if console is None and getattr(page, "MODULE", None):  # a key of a Module's page: the App may route it to a
+            assert app_module(command) in (page.MODULE, None), (cls, action, command)  # Core command (nav.back)
+            continue
+        assert console == app_module(command), f"{cls}.{action} is {console} in the Console, {command} is {app_module(command)} in the App"
+
+
+def test_a_context_source_page_shows_its_problem_last_check_and_scope(tmp_path):  # AS-MOD-8, FR-MOD-16
+    path, _ = seeded(tmp_path)
+    app = Console(path)
+    shown = {}
+
+    async def open_tana(app, pilot):
+        app.source_state["tana"] = "401 Unauthorized"
+        app.source_checked["tana"] = "2026-11-07T14:05:00+00:00"
+        app.main.go("context:tana")
+        await pilot.pause()
+        shown["text"] = str(app.main.current.query_one("#context").render())
+        shown["page"] = type(app.main.current).__name__
+    run(app, [open_tana])
+    assert shown["page"] == "ContextSourcePage"
+    assert "401 Unauthorized" in shown["text"] and "Threads, People, Organizations and Cases" in shown["text"]
+    assert "Sat Nov 7" in shown["text"]
+
+
+def test_the_local_core_draws_the_same_context_source_page(tmp_path):  # FR-MOD-16, NFR-MOD-5
+    from comms_terminal import core
+    db = inbox.connect(str(tmp_path / "x.db"))
+    inbox.migrate(db)
+    inbox.set_module(db, "cases", False)
+    fn = core.QUERIES["context.page"][0]
+    lines = fn(None, db, "tana", "401 Unauthorized", None)["lines"]
+    text = "\n".join("".join(seg[0] for seg in line) for line in lines)
+    assert "401 Unauthorized" in text and "Threads, People and Organizations" in text and "Never." in text

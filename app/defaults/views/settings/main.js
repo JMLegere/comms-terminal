@@ -3,10 +3,16 @@
 // updates, Diagnostics. Every change applies at once (settings.json; no Save step). esc or × closes it.
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
-import { nextCommand, theme, shared, setShared, run, status, keys, fonts, setting, settings, logTail, focusMain, toast } from "comms";
+import { call, nextCommand, theme, shared, setShared, run, status, keys, fonts, setting, settings, logTail, focusMain, toast } from "comms";
 
-const SECTIONS = [["look", "Look", "monitor"], ["keys", "Keys", "file-text"], ["service", "Service & updates", "server"],
-  ["diagnostics", "Diagnostics", "layers"]];
+const SECTIONS = [["look", "Look", "monitor"], ["modules", "Modules", "folder"], ["keys", "Keys", "file-text"],
+  ["service", "Service & updates", "server"], ["diagnostics", "Diagnostics", "layers"]];
+/** Settings › Modules (FR-MOD-13): each Module and what hides while it is off, worded as the Console's MODULE_LINES. */
+export const MODULES = [
+  ["pipelines", "Pipelines", "Revenue, Fundraising and Talent; Stages and Values; Unattended on Today"],
+  ["sequences", "Sequences", "Sequences, Tasks and Enrollments; Tasks and Paused on Today and the Calendar"],
+  ["cases", "Cases", "Cases in the rail, Case headers in Threads lists, the case key"],
+];
 /** Settings › Service & updates: the update step (shared "update", window.rs prepare_update) in words. */
 export const UPDATE_STEP = { building: "Building in the background", ready: "Ready · opens when you restart",
   failed: "Failed to build · see Diagnostics", unmanaged: "No launcher · reinstall the App" };
@@ -49,6 +55,7 @@ export default class Settings extends View {
     if (name === "open") {
       const asked = at < 0 ? null : JSON.parse(c.slice(at + 1)).section;
       setShared("settings", { section: SECTIONS.some(([id]) => id === asked) ? asked : shared("settings")?.section ?? "look" });
+      this.turned = {};
       this.loadLog();
       return cx.notify();
     }
@@ -152,6 +159,33 @@ export default class Settings extends View {
       .when(!differ, (el) => el.child(div().text_color(t.dim).child("Up to date with the Service.")));
   }
 
+  modules(t) {
+    const on = new Set(shared("modules") ?? MODULES.map(([m]) => m));
+    for (const [m, v] of Object.entries(this.turned ?? {})) v ? on.add(m) : on.delete(m); // shown before the copy follows
+    return v_flex().gap(8)
+      .child(this.title(t, "For this Service", "Every Client shows the same. An off Module hides everywhere; its data is kept."))
+      .children(MODULES.map(([m, name, line]) => h_flex().id(`module-${m}`).gap(12).items_center().py(6)
+        .child(v_flex().flex_1().min_w(0).child(div().font_semibold().child(name)).child(div().text_color(t.dim).child(line)))
+        .child(div().id(`module-${m}-switch`).w(56).flex_none().py(4).rounded(6).border(1).border_color(t.border)
+          .flex().justify_center().cursor_pointer().when(on.has(m), (e) => e.bg(t.selected)).hover((e) => e.bg(t.hover))
+          .on_click((_e, cx) => this.turn(m, name, !on.has(m), cx)).child(on.has(m) ? "On" : "Off"))));
+  }
+
+  /** One write through the Local core; z undoes it, as every change in the App (FR-MOD-13). */
+  turn(m, name, value, cx) {
+    this.turned = { ...this.turned, [m]: value };
+    cx.notify();
+    call("command.inbox.set_module", { module: m, enabled: value }).then(() => {
+      const message = `${name} turned ${value ? "on" : "off"}.`;
+      setShared("undo", { message, module: m, steps: [["inbox.set_module", { module: m, enabled: !value }]] });
+      toast(`${name} turned ${value ? "on" : "off"} · z undo`);
+    }).catch((e) => {
+      delete this.turned[m];
+      toast(`Not saved: ${e}`, "error");
+      cx.notify();
+    });
+  }
+
   diagnostics(t) {
     const log = this.log ?? [];
     const keysRows = log.filter((e) => e.kind === "key").slice(-50).reverse();
@@ -192,7 +226,8 @@ export default class Settings extends View {
     const t = theme();
     if (!shared("settings")) return div();
     const at = this.section();
-    const body = at === "keys" ? this.keys(t) : at === "service" ? this.service(t) : at === "diagnostics" ? this.diagnostics(t) : this.look(t);
+    const body = at === "keys" ? this.keys(t) : at === "modules" ? this.modules(t) : at === "service" ? this.service(t)
+      : at === "diagnostics" ? this.diagnostics(t) : this.look(t);
     return div().size_full().flex().justify_center().pt(60).bg("#00000033")
       .on_mouse_down("left", (_e, cx) => this.command("close", cx))
       .child(h_flex().id("settings").w(860).h(620).rounded(10).border(1).border_color(t.border).bg(t.background)

@@ -3061,14 +3061,15 @@ def thread_view(db, thread_id: int, files: tuple[str, int] | None = None) -> dic
             pid = db.execute("SELECT person_id FROM identities WHERE id = ?", (first,)).fetchone()[0]
             person = person_view(db, pid, every) if pid else None
         people, others, orgs = _participants(db, acts, every)
-        case = db.execute("SELECT title FROM cases WHERE id = ?", (t.case_id,)).fetchone() if t.case_id else None
+        cases_on = "cases" in modules_on(db)  # Cases off: no Case on the Thread page in either Client (ADR 0017)
+        case = db.execute("SELECT title FROM cases WHERE id = ?", (t.case_id,)).fetchone() if t.case_id and cases_on else None
         platform = platforms.PLATFORMS[ch["platform"]]
         msgs = [_shaped(db, m, platform, ch, files) for m in msgs]
         audit = [dict(r) for r in db.execute(
             "SELECT l.*, c.title AS case_title FROM audit_log l JOIN threads t ON t.id = l.thread_id"
             " LEFT JOIN cases c ON c.id = l.case_id WHERE COALESCE(t.merged_into, t.id) = ?"
-            " ORDER BY l.occurred_at, l.id", (thread_id,))]
-        return {"thread": t, "channel": dict(ch), "messages": msgs, "audit": audit, "person": person, "people": people,
+            " ORDER BY l.occurred_at, l.id", (thread_id,)) if cases_on or r["kind"] != "CASE"]
+        return {"thread": t, "cases_on": cases_on, "channel": dict(ch), "messages": msgs, "audit": audit, "person": person, "people": people,
                 "others": others, "organizations": orgs, "members": snapshot(db, thread_id)["_members"],
                 "link": next((m["link"] for m in reversed(msgs) if m["link"]), None),
                 "case": case["title"] if case else None, "where": _where(ch, None) if ch["kind"] != "mailbox" else "email"}

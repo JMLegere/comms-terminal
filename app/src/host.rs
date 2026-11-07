@@ -245,6 +245,9 @@ pub fn module(origin: &'static str, commands: async_channel::Receiver<String>) -
             let keys = crate::workspace::read_json(&crate::workspace::home(), "keys.json").unwrap_or(Value::Null);
             Ok(to_host(&keys))
         })
+        .function("moduleOf", |args| {
+            Ok(crate::window::module_of(args.string(0)?).map_or(HostValue::Null, |m| to_host(&Value::String(m.into()))))
+        })
         .function("focusMain", |_| {
             if let Some(tx) = REQUESTS.get() {
                 let _ = tx.try_send(Request::Focus);

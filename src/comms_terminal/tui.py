@@ -838,13 +838,7 @@ class Rail(OptionList):
         self.highlighted = None
 
     def on_option_list_option_selected(self, event):
-        if event.option.id.startswith("context:"):  # no page of its own; its context shows on each page
-            key = event.option.id.split(":", 1)[1]
-            title, state = CONTEXT_SOURCES[key][0], self.app.source_state[key]
-            self.app.notify(f"{title} is connected." if state == "ok" else f"Checking {title}…" if state == "checking"
-                            else f"{title} unavailable: {state}")
-            return
-        self.app.main.go(event.option.id)
+        self.app.main.go(event.option.id)  # a Context source opens its own page (FR-MOD-16)
 
 
 class ClickTable(DataTable):
@@ -2288,7 +2282,9 @@ def details_markup(v, db, related=None) -> str:
     case = f"[@click=app.open_case({t.case_id!r})][underline]{escape(v['case'])}[/][/]" if t.case_id else (
         "[#928374]none · [/][@click=app.thread('case')][underline]add to a case[/][/] [#928374](l)[/]")
     kind = v["channel"]["kind"]
-    lines += ["", head("case", "case"), case, "", f"[#928374]{ICON.get(kind, ICON['channel'])} channel[/]", escape(v["where"])]
+    if v.get("cases_on", True):
+        lines += ["", head("case", "case"), case]
+    lines += ["", f"[#928374]{ICON.get(kind, ICON['channel'])} channel[/]", escape(v["where"])]
     if p and (section := sequence_section(db, p["id"], keys=False)):  # FR-SEQ-19; its keys are on the Person page
         lines += ["", section]
     return "\n".join(lines + (related_markup(db, v) if related is None else related))
@@ -2474,6 +2470,7 @@ class ContextSection(Static):
             return
         connected = ctx is not None or error is not None
         self.app.source_state[self.source] = error or ("ok" if connected else None)
+        self.app.source_checked[self.source] = clock.iso(clock.now())
         self.app.main.refresh_chrome()
         self.display = connected
         if connected:
@@ -2580,7 +2577,8 @@ class ThreadView(Horizontal):
         head = thread_head(v)
         if self.has_class("narrow"):  # properties column hidden: keep who, where, and case under the title
             p = v["person"]
-            bits = [escape(p["name"]) if p else "", escape(v["where"]), escape(v["case"]) if v["thread"].case_id else "no case (l)"]
+            bits = [escape(p["name"]) if p else "", escape(v["where"]),
+                    "" if not v.get("cases_on", True) else escape(v["case"]) if v["thread"].case_id else "no case (l)"]
             head += "\n[#928374]" + " · ".join(b for b in bits if b) + "[/]"
         self.query_one(".thead").update(head + "\n")
         if details or getattr(self, "related", None) is None:
@@ -2626,7 +2624,7 @@ def thread_text(v, raw=None, context=None) -> str:
     lines = [f"# {t.title}", "",
              f"- Thread: {t.id} · {PLATFORMS[ch['platform']].title} · {v['where']}" + (f" · {v['link']}" if v["link"] else ""),
              f"- Status: {t.status} / {t.status_detail}" + (f" until {end}" if t.status == "SNOOZED" and end else ""),
-             f"- Case: {v['case'] or 'none'}",
+             *([f"- Case: {v['case'] or 'none'}"] if v.get("cases_on", True) else []),
              f"- People: {'; '.join(people + (v.get('others') or [])) or 'none'}",
              f"- Organizations: {', '.join(v.get('organizations') or []) or 'none'}", "", "## Messages"]
     for m in v["messages"]:
@@ -3684,7 +3682,8 @@ class OrganizationPage(ThreadListPage):
         people = inbox.organization_view(self.app.db, self.domain)["people"]
         emails = [i["value"] for p in people for i in p["identities"] if i["kind"] == "email"]
         o = self.org()
-        self.app.main.show_side((pipeline_section(self.app.db, o["id"]) + "\n\n" if o else "") + "\n\n".join(
+        pipe = pipeline_section(self.app.db, o["id"]) if o else ""  # empty while Pipelines is off (ADR 0017)
+        self.app.main.show_side((pipe + "\n\n" if pipe else "") + "\n\n".join(
             f"[@click=app.open_person({p['id']!r})][b underline]{escape(p['name'])}[/][/]\n"
             + "\n".join(f"[#928374]{ICON[IDENTITY_ICON[i['kind']]]} {escape(i['value'])}[/]"
                         for i in p["identities"])
@@ -3779,7 +3778,10 @@ def set_org_value(app, org: dict):
 
 
 def pipeline_section(db, org_id: int, person: bool = False) -> str:
-    """The Organization page's Pipeline section (FR-PL-26), or a Person's (person=True; ADR 0016)."""
+    """The Organization page's Pipeline section (FR-PL-26), or a Person's (person=True; ADR 0016); none while
+    Pipelines is off (ADR 0017)."""
+    if "pipelines" not in inbox.modules_on(db):
+        return ""
     g, now = PALETTE["grey1"], clock.now()
     out = [f"[b]{ICON['pipeline']} Pipeline[/]"]
     for p, s in (pipeline.current(db, person_id=org_id) if person else pipeline.current(db, org_id)).items():
@@ -3914,6 +3916,7 @@ def card(o: dict, now, valued: bool = True) -> str:
 class BoardColumn(OptionList):
     """One Stage's Organizations or People on the Pipeline board: enter opens one; s and v set its Stage and Value;
     ←/→ move to the next Stage."""
+    MODULE = "pipelines"  # a widget of a Pipelines page (ADR 0017)
     BINDINGS = [Binding("j", "cursor_down", show=False), Binding("k", "cursor_up", show=False),
                 Binding("s", "stage", "stage"), Binding("v", "value", "value")]
 
@@ -4123,13 +4126,15 @@ class PersonPage(Page):
                             for t in p["threads"]) or "—"
         orgs = ", ".join(f"[@click=app.open_org('{o}')][underline]{escape(o)}[/][/]" for o in p["organizations"]) or "—"
         section = sequence_section(self.app.db, self.person_id)
-        held = pipeline.current(self.app.db, person_id=self.person_id)  # Fundraising and Talent (ADR 0016)
+        held = pipeline_section(self.app.db, self.person_id, person=True) if pipeline.current(
+            self.app.db, person_id=self.person_id) else ""  # Fundraising and Talent (ADR 0016)
+        cases = (f"\n\n[#928374]{ICON['cases']} cases[/]\n{escape(', '.join(p['cases']) or '—')}"
+                 if "cases" in self.app.modules else "")
         self.query_one("#prest").update(
-            (f"\n{pipeline_section(self.app.db, self.person_id, person=True)}\n" if held else "") +
+            (f"\n{held}\n" if held else "") +
             (f"\n{section}\n" if section else "") +
             f"\n[#928374]{ICON['organizations']} organizations[/]\n{orgs}\n\n"
-            f"[#928374]{ICON['threads']} threads[/]\n{threads}\n\n"
-            f"[#928374]{ICON['cases']} cases[/]\n{escape(', '.join(p['cases']) or '—')}")
+            f"[#928374]{ICON['threads']} threads[/]\n{threads}" + cases)
         load_context(self, [i["value"] for i in p["identities"] if i["kind"] == "email"],
                                          p["organizations"])
 
@@ -4312,6 +4317,44 @@ def connection_markup(c) -> str:
             f"[#928374]last health check[/]\n{stamp(c['probed_at']) or 'Never.'}\n\n[#928374]problem[/]\n{escape(detail)}")
 
 
+def context_markup(key: str, state: str | None, checked_at: str | None, cases: bool = True) -> str:
+    """A Context source page (FR-MOD-16), as a Connection page: its name and state, what it adds context to, the last
+    check and the problem. `state` is "ok", "checking", None (not connected) or the error."""
+    title, icon = CONTEXT_SOURCES[key][:2]
+    shown = (f"[#6c782e]{ICON['ok']} OK[/]" if state == "ok" else "[#928374]… CHECKING[/]" if state == "checking"
+             else f"[#c14a4a]{ICON['broken']} {'BROKEN' if state else 'NOT CONNECTED'}[/]")
+    scope = "Threads, People, Organizations and Cases" if cases else "Threads, People and Organizations"
+    detail = "None." if state in ("ok", "checking") else state or "It is not set up on the inbox service."
+    return (f"[b]{ICON[icon]} {title}[/]  {shown}\nA Context source: it shows read-only context beside pages and holds"
+            f" no Threads.\n\n[#928374]adds context to[/]\n{scope}\n\n"
+            f"[#928374]last check[/]\n{stamp(checked_at) or 'Never.'}\n\n[#928374]problem[/]\n{escape(detail)}")
+
+
+class ContextSourcePage(Page):
+    """One Context source (FR-MOD-16): read-only, opened from its rail row."""
+    BINDINGS = [Binding("escape", "back", "back")]
+
+    def __init__(self, key):
+        super().__init__()
+        self.key, self.RAIL, self.TITLE = key, f"context:{key}", f"{ICON[CONTEXT_SOURCES[key][1]]} context source"
+
+    def compose(self) -> ComposeResult:
+        yield Static(id="context")
+
+    def on_mount(self):
+        self.refresh_data()
+        self.can_focus = True
+        self.focus()
+
+    def refresh_data(self):
+        app = self.app
+        self.query_one("#context").update(context_markup(self.key, app.source_state.get(self.key),
+                                                         app.source_checked.get(self.key), "cases" in app.modules))
+
+    def action_back(self):
+        self.app.main.back()
+
+
 class ConnectionPage(Page):
     @property
     def RAIL(self):
@@ -4439,6 +4482,7 @@ class StatusLine(Static):
         mode = VIEW_NAMES[app.view].upper() if sec.startswith("view:") else (
             f"CASES · {inbox.CASE_VIEWS[app.case_view].upper()}" if sec.startswith("cases:") else
             "CONNECTION" if sec.startswith("conn:") else
+            f"CONTEXT · {CONTEXT_SOURCES[sec.split(':')[1]][0].upper()}" if sec.startswith("context:") else
             f"PIPELINE · {sec.split(':')[1].upper()}" if sec.startswith("pipeline:") else sec.upper())
         if sec == "today" and main.list is not None and main.list.KIND and main.list.selectable_rows():
             mode += f" › {main.list.KIND.upper()}"
@@ -4800,7 +4844,10 @@ def props_head(icon_name: str, text: str) -> str:
 
 
 def sequence_section(db, person_id: int, keys: bool = True) -> str:
-    """One block per Enrollment, live first: state, day, the next Task, and the Tasks timeline (FR-SEQ-19)."""
+    """One block per Enrollment, live first: state, day, the next Task, and the Tasks timeline (FR-SEQ-19); none
+    while Sequences is off (ADR 0017)."""
+    if "sequences" not in inbox.modules_on(db):
+        return ""
     blocks = []
     for e in sequences.enrollments(db, person_id):
         if e["state"] == "FINISHED":
@@ -5366,6 +5413,7 @@ class TasksPage(Page):
 
 
 class SequencesTable(ClickTable):
+    MODULE = "sequences"  # a widget of a Sequences page (ADR 0017)
     BINDINGS = [Binding("enter", "steps", "Steps"), Binding("n", "new_sequence", "new Sequence"),
                 Binding("a", "archive", "archive / restore"), Binding("x", "delete_sequence", "delete"),
                 Binding("R", "rename", "rename"), Binding("w", "describe", "use when"),
@@ -5394,6 +5442,7 @@ class SequencesTable(ClickTable):
 
 
 class StepsTable(ClickTable):
+    MODULE = "sequences"  # a widget of a Sequences page (ADR 0017)
     BINDINGS = [Binding("escape", "sequences", "Sequences"), Binding("enter", "edit", "edit"),
                 Binding("n", "new_step", "new Step"), Binding("x", "delete_step", "delete Step"),
                 Binding("J", "move(1)", "move", key_display="J/K"), Binding("K", "move(-1)", show=False)]
@@ -6803,6 +6852,9 @@ class MainScreen(Screen):
             self.stack = [lambda: PipelinePage(p)]
         elif target == "settings":
             self.stack = [SettingsPage]
+        elif target.startswith("context:"):
+            key = target.split(":", 1)[1]
+            self.stack = [lambda: ContextSourcePage(key)]
         else:
             self.stack = [SECTIONS[target]]
         self._show()
@@ -7025,6 +7077,7 @@ class Console(App):
         # "checking", "ok", or the error
         self.sources = {k: f for k, f in (sources or {}).items() if f}
         self.source_state = {k: "checking" for k in self.sources}
+        self.source_checked = {}  # key -> ISO time of the last answer, for its Context source page (FR-MOD-16)
         self.case_view = 0  # the Cases section's Status view (#120)
         self.people_collapsed = set()  # People list letters folded shut
         self.undo = None  # (message, restore) for the last change
@@ -7222,6 +7275,7 @@ class Console(App):
         def show():
             if self.source_state[key] == "checking":  # a page's fetch may have answered first
                 self.source_state[key] = state
+            self.source_checked[key] = clock.iso(clock.now())
             self.main.refresh_chrome()
         self.call_from_thread(show)
 

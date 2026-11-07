@@ -76,7 +76,7 @@ APP = {
     ("MainScreen", "go('today')"): "nav.today", ("MainScreen", "go('drafts')"): "nav.drafts",
     ("MainScreen", "go('people')"): "nav.people", ("MainScreen", "go('organizations')"): "nav.organizations",
     ("MainScreen", "go('cases:0')"): "nav.cases", ("MainScreen", "go('channels')"): "nav.channels",
-    ("TablePage", "back"): "nav.back", ("PersonPage", "back"): "nav.back", ("ConnectionPage", "back"): "nav.back",
+    ("TablePage", "back"): "nav.back", ("PersonPage", "back"): "nav.back", ("ConnectionPage", "back"): "nav.back", ("ContextSourcePage", "back"): "nav.back",
     ("CasePage", "back"): "nav.back", ("MonthGrid", "back"): "calendar.escape", ("EventPage", "back"): "nav.back",
     ("MainScreen", "back"): "nav.back",
     ("MainScreen", "focus_pane(-1)"): "nav.focus_left", ("MainScreen", "focus_pane(1)"): "nav.focus_right",

@@ -474,6 +474,13 @@ impl AppWindow {
         } {
             return scroll_thread(step, window, cx);
         }
+        if let Some(module) = module_of(command) {
+            let on = host::shared("modules"); // shell.summary's Modules, set by the rail (ADR 0017)
+            if on.as_array().is_some_and(|on| !on.iter().any(|m| m.as_str() == Some(module))) {
+                let name = MODULE_NAMES.iter().find(|(m, _)| *m == module).map_or(module, |(_, n)| n);
+                return toast(&format!("{name} is disabled · turn it on in Settings"), "warning");
+            }
+        }
         if let Some((view, cmd)) = command.split_once('.') {
             if let Some(copy) = self.copies.get(view) {
                 let _ = copy.commands.try_send(cmd.to_string());
@@ -840,6 +847,24 @@ fn scroll_thread(step: f32, window: &mut Window, cx: &mut Context<AppWindow>) {
 }
 
 /// A toast in the views, as the core's own toasts arrive.
+/// The App commands that belong to a Module (ADR 0017): a whole view's prefix, or one command on a Core view.
+/// tests/test_app_parity.py checks this table against the Console's MODULE_ACTIONS and Module pages.
+const MODULE_COMMANDS: &[(&str, &str)] = &[
+    ("cases.", "cases"), ("case.", "cases"), ("thread.case", "cases"), ("nav.cases", "cases"),
+    ("tasks.", "sequences"), ("task.", "sequences"), ("sequences.", "sequences"), ("sequence.", "sequences"),
+    ("person.enroll", "sequences"), ("person.resume", "sequences"), ("person.finish", "sequences"),
+    ("today.r", "sequences"), ("today.f", "sequences"),
+    ("pipeline.", "pipelines"), ("person.stage", "pipelines"), ("person.value", "pipelines"),
+    ("organization.stage", "pipelines"), ("organization.value", "pipelines"),
+];
+const MODULE_NAMES: &[(&str, &str)] = &[("pipelines", "Pipelines"), ("sequences", "Sequences"), ("cases", "Cases")];
+
+/// The Module a command needs, if any.
+pub fn module_of(command: &str) -> Option<&'static str> {
+    MODULE_COMMANDS.iter().find(|(c, _)| if c.ends_with('.') { command.starts_with(c) } else { command == *c })
+        .map(|(_, m)| *m)
+}
+
 fn toast(message: &str, severity: &str) {
     host::broadcast(&serde_json::json!({"kind": "toast", "data": {"message": message, "severity": severity}}));
 }

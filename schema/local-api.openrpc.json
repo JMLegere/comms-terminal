@@ -2376,6 +2376,48 @@
    }
   },
   {
+   "name": "context.page",
+   "summary": "One Context source as the Console's ContextSourcePage draws it (FR-MOD-16), as segment lines. Its state and the time of its last check are the App's own (each Client checks its sources).",
+   "params": [
+    {
+     "name": "source",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
+    {
+     "name": "state",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
+    {
+     "name": "checked",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
    "name": "context.section",
    "summary": "A Context source's section (Attio, Tana, Linear) drawn as the Console draws it, or null.",
    "x-panel": false,
