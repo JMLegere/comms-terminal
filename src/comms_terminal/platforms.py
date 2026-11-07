@@ -205,6 +205,7 @@ CONTEXT = tuple(n for n, p in PLATFORMS.items() if "context" in p.kinds)  # Line
 
 def kind_of(connection) -> str:
     """A Connection's kind (ADR 0018): stored where one account backs two, else its Platform's only kind."""
-    return connection["kind"] or PLATFORMS[connection["platform"]].kind
+    platform = PLATFORMS.get(connection["platform"])  # a newer Service's Platform: no kind known here
+    return connection["kind"] or (platform.kind if platform else None)
 
 EMAIL = tuple(n for n, p in PLATFORMS.items() if p.format == "email")

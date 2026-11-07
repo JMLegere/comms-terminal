@@ -89,6 +89,7 @@ DROP TABLE connections;
 ALTER TABLE connections_old RENAME TO connections;
 CREATE UNIQUE INDEX connections_inbound ON connections (inbound);
 PRAGMA legacy_alter_table = OFF;""",
+    37: "DROP TABLE modules;",
     36: """PRAGMA foreign_keys = OFF; PRAGMA legacy_alter_table = ON;
 INSERT OR IGNORE INTO organizations (domain, name, created_at)
 SELECT 'person-' || p.id || '.sole', p.display_name, min(l.recorded_at) FROM pipeline_log l JOIN persons p ON p.id = l.person_id

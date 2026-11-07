@@ -434,6 +434,11 @@ CREATE TABLE applied_mutations (  -- each laptop write applied once, by its clie
   PRIMARY KEY (client_id, mutation_id)
 ) STRICT;
 
+CREATE TABLE modules (  -- each Module's setting for this Service; no row means off, so a new Service starts inbox-only
+  id      TEXT PRIMARY KEY CHECK (id IN ('pipelines', 'sequences', 'cases')),
+  enabled INTEGER NOT NULL CHECK (enabled IN (0, 1))
+) STRICT;
+
 -- Issues (ADR 0019): the copy of Jeremy's assigned Issues and their teams' statuses
 CREATE TABLE issue_statuses (  -- each team's statuses on an Issue connection's Platform (ADR 0019); issues.py
   id            TEXT PRIMARY KEY NOT NULL,  -- the Platform's own id

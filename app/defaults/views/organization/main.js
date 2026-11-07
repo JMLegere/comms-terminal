@@ -103,7 +103,8 @@ export default class Organization extends View {
   target() {
     if (!this.page || !["organizations", "organization"].includes(shared("page")) || shared("focus") !== "detail") return;
     const ths = this.threads(), th = ths[this.at], l = this.links?.[this.at - ths.length];
-    const acts = [["s", "stage"], ["v", "value"], ["p", "people"]];
+    const pipelines = (shared("modules") ?? ["pipelines"]).includes("pipelines"); // off: no Stage keys (ADR 0017)
+    const acts = [...(pipelines ? [["s", "stage"], ["v", "value"]] : []), ["p", "people"]];
     if (th) setShared("target", { col: "detail", label: `Thread · ${th.title ?? ""}`, keys: [["enter", "open"], ...acts] });
     else if (l) setShared("target", { col: "detail", label: `${KIND[l.link.split(":")[0]] ?? "Link"} · ${l.text.trim()}`,
       keys: [["enter", "open"], ...acts] });

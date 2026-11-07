@@ -204,8 +204,8 @@ def test_linear_context_and_match_evidence_on_all_four_surfaces(tmp_path, surfac
 
 @pytest.mark.parametrize("outcome", ["ok", "error", "disconnected"])
 def test_linear_health_shows_as_its_context_connection(tmp_path, outcome):
-    """ADR 0018: Linear's health is its Context connection's, listed under connections like any other; the
-    page's section still says when its answer failed."""
+    """ADR 0018, FR-MOD-16: Linear's Context connection is listed once, under context with its own page, not again
+    under connections; the page's section still says when its answer failed."""
     path, ids = seeded(tmp_path)
     if outcome != "disconnected":
         db = inbox.connect(path)
@@ -228,11 +228,11 @@ def test_linear_health_shows_as_its_context_connection(tmp_path, outcome):
         rail = app.main.rail
         option_ids = [rail.get_option_at_index(i).id for i in range(rail.option_count)]
         footer = str(app.main.query_one("#statusline").render())
-        assert not any((o or "").startswith("context:") for o in option_ids)  # no separate context section
+        assert f"conn:{cid}" not in option_ids if outcome != "disconnected" else True  # listed once, under context
         if outcome == "disconnected":
             assert not current.display and "Linear broken" not in footer
             return
-        prompt = str(rail.get_option(f"conn:{cid}").prompt)
+        prompt = str(rail.get_option("context:linear").prompt)
         assert "Linear" in prompt and ICON["task"] in prompt and current.display
         if outcome == "error":
             assert ICON["broken"] in prompt and "Linear broken" in footer

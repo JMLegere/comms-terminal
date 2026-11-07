@@ -449,7 +449,7 @@ _Avoid_: Transaction, Request, Call
 ## Clients
 
 **Service**:
-The process on Oracle that is the only writer of the live database and holds every secret. It ingests, sends, and answers the laptop's sync.
+The process that is the only writer of one user's live database and holds its secrets. It ingests, sends, and answers the laptop's sync. Jeremy's Service runs on Oracle; each other user has their own.
 _Avoid_: Server, Backend, Daemon
 
 **Client**:
@@ -495,3 +495,17 @@ _Avoid_: Config, Preferences
 **Panel**:
 A small script, kept in the Interface files, that draws one part of the App and acts through the Local API with the Panel Origin.
 _Avoid_: Mod, Plugin, Widget, Extension
+
+## Modules
+
+**Module**:
+A named part of Comms Terminal that a Service's user can turn on or off for that Service: Pipelines, Sequences (with their Tasks and Enrollments), or Cases. An off Module is hidden in the Console and the App, its CLI commands say it is disabled, and its data is kept.
+_Avoid_: Feature, Plugin, Extension, Section, Toggle
+
+**Core**:
+The parts of Comms Terminal that are always on and are not Modules: Connections (Context connections and Issue connections among them), Issues, the Action Queue, Threads, People, Organizations and Channels, with Today, Calendar and Drafts.
+_Avoid_: Base, Required modules
+
+**Module setting**:
+Whether one Module is on or off for one Service. Every Client of that Service reads the same value.
+_Avoid_: Flag, Toggle, Preference

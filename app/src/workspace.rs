@@ -52,6 +52,7 @@ const DEFAULTS: &[(&str, &str, bool)] = &[
     ("views/cases/main.js", include_str!("../defaults/views/cases/main.js"), true),
     ("views/channels/main.js", include_str!("../defaults/views/channels/main.js"), true),
     ("views/connection/main.js", include_str!("../defaults/views/connection/main.js"), true),
+    ("views/context/main.js", include_str!("../defaults/views/context/main.js"), true),
     ("views/draft/main.js", include_str!("../defaults/views/draft/main.js"), true),
     ("views/draft/composer.js", include_str!("../defaults/views/composer.js"), true), // the one Composer, beside each view that imports it
     ("views/side/main.js", include_str!("../defaults/views/side/main.js"), true),
@@ -124,6 +125,7 @@ pub fn write(home: &Path) -> std::io::Result<()> {
 /// FNV-1a hashes of every earlier shipped version of the files Jeremy may edit. Add the old hash here whenever one of
 /// those shipped files changes, so installed Apps take the new version.
 const PREVIOUS: &[(&str, u64)] = &[
+    ("layouts/main.json", 0x67fba9630500596c),
     ("layouts/main.json", 0xb363995d330f6414),
     ("layouts/main.json", 0x4e2034e653395857),
     ("layouts/main.json", 0x085901ebea1c6a70),

@@ -91,10 +91,12 @@ export default class Person extends View {
     const p = this.page?.person;
     if (!p || !["people", "person"].includes(shared("page")) || shared("focus") !== "detail") return;
     const ids = p.identities ?? [], i = ids[this.at], l = this.links?.[this.at - ids.length];
+    const on = shared("modules") ?? ["pipelines", "sequences"]; // an off Module's keys are not offered (ADR 0017)
+    const enroll = on.includes("sequences") ? [["s", "enroll"]] : [], stage = on.includes("pipelines") ? [["p", "stage"]] : [];
     if (i) setShared("target", { col: "detail", label: `Identity · ${i.value}`, keys: [["b", i.blocked ? "unblock" : "block"],
-      ["x", "remove"], ["a", "add"], ["s", "enroll"], ["p", "stage"], ["o", "organizations"], ["n", "rename"]] });
+      ["x", "remove"], ["a", "add"], ...enroll, ...stage, ["o", "organizations"], ["n", "rename"]] });
     else if (l) setShared("target", { col: "detail", label: `${KIND[l.link.split(":")[0]] ?? "Link"} · ${l.text.trim()}`,
-      keys: [["enter", "open"], ["s", "enroll"], ["n", "rename"]] });
+      keys: [["enter", "open"], ...enroll, ["n", "rename"]] });
   }
 
   pick(title, options, reply, prompt, value, body) {

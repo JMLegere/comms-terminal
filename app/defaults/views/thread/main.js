@@ -766,7 +766,8 @@ export default class Thread extends View {
         .on_click(() => open(v.link)).child(`${I[plat[1]] ?? ""} ${plat[2] ? `open in ${plat[0]}` : "join the meeting"} ${I.open} (o)`)))
       .when(v.channel?.kind === "meeting", (el) => el.child(div().text_size(12).text_color(t.dim).child(`${I.calendar} i respond`)))
       .when(narrow(), (el) => el.child(div().text_color("#928374")
-        .child([v.person?.name ?? "", v.where ?? "", th.case_id ? v.case ?? "" : "no case (l)"].filter(Boolean).join(" · "))));
+        .child([v.person?.name ?? "", v.where ?? "", v.cases_on === false ? "" : th.case_id ? v.case ?? "" : "no case (l)"]
+          .filter(Boolean).join(" · "))));
   }
 
   /** The properties column: Status, people, Organizations, Case, channel, related Threads, Context (details_markup). */
@@ -810,9 +811,11 @@ export default class Thread extends View {
       for (const o of orgs) col.child(known.has(o) ? link(`o-${o}`, o, push({ page: "organization", organization: { domain: o } }))
         : div().truncate().text_color(t.dim).child(o));
     }
-    col.child(head("case", "case")).child(th.case_id ? link("case", v.case ?? "", push({ page: "case", case: th.case_id }))
-      : h_flex().gap(4).child(div().text_color(t.dim).child("none ·"))
-        .child(link("add-case", "add to a case", (_e, cx) => this.command("case", cx))).child(div().text_color(t.dim).child("(l)")));
+    if (v.cases_on !== false) { // Cases off: no Case section (ADR 0017)
+      col.child(head("case", "case")).child(th.case_id ? link("case", v.case ?? "", push({ page: "case", case: th.case_id }))
+        : h_flex().gap(4).child(div().text_color(t.dim).child("none ·"))
+          .child(link("add-case", "add to a case", (_e, cx) => this.command("case", cx))).child(div().text_color(t.dim).child("(l)")));
+    }
     col.child(head("channel", "channel")).child(div().truncate().child(v.where ?? ""));
     for (const sec of this.related ?? []) {
       col.child(head(sec.kind, sec.title));

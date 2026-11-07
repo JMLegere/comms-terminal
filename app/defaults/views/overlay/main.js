@@ -10,7 +10,7 @@
 // in one list by the core's `search` (typos forgiven, recent picks first). Enter runs the command or opens the record.
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
-import { call, nextCommand, theme, shared, setShared, run, focusMain, keys } from "comms";
+import { call, nextCommand, theme, shared, setShared, run, focusMain, keys, moduleOf } from "comms";
 
 // Plain names for commands, by App command (the Console's binding descriptions); others are named from their id.
 const LABEL = {
@@ -43,11 +43,11 @@ const cap = (s) => s ? s[0].toUpperCase() + s.slice(1) : s;
 /** The commands the Palette offers on `page`: [{ id, label, key, group }], each command once with its first key.
  * Today binds raw keys that act on the focused row (`today.e`): those take their names from the focused element
  * (`target`, as the bottom bar shows it), and keys that row does not take are left out. */
-export function paletteCommands(k, page, target) {
+export function paletteCommands(k, page, target, allowed = () => true) {
   const out = new Map();
   for (const section of [`page:${page}`, "global"])
     for (const [key, id] of Object.entries(k[section] ?? {})) {
-      if (out.has(id) || MOVES.test(id) || id === "overlay.palette") continue;
+      if (out.has(id) || MOVES.test(id) || id === "overlay.palette" || !allowed(id)) continue;
       const [view, cmd] = id.split(".");
       if (view === "today" && cmd === key) {
         const named = (target?.keys ?? []).find(([kk]) => kk === key);
@@ -114,7 +114,9 @@ export default class Overlay extends View {
 
   /** / and ctrl-shift-p: the Palette over this page's commands and every record. */
   palette() {
-    this.commands = paletteCommands(keys() ?? {}, shared("page") ?? "today", shared("target"));
+    const on = shared("modules"); // an off Module's commands are not offered (ADR 0017)
+    this.commands = paletteCommands(keys() ?? {}, shared("page") ?? "today", shared("target"),
+      (id) => { const m = moduleOf(id); return !m || !on || on.includes(m); });
     setShared("picker", { title: "Search · commands, People, Organizations, Threads, messages, Events", palette: true, options: [] });
   }
 

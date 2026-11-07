@@ -18,6 +18,7 @@ THREAD = "<module>"  # THREAD_KEYS: the module-level Thread keys every Thread pa
 SCROLLS = "Panes scroll with the wheel or trackpad"  # the Thread takes space/pgdn/pgup (D55); other pages are Phase 5 and 6
 
 APP = {
+    ("MainScreen", "go('settings')"): "settings.open",
     (THREAD, "reply('sender')"): "thread.reply_sender", (THREAD, "reply('all')"): "thread.reply_all",
     (THREAD, "done"): "thread.done", (THREAD, "pause"): "thread.snooze", (THREAD, "block_sender"): "thread.block",
     (THREAD, "ignore"): "thread.ignore", (THREAD, "case"): "thread.case", (THREAD, "status"): "thread.status",
@@ -80,7 +81,7 @@ APP = {
     ("MainScreen", "go('today')"): "nav.today", ("MainScreen", "go('drafts')"): "nav.drafts",
     ("MainScreen", "go('people')"): "nav.people", ("MainScreen", "go('organizations')"): "nav.organizations",
     ("MainScreen", "go('cases:0')"): "nav.cases", ("MainScreen", "go('channels')"): "nav.channels",
-    ("TablePage", "back"): "nav.back", ("PersonPage", "back"): "nav.back", ("ConnectionPage", "back"): "nav.back",
+    ("TablePage", "back"): "nav.back", ("PersonPage", "back"): "nav.back", ("ConnectionPage", "back"): "nav.back", ("ContextSourcePage", "back"): "nav.back",
     ("CasePage", "back"): "nav.back", ("MonthGrid", "back"): "calendar.escape", ("EventPage", "back"): "nav.back",
     ("MainScreen", "back"): "nav.back",
     ("MainScreen", "focus_pane(-1)"): "nav.focus_left", ("MainScreen", "focus_pane(1)"): "nav.focus_right",
@@ -108,6 +109,7 @@ WHY = {
     ("DescriptionBox", "save"): "The description prompt saves on Enter",
     ("MainScreen", "app.quit"): "Close the window; the Local core keeps running (FR-2)",
     ("TasksPage", "filter"): "The Palette (/) replaced the Tasks filter (FR-BAR-4)",
+    ("SettingsPage", "toggle"): "App Settings › Modules switches are clicked, as every App Settings control is (FR-SET-1)",
 }
 
 

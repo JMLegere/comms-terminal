@@ -14,6 +14,8 @@ LONG = "\n\n".join(f"Paragraph {n}: details about the rollout plan, owners, and 
 
 def seed(db, broken=False):
     inbox.migrate(db)
+    for m in inbox.MODULES:  # the demo shows every Module (a new Service starts with none on)
+        inbox.set_module(db, m, True)
     now = datetime.now(timezone.utc)
     with db:
         db.execute("INSERT OR IGNORE INTO connections (id, platform, external_id, self_id, label, connected_at)"

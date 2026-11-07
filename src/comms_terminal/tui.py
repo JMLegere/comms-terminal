@@ -44,7 +44,7 @@ from textual.worker import WorkerCancelled, get_current_worker
 from . import actions, calendar as cal, clock, files, gcal, inbox, issues, pipeline, render, sequences
 from .health import problem
 from .icons import ICON
-from .platforms import FORMATS, PLATFORMS
+from .platforms import FORMATS, PLATFORMS, kind_of
 from .remote import ReplyError
 
 DETAIL_COLOR = {  # Status detail -> color; the label is inbox.DETAIL_LABEL, the glyph icons.ICON
@@ -791,21 +791,25 @@ class Rail(OptionList):
             else:
                 icon_name, color = VIEW_ICON[name]
                 opts.append(item(f"view:{i}", icon_name, name, counts[name], color))
-        opts += [gap, header("cases", "cases")]
-        case_counts = Counter(c["status"] for c in inbox.case_queue(db))
-        for i, name in enumerate(inbox.CASE_VIEWS):
-            icon_name, color = VIEW_ICON[name]
-            opts.append(item(f"cases:{i}", icon_name, name, case_counts[name], color))
-        due = len(sequences.tasks_due(db))
+        on = self.app.modules  # an off Module has no rail rows (ADR 0017)
+        if "cases" in on:
+            opts += [gap, header("cases", "cases")]
+            case_counts = Counter(c["status"] for c in inbox.case_queue(db))
+            for i, name in enumerate(inbox.CASE_VIEWS):
+                icon_name, color = VIEW_ICON[name]
+                opts.append(item(f"cases:{i}", icon_name, name, case_counts[name], color))
         open_issues = db.execute("SELECT count(*) FROM issues WHERE completed_at IS NULL AND canceled_at IS NULL").fetchone()[0]
         waiting = db.execute("SELECT count(*) FROM actions WHERE state IN ('scheduled', 'running', 'unknown')"
                              ).fetchone()[0]  # what has yet to reach its Platform
         opts += [gap, header("issues", "work"), item("issues", "issues", "Issues", open_issues or ""),
                  item("actions", "actions", "Action Queue", waiting or "")]
-        opts += [gap, header("sequence", "playbook"), item("tasks", "tasks", "Tasks", due or ""),
-                 item("sequences", "sequence", "Sequences", sum(1 for q in sequences.sequences(db) if not q["archived_at"]))]
-        opts += [gap, header("pipeline", "pipeline")] + [
-            item(f"pipeline:{p.lower()}", p.lower(), pipeline.NAMES[p], rail_share(db, p)) for p in pipeline.PIPELINES]
+        if "sequences" in on:
+            due = len(sequences.tasks_due(db))
+            opts += [gap, header("sequence", "playbook"), item("tasks", "tasks", "Tasks", due or ""),
+                     item("sequences", "sequence", "Sequences", sum(1 for q in sequences.sequences(db) if not q["archived_at"]))]
+        if "pipelines" in on:
+            opts += [gap, header("pipeline", "pipeline")] + [
+                item(f"pipeline:{p.lower()}", p.lower(), pipeline.NAMES[p], rail_share(db, p)) for p in pipeline.PIPELINES]
         opts += [gap, header("inbox", "browse"),
                  item("people", "people", "People", inbox.people_count(db)),
                  item("organizations", "organizations", "Organizations",
@@ -814,6 +818,8 @@ class Rail(OptionList):
                       db.execute("SELECT count(*) FROM channels WHERE kind != 'mailbox'").fetchone()[0]),
                  gap, header("connections", "connections")]
         for c in inbox.connections(db):
+            if kind_of(c) == "context":  # listed under context, each with its own page (FR-MOD-16)
+                continue
             ok = health_ok(c)
             state = f"[#6c782e]{ICON['ok']}[/]" if ok else f"[#c14a4a]{ICON['broken']}[/]"
             mark = "[#45707a]▌[/]" if main.section == f"conn:{c['id']}" else " "
@@ -821,6 +827,15 @@ class Rail(OptionList):
             name = name if len(name) <= 21 else name[:20] + "…"
             label = escape(name) if ok else f"[#c14a4a]{escape(name)}[/]"
             opts.append(Option(f"{mark}{conn_icon(c)} {label}{' ' * max(1, 22 - len(name))}{state}", id=f"conn:{c['id']}"))
+        sources = [(k, v) for k, v in getattr(self.app, "source_state", {}).items() if v]
+        if sources:  # Context sources (FR-13a, FR-13b) sit apart from Connections: they hold no Threads
+            opts += [gap, header("tana", "context")]
+        for key, st in sources:
+            title, icon = CONTEXT_SOURCES[key][:2]
+            state = {"ok": f"[#6c782e]{ICON['ok']}[/]", "checking": "[#928374]…[/]"}.get(st, f"[#c14a4a]{ICON['broken']}[/]")
+            label = title if st in ("ok", "checking") else f"[#c14a4a]{title}[/]"
+            opts.append(Option(f" [#654735]{ICON[icon]}[/] {label}{' ' * (22 - len(title))}{state}", id=f"context:{key}"))
+        opts += [gap, item("settings", "settings", "Settings")]
         shown = [(o.prompt, o.id, o.disabled) for o in opts]
         if shown != getattr(self, "shown", None):  # unchanged rows: no rebuild, so no redraw (the 60 s flash)
             self.shown = shown
@@ -836,7 +851,7 @@ class Rail(OptionList):
         self.highlighted = None
 
     def on_option_list_option_selected(self, event):
-        self.app.main.go(event.option.id)
+        self.app.main.go(event.option.id)  # a Context source opens its own page (FR-MOD-16)
 
 
 class ClickTable(DataTable):
@@ -912,6 +927,7 @@ class Page(Vertical):
     TITLE = ""
     SIDE = ""
     RAIL = ""  # the rail item this page belongs to; the rail and statusline read it from the current page
+    MODULE = None  # the Module this page belongs to (ADR 0017): it does not open while that Module is off
     host = None  # the page that stacks this one as one of its lists (Today); None when it is the page itself
 
     def _on_mount(self):  # runs alongside subclasses' on_mount: focus once this page's widgets exist
@@ -955,6 +971,8 @@ class Page(Vertical):
         getattr(self, "show_selected", lambda: None)()
 
     def check_action(self, action, parameters):
+        if MODULE_ACTIONS.get(action, "") and MODULE_ACTIONS[action] not in self.app.modules:
+            return False  # an off Module's key is hidden and does nothing (ADR 0017)
         if action == "back":
             return len(self.app.main.stack) > 1
         return True
@@ -968,6 +986,20 @@ class Page(Vertical):
             focusable.first().focus()
         else:
             self.focus()
+
+
+# The Console actions that belong to a Module (ADR 0017): Page.check_action hides them while it is off.
+MODULE_ACTIONS = {"case": "cases", "new_case": "cases", "enroll": "sequences", "resume": "sequences",
+                  "finish": "sequences", "stage": "pipelines", "value": "pipelines"}
+
+
+def target_module(target: str) -> str | None:
+    """The Module a rail target opens, if any."""
+    if target.startswith("cases:"):
+        return "cases"
+    if target in ("tasks", "sequences"):
+        return "sequences"
+    return "pipelines" if target.startswith("pipeline:") else None
 
 
 THREAD_KEYS = [  # Thread actions, Gmail-style (decision #93); shared by the Threads list and a Case
@@ -2263,7 +2295,9 @@ def details_markup(v, db, related=None) -> str:
     case = f"[@click=app.open_case({t.case_id!r})][underline]{escape(v['case'])}[/][/]" if t.case_id else (
         "[#928374]none · [/][@click=app.thread('case')][underline]add to a case[/][/] [#928374](l)[/]")
     kind = v["channel"]["kind"]
-    lines += ["", head("case", "case"), case, "", f"[#928374]{ICON.get(kind, ICON['channel'])} channel[/]", escape(v["where"])]
+    if v.get("cases_on", True):
+        lines += ["", head("case", "case"), case]
+    lines += ["", f"[#928374]{ICON.get(kind, ICON['channel'])} channel[/]", escape(v["where"])]
     if p and (section := sequence_section(db, p["id"], keys=False)):  # FR-SEQ-19; its keys are on the Person page
         lines += ["", section]
     return "\n".join(lines + (related_markup(db, v) if related is None else related))
@@ -2449,6 +2483,7 @@ class ContextSection(Static):
             return
         connected = ctx is not None or error is not None
         self.app.source_state[self.source] = error or ("ok" if connected else None)
+        self.app.source_checked[self.source] = clock.iso(clock.now())
         self.app.main.refresh_chrome()
         self.display = connected
         if connected:
@@ -2555,7 +2590,8 @@ class ThreadView(Horizontal):
         head = thread_head(v)
         if self.has_class("narrow"):  # properties column hidden: keep who, where, and case under the title
             p = v["person"]
-            bits = [escape(p["name"]) if p else "", escape(v["where"]), escape(v["case"]) if v["thread"].case_id else "no case (l)"]
+            bits = [escape(p["name"]) if p else "", escape(v["where"]),
+                    "" if not v.get("cases_on", True) else escape(v["case"]) if v["thread"].case_id else "no case (l)"]
             head += "\n[#928374]" + " · ".join(b for b in bits if b) + "[/]"
         self.query_one(".thead").update(head + "\n")
         if details or getattr(self, "related", None) is None:
@@ -2601,7 +2637,7 @@ def thread_text(v, raw=None, context=None) -> str:
     lines = [f"# {t.title}", "",
              f"- Thread: {t.id} · {PLATFORMS[ch['platform']].title} · {v['where']}" + (f" · {v['link']}" if v["link"] else ""),
              f"- Status: {t.status} / {t.status_detail}" + (f" until {end}" if t.status == "SNOOZED" and end else ""),
-             f"- Case: {v['case'] or 'none'}",
+             *([f"- Case: {v['case'] or 'none'}"] if v.get("cases_on", True) else []),
              f"- People: {'; '.join(people + (v.get('others') or [])) or 'none'}",
              f"- Organizations: {', '.join(v.get('organizations') or []) or 'none'}", "", "## Messages"]
     for m in v["messages"]:
@@ -3533,6 +3569,7 @@ def case_counts(counts: dict) -> str:
 
 class CasesPage(TablePage):
     """One Status view of Cases: a Case's Status is the earliest of its Threads' (#120)."""
+    MODULE = "cases"
     COLUMNS = ("", "Title", "Threads")
     BINDINGS = [Binding("n", "new_case", "new case")]
     EMPTIES = {
@@ -3658,7 +3695,8 @@ class OrganizationPage(ThreadListPage):
         people = inbox.organization_view(self.app.db, self.domain)["people"]
         emails = [i["value"] for p in people for i in p["identities"] if i["kind"] == "email"]
         o = self.org()
-        self.app.main.show_side((pipeline_section(self.app.db, o["id"]) + "\n\n" if o else "") + "\n\n".join(
+        pipe = pipeline_section(self.app.db, o["id"]) if o else ""  # empty while Pipelines is off (ADR 0017)
+        self.app.main.show_side((pipe + "\n\n" if pipe else "") + "\n\n".join(
             f"[@click=app.open_person({p['id']!r})][b underline]{escape(p['name'])}[/][/]\n"
             + "\n".join(f"[#928374]{ICON[IDENTITY_ICON[i['kind']]]} {escape(i['value'])}[/]"
                         for i in p["identities"])
@@ -3753,7 +3791,10 @@ def set_org_value(app, org: dict):
 
 
 def pipeline_section(db, org_id: int, person: bool = False) -> str:
-    """The Organization page's Pipeline section (FR-PL-26), or a Person's (person=True; ADR 0016)."""
+    """The Organization page's Pipeline section (FR-PL-26), or a Person's (person=True; ADR 0016); none while
+    Pipelines is off (ADR 0017)."""
+    if "pipelines" not in inbox.modules_on(db):
+        return ""
     g, now = PALETTE["grey1"], clock.now()
     out = [f"[b]{ICON['pipeline']} Pipeline[/]"]
     for p, s in (pipeline.current(db, person_id=org_id) if person else pipeline.current(db, org_id)).items():
@@ -3888,6 +3929,7 @@ def card(o: dict, now, valued: bool = True) -> str:
 class BoardColumn(OptionList):
     """One Stage's Organizations or People on the Pipeline board: enter opens one; s and v set its Stage and Value;
     ←/→ move to the next Stage."""
+    MODULE = "pipelines"  # a widget of a Pipelines page (ADR 0017)
     BINDINGS = [Binding("j", "cursor_down", show=False), Binding("k", "cursor_up", show=False),
                 Binding("s", "stage", "stage"), Binding("v", "value", "value")]
 
@@ -3940,6 +3982,7 @@ class PipelinePage(Page):
     """One Pipeline, action first (.agents/discovery/2026-10-24-pipeline-page-layout.md): boxes for This week and
     Progress, the Constraint, the Organizations board (each Stage once, its header carrying the Bowtie's count and
     conversion), and the Weekly review."""
+    MODULE = "pipelines"
     BINDINGS = [Binding("y", "copy", "copy for agent"), Binding("pagedown", "scroll(1)", show=False),
                 Binding("pageup", "scroll(-1)", show=False), Binding("space", "scroll(1)", show=False)]
     WEEKLY = ("Stage", "Organizations", "Convert", "Benchmark", "Days in Stage", "Reach {paid}", "Need a week",
@@ -4096,13 +4139,15 @@ class PersonPage(Page):
                             for t in p["threads"]) or "—"
         orgs = ", ".join(f"[@click=app.open_org('{o}')][underline]{escape(o)}[/][/]" for o in p["organizations"]) or "—"
         section = sequence_section(self.app.db, self.person_id)
-        held = pipeline.current(self.app.db, person_id=self.person_id)  # Fundraising and Talent (ADR 0016)
+        held = pipeline_section(self.app.db, self.person_id, person=True) if pipeline.current(
+            self.app.db, person_id=self.person_id) else ""  # Fundraising and Talent (ADR 0016)
+        cases = (f"\n\n[#928374]{ICON['cases']} cases[/]\n{escape(', '.join(p['cases']) or '—')}"
+                 if "cases" in self.app.modules else "")
         self.query_one("#prest").update(
-            (f"\n{pipeline_section(self.app.db, self.person_id, person=True)}\n" if held else "") +
+            (f"\n{held}\n" if held else "") +
             (f"\n{section}\n" if section else "") +
             f"\n[#928374]{ICON['organizations']} organizations[/]\n{orgs}\n\n"
-            f"[#928374]{ICON['threads']} threads[/]\n{threads}\n\n"
-            f"[#928374]{ICON['cases']} cases[/]\n{escape(', '.join(p['cases']) or '—')}")
+            f"[#928374]{ICON['threads']} threads[/]\n{threads}" + cases)
         load_context(self, [i["value"] for i in p["identities"] if i["kind"] == "email"],
                                          p["organizations"])
 
@@ -4285,6 +4330,44 @@ def connection_markup(c) -> str:
             f"[#928374]last health check[/]\n{stamp(c['probed_at']) or 'Never.'}\n\n[#928374]problem[/]\n{escape(detail)}")
 
 
+def context_markup(key: str, state: str | None, checked_at: str | None, cases: bool = True) -> str:
+    """A Context source page (FR-MOD-16), as a Connection page: its name and state, what it adds context to, the last
+    check and the problem. `state` is "ok", "checking", None (not connected) or the error."""
+    title, icon = CONTEXT_SOURCES[key][:2]
+    shown = (f"[#6c782e]{ICON['ok']} OK[/]" if state == "ok" else "[#928374]… CHECKING[/]" if state == "checking"
+             else f"[#c14a4a]{ICON['broken']} {'BROKEN' if state else 'NOT CONNECTED'}[/]")
+    scope = "Threads, People, Organizations and Cases" if cases else "Threads, People and Organizations"
+    detail = "None." if state in ("ok", "checking") else state or "It is not set up on the inbox service."
+    return (f"[b]{ICON[icon]} {title}[/]  {shown}\nA Context connection: it shows read-only context beside pages and holds"
+            f" no Threads.\n\n[#928374]adds context to[/]\n{scope}\n\n"
+            f"[#928374]last check[/]\n{stamp(checked_at) or 'Never.'}\n\n[#928374]problem[/]\n{escape(detail)}")
+
+
+class ContextSourcePage(Page):
+    """One Context source (FR-MOD-16): read-only, opened from its rail row."""
+    BINDINGS = [Binding("escape", "back", "back")]
+
+    def __init__(self, key):
+        super().__init__()
+        self.key, self.RAIL, self.TITLE = key, f"context:{key}", f"{ICON[CONTEXT_SOURCES[key][1]]} context connection"
+
+    def compose(self) -> ComposeResult:
+        yield Static(id="context")
+
+    def on_mount(self):
+        self.refresh_data()
+        self.can_focus = True
+        self.focus()
+
+    def refresh_data(self):
+        app = self.app
+        self.query_one("#context").update(context_markup(self.key, app.source_state.get(self.key),
+                                                         app.source_checked.get(self.key), "cases" in app.modules))
+
+    def action_back(self):
+        self.app.main.back()
+
+
 class ConnectionPage(Page):
     @property
     def RAIL(self):
@@ -4412,6 +4495,7 @@ class StatusLine(Static):
         mode = VIEW_NAMES[app.view].upper() if sec.startswith("view:") else (
             f"CASES · {inbox.CASE_VIEWS[app.case_view].upper()}" if sec.startswith("cases:") else
             "CONNECTION" if sec.startswith("conn:") else
+            f"CONTEXT · {CONTEXT_SOURCES[sec.split(':')[1]][0].upper()}" if sec.startswith("context:") else
             f"PIPELINE · {sec.split(':')[1].upper()}" if sec.startswith("pipeline:") else sec.upper())
         if sec == "today" and main.list is not None and main.list.KIND and main.list.selectable_rows():
             mode += f" › {main.list.KIND.upper()}"
@@ -4556,6 +4640,7 @@ class DescriptionBox(Vertical):
 class CasePage(Page, ThreadActions):
     """A Case laid out like a Linear issue: title, one activity timeline (Case events, each Thread card
     after its "Added" line), and properties on the right. j/k select a Thread card; Thread keys act on it."""
+    MODULE = "cases"
 
     @property
     def RAIL(self):
@@ -4766,7 +4851,10 @@ def props_head(icon_name: str, text: str) -> str:
 
 
 def sequence_section(db, person_id: int, keys: bool = True) -> str:
-    """One block per Enrollment, live first: state, day, the next Task, and the Tasks timeline (FR-SEQ-19)."""
+    """One block per Enrollment, live first: state, day, the next Task, and the Tasks timeline (FR-SEQ-19); none
+    while Sequences is off (ADR 0017)."""
+    if "sequences" not in inbox.modules_on(db):
+        return ""
     blocks = []
     for e in sequences.enrollments(db, person_id):
         if e["state"] == "FINISHED":
@@ -5078,6 +5166,7 @@ class TaskDraftView(DraftView):
 
 class TasksPage(Page):
     """Due Tasks (FR-SEQ-15): Overdue, Due today, Later today; the selected one in the side pane."""
+    MODULE = "sequences"
     TITLE = f"{ICON['tasks']} tasks · due"
     RAIL = "tasks"
     KIND = "tasks"
@@ -5331,6 +5420,7 @@ class TasksPage(Page):
 
 
 class SequencesTable(ClickTable):
+    MODULE = "sequences"  # a widget of a Sequences page (ADR 0017)
     BINDINGS = [Binding("enter", "steps", "Steps"), Binding("n", "new_sequence", "new Sequence"),
                 Binding("a", "archive", "archive / restore"), Binding("x", "delete_sequence", "delete"),
                 Binding("R", "rename", "rename"), Binding("w", "describe", "use when"),
@@ -5359,6 +5449,7 @@ class SequencesTable(ClickTable):
 
 
 class StepsTable(ClickTable):
+    MODULE = "sequences"  # a widget of a Sequences page (ADR 0017)
     BINDINGS = [Binding("escape", "sequences", "Sequences"), Binding("enter", "edit", "edit"),
                 Binding("n", "new_step", "new Step"), Binding("x", "delete_step", "delete Step"),
                 Binding("J", "move(1)", "move", key_display="J/K"), Binding("K", "move(-1)", show=False)]
@@ -5399,6 +5490,7 @@ def sequence_props_markup(db, q) -> str:
 class SequencesPage(Page):
     """Two stacked panes (Jeremy, 2026-10-16): every Sequence on top, the selected Sequence's Steps below; the side
     pane shows the selected Sequence, or the selected Step's editor once the Steps pane has focus (FR-SEQ-18)."""
+    MODULE = "sequences"
     TITLE = f"{ICON['sequence']} sequences"
     RAIL = "sequences"
     SIDE = f"{ICON['sequence']} sequence"
@@ -5934,6 +6026,7 @@ class UnattendedPage(TablePage):
     """Today's Unattended Organizations and People (FR-OA-6, FR-SEQ-38; ADR 0016): in an open or paying Stage with no
     Todo or Snoozed Thread and no Active or Finishing Enrollment for them. Enter opens the Organization or Person;
     its Pipeline section fills the right pane."""
+    MODULE = "pipelines"
     KIND = "organizations"
     SIDE = f"{ICON['organization']} organization"
     COLUMNS = ("", "Organization", "Stage", "Last message")
@@ -5976,6 +6069,7 @@ class UnattendedPage(TablePage):
 class PausedPage(TablePage):
     """Today's Paused Enrollments (FR-SEQ-39): a reply or call paused each, and it waits for Jeremy to resume or
     finish it. Enter opens the Person; r resumes; f finishes."""
+    MODULE = "sequences"
     KIND = "sequence"
     SIDE = f"{ICON['person']} person"
     COLUMNS = ("", "Person", "Sequence", "Paused")
@@ -6983,6 +7077,45 @@ class EventPage(Page):
         self.app.main.back()
 
 
+MODULE_LINES = {  # what hides while a Module is off, as App Settings › Modules says it (FR-MOD-13, FR-MOD-14)
+    "pipelines": "Revenue, Fundraising and Talent; Stages and Values; Unattended on Today",
+    "sequences": "Sequences, Tasks and Enrollments; Tasks and Paused on Today and the Calendar",
+    "cases": "Cases in the rail, Case headers in Threads lists, the case key",
+}
+
+
+class SettingsPage(TablePage):
+    """Settings › Modules (FR-MOD-14): this Service's Modules, with the App Settings section's rows and wording."""
+    RAIL = "settings"
+    TITLE = f"{ICON['settings']} settings"
+    COLUMNS = ("", "Module", "", "What hides while it is off")
+    INTRO = "Modules · For this Service · every Client shows the same. Enter or space turns one on or off."
+    BINDINGS = TablePage.BINDINGS + [Binding("space", "toggle", "on / off")]
+
+    def rows(self):
+        on = self.app.modules
+        return [(m, (f"[#654735]{ICON['settings']}[/]", f"[b]{name}[/]",
+                     "[#6c782e]on[/]" if m in on else "[#928374]off[/]", f"[#928374]{MODULE_LINES[m]}[/]"))
+                for m, name in inbox.MODULES.items()]
+
+    def open(self, item):
+        self.action_toggle()
+
+    def action_toggle(self):
+        module, app = self.selected(), self.app
+        if module is None:
+            return
+        on = module not in app.modules
+
+        def turn(value):
+            inbox.set_module(app.db, module, value)
+            app.refresh_modules()
+        turn(on)
+        app.main.refresh_chrome()
+        self.refresh_data()
+        app.offer_undo(f"{inbox.MODULES[module]} turned {'on' if on else 'off'}.", lambda: turn(not on))
+
+
 SECTIONS = {"today": TodayPage, "threads": ThreadsPage, "people": PeoplePage, "organizations": OrganizationsPage,
             "cases": CasesPage, "channels": ChannelsPage, "tasks": TasksPage, "sequences": SequencesPage,
             "calendar": CalendarPage, "issues": IssuesPage, "actions": ActionQueuePage}
@@ -7000,6 +7133,7 @@ class MainScreen(Screen):
         Binding("6", "go('drafts')", show=False),
         Binding("7", "go('people')", show=False), Binding("8", "go('organizations')", show=False),
         Binding("9", "go('cases:0')", show=False), Binding("0", "go('channels')", show=False),
+        Binding("ctrl+comma", "go('settings')", show=False),
         Binding("semicolon", "app.expand_all(True)", show=False), Binding("colon", "app.expand_all(False)", show=False),
     ]
 
@@ -7061,6 +7195,8 @@ class MainScreen(Screen):
     def check_action(self, action, parameters):
         if action == "focus_pane":
             return self.app.screen is self and not isinstance(self.focused, (Input, TextArea))
+        if action == "go" and parameters and target_module(parameters[0]) not in (None, *self.app.modules):
+            return False  # an off Module's rail key (ADR 0017)
         return True
 
     def action_focus_pane(self, direction):
@@ -7102,6 +7238,9 @@ class MainScreen(Screen):
         if target == "drafts" and isinstance(self.current, DraftsPage):
             self.focus_list()
             return
+        if (module := target_module(target)) and module not in self.app.modules:
+            self.app.notify(f"{inbox.MODULES[module]} is disabled · turn it on in Settings")
+            return
         if not self.save_draft():
             self.refresh_chrome()
             return
@@ -7119,6 +7258,11 @@ class MainScreen(Screen):
         elif target.startswith("pipeline:"):
             p = target.split(":")[1].upper()
             self.stack = [lambda: PipelinePage(p)]
+        elif target == "settings":
+            self.stack = [SettingsPage]
+        elif target.startswith("context:"):
+            key = target.split(":", 1)[1]
+            self.stack = [lambda: ContextSourcePage(key)]
         else:
             self.stack = [SECTIONS[target]]
         self._show()
@@ -7200,6 +7344,10 @@ class MainScreen(Screen):
         main, pane = self.query_one("#main"), self.query_one("#thread")
         main.remove_children()
         page = self.stack[-1]()
+        while page.MODULE is not None and page.MODULE not in self.app.modules:  # its Module went off (ADR 0017)
+            self.stack.pop()
+            self.stack = self.stack or [TodayPage]
+            page = self.stack[-1]()
         self.current = page
         pane.remove_children()
         self.showing, self.side_text = None, None
@@ -7219,6 +7367,11 @@ class MainScreen(Screen):
         self.query_one(StatusLine).refresh_line()
 
     def refresh_all(self):
+        for module in self.app.refresh_modules():  # turned off elsewhere: its pages close (FR-MOD-10)
+            self.app.notify(f"{inbox.MODULES[module]} turned off")
+            if self.current is not None and self.current.MODULE == module:
+                self._show()
+                return
         self.refresh_chrome()
         if self.current is not None:
             self.current.refresh_data()
@@ -7332,6 +7485,7 @@ class Console(App):
         # "checking", "ok", or the error
         self.sources = {k: f for k, f in (sources or {}).items() if f}
         self.source_state = {k: "checking" for k in self.sources}
+        self.source_checked = {}  # key -> ISO time of the last answer, for its Context source page (FR-MOD-16)
         self.case_view = 0  # the Cases section's Status view (#120)
         self.people_collapsed = set()  # People list letters folded shut
         self.undo = None  # (message, restore) for the last change
@@ -7530,6 +7684,7 @@ class Console(App):
         def show():
             if self.source_state[key] == "checking":  # a page's fetch may have answered first
                 self.source_state[key] = state
+            self.source_checked[key] = clock.iso(clock.now())
             self.main.refresh_chrome()
         self.call_from_thread(show)
 
@@ -8181,6 +8336,19 @@ class Console(App):
         if not isinstance(self.screen, Help):
             self.push_screen(Help())
 
+    @property
+    def modules(self) -> set[str]:
+        """The Modules on for this Service (ADR 0017), read again by refresh_modules."""
+        if getattr(self, "_modules", None) is None:
+            self._modules = inbox.modules_on(self.db)
+        return self._modules
+
+    def refresh_modules(self) -> set[str]:
+        """Read the Modules again; returns those that went off since the last read."""
+        before = self.modules
+        self._modules = inbox.modules_on(self.db)
+        return before - self._modules
+
     def offer_undo(self, message, restore):
         """Say what changed and what it means; `u` puts it back."""
         self.undo = (message, restore)
@@ -8190,14 +8358,23 @@ class Console(App):
         if self.undo is None:
             self.notify("Nothing to undo.")
             return
-        _, restore = self.undo
-        self.undo = None
+        entry = self.undo
+        _, restore = entry
         try:
             restore()
+        except inbox.ModuleDisabled as e:  # kept: it undoes once the Module is on again (FR-MOD-11)
+            self.notify(str(e).split(" on this Service")[0], severity="warning")
+            return
         except inbox.StaleThreadSnapshot:
+            self.undo = None
             self.main.refresh_all()
             self.notify("Cannot undo: this thread was reconciled. Current state kept.")
             return
+        except BaseException:
+            self.undo = None
+            raise
+        if self.undo is entry:  # a restore that offers its own undo keeps it
+            self.undo = None
         page = self.main.page
         if page is not None and hasattr(page, "after_change"):
             page.after_change()

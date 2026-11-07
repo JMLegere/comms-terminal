@@ -164,6 +164,9 @@ def main(argv=None) -> None:
         if a.remote:
             link, remote, syncer = start_remote(a.remote, a.db)
             a.socket = link.command()
+        else:
+            from . import remote as remote_mod, tui
+            remote_mod.gate_local(tui)
         app = Console(a.db, socket_reply(a.socket), {k: socket_context(a.socket, k) for k in CONTEXT_SOURCES},
                       socket_send_draft(a.socket), socket_slack_conversations(a.socket),
                       (a.files_host or FILE_SERVER[0], a.files_port or FILE_SERVER[1]), remote, syncer,

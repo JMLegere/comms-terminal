@@ -10,13 +10,17 @@ KINDS = {
     "service": "the service only (it holds the file store and the link secret)",
 }
 WRITERS: dict[str, str] = {}  # "inbox.act" -> kind
+MODULE_OF: dict[str, str] = {}  # "sequences.enroll" -> "sequences": the Module a Client call into it needs (ADR 0017)
 
 
-def writer(kind: str = "write"):
+def writer(kind: str = "write", module: str | None = None):
     if kind not in KINDS:
         raise ValueError(f"unknown writer kind {kind!r}")
 
     def mark(fn):
-        WRITERS[f"{fn.__module__.rsplit('.', 1)[-1]}.{fn.__name__}"] = kind
+        name = f"{fn.__module__.rsplit('.', 1)[-1]}.{fn.__name__}"
+        WRITERS[name] = kind
+        if module:
+            MODULE_OF[name] = module
         return fn
     return mark
