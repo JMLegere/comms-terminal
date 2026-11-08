@@ -15,7 +15,7 @@ import threading
 import urllib.error
 from datetime import datetime, timedelta
 
-from . import clock, inbox
+from . import clock, commands, inbox
 from .email import handle_hook  # noqa: F401 - Fastmail's copies arrive at /hooks/email (serve.HOOKS)
 from .mcp import McpClient, McpError
 
@@ -121,7 +121,8 @@ def poll_loop(db_path: str, client, stop: threading.Event, every: float = 600) -
             if conn is not None:
                 mine = mine or identities(client)
                 since = datetime.fromisoformat(conn["connected_at"])
-                sync(db, client, conn, since, mine, queries=("in:sent",))
+                with commands.service(db, commands.said("Fastmail")):  # one Service Command (ADR 0021)
+                    sync(db, client, conn, since, mine, queries=("in:sent",))
                 inbox.set_probe(db, conn["id"], None)
         except (McpError, OSError, ValueError, KeyError) as e:
             log.info("fastmail poll failed: %s", e)

@@ -29,12 +29,13 @@ import uuid
 from datetime import date, datetime
 from pathlib import Path
 
-from . import clock, files, inbox, issues, pipeline, sequences, writers
+from . import clock, commands, files, inbox, issues, pipeline, sequences, writers
 
 LOG = logging.getLogger("comms_terminal.remote")
 
 CALLS = writers.WRITERS  # name -> how the console runs it (writers.KINDS); each writer declares its own
-MODULES = {"inbox": inbox, "sequences": sequences, "pipeline": pipeline, "files": files, "issues": issues}
+MODULES = {"inbox": inbox, "sequences": sequences, "pipeline": pipeline, "files": files, "issues": issues,
+           "commands": commands}
 
 
 class ReplyError(Exception):
@@ -252,17 +253,7 @@ def decode(v):
 
 # --- service side ----------------------------------------------------------------
 
-class Held(sqlite3.Connection):
-    """A connection whose writers' own commits wait while `held` (ADR 0012): handle_call commits a laptop write and
-    its applied_mutations row together, so a crash between them cannot apply a resent write twice."""
-    held = False
-
-    def commit(self):
-        if not self.held:
-            super().commit()
-
-    def __exit__(self, kind, value, tb):  # `with db:` in a writer
-        return False if self.held else super().__exit__(kind, value, tb)  # held: an error reaches the caller
+Held = writers.Held  # handle_call commits a laptop write and its applied_mutations row together
 
 
 def handle_call(db_path: str, body: bytes) -> tuple[int, dict]:
@@ -277,6 +268,9 @@ def handle_call(db_path: str, body: bytes) -> tuple[int, dict]:
         module, fn = name.split(".")
         args, kwargs = decode(req.get("args", [])), decode(req.get("kwargs", {}))
         client, mutation = req.get("client"), req.get("mutation")
+        source = req.get("source", "console")  # where the Command comes from (ADR 0021); older consoles omit it
+        if source not in commands.CLIENTS:
+            raise ValueError("bad source")
         if (client is None) != (mutation is None) or (client is not None and (
                 not inbox.is_id(client) or type(mutation) is not int or mutation <= 0)):
             raise ValueError("client and mutation go together")
@@ -290,11 +284,13 @@ def handle_call(db_path: str, body: bytes) -> tuple[int, dict]:
             if first is not None:
                 return first["status"], json.loads(first["answer"])
         if client is None:
-            return _apply(db, name, module, fn, args, kwargs)
+            with commands.source(source):
+                return _apply(db, name, module, fn, args, kwargs)
         db.held = True
         db.execute("BEGIN IMMEDIATE")
         try:
-            with inbox.minting(f"{client}:{mutation}", kwargs.get("now") or clock.now()):  # the copy's new ids
+            with inbox.minting(f"{client}:{mutation}", kwargs.get("now") or clock.now()), \
+                    commands.source(source):  # the copy's new ids, its Command's among them
                 status, answer = _apply(db, name, module, fn, args, kwargs)
             if status != 200:  # refused or failed: nothing it wrote stays
                 db.rollback()
@@ -558,6 +554,7 @@ class Remote:
         self.app = None
         self.pending = queue.Queue()
         self.client, self.mutations = str(uuid.uuid4()), itertools.count(1)  # this console's writes, in order
+        self.source = "console"  # its Commands' Source; the Local core's Remote says "app" (ADR 0021)
         self.busy = 0  # writes applied locally and not yet answered by the service
         self.lock = threading.Lock()
         self.idle = threading.Event()
@@ -567,7 +564,7 @@ class Remote:
         threading.Thread(target=self._send_loop, daemon=True).start()
 
     def call(self, name, args, kwargs, timeout=30, mutation=None):
-        payload = {"fn": name, "args": encode(list(args)), "kwargs": encode(kwargs)}
+        payload = {"fn": name, "args": encode(list(args)), "kwargs": encode(kwargs), "source": self.source}
         if mutation is not None:  # applied once, however often it is sent (ADR 0012)
             payload |= {"client": self.client, "mutation": mutation}
         status, body = self.post(self.link.command(), "/call", payload, timeout)
@@ -646,8 +643,8 @@ def proxy(remote: Remote, module, prefix: str):
                     return remote.call(name, args, kwargs)
                 mutation = next(remote.mutations)
                 now = inspect.signature(value).bind_partial(db, *args, **kwargs).arguments["now"]
-                with inbox.minting(f"{remote.client}:{mutation}", now):  # the service mints the same ids
-                    result = value(db, *args, **kwargs)  # raises exactly as the service would, and paints at once
+                with inbox.minting(f"{remote.client}:{mutation}", now), commands.source(remote.source):
+                    result = value(db, *args, **kwargs)  # the service mints the same ids, raises as it would, paints
                 remote.queue(name, args, kwargs, mutation)
                 return result
             return call
@@ -668,7 +665,8 @@ def gated(module, prefix: str):
 
             def call(db, *args, **kwargs):
                 inbox.admit(db, name, args, kwargs)
-                return value(db, *args, **kwargs)
+                with commands.source("console"):
+                    return value(db, *args, **kwargs)
             return call
 
     return Gate()
@@ -676,7 +674,8 @@ def gated(module, prefix: str):
 
 def gate_local(tui):
     """Point a local console's writes through `gated`."""
-    for prefix, module in (("inbox", inbox), ("sequences", sequences), ("pipeline", pipeline)):
+    for prefix, module in (("inbox", inbox), ("sequences", sequences), ("pipeline", pipeline),
+                           ("commands", commands)):
         setattr(tui, prefix, gated(module, prefix))
 
 
@@ -690,12 +689,13 @@ def signed_urls(caps: dict):
     return file_url
 
 
+INSTALLED = ("inbox", "sequences", "pipeline", "commands", "files")  # the console modules install() swaps
+
+
 def install(tui, remote: Remote, caps: dict):
     """Point the console module at the service: proxies for its writes, and no local file store."""
-    tui.inbox = proxy(remote, inbox, "inbox")
-    tui.sequences = proxy(remote, sequences, "sequences")
-    tui.pipeline = proxy(remote, pipeline, "pipeline")
-    tui.files = proxy(remote, files, "files")
+    for name in INSTALLED:
+        setattr(tui, name, proxy(remote, MODULES[name], name))
     files.file_url = signed_urls(caps)  # Attachment bytes and files-secret stay on the service (ADR 0004)
 
 
@@ -796,7 +796,8 @@ class Syncer:
         for name, args, kwargs, mutation in pending:
             module, fn = name.split(".")
             try:
-                with inbox.minting(f"{self.remote.client}:{mutation}", kwargs.get("now") or clock.now()):
+                with inbox.minting(f"{self.remote.client}:{mutation}", kwargs.get("now") or clock.now()), \
+                        commands.source(self.remote.source):
                     getattr(MODULES[module], fn)(db, *args, **kwargs)
             except Exception as e:  # noqa: BLE001 - the service will refuse it too; its answer reverts it
                 LOG.info("replay %s failed: %s", name, e)

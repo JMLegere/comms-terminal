@@ -23,13 +23,13 @@ def test_a_new_service_has_every_module_off():  # FR-MOD-1, FR-MOD-2
     assert inbox.modules_on(fresh()) == set()
 
 
-def test_migration_43_turns_issues_on_and_keeps_the_others_as_they_were():  # Issues becomes a Module
+def test_migration_44_turns_issues_on_and_keeps_the_others_as_they_were():  # Issues becomes a Module
     from schema_history import downgrade
     db = sqlite3.connect(":memory:")
     db.create_function("new_id", 0, inbox.new_id)
     db.executescript(open(inbox.__file__.replace("inbox.py", "schema.sql")).read())
     db.execute(f"PRAGMA user_version = {inbox.SCHEMA_VERSION}")
-    downgrade(db, 42)
+    downgrade(db, 43)
     db.execute("INSERT INTO modules (id, enabled) VALUES ('pipelines', 1), ('sequences', 0)")
     db.commit()
     inbox.migrate(db)

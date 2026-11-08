@@ -64,6 +64,9 @@ if (process.argv[2] === "locked") {
   Object.assign(seqs, { rows: [{ id: "seq-1", name: "Warm intro" }], hi: "seq-1" });
   Object.assign(nav, { summary: {}, shell: {} });
   state.draft = "draft-1"; state.sequence = "seq-1";
+  const said = { "command.inbox.delete_draft": "Draft deleted: x", "command.sequences.delete_sequence": "Deleted Sequence: Warm intro",
+    "command.sequences.delete_step": "Step 2 deleted" };  // the newest Command's words, as the Service keeps them
+  answers["undo.newest"] = () => ({ id: "c", label: said[calls.filter((c) => c.method in said).at(-1).method] });
   answers["command.inbox.delete_draft"] = { id: "draft-1", body: "x" };
   drafts.command("delete", cx);
   await settle();

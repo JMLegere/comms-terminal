@@ -78,7 +78,6 @@ export default class Issue extends View {
     try {
       const action = await call("command.issues.update", { issue_id: i.id, fields });
       if (action) {
-        setShared("undo", { message: `${i.identifier}: ${what}`, steps: [["issues.undo", { action_id: action }]] });
         toast(`${i.identifier}: ${what}. Linear updates in a moment · z undoes`);
       }
     } catch (e) {

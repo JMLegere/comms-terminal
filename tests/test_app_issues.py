@@ -29,7 +29,7 @@ def test_the_list_asks_with_this_machines_options_and_selects_the_first_issue(ou
 def test_the_issue_pane_changes_through_the_action_queue_with_undo(out):
     assert out["statusPicker"] == ["Done"]
     assert out["update"] == {"issue_id": "1", "fields": {"state_id": "s-done"}}
-    assert out["undo"] == [["issues.undo", {"action_id": "action-1"}]]
+    assert out["undo"] is None  # the Service keeps the undo (ADR 0021)
     assert out["plan"] == {"issue_id": "1", "day": "2026-11-10"}
     assert out["estimateRefused"] == "An estimate is whole points, or none."
     assert out["planned"] == ["2026-11-09", "2026-11-10", "2026-11-13", None]  # Monday Nov 9: fri is Nov 13
@@ -38,6 +38,7 @@ def test_the_issue_pane_changes_through_the_action_queue_with_undo(out):
 def test_the_action_queue_heads_each_day_with_its_counts_and_today_holds_issues(out):
     assert out["queue"] == ["Mon Nov 9 | Linear 1 · console 1", "action-a1", "task-t1", "Tue Nov 10 | Gmail 1", "draft-d1"]
     assert out["today"] == ["issues-7"]
+    assert out["history"] == ["Tue Nov 10", "Undo: Done: Intro call | Console", "Done: Intro call | App | undone"]
 
 
 def test_the_rail_groups_connections_by_kind(out):

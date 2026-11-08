@@ -15,7 +15,7 @@ if (kase === "archive") { // D121
   v.command(`archive-picked:${JSON.stringify({ value: "cancel" })}`, cx);
   await settle();
   out.write = calls.find((c) => c.method === "command.sequences.archive_sequence").params;
-  out.undo = state.undo;
+  out.undo = state.undo ?? null;
 } else if (kase === "stage") { // D133
   const Organization = await load("organization");
   state.page = "organizations";
@@ -29,7 +29,7 @@ if (kase === "archive") { // D121
   await settle();
   out.write = calls.find((c) => c.method === "command.pipeline.set_stage").params;
   out.toast = toasts.at(-1);
-  out.undo = state.undo.steps;
+  out.undo = state.undo ?? null;
 } else if (kase === "person-stage") { // ADR 0016: a Person's Fundraising or Talent Stage
   const Person = await load("person");
   state.page = "people";
@@ -45,7 +45,7 @@ if (kase === "archive") { // D121
   await settle();
   out.write = calls.find((c) => c.method === "command.pipeline.set_stage").params;
   out.toast = toasts.at(-1);
-  out.undo = state.undo.steps;
+  out.undo = state.undo ?? null;
 } else if (kase === "enrollments") { // D142
   const Person = await load("person");
   answers["enroll.choices"] = { reasons: { GOAL_MET: "Goal met", CANCELED: "Canceled", UNSUBSCRIBED: "Unsubscribed" }, finishing: ["GOAL_MET"],
@@ -65,7 +65,7 @@ if (kase === "archive") { // D121
   answers["command.sequences.finish"] = [{ undo: 1 }];
   two.command(`finish-why:${JSON.stringify({ value: "CANCELED" })}`, cx);
   await settle();
-  out.finished = { toast: toasts.at(-1), steps: state.undo.steps };
+  out.finished = { toast: toasts.at(-1), undo: state.undo ?? null };
 }
 tasks.length = 0;
 console.log(JSON.stringify(out));

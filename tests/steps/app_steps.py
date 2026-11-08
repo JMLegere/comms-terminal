@@ -569,7 +569,7 @@ def done_toast_offers_undo(app, suffix):
 
 @then(parsers.parse('the first z restores the Thread and says "{message}"'))
 def undo_restores(app, message):
-    assert app.shell["calls"] == ["thread.snapshot", "command.inbox.act", "command.inbox.restore"]
+    assert app.shell["calls"] == ["command.inbox.act", "undo.newest", "command.commands.undo", "undo.newest"]
     assert app.shell["toasts"][1] == message
 
 
@@ -676,13 +676,12 @@ def no_confirm(app):
 @then(parsers.parse('each delete toast ends with "{suffix}" and z restores what was deleted'))
 def delete_undone(app, suffix):
     writes = [m for m, _ in app.phase1["calls"] if m.startswith("command.")]  # reads (the Steps reloading) aside
-    assert writes == ["command.inbox.delete_draft", "command.inbox.restore_draft",
-                                                   "command.sequences.delete_sequence", "command.sequences.undelete_sequence",
-                                                   "command.sequences.delete_step", "command.sequences.restore_step"]
-    assert app.phase1["calls"][1][1] == {"draft": {"id": "draft-1", "body": "x"}}
-    assert app.phase1["toasts"] == ["Draft deleted.  z undo", "Undone: back to how it was.",
-                                    "Deleted Warm intro.  z undo", "Undone: back to how it was.",
-                                    "Step 2 deleted. 1 Enrollment on it moved on.  z undo", "Undone: back to how it was."]
+    assert writes == ["command.inbox.delete_draft", "command.commands.undo",
+                      "command.sequences.delete_sequence", "command.commands.undo",
+                      "command.sequences.delete_step", "command.commands.undo"]  # Undo runs the Inverse on the Service
+    assert app.phase1["toasts"] == ["Draft deleted.  z undo", "Undone: Draft deleted: x.",
+                                    "Deleted Warm intro.  z undo", "Undone: Deleted Sequence: Warm intro.",
+                                    "Step 2 deleted. 1 Enrollment on it moved on.  z undo", "Undone: Step 2 deleted."]
 
 
 def phase3_view(case):
@@ -1210,7 +1209,7 @@ def skip_task(app):
 @then("the toast offers z undo, z would restore it, and the next Task is selected")
 def skip_undo(app):
     assert app.phase5["toast"].endswith("  z undo")
-    assert app.phase5["undo"]["steps"] == [["sequences.undo_task", {"undo": {"task_id": "k1", "restore": True}}]]
+    assert app.phase5["undo"] is None  # the Service keeps the undo (ADR 0021)
     assert app.phase5["task"] == "k2"
 
 
@@ -1243,7 +1242,7 @@ def archive_picker(app):
 
 @then(parsers.parse('the toast says "{message}" and z restores it'))
 def archive_undo(app, message):
-    assert app.phase6["undo"] == {"message": message, "steps": [["sequences.restore_sequence", {"sequence_id": "q1", "undo": [{"enrollment": "e1"}]}]]}
+    assert app.phase6["undo"] is None  # the Service keeps the undo (ADR 0021)
 
 
 @given("an Organization in the App at Commit in Revenue only")
@@ -1282,13 +1281,13 @@ def person_pickers(app, first, title):
 def person_stage_written(app, stage, message):
     assert app.phase6["write"] == {"org_id": "p1", "pipeline": "FUNDRAISING", "stage": stage}
     assert app.phase6["toast"] == f"{message}  z undo"
-    assert app.phase6["undo"] == [["pipeline.undo", {"entry_id": 7}]]
+    assert app.phase6["undo"] is None  # the Service keeps the undo (ADR 0021)
 
 
 @then(parsers.parse('the toast says "{message}" and z undoes it'))
 def stage_undo(app, message):
     assert app.phase6["toast"] == f"{message}  z undo"
-    assert app.phase6["undo"] == [["pipeline.undo", {"entry_id": 42}]]
+    assert app.phase6["undo"] is None  # the Service keeps the undo (ADR 0021)
 
 
 @given("a Person in the App with one Paused Enrollment, and a Person with an Active and a Finishing one")
@@ -1314,7 +1313,7 @@ def resume_finish(app, title):
 def finish_undo(app):
     f = app.phase6["finished"]
     assert f["toast"] == "Finished Bench: Canceled. Its unsent Task Drafts are gone.  z undo"
-    assert f["steps"] == [["sequences.restore_finish", {"undo": [{"undo": 1}]}]]
+    assert f["undo"] is None  # the Service keeps the undo (ADR 0021)
 
 
 

@@ -1,7 +1,8 @@
 // The Action Queue, as the Console's ActionQueuePage (ADR 0020, PRD FR-UI-4): Actions not yet confirmed (or confirmed
 // today) and what is scheduled to leave this week (scheduled Drafts, coming Tasks, Enrollment starts), by day, each
 // day headed by its count per Connection, as Lemlist's Outreach queue. j/k move; Enter opens what an Action changes
-// (an Issue on the Issues page, a Task, a Draft).
+// (an Issue on the Issues page, a Task, a Draft). Below it, History (ADR 0021): every change from the Command log,
+// newest first, with its Source and whether it was undone; v shows or hides the Service's own work.
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, v_virtual_list, VirtualListScrollHandle } from "gpui-base";
 import { call, nextEvent, nextCommand, theme, shared, setShared, run, focusMain } from "comms";
@@ -28,9 +29,26 @@ export function queueItems(rows) {
   return items;
 }
 
+/** History rows (commands.history) with a header per day, as the Console's ActionQueuePage.history_rows. */
+export function historyItems(rows) {
+  const items = [];
+  let day = null;
+  for (const c of rows) {
+    const at = new Date(c.at), key = `${at.getFullYear()}-${at.getMonth()}-${at.getDate()}`;
+    if (key !== day) {
+      day = key;
+      items.push({ key: `h-${key}`, header: `${DAYS[at.getDay()]} ${MONTHS[at.getMonth()]} ${at.getDate()}`, counts: "" });
+    }
+    items.push({ key: `command-${c.id}`, command: c });
+  }
+  return items;
+}
+
 export default class Actions extends View {
   init(_props, cx) {
     this.rows = [];
+    this.history = [];
+    this.service = true; // History shows the Service's own work (FR-UN-19)
     this.at = 0;
     this.scroll = VirtualListScrollHandle.new();
     this.load(cx);
@@ -46,6 +64,7 @@ export default class Actions extends View {
     cx.spawn(async (cx) => {
       try {
         this.rows = await call("actions.queue");
+        this.history = await call("history.page", { service: this.service });
         this.error = null;
       } catch (e) {
         this.error = String(e);
@@ -58,6 +77,7 @@ export default class Actions extends View {
     const n = this.rows.length;
     switch (c) {
       case "show": return this.load(cx);
+      case "toggle_service": this.service = !this.service; return this.load(cx);
       case "focus_entry": return this.target();
       case "next": case "prev":
         this.at = Math.max(0, Math.min(n - 1, this.at + (c === "next" ? 1 : -1)));
@@ -80,7 +100,9 @@ export default class Actions extends View {
 
   render() {
     const t = theme();
-    const items = queueItems(this.rows);
+    const items = [...queueItems(this.rows), { key: "history", header: "History",
+      counts: `every change · z undoes the newest from a Client · v Service work ${this.service ? "shown" : "hidden"}` },
+    ...historyItems(this.history ?? [])];
     const selected = this.rows[this.at];
     const header = (it) => h_flex().h(26).px(8).gap(8).items_center()
       .child(div().font_semibold().text_color(t.muted).child(it.header))
@@ -96,6 +118,14 @@ export default class Actions extends View {
         .child(div().w(90).flex_none().truncate().text_color(t.muted).child(r.connection ?? ""))
         .child(div().w(76).flex_none().text_color(t[STATE[r.state]] ?? t.muted).child(r.state ?? ""));
     };
+    const command = (c) => {
+      const at = new Date(c.at);
+      return h_flex().h(26).px(8).gap(8).rounded(4).items_center()
+        .child(div().w(44).flex_none().text_color(t.muted).child(`${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`))
+        .child(div().flex_1().min_w(0).truncate().text_color(c.undone ? t.muted : t.foreground).child(c.label ?? ""))
+        .child(div().w(76).flex_none().text_color(t.muted).child(c.undone ? "undone" : c.undoes ? "undo" : ""))
+        .child(div().w(90).flex_none().truncate().text_color(t.muted).child(c.source_name ?? ""));
+    };
     return v_flex().size_full().min_h(0).bg(t.background).text_size(13)
       .child(h_flex().h(30).flex_none().px(12).gap(8).items_center().border_b(1).border_color(t.border).text_size(12)
         .child(div().text_color(t.accent).child("\u{f048a}"))
@@ -104,7 +134,7 @@ export default class Actions extends View {
       .when(!this.error && !this.rows.length, (el) => el.child(div().p(16).text_color(t.muted).child("Nothing is waiting to leave.")))
       .child(div().flex_1().min_h(0).px(4).py(4).child(
         v_virtual_list("actions", items.length, 26, (i) => items[i].key,
-          (range) => items.slice(range.start, range.end).map((it) => (it.header ? header(it) : row(it.row))))
+          (range) => items.slice(range.start, range.end).map((it) => (it.header ? header(it) : it.command ? command(it.command) : row(it.row))))
           .size_full().track_scroll(this.scroll).on_item_click((key, cx) => {
             const at = this.rows.findIndex((r) => `${r.kind}-${r.id}` === key);
             if (at < 0) return;

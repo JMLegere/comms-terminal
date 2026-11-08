@@ -18,7 +18,7 @@ const GLYPH = {
 const PIPE_ICON = { REVENUE: "\u{f0116}", FUNDRAISING: "\u{f1890}", TALENT: "\u{f0849}" };
 const SOURCES = ["attio", "tana", "linear"];
 const grouped = (x) => String(Math.round(x)).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
-const offerUndo = (message, steps) => { setShared("undo", { message, steps }); toast(`${message}  z undo`); };
+const offerUndo = (message) => toast(`${message}  z undo`); // z undoes the newest Command (ADR 0021)
 const KIND = { person: "Person", org: "Organization" };
 const viewOf = (t) => (t.status_detail === "IGNORED" ? "ignored" : { TODO: "todo", SNOOZED: "snoozed", DONE: "done" }[t.status] ?? "todo");
 
@@ -132,7 +132,7 @@ export default class Organization extends View {
   async write(method, params, message, undo) {
     try {
       const r = await call(`command.${method}`, params);
-      if (undo && r != null) offerUndo(message, undo(r));
+      if (undo && r != null) offerUndo(message);
       else if (message && r !== null) toast(message);
       return r;
     } catch (e) {
@@ -169,13 +169,13 @@ export default class Organization extends View {
       case "stage-picked":
         if (answer.value.startsWith("pipeline:")) return this.stagePick(answer.value.slice(9));
         return cx.spawn(async () => this.write("pipeline.set_stage", { org_id: o.id, pipeline: this.pipeline, stage: answer.value },
-          `${o.name} → ${answer.value}.`, (entry) => [["pipeline.undo", { entry_id: entry }]]));
+          `${o.name} → ${answer.value}.`, true));
       case "value-typed":
         if (answer.text == null) return;
         return cx.spawn(async () => {
           const amount = await call("amount.parse", { text: answer.text }).catch(() => null);
           await this.write("pipeline.set_value", { org_id: o.id, pipeline: this.pipeline, value: answer.text },
-            `${o.name}: ${pg.stages.names[this.pipeline]} Value CAD ${grouped(amount ?? 0)}.`, (entry) => [["pipeline.undo", { entry_id: entry }]]);
+            `${o.name}: ${pg.stages.names[this.pipeline]} Value CAD ${grouped(amount ?? 0)}.`, true);
         });
       case "people":
         return this.pick(`People · ${pg.domain}`, [{ value: "add", label: "+ add a Person…" },
@@ -207,8 +207,7 @@ export default class Organization extends View {
     cx.spawn(async () => {
       try {
         const before = await call("command.inbox.set_membership", { person_id: personId, domain, member });
-        offerUndo(member ? `Added ${name} to ${domain}.` : `Removed ${name} from ${domain}.`,
-          [["inbox.set_membership", { person_id: personId, domain, member: before ?? null }]]);
+        offerUndo(member ? `Added ${name} to ${domain}.` : `Removed ${name} from ${domain}.`);
       } catch (e) {
         toast(/FreeMail/.test(String(e)) ? `Not added: ${domain} is a free-mail or incomplete domain, never an Organization.` : String(e), "error");
       }

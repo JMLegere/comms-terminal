@@ -1,6 +1,6 @@
 """Modules in the Console (PRD 2026-11-07-modules, Phase 3): the rail, keys, pages, Settings and undo."""
 
-from comms_terminal import inbox, remote, tui
+from comms_terminal import commands, inbox, remote, tui
 from comms_terminal.tui import CasesPage, Console, SettingsPage, TodayPage
 from test_console import run, seeded
 
@@ -15,9 +15,11 @@ def toasts(app):
 
 
 def off(path, *modules):
+    """Turn Modules off elsewhere: another Client's (here the Service's) Command, not the Console's."""
     db = inbox.connect(path)
-    for m in modules:
-        inbox.set_module(db, m, False)
+    with commands.source("service"):
+        for m in modules:
+            inbox.set_module(db, m, False)
     return db
 
 
@@ -73,7 +75,7 @@ def test_settings_turns_a_module_off_and_z_turns_it_back_on(tmp_path):  # FR-MOD
 
     async def opened(app, pilot):
         assert isinstance(app.main.current, SettingsPage)
-        assert [m for m, _ in app.main.current.items] == ["pipelines", "sequences", "cases", "issues"]
+        assert [m for m, _ in app.main.current.items] == ["pipelines", "sequences", "cases", "issues", "undo_window"]
     run(app, ["ctrl+comma", opened, "down", "down", "space",
               assert_off, "z"])
     assert "cases" in inbox.modules_on(inbox.connect(path))
@@ -90,17 +92,21 @@ def test_undo_into_an_off_module_is_refused_and_kept(tmp_path, monkeypatch):  # 
     monkeypatch.setattr(tui, "inbox", remote.gated(inbox, "inbox"))  # as main.py gates a local console
     app = Console(path)
 
+    case = inbox.connect(path).execute("SELECT id FROM cases LIMIT 1").fetchone()[0]
+
     async def offer(app, pilot):
-        app.offer_undo("Removed the Case.", lambda: tui.inbox.create_case(app.db, "Logan onboarding"))
+        tui.inbox.set_case_description(app.db, case, "Roll out to 40 seats")  # a Console Command
         off(path, "cases")
         app.refresh_modules()
 
     async def back_on(app, pilot):
-        assert app.undo is not None and "Cases is disabled" in toasts(app)
-        inbox.set_module(app.db, "cases", True)
+        assert commands.newest(app.db)["writer"] == "inbox.set_case_description" and "Cases is disabled" in toasts(app)
+        with commands.source("service"):  # on again elsewhere; turning it on here would be the newest change itself
+            inbox.set_module(app.db, "cases", True)
         app.refresh_modules()
     run(app, [offer, "z", back_on, "z"])
-    assert inbox.connect(path).execute("SELECT count(*) FROM cases WHERE title = 'Logan onboarding'").fetchone()[0] == 1
+    assert inbox.connect(path).execute("SELECT description FROM cases WHERE id = ?", (case,)).fetchone()[0] != \
+        "Roll out to 40 seats"
 
 
 def app_module_commands() -> list[tuple[str, str]]:

@@ -9,7 +9,7 @@ import { call, nextEvent, nextCommand, theme, shared, setShared, run, toast, ope
 
 const KIND_ICON = { email: "\u{f01f0}", slack_user: "\u{f04b1}", phone: "\u{f011c}" };
 const SOURCES = ["attio", "tana", "linear"];
-const offerUndo = (message, steps) => { setShared("undo", { message, steps }); toast(`${message}  z undo`); };
+const offerUndo = (message) => toast(`${message}  z undo`); // z undoes the newest Command (ADR 0021)
 const KIND = { person: "Person", org: "Organization", thread: "Thread" };
 
 /** Console segment lines ([text, colour, bold, link]); person, org and thread links open where they live; a URL opens
@@ -126,7 +126,7 @@ export default class Person extends View {
   async undoable(method, params, message) {
     try {
       const entry = await call(`command.${method}`, params);
-      if (entry != null) offerUndo(message, [["pipeline.undo", { entry_id: entry }]]);
+      if (entry != null) offerUndo(message);
     } catch (e) {
       toast(`Not changed: ${String(e).replace(/^(Error|Refused): /, "")}`, "error");
     }
@@ -269,8 +269,7 @@ export default class Person extends View {
             const undo = await call("command.sequences.finish", { enrollment_id: e.id, reason: answer.value });
             const ch = await call("enroll.choices", { person_id: p.id, organization_id: "" });
             const runs = (this.finishingReasons ?? []).includes(answer.value) ? " Its On completion ran." : "";
-            offerUndo(`Finished ${e.sequence}: ${ch.reasons[answer.value]}.${runs} Its unsent Task Drafts are gone.`,
-              [["sequences.restore_finish", { undo }]]);
+            offerUndo(`Finished ${e.sequence}: ${ch.reasons[answer.value]}.${runs} Its unsent Task Drafts are gone.`);
           } catch (err) {
             toast(`Not finished: ${String(err).replace(/^(Error|Refused): /, "")}`, "error");
           }
@@ -307,8 +306,7 @@ export default class Person extends View {
         const eid = await call("command.sequences.enroll", { person_id: p.id, sequence_id: e.sequence, start: start ? { $date: start } : null,
           organization_id: org, identity_id: e.identity ?? null });
         const due = await call("enrollment.first_due", { enrollment_id: String(eid) }).catch(() => "soon");
-        offerUndo(`Enrolled ${p.name} in ${q?.name ?? "the Sequence"}: the first Task is due ${due}, under Tasks.`,
-          [["sequences.unenroll", { enrollment_id: eid }]]);
+        offerUndo(`Enrolled ${p.name} in ${q?.name ?? "the Sequence"}: the first Task is due ${due}, under Tasks.`);
       } catch (err) {
         toast(`Not enrolled: ${String(err).replace(/^(Error|Refused): /, "")}`, "error");
       }

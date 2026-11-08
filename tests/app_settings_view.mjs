@@ -33,6 +33,7 @@ toasts.splice(0);
 v.turn("sequences", "Sequences", false, cx);
 await new Promise((r) => setTimeout(r, 0));
 out.turned = calls.filter((c) => c.method.startsWith("command."));
-out.undo = state.undo;
+out.undo = state.undo ?? null;
+out.said = state.turned;
 out.turnToasts = toasts.splice(0);
 console.log(JSON.stringify(out));

@@ -56,8 +56,8 @@ export function advancing(id) {
   return true;
 }
 
-// The one undo (nav owns z), as thread/main.js offerUndo.
-const offerUndo = (message, steps) => { setShared("undo", { message, steps }); toast(`${message}  z undo`); };
+// z (nav) undoes the newest Command (ADR 0021); a write here only says so.
+const offerUndo = (message) => toast(`${message}  z undo`); // z undoes the newest Command (ADR 0021)
 
 export default class Drafts extends View {
   init(_props, cx) {
@@ -158,7 +158,7 @@ export default class Drafts extends View {
         return cx.spawn(async () => {
           try {
             const draft = await call("command.inbox.delete_draft", { draft_id: id });
-            offerUndo("Draft deleted.", [["inbox.restore_draft", { draft }]]);
+            offerUndo("Draft deleted.");
           } catch (e) {
             setShared("advance", null);
             toast("Draft not deleted · delete failed.", "error");
