@@ -59,4 +59,12 @@ out.queue = Actions.ns.queueItems([
 const Today = await load("today");
 const panes = Today.ns.paneItems({ issues: [issue("7")] }, {});
 out.today = panes.issues.map((it) => it.key);
+
+// The rail: Connections grouped under one header per kind (ADR 0018); Context connections are not among them.
+const Nav = await load("nav");
+out.rail = Nav.ns.connectionRows([
+  { id: 3, platform: "linear", kind: "issue", name: "Linear" }, { id: 1, platform: "gmail", kind: "email", name: "Gmail" },
+  { id: 4, platform: "linear", kind: "context", name: "Linear" }, { id: 2, platform: "slack", kind: "slack", name: "Slack" },
+  { id: 5, platform: "newer", kind: null, name: "Newer" }, { id: 6, platform: "fastmail", kind: "email", name: "Fastmail" }])
+  .map((r) => r.header ?? r.id);
 console.log(JSON.stringify(out));
