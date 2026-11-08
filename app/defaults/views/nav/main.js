@@ -1,5 +1,5 @@
 // The rail and the shell, as the Console's (ADR 0014): Today and Calendar; threads by Status view, and Drafts; cases
-// by Status view; playbook; pipeline; browse; connections. It also owns what the Console's MainScreen owns:
+// by Status view; playbook; pipeline; browse; connections by kind. It also owns what the Console's MainScreen owns:
 //   - the page stack. A rail pick resets it; a link pushes a full page (setShared("push", {page, …keys}) then
 //     run("nav.push")); esc and u go back. Each entry keeps the shared keys its page showed, so back restores them.
 //   - element focus across columns (rail, list, detail): ← → and h l move the focus to an element in the column
@@ -17,6 +17,20 @@ const ICON = { Todo: "square", Snoozed: "clock", Done: "circle-check", Ignored: 
 const PIPELINES = [["revenue", "Revenue"], ["fundraising", "Fundraising"], ["talent", "Talent"]];
 const CONN = { gmail: "mail", fastmail: "mail", slack: "message-square", quo: "phone", gcal: "calendar",
   linear: "list-checks", tana: "layers", attio: "server" };
+/** The rail's Connection groups (ADR 0018), in order; a newer Service's unknown kind goes under "other". */
+export const RAIL_KINDS = ["email", "sms", "slack", "calendar", "issue", "other"];
+
+/** Connection rows grouped under one header per kind; Context connections are listed under context instead. */
+export function connectionRows(connections) {
+  const kind = (c) => (RAIL_KINDS.includes(c.kind) ? c.kind : "other");
+  const rows = [];
+  for (const k of RAIL_KINDS) {
+    const group = connections.filter((c) => c.kind !== "context" && kind(c) === k);
+    if (group.length) rows.push({ header: k }, ...group.map((c) => ({ id: `conn:${c.id}`, icon: CONN[c.platform] ?? "server", conn: c,
+      label: c.name.length <= 21 ? c.name : c.name.slice(0, 20) + "…" })));
+  }
+  return rows;
+}
 const KEYS = ["page", "view", "case_view", "pipeline", "detail", "thread", "draft", "person", "organization", "case",
   "connection", "event", "task", "sequence", "source"];
 // What a page shows, once its shared keys are set: the commands that load its views.
@@ -305,9 +319,7 @@ export default class Nav extends View {
       { id: "people", icon: "users", label: "People", count: s.people },
       { id: "organizations", icon: "building-2", label: "Organizations", count: h.organizations },
       { id: "channels", icon: "hash", label: "Channels", count: h.channels },
-      { header: "connections" },
-      ...(h.connections ?? []).filter((c) => c.kind !== "context").map((c) => ({ id: `conn:${c.id}`, icon: CONN[c.platform] ?? "server", conn: c,
-        label: c.name.length <= 21 ? c.name : c.name.slice(0, 20) + "…" })),
+      ...connectionRows(h.connections ?? []),
       ...(ctx.length ? [{ header: "context" }] : []),
       ...ctx.map(([key, title, icon, st]) => ({ id: `context:${key}`, icon, label: title, ctx: st })),
     ].filter((i) => !i.module || modulesOn().has(i.module));

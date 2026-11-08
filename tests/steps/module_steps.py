@@ -6,6 +6,8 @@ import contextlib
 import io
 from datetime import timedelta
 
+import re
+
 from pytest_bdd import given, parsers, then, when
 
 from comms_terminal import agent, core, inbox, pipeline, remote, sequences, tui
@@ -71,7 +73,11 @@ def console_opens(ctx):
     def rail(app):
         r = app.main.rail
         return "\n".join(r.render_line(y).text for y in range(r.content_size.height))
-    (ctx.rail,) = console(ctx.path, [rail])
+
+    def rows(app):  # every rail row, also those below the fold
+        r = app.main.rail
+        return [str(r.get_option_at_index(i).prompt) for i in range(r.option_count)]
+    ctx.rail, ctx.rail_rows = console(ctx.path, [rail, rows])
 
 
 @then(parsers.parse("the rail shows {names}"))
@@ -84,6 +90,22 @@ def rail_shows(ctx, names):
         return
     for name in names.replace(" and ", ", ").replace('"', "").split(", "):
         assert name in ctx.rail, name
+
+
+# --- ADR 0018: the rail groups Connections by kind ----------------------------------------------------------
+
+@given("the demo Service with a Gmail, a Slack and a Linear Issue connection")
+def demo_service(ctx, tmp_path):
+    ctx.path = seeded(tmp_path)  # the demo seeds Gmail, Slack and Linear's Issue connection
+
+
+@then(parsers.parse("the rail lists {pairs}"))
+def rail_lists_under(ctx, pairs):
+    lines = [re.sub(r"\[[^\]]*\]", "", row).strip() for row in ctx.rail_rows]  # markup off
+    for name, kind in re.findall(r'"([^"]+)" under "([^"]+)"', pairs):
+        at = next(i for i, line in enumerate(lines) if line.endswith(f" {kind}") and len(line.split()) == 2)
+        group = lines[at + 1:next((j for j in range(at + 1, len(lines)) if not lines[j]), len(lines))]
+        assert any(name in row for row in group), (kind, group)
 
 
 # --- AS-MOD-2: Cases off --------------------------------------------------------------------------------------

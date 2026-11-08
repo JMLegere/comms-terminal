@@ -750,6 +750,15 @@ def rail_share(db, p: str) -> str:
         verdict[0], verdict[0].lower()) if verdict else "—"
 
 
+RAIL_KINDS = ("email", "sms", "slack", "calendar", "issue", "other")  # the rail's Connection groups, in order
+
+
+def rail_kind(c) -> str:
+    """A Connection's rail group: its kind, or "other" for a newer Service's Platform this Console doesn't know."""
+    kind = kind_of(c)
+    return kind if kind in RAIL_KINDS else "other"
+
+
 class Rail(OptionList):
     """Side rail (herdr/Plain style): threads and cases sections with their Status views, browse, and connections."""
     can_focus = True
@@ -807,11 +816,15 @@ class Rail(OptionList):
                  item("organizations", "organizations", "Organizations",
                       db.execute("SELECT COUNT(*) FROM organizations").fetchone()[0]),
                  item("channels", "channels", "Channels",
-                      db.execute("SELECT count(*) FROM channels WHERE kind != 'mailbox'").fetchone()[0]),
-                 gap, header("connections", "connections")]
-        for c in inbox.connections(db):
-            if kind_of(c) == "context":  # listed under context, each with its own page (FR-MOD-16)
-                continue
+                      db.execute("SELECT count(*) FROM channels WHERE kind != 'mailbox'").fetchone()[0])]
+        # Connections grouped by kind (ADR 0018), Context connections apart under context (FR-MOD-16)
+        conns = sorted((c for c in inbox.connections(db) if kind_of(c) != "context"),
+                       key=lambda c: RAIL_KINDS.index(rail_kind(c)))
+        kind = None
+        for c in conns:
+            if rail_kind(c) != kind:
+                kind = rail_kind(c)
+                opts += [gap, header({"issue": "issues", "other": "connections"}.get(kind, kind), kind)]
             ok = health_ok(c)
             state = f"[#6c782e]{ICON['ok']}[/]" if ok else f"[#c14a4a]{ICON['broken']}[/]"
             mark = "[#45707a]▌[/]" if main.section == f"conn:{c['id']}" else " "
