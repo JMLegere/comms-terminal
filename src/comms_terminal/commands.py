@@ -165,13 +165,27 @@ def service(db, words):
         yield
     finally:
         _state.reset(token)
-    counts = dict(db.execute("SELECT tbl, count(*) FROM changes WHERE seq > ? AND tbl != 'commands' GROUP BY tbl",
-                             (before,)).fetchall())
+    counts = {t: n for t, n in db.execute("SELECT tbl, count(*) FROM changes WHERE seq > ? GROUP BY tbl", (before,))
+              if t not in BOOKKEEPING}
     if counts:
         text = words(counts) if callable(words) else words
         db.execute("INSERT INTO commands (at, source, writer, label, reason) VALUES (?, 'service', 'service', ?,"
                    " 'Service work is not undone')", (clock.iso(clock.now()), text))
         db.commit()
+
+
+BOOKKEEPING = {"commands", "connections", "event_provider", "applied_mutations"}  # health and sync, not records
+WORDS = {"activities": "messages", "threads": "Threads", "tasks": "Tasks", "enrollments": "Enrollments",
+         "composition_drafts": "Drafts", "issues": "Issues", "events": "Events", "persons": "People",
+         "identities": "addresses", "audit_log": None, "email_refs": None, "attachments": "files"}
+
+
+def said(title: str):
+    """A Service pass's label from its changed tables: "Gmail: 2 messages, 1 Threads"."""
+    def words(counts: dict) -> str:
+        parts = [f"{n} {WORDS.get(t, t)}" for t, n in sorted(counts.items()) if WORDS.get(t, t)]
+        return f"{title}: {', '.join(parts) or 'records changed'}"
+    return words
 
 
 def _client_newest(db):

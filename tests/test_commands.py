@@ -187,3 +187,12 @@ def test_the_undo_window_is_a_setting_with_gmails_choices(demo):  # FR-UN-17, AS
     with commands.source("app"):
         commands.undo(db, commands.newest(db)["id"])
     assert inbox.undo_window(db) == 0
+
+
+def test_service_pass_labels_say_what_changed(demo):  # FR-UN-18, AS-UN-9
+    db, ids = demo
+    with commands.service(db, commands.said("Gmail")):
+        inbox.act(db, ids["ana"], inbox.Done())
+    c = last(db)
+    assert c["source"] == "service" and c["label"] == "Gmail: 1 Threads"
+    assert all(r["source"] != "service" for r in commands.history(db, service=False))

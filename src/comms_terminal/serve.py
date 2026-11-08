@@ -23,8 +23,8 @@ from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from . import (actions, attio, calendar, clock, email, fastmail, files, gcal, inbox, issues, linear, mcp, meetings,
-               platforms, quo, slack, tana)
+from . import (actions, attio, calendar, clock, commands, email, fastmail, files, gcal, inbox, issues, linear, mcp,
+               meetings, platforms, quo, slack, tana)
 
 
 def credential(name: str) -> bytes | None:
@@ -691,7 +691,8 @@ def hooks_server(db_path: str, host: str, port: int, client=None,
                 return 503, "text/plain", f"{path.rsplit('/', 1)[1]} not connected".encode()
             db = inbox.connect(db_path)
             try:
-                status, text = intake(db, name, headers, body, secret, clock.now(), *args)
+                with commands.service(db, commands.said(platforms.PLATFORMS[name].title)):  # one Command (ADR 0021)
+                    status, text = intake(db, name, headers, body, secret, clock.now(), *args)
             finally:
                 db.close()
             if name not in platforms.EMAIL:  # email stores its files inline
@@ -957,21 +958,22 @@ def wake_loop(db_path: str, stop: threading.Event, every: float = 60, kick: thre
         kick.clear()
         db = inbox.connect(db_path)
         try:
-            now = clock.now()
-            inbox.wake(db, now)
-            meetings.held(db, now)  # an ended Meeting occurrence puts its Thread in Todo (FR-OA-13)
-            if senders is not None:
-                send_due(db, senders, now)
-            inbox.reconcile_resend_receipts(db)
-            issues.rollover(db, now)  # unfinished Issues from a passed Planned day move on (FR-IS-10)
-            actions.run(db, action_clients(), now)  # the Action Queue (ADR 0020)
-            fetch_pending(db, get or {})
-            if expired is None or now - expired >= timedelta(days=1):
-                expired = now
-                inbox.expire_attachments(db, now)
-                inbox.prune_changes(db, now)  # the laptop's Change sets reach back 7 days (ADR 0012)
-            due = inbox.next_send_at(db)  # a Send now waiting out its Undo window leaves on time (ADR 0021)
-            wait = every if due is None else max(0.5, min(every, (due - clock.now()).total_seconds()))
+            with commands.service(db, commands.said("Wake")):  # the pass is one Service Command (ADR 0021)
+                now = clock.now()
+                inbox.wake(db, now)
+                meetings.held(db, now)  # an ended Meeting occurrence puts its Thread in Todo (FR-OA-13)
+                if senders is not None:
+                    send_due(db, senders, now)
+                inbox.reconcile_resend_receipts(db)
+                issues.rollover(db, now)  # unfinished Issues from a passed Planned day move on (FR-IS-10)
+                actions.run(db, action_clients(), now)  # the Action Queue (ADR 0020)
+                fetch_pending(db, get or {})
+                if expired is None or now - expired >= timedelta(days=1):
+                    expired = now
+                    inbox.expire_attachments(db, now)
+                    inbox.prune_changes(db, now)  # the laptop's Change sets reach back 7 days (ADR 0012)
+                due = inbox.next_send_at(db)  # a Send now waiting out its Undo window leaves on time (ADR 0021)
+                wait = every if due is None else max(0.5, min(every, (due - clock.now()).total_seconds()))
         except Exception as e:  # noqa: BLE001 - one failed pass must not stop the loop
             logging.getLogger("comms_terminal.wake").info("wake pass failed: %s", e)
         finally:
@@ -1043,15 +1045,16 @@ def calendar_loop(db_path: str, url: str, stop: threading.Event, every: float = 
     while True:
         db = inbox.connect(db_path)
         try:
-            if calendar.sync(db, calendar.fetch(url)):
-                log.info("calendar changed")
-                try:  # bookings, cancellations, declines (FR-OA-12, FR-OA-14); a failure is not the feed's
-                    if n := meetings.synced(db):
-                        log.info("meetings recorded: %d", n)
-                except Exception as e:  # noqa: BLE001
-                    log.info("meetings not recorded: %s", e)
-            ok_at = clock.now().isoformat(timespec="seconds")
-            calendar.record_ok(db)
+            with commands.service(db, commands.said("Calendar")):  # one Service Command when it changed (ADR 0021)
+                if calendar.sync(db, calendar.fetch(url)):
+                    log.info("calendar changed")
+                    try:  # bookings, cancellations, declines (FR-OA-12, FR-OA-14); a failure is not the feed's
+                        if n := meetings.synced(db):
+                            log.info("meetings recorded: %d", n)
+                    except Exception as e:  # noqa: BLE001
+                        log.info("meetings not recorded: %s", e)
+                ok_at = clock.now().isoformat(timespec="seconds")
+                calendar.record_ok(db)
         except Exception as e:  # noqa: BLE001 - one failed fetch must not stop the loop
             error = (str(e) or type(e).__name__).replace(url, "<secret address>")[:300]
             calendar.record_failure(db, error, ok_at)
