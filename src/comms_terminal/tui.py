@@ -1826,16 +1826,20 @@ class ReplyBox(Composer, Vertical):
         def chosen(choice):
             if not self.is_attached or choice in (None, "keep"):
                 return
-            if choice == "send":
+            if choice == "send" and not (window := inbox.undo_window(self.app.db)):
                 self.hint("sending…")
                 self.send(text, to, cc)
                 return
+            when = clock.now() + timedelta(seconds=window) if choice == "send" else later[choice]
             try:
-                inbox.schedule_reply(self.app.db, self.draft_key, text, to, cc, later[choice])
+                inbox.schedule_reply(self.app.db, self.draft_key, text, to, cc, when)
             except (ValueError, inbox.SendUnknown) as e:
                 self.hint(f"Not scheduled: {e}", True)
                 return
-            self.app.notify(f"Sends {stamp(later[choice].isoformat())}." if later[choice] else "Unscheduled · kept as a draft.")
+            if choice == "send":  # it waits out the Undo window on the Service (ADR 0021)
+                self.app.offer_undo(f"Sending in {window} s.")
+            else:
+                self.app.notify(f"Sends {stamp(later[choice].isoformat())}." if later[choice] else "Unscheduled · kept as a draft.")
             self.action_close()
 
         self.app.push_screen(Pick("Send", options), chosen)
@@ -3070,15 +3074,19 @@ class DraftView(Composer, Horizontal):
                              lambda choice: self.chose_send(choice, later) if self.is_attached else None)
 
     def chose_send(self, choice, later):
-        if choice == "send":
+        window = inbox.undo_window(self.app.db) if choice == "send" else 0
+        if choice == "send" and not window:
             self.dispatch_send()
-        elif choice in later:
+        elif choice in later or window:
+            when = clock.now() + timedelta(seconds=window) if window else later[choice]
             try:
-                self.draft = dict(inbox.schedule_draft(self.app.db, self.draft_id, later[choice]))
+                self.draft = dict(inbox.schedule_draft(self.app.db, self.draft_id, when))
             except inbox.SendUnknown as e:
                 self.notice, self.save_error = f"Not scheduled · {e}", True
             else:
                 self.notice, self.save_error = "", False
+                if window:  # it waits out the Undo window on the Service (ADR 0021)
+                    self.app.offer_undo(f"Sending in {window} s.")
             self.paint()
             page = self.app.main.current
             if isinstance(page, DraftsPage):
@@ -7069,14 +7077,17 @@ class SettingsPage(TablePage):
     RAIL = "settings"
     TITLE = f"{ICON['settings']} settings"
     COLUMNS = ("", "Module", "", "What hides while it is off")
-    INTRO = "Modules · For this Service · every Client shows the same. Enter or space turns one on or off."
+    INTRO = "Modules and the Undo window · For this Service · every Client shows the same. Enter or space changes one."
     BINDINGS = TablePage.BINDINGS + [Binding("space", "toggle", "on / off")]
 
     def rows(self):
         on = self.app.modules
+        window = inbox.undo_window(self.app.db)
         return [(m, (f"[#654735]{ICON['settings']}[/]", f"[b]{name}[/]",
                      "[#6c782e]on[/]" if m in on else "[#928374]off[/]", f"[#928374]{MODULE_LINES[m]}[/]"))
-                for m, name in inbox.MODULES.items()]
+                for m, name in inbox.MODULES.items()] + [
+            ("undo_window", (f"[#654735]{ICON['settings']}[/]", "[b]Undo window[/]", f"{window} s",
+                             "[#928374]Send now waits this long, so z can call it back; 0 sends at once[/]"))]
 
     def open(self, item):
         self.action_toggle()
@@ -7084,6 +7095,14 @@ class SettingsPage(TablePage):
     def action_toggle(self):
         module, app = self.selected(), self.app
         if module is None:
+            return
+        if module == "undo_window":  # the next of Gmail's choices (ADR 0021)
+            now = inbox.undo_window(app.db)
+            seconds = inbox.UNDO_WINDOWS[(inbox.UNDO_WINDOWS.index(now) + 1) % len(inbox.UNDO_WINDOWS)] \
+                if now in inbox.UNDO_WINDOWS else inbox.UNDO_WINDOW
+            inbox.set_undo_window(app.db, seconds)
+            self.refresh_data()
+            app.offer_undo(f"Undo window {seconds} s.")
             return
         on = module not in app.modules
 

@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 from test_remote import laptop, service  # noqa: F401 - fixtures
 
-from comms_terminal import inbox, remote, tui
+from comms_terminal import commands, inbox, remote, tui
 
 
 def call(path, **req):
@@ -57,6 +57,20 @@ def test_the_queue_numbers_writes_and_both_sides_use_the_console_moment(service,
     assert [p["mutation"] for p in calls] == [1, 2] and len({p["client"] for p in calls}) == 1
     assert all(remote.decode(p["kwargs"])["now"] == stamp for p in calls)
     assert inbox.get_thread(sdb, tid).status == inbox.get_thread(db, tid).status == "SNOOZED"
+
+
+def test_a_laptop_write_and_its_undo_are_the_same_commands_on_the_service(service, laptop):  # noqa: F811
+    """FR-UN-4, NFR-UN-1 (ADR 0021): the copy mints the Command's id as the Service does, and Undo applies at once."""
+    _, sdb, _, tid = service
+    rem, _, db, _ = laptop
+    tui.inbox.act(db, tid, inbox.Done())
+    assert rem.drain(10)
+    mine, theirs = commands.newest(db), commands.newest(sdb)
+    assert mine["id"] == theirs["id"] and (mine["source"], theirs["source"]) == ("console", "console")
+    tui.commands.undo(db, mine["id"])
+    assert inbox.get_thread(db, tid).status != "DONE"  # on the copy before the Service answers
+    assert rem.drain(10)
+    assert inbox.get_thread(sdb, tid).status != "DONE" and commands.newest(sdb) is None
 
 
 def test_prune_drops_week_old_ledger_entries(tmp_path):

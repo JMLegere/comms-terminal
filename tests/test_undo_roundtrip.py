@@ -112,6 +112,7 @@ CASES = {
     "inbox.delete_channel_rule": (None, lambda db, ids, x: inbox.delete_channel_rule(
         db, db.execute("SELECT id FROM channel_rules LIMIT 1").fetchone()[0])),
     "inbox.set_module": (None, lambda db, ids, x: inbox.set_module(db, "cases", False)),
+    "inbox.set_undo_window": (None, lambda db, ids, x: inbox.set_undo_window(db, 30)),
     "pipeline.set_stage": (None, lambda db, ids, x: pipeline.set_stage(db, org(db), "REVENUE", "Selection")),
     "pipeline.set_value": (None, lambda db, ids, x: pipeline.set_value(db, org(db), "REVENUE", 40000)),
     "issues.update": (None, lambda db, ids, x: issues.update(db, issue(db), {"priority": 4 if db.execute(

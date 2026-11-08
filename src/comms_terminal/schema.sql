@@ -522,3 +522,7 @@ CREATE TRIGGER commands_no_update BEFORE UPDATE ON commands
 BEGIN
   SELECT RAISE(ABORT, 'the Command log is append-only');
 END;
+CREATE TABLE service_settings (  -- this Service's own settings, the same in every Client (ADR 0021: the Undo window)
+  name  TEXT PRIMARY KEY NOT NULL,
+  value TEXT NOT NULL
+) STRICT;

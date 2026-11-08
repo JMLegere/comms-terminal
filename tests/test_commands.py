@@ -2,6 +2,7 @@
 words and Inverse; Undo of the newest Client Command."""
 
 import sqlite3
+from datetime import datetime, timedelta, timezone
 import sys
 from pathlib import Path
 
@@ -161,3 +162,28 @@ def test_the_command_log_is_append_only(demo):  # FR-UN-20
     with pytest.raises(sqlite3.IntegrityError, match="append-only"):
         with db:
             db.execute("DELETE FROM commands")
+
+
+@pytest.mark.undo_window
+def test_send_now_waits_the_undo_window_and_undo_calls_it_back(demo):  # FR-UN-16, AS-UN-5
+    db, ids = demo
+    assert inbox.undo_window(db) == 10
+    now = datetime.now(timezone.utc)
+    with commands.source("console"):
+        d = inbox.schedule_reply(db, ids["ana"], "Thanks, Ana", ["ana@acme.com"], [], now + timedelta(seconds=10))
+    assert inbox.next_send_at(db) is not None
+    with commands.source("console"):
+        commands.undo(db, commands.newest(db)["id"])
+    assert inbox.get_draft(db, d["id"])["send_at"] is None and inbox.next_send_at(db) is None  # nothing leaves
+
+
+def test_the_undo_window_is_a_setting_with_gmails_choices(demo):  # FR-UN-17, AS-UN-6
+    db, _ = demo
+    with commands.source("app"):
+        assert inbox.set_undo_window(db, 30) == 0
+    assert inbox.undo_window(db) == 30
+    with pytest.raises(ValueError):
+        inbox.set_undo_window(db, 7)
+    with commands.source("app"):
+        commands.undo(db, commands.newest(db)["id"])
+    assert inbox.undo_window(db) == 0

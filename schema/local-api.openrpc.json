@@ -1328,6 +1328,38 @@
    }
   },
   {
+   "name": "command.inbox.set_undo_window",
+   "summary": "The inbox.set_undo_window writer (write).",
+   "params": [
+    {
+     "name": "seconds",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": false,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
    "name": "command.inbox.stage",
    "summary": "The inbox.stage writer (create).",
    "params": [
@@ -3834,7 +3866,7 @@
   },
   {
    "name": "send.later",
-   "summary": "The send-later times a send menu offers: tomorrow and next Monday, at a random minute from 7 to 9 am.",
+   "summary": "The send-later times a send menu offers: tomorrow and next Monday, at a random minute from 7 to 9 am; and `window`, the Undo window in seconds that Send now waits (ADR 0021).",
    "params": [
     {
      "name": "origin",

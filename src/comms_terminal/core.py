@@ -215,7 +215,8 @@ def _envelope(core, db, thread_id, mode):
     return {"email": p.format == "email", "takes_replies": p.takes_replies, "sends_files": p.sends_files,
             "from": v["channel"]["external_id"], "where": v["where"], "to": list(to), "cc": list(cc),
             "subject": title if title.lower().startswith("re:") else f"Re: {title}", "link": native_link(v),
-            "later": {k: inbox.send_time(k, now).isoformat() for k in ("tomorrow", "monday")}}
+            "later": {k: inbox.send_time(k, now).isoformat() for k in ("tomorrow", "monday")}
+            | {"window": inbox.undo_window(db)}}
 
 
 @query("thread.forward", thread_id="string")
@@ -232,10 +233,11 @@ def _forward(core, db, thread_id):
 
 @query("send.later")
 def _later(core, db):
-    """The send-later times a send menu offers: tomorrow and next Monday, at a random minute from 7 to 9 am."""
+    """The send-later times a send menu offers: tomorrow and next Monday, at a random minute from 7 to 9 am; and
+    `window`, the Undo window in seconds that Send now waits (ADR 0021)."""
     from . import clock
     now = clock.now()
-    return {k: inbox.send_time(k, now).isoformat() for k in ("tomorrow", "monday")}
+    return {k: inbox.send_time(k, now).isoformat() for k in ("tomorrow", "monday")} | {"window": inbox.undo_window(db)}
 
 
 @query("enroll.choices", person_id="string", organization_id="string")

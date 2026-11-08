@@ -59,7 +59,7 @@ def test_every_query_answers_on_the_demo_data(demo_core):
               "person_id": first("SELECT id FROM persons"), "domain": first("SELECT domain FROM organizations"),
               "name": "revenue", "text": "a", "commands": [], "recent": [], "connection_id": first("SELECT id FROM connections"),
               "start": "2026-01-01", "end": "2026-12-31", "mode": "all", "organization_id": "", "org_id": first("SELECT id FROM organizations"),
-              "task_id": first("SELECT id FROM tasks WHERE state = 'DUE'"), "since": "2000-01-01",
+              "task_id": first("SELECT id FROM tasks WHERE state = 'DUE'"), "since": "2000-01-01", "service": True,
               "enrollment_id": first("SELECT id FROM enrollments"),
               "keep": first("SELECT id FROM persons"), "value": "a", "kind": "email", "drop": first("SELECT id FROM persons ORDER BY id DESC"),
               "id": first("SELECT id FROM organizations"), "uid": "no-such-event", "step_id": first("SELECT id FROM sequence_steps"), "fields": {}, "body": "", "voicemail": "", "source": "tana", "state": "ok", "checked": "2026-11-07T00:00:00+00:00",

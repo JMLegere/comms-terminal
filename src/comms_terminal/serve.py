@@ -949,9 +949,9 @@ def wake_loop(db_path: str, stop: threading.Event, every: float = 60, kick: thre
     downloads. Hook `kick` also wakes this pass (after acknowledgement, NFR-A5); old files and change-log entries
     expire once a day (NFR-A6, ADR 0012)."""
     import logging
-    kick, expired = kick or threading.Event(), None
+    kick, expired, wait = kick or threading.Event(), None, every
     while True:
-        kick.wait(every)
+        kick.wait(wait)
         if stop.is_set():
             return
         kick.clear()
@@ -970,6 +970,8 @@ def wake_loop(db_path: str, stop: threading.Event, every: float = 60, kick: thre
                 expired = now
                 inbox.expire_attachments(db, now)
                 inbox.prune_changes(db, now)  # the laptop's Change sets reach back 7 days (ADR 0012)
+            due = inbox.next_send_at(db)  # a Send now waiting out its Undo window leaves on time (ADR 0021)
+            wait = every if due is None else max(0.5, min(every, (due - clock.now()).total_seconds()))
         except Exception as e:  # noqa: BLE001 - one failed pass must not stop the loop
             logging.getLogger("comms_terminal.wake").info("wake pass failed: %s", e)
         finally:

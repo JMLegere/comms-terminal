@@ -76,6 +76,7 @@ CONSOLE_ONLY = {
     "inbox.restore_rows": UNDO,
     "inbox.schedule_draft": SENDS,
     "inbox.schedule_reply": SENDS,
+    "inbox.set_undo_window": "a Setting Jeremy sets in Settings",
     "inbox.unmerge_persons": UNDO,
     "issues.undo": "the console's undo; set the field again instead",
     "pipeline.undo": UNDO + "; set the Stage or Value again instead",

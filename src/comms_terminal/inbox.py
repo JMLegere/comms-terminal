@@ -904,7 +904,11 @@ END;
 CREATE TRIGGER commands_no_update BEFORE UPDATE ON commands
 BEGIN
   SELECT RAISE(ABORT, 'the Command log is append-only');
-END;"""
+END;
+CREATE TABLE service_settings (  -- this Service's own settings, the same in every Client (ADR 0021: the Undo window)
+  name  TEXT PRIMARY KEY NOT NULL,
+  value TEXT NOT NULL
+) STRICT;"""
 
 
 
@@ -2913,6 +2917,41 @@ def reply(db, thread_id: int, text: str, sender: Sender,
     if d is None:
         raise ValueError("Write a message")
     return send_draft(db, d["id"], d["revision"], sender)
+
+
+UNDO_WINDOWS = (0, 5, 10, 20, 30)  # seconds Send now waits so Undo can call it back, as Gmail offers (ADR 0021)
+UNDO_WINDOW = 10
+
+
+def undo_window(db) -> int:
+    """The Undo window in seconds (GLOSSARY): this Service's setting, 10 when it has none."""
+    r = db.execute("SELECT value FROM service_settings WHERE name = 'undo_window'").fetchone()
+    return int(r[0]) if r else UNDO_WINDOW
+
+
+@writer("write")
+def set_undo_window(db, seconds: int | None, *, now: datetime | None = None) -> int:
+    """Set how long Send now waits before the message leaves (None: back to the default); returns the old value."""
+    if seconds is not None and seconds not in UNDO_WINDOWS:
+        raise ValueError(f"The Undo window is one of {', '.join(map(str, UNDO_WINDOWS))} seconds.")
+    old = undo_window(db)
+    had = db.execute("SELECT 1 FROM service_settings WHERE name = 'undo_window'").fetchone()
+    with db:
+        if seconds is None:
+            db.execute("DELETE FROM service_settings WHERE name = 'undo_window'")
+        else:
+            db.execute("INSERT INTO service_settings (name, value) VALUES ('undo_window', ?)"
+                       " ON CONFLICT (name) DO UPDATE SET value = excluded.value", (str(seconds),))
+    commands.label(f"Undo window {undo_window(db)} s")
+    commands.inverse("inbox.set_undo_window", old if had else None)
+    return old
+
+
+def next_send_at(db) -> datetime | None:
+    """When the next scheduled Draft is due, for the Service's wake pass."""
+    r = db.execute("SELECT min(send_at) FROM composition_drafts WHERE send_at IS NOT NULL AND sending_at IS NULL"
+                   ).fetchone()[0]
+    return datetime.fromisoformat(r) if r else None
 
 
 @writer("write")
