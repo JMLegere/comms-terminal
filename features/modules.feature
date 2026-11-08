@@ -80,3 +80,9 @@ Feature: Modules
     When Jeremy opens "Tana" from the rail
     Then its Context source page shows "401 Unauthorized" and the time of its last check
     And it says Tana adds context to "Threads", "People", "Organizations" and "Cases"
+
+  @ADR-0018
+  Scenario: The rail groups Connections under their kind
+    Given the demo Service with a Gmail, a Slack and a Linear Issue connection
+    When the Console opens
+    Then the rail lists "jeremy@agentmaple.com" under "email", "Slack" under "slack" and "Linear" under "issue"
