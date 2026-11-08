@@ -84,7 +84,8 @@ CONSOLE_ONLY = {
 }
 # The Module each command needs (ADR 0017); `thread --case` needs Cases too. An off Module's command exits 3.
 CLI_MODULE = {"case": "cases", "enroll": "sequences", "enrollment": "sequences", "sequence": "sequences",
-              "step": "sequences", "task": "sequences", "tasks": "sequences", "pipeline": "pipelines"}
+              "step": "sequences", "task": "sequences", "tasks": "sequences", "pipeline": "pipelines",
+              "issues": "issues", "issue": "issues", "urgency": "issues"}
 DISABLED_EXIT = 3
 STATUSES = {"done": inbox.Done(), "wait": inbox.Wait(), "investigate": inbox.Investigate(),
             "ignore": inbox.Ignore(), "unignore": inbox.Unignore(), "snooze": None, "todo": None}

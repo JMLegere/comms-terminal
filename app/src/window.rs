@@ -856,8 +856,10 @@ const MODULE_COMMANDS: &[(&str, &str)] = &[
     ("today.r", "sequences"), ("today.f", "sequences"),
     ("pipeline.", "pipelines"), ("person.stage", "pipelines"), ("person.value", "pipelines"),
     ("organization.stage", "pipelines"), ("organization.value", "pipelines"),
+    ("issues.", "issues"), ("issue.", "issues"),
 ];
-const MODULE_NAMES: &[(&str, &str)] = &[("pipelines", "Pipelines"), ("sequences", "Sequences"), ("cases", "Cases")];
+const MODULE_NAMES: &[(&str, &str)] =
+    &[("pipelines", "Pipelines"), ("sequences", "Sequences"), ("cases", "Cases"), ("issues", "Issues")];
 
 /// The Module a command needs, if any.
 pub fn module_of(command: &str) -> Option<&'static str> {

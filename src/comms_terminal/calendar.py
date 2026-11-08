@@ -281,8 +281,10 @@ def items(db, start: date, end: date) -> list[dict]:
                         " JOIN persons p ON p.id = e.person_id JOIN sequences q ON q.id = e.sequence_id"
                         " WHERE e.starts_at IS NOT NULL AND e.state != 'FINISHED' AND ?", (seq,)):
         add("enrollment", e["starts_at"], f"{e['display_name']} starts {e['name']}", e["person_id"])
+    issues_on = "issues" in inbox.modules_on(db)  # Issues off: no planned Issues on the Calendar (ADR 0017)
     for i in db.execute("SELECT id, identifier, title, planned_day FROM issues WHERE planned_day >= ? AND planned_day < ?"
-                        " AND completed_at IS NULL AND canceled_at IS NULL", (start.isoformat(), end.isoformat())):
+                        " AND completed_at IS NULL AND canceled_at IS NULL AND ?",
+                        (start.isoformat(), end.isoformat(), issues_on)):
         add("issue", clock.local(date.fromisoformat(i["planned_day"])).isoformat(),  # on its Planned day (FR-UI-3)
             f"{i['identifier']} · {i['title']}", i["id"])
     return sorted(out, key=lambda i: (not i["all_day"], i["at"]))

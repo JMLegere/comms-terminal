@@ -21,3 +21,7 @@ Hiding works by tags where each surface is defined (pages, rail rows, view comma
 - An undo into an off Module is refused and kept, so it works again once the Module is back on.
 - App Settings › Modules writes the Service's database, an exception to the App Settings rule that Settings writes only `settings.json`.
 - Every new page, command or key that belongs to a Module must declare it; the parity tests fail otherwise.
+
+## Addendum (2026-11-08): Issues is a Module
+
+Issues (ADR 0019) is a fourth Module. While it is off the Issues page, its rail row, Today's issues pane, planned Issues on the Calendar, the Issue keys and the `issues`, `issue` and `urgency` commands are hidden or refused; the Action Queue and every Connection, Linear's Issue connection among them, stay Core. The Service keeps its copy current (the full read and the Linear webhook go on), but Rollover does nothing while Issues is off, as the Sequence engine does for Sequences, so no Slip status reaches Linear for a hidden Module. Migration 43 widens the `modules` table to the new id and turns Issues on for an existing Service; a new Service starts with it off.

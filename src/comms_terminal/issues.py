@@ -134,7 +134,7 @@ def _check(db, row, fields: dict) -> None:
         raise ValueError("that status belongs to another team")
 
 
-@writer("write")
+@writer("write", module="issues")
 def update(db, issue_id: str, fields: dict, *, now: datetime | None = None) -> str | None:
     """Sets some of an Issue's core fields in the copy at once and enqueues the Action that sets them on its
     Platform (FR-IS-11, FR-AQ-1). Returns the Action's id, or None when nothing changes."""
@@ -153,7 +153,7 @@ def update(db, issue_id: str, fields: dict, *, now: datetime | None = None) -> s
         return actions.enqueue(db, row["connection_id"], "issue_update", row["id"], changed, previous, True, now)
 
 
-@writer("write")
+@writer("write", module="issues")
 def create(db, issue_id: str, team_id: str, title: str, *, description: str | None = None,
            state_id: str | None = None, priority: int = 0, estimate: float | None = None,
            due_date: str | None = None, now: datetime | None = None) -> str:
@@ -178,7 +178,7 @@ def create(db, issue_id: str, team_id: str, title: str, *, description: str | No
                                True, now)
 
 
-@writer("write")
+@writer("write", module="issues")
 def undo(db, action_id: str, *, now: datetime | None = None) -> str | None:
     """Undo of an Issue change is a new Action that sets the old values back (FR-AQ-6)."""
     a = db.execute("SELECT * FROM actions WHERE id = ?", (action_id,)).fetchone()
@@ -271,7 +271,7 @@ def next_workday(d: date) -> date:
     return d
 
 
-@writer("write")
+@writer("write", module="issues")
 def plan(db, issue_id: str, day: str | None, *, now: datetime | None = None) -> None:
     """Sets or clears an Issue's Planned day (FR-IS-5). Local only: no Action, nothing goes to the Platform."""
     row = find(db, issue_id)
@@ -337,7 +337,7 @@ def coefficients(db) -> dict:
     return {r["name"]: r["value"] for r in db.execute("SELECT name, value FROM urgency")}
 
 
-@writer("write")
+@writer("write", module="issues")
 def set_urgency(db, name: str, value: float, *, now: datetime | None = None) -> None:
     """Changes one urgency coefficient (FR-IS-8)."""
     if db.execute("SELECT 1 FROM urgency WHERE name = ?", (name,)).fetchone() is None:
@@ -403,7 +403,10 @@ def warnings(db, now: datetime | None = None) -> dict[str, list[str]]:
 def rollover(db, now: datetime | None = None) -> int:
     """Each unfinished Issue planned before Jeremy's today moves to the next workday, and its Slip status goes to
     the Platform as an Action (FR-IS-10). Run each pass of the Service's loop; it moves only what has passed.
-    Returns how many moved."""
+    Returns how many moved. While Issues is off it does nothing, so no Slip status reaches the Platform for a hidden
+    Module; Issues that passed meanwhile roll on the first pass after it is on again (ADR 0017)."""
+    if "issues" not in inbox.modules_on(db):
+        return 0
     now = now or clock.now()
     target = next_workday(today(now))
     moved = 0
@@ -491,7 +494,7 @@ def view(db, options: dict | None = None, now: datetime | None = None, day_only:
     statuses = {r["id"]: dict(r) for r in db.execute("SELECT * FROM issue_statuses")}
     keep = COMPLETED[o["completed"]]
     shown = []
-    for i in issues(db):
+    for i in issues(db) if "issues" in inbox.modules_on(db) else ():  # Issues off: an empty page and pane (ADR 0017)
         closed = i["completed_at"] or i["canceled_at"]
         if closed and (keep is None or (now - datetime.fromisoformat(closed.replace("Z", "+00:00"))).days >= keep):
             continue

@@ -44,9 +44,9 @@ const NOLIST = new Set([...FULL, "pipeline"]); // pages whose list block is hidd
 const SOURCES = [["attio", "Attio", "server"], ["tana", "Tana", "layers"], ["linear", "Linear", "list-checks"]];
 const cap = (s) => s[0].toUpperCase() + s.slice(1);
 // Modules (ADR 0017): the pages each owns; an off Module's rail rows hide and its pages close (FR-MOD-9, FR-MOD-10).
-const MODULES = { pipelines: "Pipelines", sequences: "Sequences", cases: "Cases" };
+const MODULES = { pipelines: "Pipelines", sequences: "Sequences", cases: "Cases", issues: "Issues" };
 export const PAGE_MODULE = { cases: "cases", case: "cases", tasks: "sequences", task: "sequences",
-  sequences: "sequences", sequence: "sequences", pipeline: "pipelines" };
+  sequences: "sequences", sequence: "sequences", pipeline: "pipelines", issues: "issues", issue: "issues" };
 /** The Modules on, as shell.summary last said (all of them until it answers). */
 export const modulesOn = () => new Set(shared("modules") ?? Object.keys(MODULES));
 
@@ -311,7 +311,7 @@ export default class Nav extends View {
       { header: "cases", module: "cases" },
       ...STATUS.map((n) => ({ id: `cases:${n}`, icon: ICON[n], label: n, count: (h.cases ?? {})[n] ?? 0, module: "cases" })),
       { header: "work" },
-      { id: "issues", icon: "list-checks", label: "Issues", count: h.issues || "" },
+      { id: "issues", icon: "list-checks", label: "Issues", count: h.issues || "", module: "issues" },
       { id: "actions", icon: "clock", label: "Action Queue", count: h.actions || "" },
       { header: "playbook", module: "sequences" },
       { id: "tasks", icon: "list-checks", label: "Tasks", count: due || "", module: "sequences" },

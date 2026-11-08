@@ -499,7 +499,7 @@ _Avoid_: Mod, Plugin, Widget, Extension
 ## Modules
 
 **Module**:
-A named part of Comms Terminal that a Service's user can turn on or off for that Service: Pipelines, Sequences (with their Tasks and Enrollments), or Cases. An off Module is hidden in the Console and the App, its CLI commands say it is disabled, and its data is kept.
+A named part of Comms Terminal that a Service's user can turn on or off for that Service: Pipelines, Sequences (with their Tasks and Enrollments), Cases, or Issues. An off Module is hidden in the Console and the App, its CLI commands say it is disabled, and its data is kept.
 _Avoid_: Feature, Plugin, Extension, Section, Toggle
 
 **Core**:

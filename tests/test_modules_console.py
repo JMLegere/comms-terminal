@@ -73,7 +73,7 @@ def test_settings_turns_a_module_off_and_z_turns_it_back_on(tmp_path):  # FR-MOD
 
     async def opened(app, pilot):
         assert isinstance(app.main.current, SettingsPage)
-        assert [m for m, _ in app.main.current.items] == ["pipelines", "sequences", "cases"]
+        assert [m for m, _ in app.main.current.items] == ["pipelines", "sequences", "cases", "issues"]
     run(app, ["ctrl+comma", opened, "down", "down", "space",
               assert_off, "z"])
     assert "cases" in inbox.modules_on(inbox.connect(path))

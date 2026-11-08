@@ -27,7 +27,7 @@ from typing import Protocol, Sequence
 from . import clock, files, platforms
 from .writers import writer
 
-SCHEMA_VERSION = 42
+SCHEMA_VERSION = 43
 WAIT = timedelta(days=4)  # Waiting for them ends after this with no reply: back to Todo to follow up (#116)
 EMAIL_CONFIRMATION_PENDING = "Email confirmation pending; wait for its sent receipt before replying."
 MIGRATIONS = {  # version -> statement that upgrades an existing database to it
@@ -883,6 +883,15 @@ CREATE INDEX actions_due ON actions (state, due_at);
 CREATE INDEX actions_target ON actions (target, created_at);
 PRAGMA legacy_alter_table = OFF;"""
 
+MIGRATIONS[43] = """CREATE TABLE modules_new (  -- Issues becomes a Module (ADR 0017): on for an existing Service
+  id      TEXT PRIMARY KEY CHECK (id IN ('pipelines', 'sequences', 'cases', 'issues')),
+  enabled INTEGER NOT NULL CHECK (enabled IN (0, 1))
+) STRICT;
+INSERT INTO modules_new (id, enabled) SELECT id, enabled FROM modules;
+DROP TABLE modules;
+ALTER TABLE modules_new RENAME TO modules;
+INSERT INTO modules (id, enabled) VALUES ('issues', 1);"""
+
 
 class SendUnknown(SendFailed):
     """The provider may or may not have sent the message (timeout, lost response, crash before recording)."""
@@ -1111,7 +1120,7 @@ def migrate(db: sqlite3.Connection) -> None:
 
 # --- Modules (GLOSSARY, ADR 0017) --------------------------------------------
 
-MODULES = {"pipelines": "Pipelines", "sequences": "Sequences", "cases": "Cases"}  # id -> name, in rail order
+MODULES = {"pipelines": "Pipelines", "sequences": "Sequences", "cases": "Cases", "issues": "Issues"}  # id -> name, in rail order
 
 
 def modules_on(db) -> set[str]:

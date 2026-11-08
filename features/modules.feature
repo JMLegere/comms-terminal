@@ -86,3 +86,23 @@ Feature: Modules
     Given the demo Service with a Gmail, a Slack and a Linear Issue connection
     When the Console opens
     Then the rail lists "jeremy@agentmaple.com" under "email", "Slack" under "slack" and "Linear" under "issue"
+
+  @ADR-0017
+  Scenario: With Issues off, the CLI refuses the Issue commands
+    Given Issues is off
+    When the CLI runs "issues"
+    Then the CLI prints "Issues is disabled on this Service. Turn it on in Settings › Modules."
+    And the CLI exits with code 3
+
+  @ADR-0017
+  Scenario: With Issues off, the rail keeps the Action Queue but drops Issues
+    Given the demo Service with Issues off
+    When the Console opens
+    Then the rail keeps "Action Queue" and drops "Issues"
+
+  @ADR-0017
+  Scenario: Rollover waits while Issues is off
+    Given Issues is off
+    And an unfinished Issue planned for last Friday
+    When Rollover runs on Monday
+    Then the Issue is still planned for last Friday and nothing is queued for Linear

@@ -22,7 +22,7 @@ def test_settings_opens_names_sections_and_writes_at_once():
 
 def test_settings_modules_lists_each_module_and_a_switch_writes_and_offers_undo():
     out = _run()  # PRD 2026-11-07-modules, FR-MOD-13
-    assert out["modules"] == ["For this Service", "Pipelines", "On", "Sequences", "On", "Cases", "Off"]
+    assert out["modules"] == ["For this Service", "Pipelines", "On", "Sequences", "On", "Cases", "Off", "Issues", "Off"]
     assert out["turned"] == [{"method": "command.inbox.set_module", "params": {"module": "sequences", "enabled": False}}]
     assert out["undo"]["steps"] == [["inbox.set_module", {"module": "sequences", "enabled": True}]]
     assert out["turnToasts"] == ["Sequences turned off · z undo"]

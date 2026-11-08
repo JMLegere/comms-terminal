@@ -12,6 +12,7 @@ export const MODULES = [
   ["pipelines", "Pipelines", "Revenue, Fundraising and Talent; Stages and Values; Unattended on Today"],
   ["sequences", "Sequences", "Sequences, Tasks and Enrollments; Tasks and Paused on Today and the Calendar"],
   ["cases", "Cases", "Cases in the rail, Case headers in Threads lists, the case key"],
+  ["issues", "Issues", "Issues in the rail, Issues on Today and the Calendar, the issue commands"],
 ];
 /** Settings › Service & updates: the update step (shared "update", window.rs prepare_update) in words. */
 export const UPDATE_STEP = { building: "Building in the background", ready: "Ready · opens when you restart",

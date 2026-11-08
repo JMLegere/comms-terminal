@@ -27,7 +27,7 @@ for (const step of ["building", "ready", "failed"]) {
 state.modules = ["pipelines", "sequences"];
 texts.splice(0);
 v.modules({});
-out.modules = texts.filter((t) => ["Pipelines", "Sequences", "Cases", "On", "Off", "For this Service"].includes(t));
+out.modules = texts.filter((t) => ["Pipelines", "Sequences", "Cases", "Issues", "On", "Off", "For this Service"].includes(t));
 calls.splice(0);
 toasts.splice(0);
 v.turn("sequences", "Sequences", false, cx);
