@@ -12,6 +12,7 @@ export const MODULES = [
   ["pipelines", "Pipelines", "Revenue, Fundraising and Talent; Stages and Values; Unattended on Today"],
   ["sequences", "Sequences", "Sequences, Tasks and Enrollments; Tasks and Paused on Today and the Calendar"],
   ["cases", "Cases", "Cases in the rail, Case headers in Threads lists, the case key"],
+  ["issues", "Issues", "Issues in the rail, Issues on Today and the Calendar, the issue commands"],
 ];
 /** Settings › Modules: the Undo window's choices in seconds, as Gmail offers (inbox.UNDO_WINDOWS, ADR 0021). */
 export const WINDOWS = [0, 5, 10, 20, 30];

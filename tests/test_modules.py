@@ -23,6 +23,20 @@ def test_a_new_service_has_every_module_off():  # FR-MOD-1, FR-MOD-2
     assert inbox.modules_on(fresh()) == set()
 
 
+def test_migration_44_turns_issues_on_and_keeps_the_others_as_they_were():  # Issues becomes a Module
+    from schema_history import downgrade
+    db = sqlite3.connect(":memory:")
+    db.create_function("new_id", 0, inbox.new_id)
+    db.executescript(open(inbox.__file__.replace("inbox.py", "schema.sql")).read())
+    db.execute(f"PRAGMA user_version = {inbox.SCHEMA_VERSION}")
+    downgrade(db, 43)
+    db.execute("INSERT INTO modules (id, enabled) VALUES ('pipelines', 1), ('sequences', 0)")
+    db.commit()
+    inbox.migrate(db)
+    assert inbox.modules_on(db) == {"pipelines", "issues"}
+    assert db.execute("SELECT enabled FROM modules WHERE id = 'sequences'").fetchone()[0] == 0
+
+
 def test_the_migration_turns_every_module_on_for_an_existing_service():  # FR-MOD-2
     from schema_history import downgrade
     db = sqlite3.connect(":memory:")
@@ -31,13 +45,13 @@ def test_the_migration_turns_every_module_on_for_an_existing_service():  # FR-MO
     db.execute(f"PRAGMA user_version = {inbox.SCHEMA_VERSION}")
     downgrade(db, 36)
     inbox.migrate(db)
-    assert inbox.modules_on(db) == {"pipelines", "sequences", "cases"}
+    assert inbox.modules_on(db) == {"pipelines", "sequences", "cases", "issues"}
 
 
 def test_set_module_turns_one_off_and_back_on_and_says_what_it_was():  # FR-MOD-15
     db = fresh()
     assert inbox.set_module(db, "cases", False) is True
-    assert inbox.modules_on(db) == {"pipelines", "sequences"}
+    assert inbox.modules_on(db) == {"pipelines", "sequences", "issues"}
     assert inbox.set_module(db, "cases", True) is False
     with pytest.raises(KeyError):
         inbox.set_module(db, "calendar", False)

@@ -108,6 +108,51 @@ def rail_lists_under(ctx, pairs):
         assert any(name in row for row in group), (kind, group)
 
 
+# --- Issues as a Module (ADR 0017) --------------------------------------------------------------------------
+
+@given("the demo Service with Issues off")
+def demo_issues_off(ctx, tmp_path):
+    ctx.path = seeded(tmp_path)
+    with inbox.connect(ctx.path) as db:
+        inbox.set_module(db, "issues", False)
+
+
+@then(parsers.parse('the rail keeps "{kept}" and drops "{gone}"'))
+def rail_keeps_and_drops(ctx, kept, gone):
+    rows = [re.sub(r"\[[^\]]*\]", "", row).split() for row in ctx.rail_rows]
+    assert any(kept.split()[0] in row for row in rows), kept
+    assert not any(gone in row for row in rows), gone
+
+
+@given("an unfinished Issue planned for last Friday")
+def issue_planned_friday(ctx):
+    from datetime import datetime, timezone
+    from comms_terminal import issues
+    now = datetime(2026, 11, 6, 14, tzinfo=timezone.utc)
+    cid = inbox.ensure_connection(ctx.db, "linear", "issue", now)
+    issues.upsert(ctx.db, cid, {"id": "id-BIZ-1", "identifier": "BIZ-1", "title": "T", "description": None, "url": None,
+                                "team_id": "team", "state_id": "todo", "priority": 0, "estimate": None,
+                                "due_date": None, "created_at": "2026-11-01T12:00:00.000Z",
+                                "updated_at": "2026-11-06T12:00:00.000Z", "completed_at": None, "canceled_at": None,
+                                "data": {}}, now)
+    with ctx.db:
+        ctx.db.execute("UPDATE issues SET planned_day = '2026-11-06'")
+
+
+@when("Rollover runs on Monday")
+def rollover_monday(ctx):
+    from datetime import datetime, timezone
+    from comms_terminal import issues
+    ctx.moved = issues.rollover(ctx.db, datetime(2026, 11, 9, 14, tzinfo=timezone.utc))
+
+
+@then("the Issue is still planned for last Friday and nothing is queued for Linear")
+def rollover_waited(ctx):
+    assert ctx.moved == 0
+    assert ctx.db.execute("SELECT planned_day FROM issues").fetchone()[0] == "2026-11-06"
+    assert ctx.db.execute("SELECT count(*) FROM actions").fetchone()[0] == 0
+
+
 # --- AS-MOD-2: Cases off --------------------------------------------------------------------------------------
 
 @given(parsers.parse('an email Thread {n:d} in the Case "{title}"'))

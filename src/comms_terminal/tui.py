@@ -802,7 +802,8 @@ class Rail(OptionList):
         open_issues = db.execute("SELECT count(*) FROM issues WHERE completed_at IS NULL AND canceled_at IS NULL").fetchone()[0]
         waiting = db.execute("SELECT count(*) FROM actions WHERE state IN ('scheduled', 'running', 'unknown')"
                              ).fetchone()[0]  # what has yet to reach its Platform
-        opts += [gap, header("issues", "work"), item("issues", "issues", "Issues", open_issues or ""),
+        opts += [gap, header("issues", "work")] + ([item("issues", "issues", "Issues", open_issues or "")]
+                                                    if "issues" in on else []) + [
                  item("actions", "actions", "Action Queue", waiting or "")]
         if "sequences" in on:
             due = len(sequences.tasks_due(db))
@@ -1004,6 +1005,8 @@ def target_module(target: str) -> str | None:
         return "cases"
     if target in ("tasks", "sequences"):
         return "sequences"
+    if target == "issues":
+        return "issues"
     return "pipelines" if target.startswith("pipeline:") else None
 
 
@@ -6349,6 +6352,7 @@ class IssuesPage(Page):
     """Jeremy's Issues (FR-UI-1): Linear's List with its Display options, plus Planned day and Urgency. Today's
     section (FR-UI-2) is this list kept to today's Planned day."""
     TITLE = f"{ICON['issues']} issues"
+    MODULE = "issues"
     RAIL = "issues"
     KIND = "issues"
     SIDE = f"{ICON['issues']} issue"
@@ -7113,6 +7117,7 @@ MODULE_LINES = {  # what hides while a Module is off, as App Settings › Module
     "pipelines": "Revenue, Fundraising and Talent; Stages and Values; Unattended on Today",
     "sequences": "Sequences, Tasks and Enrollments; Tasks and Paused on Today and the Calendar",
     "cases": "Cases in the rail, Case headers in Threads lists, the case key",
+    "issues": "Issues in the rail, Issues on Today and the Calendar, the issue commands",
 }
 
 

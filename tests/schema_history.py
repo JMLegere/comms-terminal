@@ -41,6 +41,14 @@ def _integer_keys_sql() -> str:
 
 
 UNDO = {
+    44: """DELETE FROM modules WHERE id = 'issues';
+CREATE TABLE modules_old (  -- each Module's setting for this Service; no row means off (ADR 0017)
+  id      TEXT PRIMARY KEY CHECK (id IN ('pipelines', 'sequences', 'cases')),
+  enabled INTEGER NOT NULL CHECK (enabled IN (0, 1))
+) STRICT;
+INSERT INTO modules_old (id, enabled) SELECT id, enabled FROM modules;
+DROP TABLE modules;
+ALTER TABLE modules_old RENAME TO modules;""",
     43: "DROP TABLE commands; DROP TABLE service_settings;",
     42: """PRAGMA foreign_keys = OFF; PRAGMA legacy_alter_table = ON;
 DELETE FROM actions WHERE kind IN ('send', 'respond');
