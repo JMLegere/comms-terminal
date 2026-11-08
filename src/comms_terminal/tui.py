@@ -6639,9 +6639,10 @@ class ActionQueuePage(TablePage):
             if at.date() != day:
                 day = at.date()
                 out.append(({"header": f"history:{day}"}, ("", f"[b #7c6f64]{day:%a %b %-d}[/]", "", "", "", "")))
-            mark = "[#928374]undone[/]" if c["undone"] else ("[#928374]undo[/]" if c["undoes"] else "")
-            out.append((c | {"kind": "command"}, (f"[#928374]{at:%H:%M}[/]", escape(c["label"]), "", mark,
-                                                  f"[#928374]{c['source_name']}[/]", "")))
+            mark = " · undone" if c["undone"] else ""  # Source and mark beside the words: a narrow pane shows two columns
+            words = f"[#928374]{escape(c['label'])}[/]" if c["undone"] else escape(c["label"])
+            out.append((c | {"kind": "command"}, (f"[#928374]{at:%H:%M}[/]",
+                                                  f"{words}  [#928374]{c['source_name']}{mark}[/]", "", "", "", "")))
         return out
 
     def action_toggle_service(self):

@@ -109,7 +109,7 @@ def test_a_task_done_leaves_and_the_cursor_moves_on_to_drafts(tmp_path):
 
     run(Console(path), [scenario])
     assert seen["after"] == (False, True)
-    assert seen["undone"] == 1
+    assert seen["undone"] == 0  # a done Task is not undone (D-3, ADR 0021)
 
 
 def test_an_empty_today_says_all_clear_and_what_comes_next(tmp_path):

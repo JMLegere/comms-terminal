@@ -206,12 +206,3 @@ def none_without_service(ctx):
     assert not [c for c in commands.history(ctx.db, service=False)]
 
 
-@when(parsers.parse('the CLI runs "{line}"'))
-def cli_runs(ctx, line):
-    cli(ctx, *line.split())
-
-
-@then(parsers.parse('the CLI prints "{words}"'))
-def cli_prints(ctx, words):
-    assert words in ctx.printed, ctx.printed
-
