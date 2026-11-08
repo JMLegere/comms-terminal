@@ -689,13 +689,13 @@ def signed_urls(caps: dict):
     return file_url
 
 
+INSTALLED = ("inbox", "sequences", "pipeline", "commands", "files")  # the console modules install() swaps
+
+
 def install(tui, remote: Remote, caps: dict):
     """Point the console module at the service: proxies for its writes, and no local file store."""
-    tui.inbox = proxy(remote, inbox, "inbox")
-    tui.sequences = proxy(remote, sequences, "sequences")
-    tui.pipeline = proxy(remote, pipeline, "pipeline")
-    tui.commands = proxy(remote, commands, "commands")
-    tui.files = proxy(remote, files, "files")
+    for name in INSTALLED:
+        setattr(tui, name, proxy(remote, MODULES[name], name))
     files.file_url = signed_urls(caps)  # Attachment bytes and files-secret stay on the service (ADR 0004)
 
 

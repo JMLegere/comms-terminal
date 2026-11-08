@@ -57,7 +57,7 @@ def service(tmp_path):
 @pytest.fixture
 def laptop(service, tmp_path, monkeypatch):
     path, _, sock, _ = service
-    for name in ("inbox", "sequences", "pipeline", "files"):
+    for name in remote.INSTALLED:  # install() swaps each
         monkeypatch.setattr(tui, name, getattr(tui, name))
     monkeypatch.setattr(files, "file_url", files.file_url)
     link = LocalLink(sock)
