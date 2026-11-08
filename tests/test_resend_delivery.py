@@ -28,7 +28,7 @@ def test_tunnel_source_exposes_only_exact_four_hook_paths():
     tree = ast.parse((ROOT / "scripts/cloudflare_setup.py").read_text())
     paths = [node.value for node in ast.walk(tree) if isinstance(node, ast.Constant)
              and isinstance(node.value, str) and node.value.startswith("^/hooks/")]
-    assert paths == ["^/hooks/(email|slack|quo|resend)$"]
+    assert paths == ["^/hooks/(email|slack|quo|resend|linear)$"]
     pattern = re.compile(paths[0])
     for name in ("email", "slack", "quo", "resend"):
         assert pattern.fullmatch("/hooks/" + name)

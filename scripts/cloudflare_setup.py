@@ -99,7 +99,7 @@ def main(argv=None) -> int:
     else:
         tunnel_id = cf.call("POST", f"/accounts/{account_id}/cfd_tunnel", {"name": TUNNEL, "config_src": "cloudflare"})["id"]
     cf.call("PUT", f"/accounts/{account_id}/cfd_tunnel/{tunnel_id}/configurations", {"config": {"ingress": [
-        {"hostname": HOOKS, "path": "^/hooks/(email|slack|quo|resend)$", "service": "http://127.0.0.1:8787"},
+        {"hostname": HOOKS, "path": "^/hooks/(email|slack|quo|resend|linear)$", "service": "http://127.0.0.1:8787"},
         {"service": "http_status:404"}]}})
     run_token = cf.call("GET", f"/accounts/{account_id}/cfd_tunnel/{tunnel_id}/token")
     out = Path(a.tunnel_token_out).expanduser()

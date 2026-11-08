@@ -524,7 +524,7 @@ Two listeners in one process.
 
 ### Public hooks listener
 
-Four exact hook routes compose this listener; absent optional credentials return 503 for their route while siblings remain available (NFR-4). The source tunnel allowlist is `^/hooks/(email|slack|quo|resend)$`; private routes are excluded. `serve.HOOKS` maps the email, Slack, and Quo paths to their Platform; `serve.intake` finds the Connection (`503` when none), calls the adapter's `handle_hook`, and records `connections.last_error` on any `401`. `/hooks/resend` carries Resend receipts for the Gmail Connection and stays separate.
+Four exact hook routes compose this listener; absent optional credentials return 503 for their route while siblings remain available (NFR-4). The source tunnel allowlist is `^/hooks/(email|slack|quo|resend|linear)$`; private routes are excluded. `serve.HOOKS` maps the email, Slack, and Quo paths to their Platform; `serve.intake` finds the Connection (`503` when none), calls the adapter's `handle_hook`, and records `connections.last_error` on any `401`. `/hooks/resend` carries Resend receipts for the Gmail Connection and stays separate.
 
 - **`POST /hooks/email`**: one forwarded message as raw RFC 5322 (`Content-Type: message/rfc822`).
   - Auth: `X-Inbox-Timestamp` and `X-Inbox-Signature: sha256=<hex>`, HMAC-SHA256 over `timestamp + "." + body` with the shared secret; 5-minute window.
