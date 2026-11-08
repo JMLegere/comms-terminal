@@ -38,3 +38,4 @@ def test_the_issue_pane_changes_through_the_action_queue_with_undo(out):
 def test_the_action_queue_heads_each_day_with_its_counts_and_today_holds_issues(out):
     assert out["queue"] == ["Mon Nov 9 | Linear 1 · console 1", "action-a1", "task-t1", "Tue Nov 10 | Gmail 1", "draft-d1"]
     assert out["today"] == ["issues-7"]
+    assert out["history"] == ["Tue Nov 10", "Undo: Done: Intro call | Console", "Done: Intro call | App | undone"]

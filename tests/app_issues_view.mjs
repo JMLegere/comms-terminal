@@ -54,6 +54,11 @@ out.queue = Actions.ns.queueItems([
   { kind: "task", id: "t1", day: "2026-11-09", at: "2026-11-09T15:00:00Z", connection: null },
   { kind: "draft", id: "d1", day: "2026-11-10", at: "2026-11-10T13:00:00Z", connection: "Gmail" }])
   .map((it) => it.header ? `${it.header} | ${it.counts}` : it.key);
+// History (ADR 0021): the Command log below, a header per local day, newest first.
+out.history = Actions.ns.historyItems([
+  { id: "c2", at: "2026-11-10T15:00:00", label: "Undo: Done: Intro call", source_name: "Console", undoes: "c1", undone: false },
+  { id: "c1", at: "2026-11-10T14:00:00", label: "Done: Intro call", source_name: "App", undoes: null, undone: true }])
+  .map((it) => it.header ?? `${it.command.label} | ${it.command.source_name}${it.command.undone ? " | undone" : ""}`);
 
 // Today: the issues pane holds today's Planned Issues, and its keys reach the Issue pane.
 const Today = await load("today");

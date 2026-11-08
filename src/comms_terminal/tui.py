@@ -6602,6 +6602,8 @@ class ActionQueuePage(TablePage):
     SIDE = f"{ICON['actions']} action"
     COLUMNS = ("", "What", "Target", "State", "Source", "Connection")  # State before what clips in a narrow pane
     EMPTY = "Nothing is waiting to leave."
+    BINDINGS = TablePage.BINDINGS + [Binding("v", "toggle_service", "Service work in History")]
+    service = True  # History shows the Service's own Commands (FR-UN-19)
     STATE = {"scheduled": "#928374", "running": "#45707a", "confirmed": "#6c782e", "refused": "#c14a4a",
              "unknown": "#b47109"}
 
@@ -6622,11 +6624,39 @@ class ActionQueuePage(TablePage):
             out.append((r, (f"[#928374]{datetime.fromisoformat(r['at']).astimezone(sequences.LOCAL):%H:%M}[/]",
                             escape(r["what"]), escape(r["target"] or ""), state,
                             f"[#928374]{escape(r['source'] or '')}[/]", f"[#928374]{escape(r['connection'] or '')}[/]")))
+        if not found:  # the Action Queue's own empty state, above History
+            out.append(({"header": "empty"}, ("", f"[#928374]{self.EMPTY}[/]", "", "", "", "")))
+        return out + self.history_rows()
+
+    def history_rows(self):
+        """History (ADR 0021): the Command log below the Action Queue, newest first, by day."""
+        out, day = [({"header": "history"}, ("", f"[b]{ICON['actions']} History[/]",
+                                              "[#928374]every change · z undoes the newest from a Client[/]", "",
+                                              "[#928374]v Service work " + ("shown" if self.service else "hidden") + "[/]",
+                                              ""))], None
+        for c in commands.history(self.app.db, service=self.service, limit=200):
+            at = datetime.fromisoformat(c["at"]).astimezone(sequences.LOCAL)
+            if at.date() != day:
+                day = at.date()
+                out.append(({"header": f"history:{day}"}, ("", f"[b #7c6f64]{day:%a %b %-d}[/]", "", "", "", "")))
+            mark = "[#928374]undone[/]" if c["undone"] else ("[#928374]undo[/]" if c["undoes"] else "")
+            out.append((c | {"kind": "command"}, (f"[#928374]{at:%H:%M}[/]", escape(c["label"]), "", mark,
+                                                  f"[#928374]{c['source_name']}[/]", "")))
         return out
+
+    def action_toggle_service(self):
+        self.service = not self.service
+        self.refresh_data()
 
     def show_selected(self):
         r = self.selected()
         if not r or "header" in r:
+            return
+        if r.get("kind") == "command":
+            self.app.main.show_side(f"[b]{escape(r['label'])}[/]\n\n[#928374]Source[/]  {r['source_name']}\n"
+                                    f"[#928374]When[/]  {datetime.fromisoformat(r['at']).astimezone(sequences.LOCAL):%a %b %-d %H:%M}\n"
+                                    + ("[#928374]Undone[/]\n" if r["undone"] else "")
+                                    + (f"[#928374]No undo[/]  {escape(r['reason'])}\n" if r["reason"] else ""))
             return
         self.app.main.show_side(f"[b]{escape(r['what'])}[/]  {escape(r['target'] or '')}\n\n"
                                 f"[#928374]State[/]  {r['state']}\n[#928374]Source[/]  {escape(r['source'] or '')}\n"
@@ -6642,7 +6672,7 @@ class ActionQueuePage(TablePage):
         self.show_selected()
 
     def open(self, r):
-        if "header" in r:
+        if "header" in r or r.get("kind") == "command":
             return
         if r["kind"] == "action" and r["source"] == "Issue":
             page = IssuesPage()
