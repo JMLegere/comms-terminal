@@ -224,7 +224,7 @@ Status key in brackets:
   - Every Connection: Broken when its Health Check fails or none has run for over an hour (decision #119). Every 30 minutes the service checks that Resend, Slack, and Quo accept their keys and that Quo's webhook is enabled; Fastmail's 10-minute Sent poll is its check.
   - Silence on any channel cannot be told apart from a quiet inbox (R7, R12).
 - **NFR-3** [C]: **Pull only.** No notifications.
-- **NFR-4** [C]: **Single user.** The console is a terminal app reachable only by SSH to Workbox (D2, decision #71); the reply socket is owned by `jerry` with mode 0600. The source tunnel allowlist is exactly `^/hooks/(email|slack|quo|resend)$`; each route verifies its own protocol/secret. Private reply, context, file, and upload routes stay outside public ingress. Live tunnel changes require separately approved, scoped preservation of current configuration.
+- **NFR-4** [C]: **Single user.** The console is a terminal app reachable only by SSH to Workbox (D2, decision #71); the reply socket is owned by `jerry` with mode 0600. The source tunnel allowlist is exactly `^/hooks/(email|slack|quo|resend|linear)$`; each route verifies its own protocol/secret. Private reply, context, file, and upload routes stay outside public ingress. Live tunnel changes require separately approved, scoped preservation of current configuration.
 - **NFR-5** [P]: **Secrets.** Tokens and keys are never logged or printed, and are never stored as plaintext user-service credentials (Ledgere precedent).
 - **NFR-8** [P]: **Simplicity.** A single process, the standard library first, and no added service without evidence that it is needed. The inbound mail service, outbound provider, and ingress are needed by Plain's architecture (decision #55).
 
