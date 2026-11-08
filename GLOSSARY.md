@@ -509,3 +509,33 @@ _Avoid_: Base, Required modules
 **Module setting**:
 Whether one Module is on or off for one Service. Every Client of that Service reads the same value.
 _Avoid_: Flag, Toggle, Preference
+
+## Undo
+
+**Command**:
+One change made through Comms Terminal: one call to a writer, from the Console, the App, the CLI, or the Service's own work. It records when, its Source, what it did in a few words, and its Inverse. A writer that another writer calls belongs to the outer Command.
+_Avoid_: Action (that one is carried out on a Platform), Mutation (the laptop's queued write), Activity, Event, Operation
+
+**Source**:
+Where a Command came from: Console, App, CLI, or Service.
+_Avoid_: User, Agent, Origin (the Local API's view or Panel)
+
+**Inverse**:
+What puts one Command back: the writer calls that undo it, with the state its records must still be in. A Command whose change cannot be put back cleanly every time (a sent message, a completed Task, a new Case, a new Linear Issue) has no Inverse, only the reason.
+_Avoid_: Rollback, Revert
+
+**Undo**:
+Running the Inverse of the newest Command from the Console, the App or the CLI, from any of them. It is a Command itself that points at the one it undid; it has no Inverse, so there is no redo. It is refused when the records changed since, when its Module is off, or when a newer Command exists.
+_Avoid_: Revert, Rollback
+
+**Command log**:
+Every Command, kept forever on the Service and copied to each laptop like any other table. Never rewritten.
+_Avoid_: Change log (the laptop sync's record of row changes, ADR 0012), Audit log, Activity
+
+**History**:
+The Command log as Jeremy reads it: on the Action Queue page, below the Action Queue, by day, with each Command's time, Source and words, and whether it was undone. Service Commands can be hidden.
+_Avoid_: Activity, Timeline, Feed
+
+**Undo window**:
+How long Send now waits before the message leaves, so Undo can call it back; a Setting in seconds, 10 by default, 0 to send at once. It uses the send-later time.
+_Avoid_: Delay, Grace period, Unsend

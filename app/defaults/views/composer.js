@@ -222,6 +222,7 @@ export class Composer {
       }
     }
     const later = r?.envelope.later ?? await call("send.later").catch(() => null);
+    this.window = later?.window ?? 0; // Send now waits this long so z can call it back (ADR 0021)
     const options = [{ value: "send", label: "Send now" }];
     if (later) options.push({ value: later.tomorrow, label: `Send tomorrow · ${stamp(later.tomorrow)}` },
       { value: later.monday, label: `Send next Monday · ${stamp(later.monday)}` });
@@ -237,11 +238,13 @@ export class Composer {
   async sendPicked(choice, cx) {
     const d = this.draft;
     if (!d || choice === "keep") return this.body.focus();
-    if (choice === "send") return this.dispatch(false, cx);
+    const window = choice === "send" ? this.window ?? 0 : 0;
+    if (choice === "send" && !window) return this.dispatch(false, cx);
+    if (window) choice = new Date(Date.now() + window * 1000).toISOString(); // it waits out the Undo window
     setShared("advance", { draft: d.id, at: Date.now() }); // a list moves on to the next Draft (FR-UD-7)
     try {
       await call("command.inbox.schedule_draft", { draft_id: d.id, send_at: choice === "unschedule" ? null : { $dt: choice } });
-      toast(choice === "unschedule" ? "Unscheduled · kept as a draft." : `Sends ${stamp(choice)}.`);
+      toast(window ? `Sending in ${window} s.  z undo` : choice === "unschedule" ? "Unscheduled · kept as a draft." : `Sends ${stamp(choice)}.`);
       this.done(cx);
     } catch (e) {
       setShared("advance", null);

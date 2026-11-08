@@ -13,6 +13,8 @@ export const MODULES = [
   ["sequences", "Sequences", "Sequences, Tasks and Enrollments; Tasks and Paused on Today and the Calendar"],
   ["cases", "Cases", "Cases in the rail, Case headers in Threads lists, the case key"],
 ];
+/** Settings › Modules: the Undo window's choices in seconds, as Gmail offers (inbox.UNDO_WINDOWS, ADR 0021). */
+export const WINDOWS = [0, 5, 10, 20, 30];
 /** Settings › Service & updates: the update step (shared "update", window.rs prepare_update) in words. */
 export const UPDATE_STEP = { building: "Building in the background", ready: "Ready · opens when you restart",
   failed: "Failed to build · see Diagnostics", unmanaged: "No launcher · reinstall the App" };
@@ -57,6 +59,7 @@ export default class Settings extends View {
       setShared("settings", { section: SECTIONS.some(([id]) => id === asked) ? asked : shared("settings")?.section ?? "look" });
       this.turned = {};
       this.loadLog();
+      call("send.later").then((l) => { this.window = l?.window ?? null; cx.notify(); }).catch(() => {});
       return cx.notify();
     }
     if (name === "close") {
@@ -168,7 +171,25 @@ export default class Settings extends View {
         .child(v_flex().flex_1().min_w(0).child(div().font_semibold().child(name)).child(div().text_color(t.dim).child(line)))
         .child(div().id(`module-${m}-switch`).w(56).flex_none().py(4).rounded(6).border(1).border_color(t.border)
           .flex().justify_center().cursor_pointer().when(on.has(m), (e) => e.bg(t.selected)).hover((e) => e.bg(t.hover))
-          .on_click((_e, cx) => this.turn(m, name, !on.has(m), cx)).child(on.has(m) ? "On" : "Off"))));
+          .on_click((_e, cx) => this.turn(m, name, !on.has(m), cx)).child(on.has(m) ? "On" : "Off"))))
+      .child(h_flex().id("undo-window").gap(12).items_center().py(6)  // the Undo window (ADR 0021), Gmail's choices
+        .child(v_flex().flex_1().min_w(0).child(div().font_semibold().child("Undo window"))
+          .child(div().text_color(t.dim).child("Send now waits this long, so z can call it back; 0 sends at once")))
+        .children(WINDOWS.map((s) => div().id(`undo-window-${s}`).w(40).flex_none().py(4).rounded(6).border(1)
+          .border_color(t.border).flex().justify_center().cursor_pointer().when(this.window === s, (e) => e.bg(t.selected))
+          .hover((e) => e.bg(t.hover)).on_click((_e, cx) => this.setWindow(s, cx)).child(`${s} s`))));
+  }
+
+  /** The Undo window, written to this Service like a Module; z undoes it. */
+  setWindow(seconds, cx) {
+    const was = this.window;
+    this.window = seconds;
+    cx.notify();
+    call("command.inbox.set_undo_window", { seconds }).then(() => toast(`Undo window ${seconds} s.  z undo`)).catch((e) => {
+      this.window = was;
+      toast(`Not saved: ${e}`, "error");
+      cx.notify();
+    });
   }
 
   /** One write through the Local core; z undoes it, as every change in the App (FR-MOD-13). */
@@ -177,7 +198,7 @@ export default class Settings extends View {
     cx.notify();
     call("command.inbox.set_module", { module: m, enabled: value }).then(() => {
       const message = `${name} turned ${value ? "on" : "off"}.`;
-      setShared("undo", { message, module: m, steps: [["inbox.set_module", { module: m, enabled: !value }]] });
+      setShared("turned", m); // nav does not say it again
       toast(`${name} turned ${value ? "on" : "off"} · z undo`);
     }).catch((e) => {
       delete this.turned[m];

@@ -225,7 +225,7 @@ Feature: App
     Given the App with a Thread selected
     When Jeremy marks it Done, then presses z twice
     Then the Done toast ends with "z undo"
-    And the first z restores the Thread and says "Undone: back to how it was."
+    And the first z restores the Thread and says "Undone: Done: Intro call."
     And the second z says "Nothing to undo."
 
   @AS-CONF-7 @FR-CONF-11 @FR-CONF-9

@@ -20,7 +20,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from statistics import median
 from zoneinfo import ZoneInfo
 
-from . import calendar as cal, clock, inbox
+from . import calendar as cal, clock, commands, inbox
 from .writers import writer
 
 LOCAL = ZoneInfo("America/Halifax")  # Jeremy's days (main.LOCAL_TZ)
@@ -152,7 +152,8 @@ def set_stage(db, org_id: int, pipeline: str, stage: str, at=None, *, now: datet
     stage = parse_stage(pipeline, stage)
     if _held(db, org_id, pipeline).get("stage") == stage:
         return None
-    return _append(db, org_id, pipeline, "STAGE", at, stage=stage, now=now)
+    return _logged(db, org_id, pipeline, f"Stage {stage}",
+                   _append(db, org_id, pipeline, "STAGE", at, stage=stage, now=now))
 
 
 @writer("create", module="pipelines")
@@ -162,7 +163,18 @@ def set_value(db, org_id: int, pipeline: str, value, at=None, *, now: datetime |
     value = parse_amount(value)
     if _held(db, org_id, pipeline).get("value") == value:
         return None
-    return _append(db, org_id, pipeline, "VALUE", at, value=value, now=now)
+    return _logged(db, org_id, pipeline, f"Value CAD {value:,}",
+                   _append(db, org_id, pipeline, "VALUE", at, value=value, now=now))
+
+
+def _logged(db, subject_id, pipeline: str, what: str, entry: int) -> int:
+    """A Stage or Value entry's Command (ADR 0021): undone by its UNDO entry, never by deleting it."""
+    r = db.execute("SELECT display_name FROM persons WHERE id = ?" if pipeline in PEOPLE else
+                   "SELECT name FROM organizations WHERE id = ?", (subject_id,)).fetchone()
+    commands.label(f"{NAMES[pipeline]} {what}: {r[0] if r else subject_id}")
+    commands.target("pipeline_log", entry)
+    commands.inverse("pipeline.undo", entry)
+    return entry
 
 
 @writer("write", module="pipelines")
@@ -174,6 +186,8 @@ def undo(db, entry_id: int, *, now: datetime | None = None) -> None:
     if db.execute("SELECT 1 FROM pipeline_log WHERE undoes = ?", (entry_id,)).fetchone():
         raise Refused("already undone")
     _append(db, _subject(e), e["pipeline"], "UNDO", undoes=entry_id, now=now)
+    commands.label(f"{NAMES[e['pipeline']]} entry undone")
+    commands.not_undoable("set the Stage or Value again instead")
 
 
 def set_target(db, pipeline: str, amount, due) -> None:

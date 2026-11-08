@@ -9,7 +9,7 @@ import { call, nextEvent, nextCommand, theme, shared, setShared, run, toast, foc
 const RULE = { channel: "is exactly", prefix: "starts with", suffix: "ends with" };
 const EXAMPLE = { channel: "e.g. general", prefix: "e.g. ext-", suffix: "e.g. -alerts" };
 const GREY = { "#928374": "muted", "#a89984": "dim", "#7c6f64": "muted" };
-const offerUndo = (message, steps) => { setShared("undo", { message, steps }); toast(`${message}  z undo`); };
+const offerUndo = (message) => toast(`${message}  z undo`); // z undoes the newest Command (ADR 0021)
 
 export default class Connection extends View {
   init(_props, cx) {
@@ -84,8 +84,7 @@ export default class Connection extends View {
         return cx.spawn(async () => {
           try {
             await call("command.inbox.delete_channel_rule", { rule_id: rule.id });
-            offerUndo(`Rule deleted: “${rule.value}” channels stop syncing.`,
-              [["inbox.add_channel_rule", { connection_id: this.conn.slack, kind: rule.kind, value: rule.value }]]);
+            offerUndo(`Rule deleted: “${rule.value}” channels stop syncing.`);
           } catch (e) {
             toast(String(e), "error");
           }

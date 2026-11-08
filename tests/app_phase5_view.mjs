@@ -63,7 +63,7 @@ if (kase === "join") { // D95: o toasts the link; Ctrl+click opens it
   answers["command.sequences.skip_task"] = { task_id: "k1", restore: true };
   make(Tasks, { rows, filter: null, items: [], scroll: { scroll_to_item() {} } }).command("skip", cx);
   await settle();
-  out.undo = state.undo; out.toast = toasts.at(-1); out.task = state.task;
+  out.undo = state.undo ?? null; out.toast = toasts.at(-1); out.task = state.task;
 } else if (kase === "scheduled") { // decision #146: a scheduled email Task under SCHEDULED, with its send time
   const Tasks = await load("tasks");
   const send = new Date(2026, 10, 4, 9, 30).toISOString(); // Wed 04 Nov 09:30 local

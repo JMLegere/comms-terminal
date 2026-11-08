@@ -168,15 +168,13 @@ def test_enroll_from_people_then_do_skip_and_undo_tasks(tmp_path):
         await pilot.press("z")
         await pilot.pause()
         seen["after undo"] = [x["kind"] for x in sq.tasks_due(app.db)]
-        await pilot.press("x")
-        await pilot.pause()
-        seen["after skip"] = db.execute("SELECT state FROM tasks ORDER BY id").fetchall()
+        seen["states"] = db.execute("SELECT state FROM tasks ORDER BY id").fetchall()
 
     run(Console(path), [scenario], size=(187, 40))
     assert seen["task"] == ("Ana Ruiz", "call", 1)
     assert seen["after done"] == []  # the email follows on the next business day
-    assert seen["after undo"] == ["call"]
-    assert [r[0] for r in seen["after skip"]] == ["SKIPPED", "DUE"]
+    assert seen["after undo"] == []  # a done Task is not undone (D-3, ADR 0021)
+    assert [r[0] for r in seen["states"]] == ["DONE", "DUE"]
 
 
 def test_enroll_with_a_later_start_date(tmp_path):  # FR-SEQ-25

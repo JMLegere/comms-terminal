@@ -35,7 +35,11 @@ export function input(options = {}) {
 }
 const state_widget = { new: input };
 const comms = {
-  async call(method, params) { calls.push({ method, params }); return answers[method] ?? null; },
+  async call(method, params) {  // an answer may be a function of the params (the Service's state changing)
+    calls.push({ method, params });
+    const a = answers[method];
+    return (typeof a === "function" ? a(params) : a) ?? null;
+  },
   nextEvent: () => new Promise(() => {}), nextCommand: () => new Promise(() => {}), theme: () => ({}),
   shared: (key) => state[key], setShared: (key, value) => { state[key] = value; }, run(c) { ran.push(c); }, open() {},
   focusMain() {}, mark() {}, toast(m) { toasts.push(m); }, keys: () => ({}), moduleOf: () => null, status: () => state.status ?? {},

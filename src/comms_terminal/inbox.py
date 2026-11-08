@@ -24,10 +24,10 @@ from email.parser import BytesHeaderParser
 from email.utils import getaddresses
 from typing import Protocol, Sequence
 
-from . import clock, files, platforms
+from . import clock, commands, files, platforms
 from .writers import writer
 
-SCHEMA_VERSION = 42
+SCHEMA_VERSION = 43
 WAIT = timedelta(days=4)  # Waiting for them ends after this with no reply: back to Todo to follow up (#116)
 EMAIL_CONFIRMATION_PENDING = "Email confirmation pending; wait for its sent receipt before replying."
 MIGRATIONS = {  # version -> statement that upgrades an existing database to it
@@ -882,6 +882,34 @@ ALTER TABLE actions_new RENAME TO actions;
 CREATE INDEX actions_due ON actions (state, due_at);
 CREATE INDEX actions_target ON actions (target, created_at);
 PRAGMA legacy_alter_table = OFF;"""
+# Every change is a Command with its Inverse, kept forever (ADR 0021).
+MIGRATIONS[43] = """CREATE TABLE commands (  -- the Command log (ADR 0021): every change, its Source, words and Inverse; commands.py
+  id      TEXT PRIMARY KEY NOT NULL DEFAULT (new_id()),
+  at      TEXT NOT NULL,                       -- the writer's moment
+  source  TEXT NOT NULL CHECK (source IN ('console', 'app', 'cli', 'service')),
+  writer  TEXT NOT NULL,                       -- "inbox.act"; "service" for a Service pass
+  label   TEXT NOT NULL,                       -- what it did, in a few words ("Done: Intro call")
+  target  TEXT,                                -- the main record it changed, "threads:<id>"
+  guard   TEXT NOT NULL DEFAULT '[]',          -- JSON: [table, id, row as the Command left it]; Undo needs them so
+  inverse TEXT,                                -- JSON: [[writer, args, kwargs], ...] that put it back
+  reason  TEXT,                                -- why it has no Inverse
+  undoes  TEXT UNIQUE REFERENCES commands (id), -- an Undo: the Command it undid
+  CHECK (inverse IS NULL OR reason IS NULL)
+) STRICT;
+CREATE INDEX commands_at ON commands (at);
+CREATE TRIGGER commands_no_delete BEFORE DELETE ON commands
+BEGIN
+  SELECT RAISE(ABORT, 'the Command log is append-only');
+END;
+CREATE TRIGGER commands_no_update BEFORE UPDATE ON commands
+BEGIN
+  SELECT RAISE(ABORT, 'the Command log is append-only');
+END;
+CREATE TABLE service_settings (  -- this Service's own settings, the same in every Client (ADR 0021: the Undo window)
+  name  TEXT PRIMARY KEY NOT NULL,
+  value TEXT NOT NULL
+) STRICT;"""
+
 
 
 class SendUnknown(SendFailed):
@@ -1030,7 +1058,9 @@ class Sender(Protocol):
 
 # --- storage ---------------------------------------------------------------
 
-def connect(path: str = ":memory:", factory=sqlite3.Connection) -> sqlite3.Connection:
+def connect(path: str = ":memory:", factory=None) -> sqlite3.Connection:
+    from .writers import Held
+    factory = factory or Held  # a Command commits as a whole (ADR 0021)
     db = sqlite3.connect(path, factory=factory)
     db.row_factory = sqlite3.Row
     db.execute("PRAGMA foreign_keys = ON")
@@ -1149,6 +1179,9 @@ def set_module(db, module: str, enabled: bool, *, now: datetime | None = None) -
         was = module in modules_on(db)
         db.execute("INSERT INTO modules (id, enabled) VALUES (?, ?)"
                    " ON CONFLICT (id) DO UPDATE SET enabled = excluded.enabled", (module, int(bool(enabled))))
+    commands.label(f"{MODULES[module]} {'on' if enabled else 'off'}")
+    commands.target("modules", module)
+    commands.inverse("inbox.set_module", module, was)
     return was
 
 
@@ -1205,7 +1238,10 @@ def save_draft(db, values: dict, *, draft_id: int | None = None,
                 'INSERT INTO composition_drafts (connection_id, kind, sender, "to", cc, subject, body,'
                 " revision, created_at, updated_at, thread_id, task_id) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?) RETURNING id",
                 (*envelope, at, at, thread_id, task_id)).fetchone()[0]
+            commands.label(f"New Draft: {_draft_words(values)}")
+            commands.inverse("inbox.delete_draft", draft_id)
         else:
+            old = db.execute("SELECT * FROM composition_drafts WHERE id = ?", (draft_id,)).fetchone()
             saved = db.execute(
                 'UPDATE composition_drafts SET connection_id = ?, kind = ?, sender = ?, "to" = ?,'
                 " cc = ?, subject = ?, body = ?, revision = revision + 1, updated_at = ?,"
@@ -1215,15 +1251,29 @@ def save_draft(db, values: dict, *, draft_id: int | None = None,
             if not saved:
                 get_draft(db, draft_id)  # a missing row is distinct from a stale writer
                 raise DraftConflict("Draft changed after this edit was made; reload before saving.")
+            commands.label(f"Draft edited: {_draft_words(values)}")
+            if old["needs_edit"]:
+                commands.inverse("inbox.mark_needs_edit", draft_id)
+            commands.inverse("inbox.save_draft", {k: old[k] for k in values}, draft_id=draft_id,
+                             expected_revision=old["revision"] + 1)
+        commands.target("composition_drafts", draft_id)
         return get_draft(db, draft_id)
 
 
+def _draft_words(d) -> str:
+    return d.get("subject") or d.get("to") or (d.get("body") or "").strip().split("\n")[0][:60] or "(empty)"
+
+
 @writer("write")
-def mark_needs_edit(db, draft_id: int, *, now: datetime | None = None) -> dict:
-    """Needs edit: the Draft cannot send until its text is changed (GLOSSARY). The revision stays."""
+def mark_needs_edit(db, draft_id: int, needs: bool = True, *, now: datetime | None = None) -> dict:
+    """Needs edit: the Draft cannot send until its text is changed (GLOSSARY). The revision stays. `needs=False`
+    clears it (its undo)."""
     with db:
-        get_draft(db, draft_id)
-        db.execute("UPDATE composition_drafts SET needs_edit = 1 WHERE id = ?", (draft_id,))
+        d = get_draft(db, draft_id)
+        db.execute("UPDATE composition_drafts SET needs_edit = ? WHERE id = ?", (int(needs), draft_id))
+    commands.label(f"{'Needs edit' if needs else 'Needs edit cleared'}: {_draft_words(d)}")
+    commands.target("composition_drafts", draft_id)
+    commands.inverse("inbox.mark_needs_edit", draft_id, bool(d["needs_edit"]))
     return get_draft(db, draft_id)
 
 
@@ -1261,9 +1311,16 @@ def save_reply_draft(db, thread_id: int, body: str, task_id: int | None = None, 
         if not body.strip() and not (row and db.execute(
                 "SELECT 1 FROM staged_attachments WHERE draft_id = ?", (row["id"],)).fetchone()):
             if row:
+                whole = get_draft(db, row["id"])
                 db.execute("DELETE FROM composition_drafts WHERE id = ?", (row["id"],))
                 from . import sequences
                 sequences.task_draft_deleted(db, dict(row), now=now)  # an email Task's reply cleared: the Task is skipped
+                commands.label(f"Reply Draft cleared: {_draft_words(whole)}")
+                commands.target("composition_drafts", row["id"])
+                if row["task_id"]:
+                    commands.not_undoable("its Task was skipped")
+                else:
+                    commands.inverse("inbox.restore_draft", whole)
             return None
         values = _reply_values(db, thread_id, body)
         if values["kind"] == "email":
@@ -1292,10 +1349,15 @@ def schedule_draft(db, draft_id: int, send_at: datetime | None, *, now: datetime
     with db:
         if not db.in_transaction:
             db.execute("BEGIN IMMEDIATE")
-        if get_draft(db, draft_id)["sending_at"]:
+        d = get_draft(db, draft_id)
+        if d["sending_at"]:
             raise SendUnknown("Send outcome unknown; check before scheduling it.")
         db.execute("UPDATE composition_drafts SET send_at = ?, send_error = NULL WHERE id = ?",
                    (clock.iso(send_at) if send_at else None, draft_id))
+    commands.label(f"Send {'at ' + clock.local(send_at).strftime('%Y-%m-%d %H:%M') if send_at else 'later cleared'}:"
+                   f" {_draft_words(d)}")
+    commands.target("composition_drafts", draft_id)
+    commands.inverse("inbox.schedule_draft", draft_id, datetime.fromisoformat(d["send_at"]) if d["send_at"] else None)
     return get_draft(db, draft_id)
 
 
@@ -1356,6 +1418,9 @@ def delete_draft(db, draft_id: int, *, now: datetime | None = None) -> dict:
         draft = get_draft(db, draft_id)
         db.execute("DELETE FROM composition_drafts WHERE id = ?", (draft_id,))
         sequences.task_draft_deleted(db, draft, now=now)  # deleting an email Task's Draft skips the Task
+    commands.label(f"Draft deleted: {_draft_words(draft)}")
+    commands.target("composition_drafts", draft_id)
+    commands.inverse("inbox.restore_draft", draft)
     return draft
 
 
@@ -1363,6 +1428,8 @@ def delete_draft(db, draft_id: int, *, now: datetime | None = None) -> dict:
 def restore_draft(db, draft: dict, *, now: datetime | None = None) -> None:
     from . import sequences
     columns = ", ".join(f'"{c}"' for c in draft)
+    commands.label(f"Draft restored: {_draft_words(draft)}")
+    commands.not_undoable("it is an undo")
     with db:
         sequences.task_draft_restored(db, draft)
         db.execute(f"INSERT INTO composition_drafts ({columns}) VALUES ({', '.join('?' * len(draft))})",
@@ -1848,7 +1915,12 @@ def _same_person(db, name: str, value: str, kind: str) -> int | None:
 def rename_person(db, person_id: int, name: str, *, now: datetime | None = None) -> None:
     """Jeremy's own name for a Person; senders' display names only replace a name that is still an address."""
     with db:
+        old = db.execute("SELECT display_name FROM persons WHERE id = ?", (person_id,)).fetchone()
         db.execute("UPDATE persons SET display_name = ? WHERE id = ?", (name.strip(), person_id))
+    if old is not None:
+        commands.label(f"Renamed {old[0]} to {name.strip()}")
+        commands.target("persons", person_id)
+        commands.inverse("inbox.rename_person", person_id, old[0])
 
 
 @writer("write")
@@ -1858,6 +1930,7 @@ def merge_persons(db, keep: int, drop: int, *, now: datetime | None = None) -> N
     if keep == drop:
         return
     with db:
+        rows = _merge_rows(db, keep, drop)
         name = _merged_name(db, keep, drop)
         db.execute("UPDATE identities SET person_id = ? WHERE person_id = ?", (keep, drop))
         db.execute("UPDATE OR IGNORE memberships SET person_id = ? WHERE person_id = ?", (keep, drop))
@@ -1867,6 +1940,55 @@ def merge_persons(db, keep: int, drop: int, *, now: datetime | None = None) -> N
         sequences.merge_people(db, keep, drop, now=now)
         db.execute("DELETE FROM persons WHERE id = ?", (drop,))
         db.execute("UPDATE persons SET display_name = ? WHERE id = ?", (name, keep))
+    commands.label(f"Merged {rows['persons'][1]['display_name']} into {rows['persons'][0]['display_name']}")
+    commands.target("persons", keep)
+    commands.target("persons", drop)
+    commands.inverse("inbox.unmerge_persons", rows)
+
+
+MERGED = {"identities": "person_id = :drop", "memberships": "person_id IN (:keep, :drop)",
+          "enrollments": "person_id IN (:keep, :drop)",
+          "composition_drafts": "task_id IN (SELECT t.id FROM tasks t JOIN enrollments e ON e.id = t.enrollment_id"
+                                " WHERE e.person_id = :drop)"}
+
+
+def _merge_rows(db, keep, drop) -> dict:
+    """Every row a merge changes or removes, as it was (ADR 0021): what unmerge_persons puts back."""
+    q = {"keep": keep, "drop": drop}
+    rows = {t: [dict(r) for r in db.execute(f"SELECT * FROM {t} WHERE {w}", q)] for t, w in MERGED.items()}
+    rows["persons"] = [dict(db.execute("SELECT * FROM persons WHERE id = ?", (i,)).fetchone()) for i in (keep, drop)]
+    rows["pipeline_log"] = [r[0] for r in db.execute("SELECT id FROM pipeline_log WHERE person_id = ?", (drop,))]
+    return rows
+
+
+@writer("write")
+def unmerge_persons(db, rows: dict, *, now: datetime | None = None) -> None:
+    """Undo of merge_persons: the dropped Person back with its Identities, Memberships, Enrollments, Pipeline
+    entries and the Task Drafts the merge removed; the kept Person's name and Memberships as they were."""
+    keep, drop = rows["persons"]
+    commands.label(f"Unmerged {drop['display_name']} from {keep['display_name']}")
+    commands.not_undoable("it is an undo")
+    with db:
+        _put_row(db, "persons", drop)
+        db.execute("UPDATE persons SET display_name = ?, unsubscribed_at = ? WHERE id = ?",
+                   (keep["display_name"], keep["unsubscribed_at"], keep["id"]))
+        for r in rows["identities"]:
+            db.execute("UPDATE identities SET person_id = ? WHERE id = ?", (drop["id"], r["id"]))
+        db.execute("DELETE FROM memberships WHERE person_id IN (?, ?)", (keep["id"], drop["id"]))
+        for t in ("memberships", "enrollments", "composition_drafts"):
+            for r in rows[t]:
+                _put_row(db, t, r)
+        for i in rows["pipeline_log"]:
+            db.execute("UPDATE pipeline_log SET person_id = ? WHERE id = ?", (drop["id"], i))
+
+
+def _put_row(db, table: str, row: dict) -> None:
+    """A row back as it was: inserted, or updated in place when its id is there (no REPLACE, which would delete its
+    children)."""
+    cols = ", ".join(f'"{c}"' for c in row)
+    upsert = (" ON CONFLICT (id) DO UPDATE SET " + ", ".join(f'"{c}" = excluded."{c}"' for c in row if c != "id")
+              if "id" in row else "")
+    db.execute(f'INSERT INTO "{table}" ({cols}) VALUES ({", ".join("?" * len(row))}){upsert}', tuple(row.values()))
 
 
 def _merged_name(db, keep: int, drop: int) -> str:
@@ -2031,11 +2153,18 @@ def _identity_for(db, sender: Identity) -> sqlite3.Row:
 def block(db, kind: str, value: str, blocked: bool = True, *, now: datetime | None = None) -> None:
     value = value.lower() if kind == "email" else value
     with db:
-        if db.execute("SELECT 1 FROM identities WHERE kind = ? AND value = ?",
-                      (kind, value)).fetchone() is None:
+        was = db.execute("SELECT blocked FROM identities WHERE kind = ? AND value = ?", (kind, value)).fetchone()
+        if was is None:
             _identity_for(db, Identity(kind, value))
         db.execute("UPDATE identities SET blocked = ? WHERE kind = ? AND value = ?",
                    (int(blocked), kind, value))
+        ident = db.execute("SELECT id FROM identities WHERE kind = ? AND value = ?", (kind, value)).fetchone()[0]
+    commands.label(f"{'Blocked' if blocked else 'Unblocked'} {value}")
+    commands.target("identities", ident)
+    if was is None:  # it added an address, maybe a Person: not clean to take back (D-3)
+        commands.not_undoable("blocking a new address added it; unblock it instead")
+    else:
+        commands.inverse("inbox.block", kind, value, bool(was[0]))
 
 
 def thread_senders(db, thread_id: int) -> list[dict]:
@@ -2065,13 +2194,38 @@ def add_identity(db, person_id: int, kind: str, value: str, *, now: datetime | N
                        (person_id, kind, value))
         elif row["person_id"] != person_id:
             raise IdentityTaken(value)
-        _ensure_org(db, kind, value, now=now)
+        made = _made_org(db, kind, value, lambda: _ensure_org(db, kind, value, now=now))
+        ident = db.execute("SELECT id FROM identities WHERE kind = ? AND value = ?", (kind, value)).fetchone()[0]
+    commands.label(f"Linked {value}")
+    commands.target("identities", ident)
+    if row is None:
+        commands.inverse("inbox.delete_rows", [["identities", ident]] + made)
+    else:
+        if made:
+            commands.inverse("inbox.delete_rows", made)
+        commands.inverse("inbox.remove_identity", ident)
+
+
+def _made_org(db, kind, value, make) -> list:
+    """Run `make`; the Organization it added for the address's domain, as [[table, id]] for delete_rows."""
+    domain = _org(value.rsplit("@", 1)[1]) if kind == "email" and "@" in value else None
+    had = domain and db.execute("SELECT 1 FROM organizations WHERE domain = ?", (domain,)).fetchone()
+    make()
+    if not domain or had:
+        return []
+    r = db.execute("SELECT id FROM organizations WHERE domain = ?", (domain,)).fetchone()
+    return [["organizations", r[0]]] if r else []
 
 
 @writer("write")
 def remove_identity(db, identity_id: int, *, now: datetime | None = None) -> None:
     with db:
+        r = db.execute("SELECT person_id, kind, value FROM identities WHERE id = ?", (identity_id,)).fetchone()
         db.execute("UPDATE identities SET person_id = NULL WHERE id = ?", (identity_id,))
+    if r is not None and r["person_id"] is not None:
+        commands.label(f"Unlinked {r['value']}")
+        commands.target("identities", identity_id)
+        commands.inverse("inbox.add_identity", r["person_id"], r["kind"], r["value"])
 
 
 # --- ingest ----------------------------------------------------------------
@@ -2277,8 +2431,12 @@ def stage(db, *, sha: str, name: str, type: str, size: int,
     if owner is None:  # a file for a reply with no text yet: an empty Reply Draft holds it
         owner = save_draft(db, _reply_values(db, thread_id, ""), thread_id=thread_id, now=now)["id"]
     with db:
-        return db.execute("INSERT INTO staged_attachments (draft_id, sha, name, type, size, added_at)"
-                          " VALUES (?, ?, ?, ?, ?, ?) RETURNING id", (owner, sha, name, type, size, clock.iso((now or clock.now())))).fetchone()[0]
+        staged = db.execute("INSERT INTO staged_attachments (draft_id, sha, name, type, size, added_at)"
+                            " VALUES (?, ?, ?, ?, ?, ?) RETURNING id", (owner, sha, name, type, size, clock.iso((now or clock.now())))).fetchone()[0]
+    commands.label(f"Attached {name}")
+    commands.target("staged_attachments", staged)
+    commands.inverse("inbox.unstage", staged)
+    return staged
 
 
 def staged(db, *, draft_id: int | None = None, thread_id: int | None = None) -> list[dict]:
@@ -2304,12 +2462,45 @@ def unstage(db, staged_id: int, *, now: datetime | None = None) -> None:
     with db:
         r = db.execute("SELECT d.* FROM staged_attachments s JOIN composition_drafts d ON d.id = s.draft_id"
                        " WHERE s.id = ?", (staged_id,)).fetchone()
+        f = db.execute("SELECT * FROM staged_attachments WHERE id = ?", (staged_id,)).fetchone()
         db.execute("DELETE FROM staged_attachments WHERE id = ?", (staged_id,))
+        gone = False
         if r and r["thread_id"] is not None and not r["body"].strip() and not db.execute(
                 "SELECT 1 FROM staged_attachments WHERE draft_id = ?", (r["id"],)).fetchone():
             db.execute("DELETE FROM composition_drafts WHERE id = ?", (r["id"],))
             from . import sequences
             sequences.task_draft_deleted(db, dict(r), now=now)
+            gone = True
+    if f is not None:
+        commands.label(f"Removed {f['name']}")
+        commands.target("staged_attachments", staged_id)
+        if gone and r["task_id"]:
+            commands.not_undoable("its Task was skipped")
+        elif gone:  # last first: the Draft comes back before its file
+            commands.inverse("inbox.restore_rows", [["staged_attachments", dict(f)]])
+            commands.inverse("inbox.restore_draft", dict(r))
+        else:
+            commands.inverse("inbox.restore_rows", [["staged_attachments", dict(f)]])
+
+
+@writer("write")
+def restore_rows(db, rows: list, *, now: datetime | None = None) -> None:
+    """An Inverse (ADR 0021): rows a Command removed or changed, back as they were, in order."""
+    commands.label("Rows back")
+    commands.not_undoable("it is an undo")
+    with db:
+        for table, row in rows:
+            _put_row(db, table, row)
+
+
+@writer("write")
+def delete_rows(db, rows: list, *, now: datetime | None = None) -> None:
+    """An Inverse (ADR 0021): rows a Command made, gone again, last first."""
+    commands.label("Rows removed")
+    commands.not_undoable("it is an undo")
+    with db:
+        for table, row_id in reversed(rows):
+            db.execute(f'DELETE FROM "{table}" WHERE id = ?', (row_id,))
 
 
 EMAIL_ATOM = r"[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+"
@@ -2676,6 +2867,7 @@ def act(db, thread_id: int, action: Action | Reopen, *, now: datetime | None = N
         t = get_thread(db, thread_id)
         thread_id = t.id
         now = (now or clock.now())
+        _act_command(db, t, action)
         if isinstance(action, SetCase):
             case_id = action.case_id
             if action.new_title is not None:
@@ -2687,6 +2879,28 @@ def act(db, thread_id: int, action: Action | Reopen, *, now: datetime | None = N
         elif nxt := transition((t.status, t.status_detail), action, has_replied=_has_replied(db, thread_id)):
             _set_status(db, thread_id, now, *nxt, cause="reopen" if isinstance(action, Reopen) else "action")
         return get_thread(db, thread_id)
+
+
+ACT_WORDS = {"Done": "Done", "Ignore": "Ignored", "Unignore": "Un-ignored", "Investigate": "Investigating",
+             "Wait": "Waiting for them", "MarkTodo": "Back to Todo", "Reopen": "Reopened by an import"}
+
+
+def _act_command(db, t: Thread, action) -> None:
+    """Act's Command (ADR 0021): its words, the Thread, and the snapshot that puts it back."""
+    commands.target("threads", t.id)
+    if isinstance(action, SetCase):
+        if action.new_title is not None:  # a new Case stays behind: not clean, so not undoable (D-3)
+            commands.label(f"New Case {action.new_title}: {t.title}")
+            commands.not_undoable("a new Case is not undone")
+            return
+        case = db.execute("SELECT title FROM cases WHERE id = ?", (action.case_id,)).fetchone()
+        commands.label(f"Case {case[0]}: {t.title}" if case else f"Out of its Case: {t.title}")
+    elif isinstance(action, Snooze):
+        commands.label(f"Snoozed{' until ' + action.until.strftime('%Y-%m-%d %H:%M') if action.until else ''}: "
+                       f"{t.title}")
+    else:
+        commands.label(f"{ACT_WORDS.get(type(action).__name__, type(action).__name__)}: {t.title}")
+    commands.inverse("inbox.restore", snapshot(db, t.id))
 
 
 def reply(db, thread_id: int, text: str, sender: Sender,
@@ -2703,6 +2917,54 @@ def reply(db, thread_id: int, text: str, sender: Sender,
     if d is None:
         raise ValueError("Write a message")
     return send_draft(db, d["id"], d["revision"], sender)
+
+
+UNDO_WINDOWS = (0, 5, 10, 20, 30)  # seconds Send now waits so Undo can call it back, as Gmail offers (ADR 0021)
+UNDO_WINDOW = 10
+
+
+def undo_window(db) -> int:
+    """The Undo window in seconds (GLOSSARY): this Service's setting, 10 when it has none."""
+    r = db.execute("SELECT value FROM service_settings WHERE name = 'undo_window'").fetchone()
+    return int(r[0]) if r else UNDO_WINDOW
+
+
+@writer("write")
+def set_undo_window(db, seconds: int | None, *, now: datetime | None = None) -> int:
+    """Set how long Send now waits before the message leaves (None: back to the default); returns the old value."""
+    if seconds is not None and seconds not in UNDO_WINDOWS:
+        raise ValueError(f"The Undo window is one of {', '.join(map(str, UNDO_WINDOWS))} seconds.")
+    old = undo_window(db)
+    had = db.execute("SELECT 1 FROM service_settings WHERE name = 'undo_window'").fetchone()
+    with db:
+        if seconds is None:
+            db.execute("DELETE FROM service_settings WHERE name = 'undo_window'")
+        else:
+            db.execute("INSERT INTO service_settings (name, value) VALUES ('undo_window', ?)"
+                       " ON CONFLICT (name) DO UPDATE SET value = excluded.value", (str(seconds),))
+    commands.label(f"Undo window {undo_window(db)} s")
+    commands.inverse("inbox.set_undo_window", old if had else None)
+    return old
+
+
+def next_send_at(db) -> datetime | None:
+    """When the next scheduled Draft is due, for the Service's wake pass."""
+    r = db.execute("SELECT min(send_at) FROM composition_drafts WHERE send_at IS NOT NULL AND sending_at IS NULL"
+                   ).fetchone()[0]
+    return datetime.fromisoformat(r) if r else None
+
+
+@writer("write")
+def block_sender(db, thread_id: int, kind: str, value: str, blocked: bool = True, ignore: bool = False, *,
+                 now: datetime | None = None) -> bool:
+    """b on a Thread: block (or unblock) whoever wrote and, with `ignore`, Ignore the Thread too: one Command, so
+    one Undo puts both back (ADR 0021). Returns whether it Ignored the Thread."""
+    block(db, kind, value, blocked, now=now)
+    ignored = bool(blocked and ignore and get_thread(db, thread_id).status_detail != "IGNORED")
+    if ignored:
+        act(db, thread_id, Ignore(), now=now)
+    commands.label(f"{'Blocked' if blocked else 'Unblocked'} {value}{' and ignored the Thread' if ignored else ''}")
+    return ignored
 
 
 def wake(db, now: datetime) -> int:
@@ -2899,6 +3161,11 @@ def set_membership(db, person_id: int, domain: str, member: bool | None, *, now:
             db.execute("INSERT INTO memberships (person_id, organization_id, member, changed_at) VALUES (?, ?, ?, ?)"
                        " ON CONFLICT DO UPDATE SET member = excluded.member, changed_at = excluded.changed_at",
                        (person_id, org, int(member), clock.iso((now or clock.now()))))
+        who = db.execute("SELECT display_name FROM persons WHERE id = ?", (person_id,)).fetchone()
+    commands.label(f"{'Added' if member else 'Removed' if member is False else 'Email decides'}"
+                   f" {who[0] if who else person_id} {'to' if member else 'from' if member is False else 'for'} {domain}")
+    commands.target("persons", person_id)
+    commands.inverse("inbox.set_membership", person_id, domain, before)
     return before
 
 
@@ -2918,6 +3185,9 @@ def create_sole_proprietorship(db, person_id: int, *, now: datetime | None = Non
         db.execute("INSERT INTO memberships (person_id, organization_id, member, changed_at) VALUES (?, ?, 1, ?)"
                    " ON CONFLICT DO UPDATE SET member = 1, changed_at = excluded.changed_at",
                    (person_id, org, clock.iso((now or clock.now()))))
+    commands.label(f"Sole proprietorship: {name[0]}")
+    commands.target("organizations", org)
+    commands.not_undoable("a new Organization is not undone")
     return org
 
 
@@ -2938,6 +3208,10 @@ def set_case_description(db, case_id: int, description: str, *, now: datetime | 
             db.execute("UPDATE cases SET description = ? WHERE id = ?", (description, case_id))
             db.execute("INSERT INTO case_log (case_id, occurred_at, kind, old) VALUES (?, ?, 'DESCRIPTION', ?)",
                        (case_id, clock.iso((now or clock.now())), old))
+            title = db.execute("SELECT title FROM cases WHERE id = ?", (case_id,)).fetchone()[0]
+            commands.label(f"Case description: {title}")
+            commands.target("cases", case_id)
+            commands.inverse("inbox.set_case_description", case_id, old)
 
 
 def case_feed(db, case_id: int) -> list[dict]:
@@ -3003,6 +3277,8 @@ def rollup(details, order=CASE_VIEWS, empty="Todo") -> str:
 @writer("create", module="cases")
 def create_case(db, title: str, *, now: datetime | None = None) -> int:
     """A Case with no Threads yet (#120)."""
+    commands.label(f"New Case: {title}")
+    commands.not_undoable("a new Case is not undone")
     with db:
         return db.execute("INSERT INTO cases (title, created_at) VALUES (?, ?) RETURNING id", (title, clock.iso((now or clock.now())))).fetchone()[0]
 
@@ -3272,12 +3548,22 @@ def add_channel_rule(db, connection_id: int, kind: str, value: str, *, now: date
     with db:
         db.execute("INSERT OR IGNORE INTO channel_rules (connection_id, kind, value) VALUES (?, ?, ?)",
                    (connection_id, kind, value))
+        rule = db.execute("SELECT id FROM channel_rules WHERE connection_id = ? AND kind = ? AND value = ?",
+                          (connection_id, kind, value)).fetchone()[0]
+    commands.label(f"Channel rule {kind} {value}")
+    commands.target("channel_rules", rule)
+    commands.inverse("inbox.delete_channel_rule", rule)
 
 
 @writer("write")
 def delete_channel_rule(db, rule_id: int, *, now: datetime | None = None) -> None:
     with db:
+        r = db.execute("SELECT * FROM channel_rules WHERE id = ?", (rule_id,)).fetchone()
         db.execute("DELETE FROM channel_rules WHERE id = ?", (rule_id,))
+    if r is not None:
+        commands.label(f"Channel rule deleted: {r['kind']} {r['value']}")
+        commands.target("channel_rules", rule_id)
+        commands.inverse("inbox.restore_rows", [["channel_rules", dict(r)]])
 
 
 def people(db) -> list[dict]:
@@ -3376,6 +3662,8 @@ def restore(db, snap: dict, *, now: datetime | None = None) -> Thread:
             db.execute("BEGIN IMMEDIATE")
         current = snapshot(db, snap["id"])
         thread_id = current["id"]
+        commands.label("Thread restored")
+        commands.not_undoable("it is an undo")
         if thread_id != snap["id"] or current["_members"] != snap.get("_members", [snap["id"]]):
             raise StaleThreadSnapshot("Thread merged since this undo snapshot; refresh before changing it.")
         db.execute("UPDATE threads SET status = ?, status_detail = ?, status_changed_at = ?, snoozed_until = ?,"

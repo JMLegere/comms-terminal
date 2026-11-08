@@ -25,7 +25,9 @@ if (process.argv[2] === "stack") {
   out.push(look());
 } else {
   state.thread = "thread-1";
-  answers["thread.snapshot"] = { thread: "thread-1", status: "NEW_REPLY" };
+  let undone = false;  // the Service's Command log: one Command, then its Undo (ADR 0021)
+  answers["undo.newest"] = () => (undone ? null : { id: "c1", label: "Done: Intro call" });
+  answers["command.commands.undo"] = () => { undone = true; return "Done: Intro call"; };
   thread.command("done", cx);
   await settle();
   nav.command("undo", cx);

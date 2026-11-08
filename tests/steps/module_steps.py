@@ -134,19 +134,19 @@ def no_case_key(ctx):
 def cli_runs(ctx, line):
     from test_cli_parity import parser
     words = [str(ctx.threads.get(int(w), w)) if w.isdigit() and w == line.split()[1] else w for w in line.split()]
-    err = io.StringIO()
+    err, out = io.StringIO(), io.StringIO()
     ctx.exit = 0
-    with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+    with contextlib.redirect_stderr(err), contextlib.redirect_stdout(out):
         try:
             agent.run(parser().parse_args(words), ctx.db)
         except SystemExit as e:
             ctx.exit = e.code
-    ctx.stderr = err.getvalue()
+    ctx.stderr, ctx.printed = err.getvalue(), out.getvalue()
 
 
 @then(parsers.parse('the CLI prints "{text}"'))
 def cli_prints(ctx, text):
-    assert text in ctx.stderr
+    assert text in ctx.stderr + ctx.printed  # an error to stderr, an answer (undo --show) to stdout
 
 
 @then(parsers.parse("the CLI exits with code {code:d}"))

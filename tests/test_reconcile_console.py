@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 from textual.widgets import Input, OptionList, TextArea
 
-from comms_terminal import inbox
+from comms_terminal import commands, inbox
 from comms_terminal.tui import CaseCard, Console, Pick, ReplyBox
 
 
@@ -187,11 +187,9 @@ def test_remote_merge_preserves_live_composer_selection_and_invalidates_undo(tmp
         await pilot.press("r", *"Live text")
         box = app.main.thread_view.query_one(ReplyBox)
         box.query_one(".toinput", Input).value = "custom@example.test"
-        app.offer_undo("Fixture change", lambda: None)
-        bridge_console(path)
+        bridge_console(path)  # a stale undo is now refused by the Service's guard (ADR 0021), not dropped here
         app.check_changes()
         await pilot.pause()
-        assert app.undo is None
         assert app.main.page.current_thread_id() == ids["keep"]
         assert app.main.thread_view.query_one(ReplyBox) is box
         assert box.has_class("open") and box.query_one(TextArea).text == "Live text"
@@ -304,20 +302,22 @@ def test_stale_undo_keeps_reconciled_case_triage_and_live_draft(tmp_path):
     async def scenario(app, pilot):
         await open_old(app, pilot, ids["old"])
         await pilot.press("e")
-        assert app.undo is not None
+        done = commands.newest(app.db)
+        assert done["writer"] == "inbox.act"
         await open_old(app, pilot, ids["old"])
         await pilot.press("r", "ctrl+end", "!")
         box = app.main.thread_view.query_one(ReplyBox)
-        inbox.act(app.db, ids["keep"], inbox.SetCase(new_title="Case kept after reconciliation"))
-        case_id = inbox.get_thread(app.db, ids["keep"]).case_id
-        inbox.ingest(app.db, inbox.Incoming(
-            1, ME, "mailbox", "MESSAGE", FIRST, inbox.Identity("email", "first@example.test"),
-            datetime.now(timezone.utc), "duplicate", [SECOND]))
+        with commands.source("service"):  # changes from elsewhere since the Done
+            inbox.act(app.db, ids["keep"], inbox.SetCase(new_title="Case kept after reconciliation"))
+            case_id = inbox.get_thread(app.db, ids["keep"]).case_id
+            inbox.ingest(app.db, inbox.Incoming(
+                1, ME, "mailbox", "MESSAGE", FIRST, inbox.Identity("email", "first@example.test"),
+                datetime.now(timezone.utc), "duplicate", [SECOND]))
         app.main.focus_list()
         await pilot.press("z")
         await pilot.pause()
         thread = inbox.get_thread(app.db, ids["keep"])
-        assert app.undo is None
+        assert commands.newest(app.db)["id"] == done["id"]  # refused (changed since) and kept
         assert thread.case_id == case_id and thread.status_detail == "DONE_MANUALLY_SET"
         assert app.main.thread_view.query_one(ReplyBox) is box
         assert box.has_class("open") and box.query_one(TextArea).text == "Old saved text!"

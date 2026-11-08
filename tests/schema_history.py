@@ -41,6 +41,7 @@ def _integer_keys_sql() -> str:
 
 
 UNDO = {
+    43: "DROP TABLE commands; DROP TABLE service_settings;",
     42: """PRAGMA foreign_keys = OFF; PRAGMA legacy_alter_table = ON;
 DELETE FROM actions WHERE kind IN ('send', 'respond');
 CREATE TABLE actions_old (  -- the Action Queue (ADR 0020): each thing Comms Terminal carries out itself; actions.py

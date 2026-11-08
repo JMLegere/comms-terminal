@@ -9,7 +9,7 @@ import mimetypes
 import sys
 from datetime import date, timedelta
 
-from . import calendar, clock, files, inbox, issues, pipeline, sequence_md, sequences
+from . import calendar, clock, commands, files, inbox, issues, pipeline, sequence_md, sequences
 from .platforms import PLATFORMS
 from .remote import ReplyError, socket_context
 from .tui import (CONTEXT_SOURCES, DRAFT_FIELDS, connection_label, draft_history, draft_text, parse_time,
@@ -18,6 +18,7 @@ from .tui import (CONTEXT_SOURCES, DRAFT_FIELDS, connection_label, draft_history
 # Parity with the console (Jeremy, 2026-10-29): every writer (writers.WRITERS) is reachable from one command here,
 # or sits in CONSOLE_ONLY with its reason. tests/test_cli_parity.py fails when a new writer lands in neither.
 COMMANDS = {
+    "commands.undo": "undo",
     "files.store_file": "draft --attach",
     "inbox.act": "thread --status/--case",
     "inbox.add_channel_rule": "channel-rule add",
@@ -65,18 +66,24 @@ COMMANDS = {
 }
 SENDS = "it sends: Jeremy sends Drafts himself (Jeremy, 2026-10-29)"
 JEREMYS_TASK = "Jeremy does his own Tasks and answers his own Ifs"
-UNDO = "the console's undo, which replays a snapshot only the console holds"
+UNDO = "an Inverse that commands.undo runs (ADR 0021); agents use undo"
 CONSOLE_ONLY = {
     "files.upload_url": "a browser upload page on the LAN; agents use draft --attach",
+    "inbox.block_sender": "b on a Thread page (block and ignore as one change); agents use person block",
+    "inbox.delete_rows": UNDO,
     "inbox.restore": UNDO,
     "inbox.restore_draft": UNDO,
+    "inbox.restore_rows": UNDO,
     "inbox.schedule_draft": SENDS,
     "inbox.schedule_reply": SENDS,
+    "inbox.set_undo_window": "a Setting Jeremy sets in Settings",
+    "inbox.unmerge_persons": UNDO,
     "issues.undo": "the console's undo; set the field again instead",
     "pipeline.undo": UNDO + "; set the Stage or Value again instead",
     "sequences.complete_task": JEREMYS_TASK,
     "sequences.pick": JEREMYS_TASK,
     "sequences.restore_finish": UNDO,
+    "sequences.restore_schedule": UNDO,
     "sequences.restore_sequence": UNDO,
     "sequences.restore_step": UNDO,
     "sequences.undelete_sequence": UNDO,
@@ -259,6 +266,11 @@ def add_parsers(sub):
         t.add_argument("--at", help="backdate it: YYYY-MM-DD (seeding past Stages)")
     sub.add_parser("issues", help="Jeremy's Issues (ADR 0019): identifier, status, priority, Planned day, title")
     sub.add_parser("actions", help="the Action Queue (ADR 0020): what is waiting to leave, by day")
+    u = sub.add_parser("undo", help="undo the newest change from the Console, the App or the CLI (ADR 0021)")
+    u.add_argument("--show", action="store_true", help="print what undo would undo, and undo nothing")
+    h = sub.add_parser("history", help="the Command log, newest first: time, source, what, undone (ADR 0021)")
+    h.add_argument("--day", help="only this day, YYYY-MM-DD")
+    h.add_argument("--no-service", action="store_true", help="leave out the Service's own work")
     t = sub.add_parser("issue", help="one Issue as Markdown; flags change it on its Platform through the Action Queue"
                                      " (ADR 0020); `issue new` makes one")
     t.add_argument("id", help="an identifier (BIZ-1426), an Issue id, or new")
@@ -339,6 +351,11 @@ def issue_cmd(db, a) -> str:
 
 
 def run(a, db):
+    with commands.source("cli"):  # every change an agent makes is a CLI Command (ADR 0021)
+        _run(a, db)
+
+
+def _run(a, db):
     module = CLI_MODULE.get(a.cmd) or ("cases" if a.cmd == "thread" and a.case is not None else None)
     try:
         if module and module not in inbox.modules_on(db):
@@ -396,6 +413,12 @@ def run(a, db):
             for r in actions.queue(db):
                 print(f"{r['day']}\t{r['state']}\t{r['what']}\t{r['target'] or ''}\t{r['connection'] or ''}"
                       + (f"\t{r['error']}" if r["error"] else ""))
+        elif a.cmd == "undo":
+            print(undo_cmd(db, a), end="")
+        elif a.cmd == "history":
+            for c in commands.history(db, day=a.day, service=not a.no_service):
+                print(f"{c['at'][:16].replace('T', ' ')}\t{c['source_name']}\t{c['label']}"
+                      + ("\tundone" if c["undone"] else ""))
         elif a.cmd == "urgency":
             if a.urgency_cmd == "set":
                 issues.set_urgency(db, a.name, a.value, now=clock.now())
@@ -414,6 +437,15 @@ def run(a, db):
         raise SystemExit(DISABLED_EXIT) from e
     except (KeyError, ValueError, inbox.DraftConflict) as e:  # Refused and sequence_md.Invalid are ValueErrors
         raise SystemExit(f"comms-terminal {a.cmd}: {e.args[0] if e.args else e}") from e
+
+
+def undo_cmd(db, a) -> str:
+    c = commands.newest(db)
+    if c is None:
+        raise commands.Refused("Nothing to undo.")
+    if a.show:
+        return f"{c['label']} ({commands.NAMES[c['source']]}, {c['at'][:16].replace('T', ' ')})\n"
+    return f"Undone: {commands.undo(db, c['id'], now=clock.now())}\n"
 
 
 def module_cmd(db, a) -> str:

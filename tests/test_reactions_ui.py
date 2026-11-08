@@ -825,7 +825,7 @@ def test_remote_writer_proxies_keep_reaction_reads_adds_and_removes_on_private_t
         await settle(app, pilot)
         before = tuple(app.db.iterdump())
         with monkeypatch.context() as patch:
-            for name in ("inbox", "sequences", "pipeline", "files"):
+            for name in remote.INSTALLED:
                 patch.setattr(tui, name, getattr(tui, name))
             patch.setattr(remote.files, "file_url", remote.files.file_url)
             patch.setattr(remote, "post", post)

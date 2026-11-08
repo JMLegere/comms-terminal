@@ -30,7 +30,7 @@ from datetime import datetime
 from importlib import resources
 from pathlib import Path
 
-from . import agent, calendar, files, inbox, pipeline, remote, render, sequences, writers
+from . import agent, calendar, commands, files, inbox, pipeline, remote, render, sequences, writers
 
 LOG = logging.getLogger("comms_terminal.core")
 GENERATION = 1  # the Local API's protocol generation: a breaking change starts the next one (ADR 0013)
@@ -39,7 +39,7 @@ HEARTBEAT = 15  # seconds between heartbeat events
 BACKLOG = 1000  # events a slow subscriber may fall behind before it gets "missed"
 MAX_IMAGE = 5 * 1024 * 1024  # a remote image larger than this stays as its alt text
 ORIGINS = ("view", "panel")
-VIEW_ONLY = set(agent.CONSOLE_ONLY)  # commands a Panel may not run (sending, Tasks, undo, upload links)
+VIEW_ONLY = set(agent.CONSOLE_ONLY) | {"commands.undo"}  # a Panel may not send, do Tasks, undo, or make upload links
 DOMAIN_ERRORS = tuple(remote.ERRORS.values())
 
 
@@ -215,7 +215,8 @@ def _envelope(core, db, thread_id, mode):
     return {"email": p.format == "email", "takes_replies": p.takes_replies, "sends_files": p.sends_files,
             "from": v["channel"]["external_id"], "where": v["where"], "to": list(to), "cc": list(cc),
             "subject": title if title.lower().startswith("re:") else f"Re: {title}", "link": native_link(v),
-            "later": {k: inbox.send_time(k, now).isoformat() for k in ("tomorrow", "monday")}}
+            "later": {k: inbox.send_time(k, now).isoformat() for k in ("tomorrow", "monday")}
+            | {"window": inbox.undo_window(db)}}
 
 
 @query("thread.forward", thread_id="string")
@@ -232,10 +233,11 @@ def _forward(core, db, thread_id):
 
 @query("send.later")
 def _later(core, db):
-    """The send-later times a send menu offers: tomorrow and next Monday, at a random minute from 7 to 9 am."""
+    """The send-later times a send menu offers: tomorrow and next Monday, at a random minute from 7 to 9 am; and
+    `window`, the Undo window in seconds that Send now waits (ADR 0021)."""
     from . import clock
     now = clock.now()
-    return {k: inbox.send_time(k, now).isoformat() for k in ("tomorrow", "monday")}
+    return {k: inbox.send_time(k, now).isoformat() for k in ("tomorrow", "monday")} | {"window": inbox.undo_window(db)}
 
 
 @query("enroll.choices", person_id="string", organization_id="string")
@@ -566,6 +568,19 @@ def _actions_queue(core, db):
     leave in the next week, by day."""
     from . import actions
     return actions.queue(db)
+
+
+@query("undo.newest")
+def _undo_newest(core, db):
+    """The Command z would undo (ADR 0021): {id, label, source, at}, or null when there is nothing to undo."""
+    return commands.newest(db)
+
+
+@query("history.page", service="boolean")
+def _history(core, db, service):
+    """History (ADR 0021): the Command log, newest first, each with its Source and whether it was undone; `service`
+    false leaves out the Service's own work."""
+    return commands.history(db, service=service)
 
 
 @query("task.markdown", task_id="string")
@@ -948,6 +963,7 @@ class Core:
             self.call_from_thread(_rebase, syncer)
         if remote_ is not None:
             remote_.app = self
+            remote_.source = "app"  # the App's writes are App Commands on the Service too (ADR 0021)
         threading.Thread(target=self._heartbeat, daemon=True).start()
 
     # The interface Remote and Syncer report to, as the Console's app does.
@@ -1107,7 +1123,8 @@ class Core:
         def run():
             try:
                 inbox.admit(self.db, name, (), kwargs)  # a call into an off Module is refused (ADR 0017)
-                result = target(self.db, **kwargs)
+                with commands.source("app"):  # the App's Commands (ADR 0021)
+                    result = target(self.db, **kwargs)
                 if self.proxies is None:
                     self.db.commit()
             finally:

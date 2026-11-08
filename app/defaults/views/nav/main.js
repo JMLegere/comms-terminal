@@ -5,7 +5,7 @@
 //   - element focus across columns (rail, list, detail): ← → and h l move the focus to an element in the column
 //     beside (each view's cursor is its element); j/k in the detail column go to that column's view (keys.json
 //     "detail"); esc steps back a column, then a page. While the rail has it, keys.json's "rail" keys move it.
-//   - the one undo (setShared("undo", {message, steps: [[method, params], …]})); z runs the steps.
+//   - z: Undo of the newest Command from the Console, the App or the CLI, kept on the Service (ADR 0021).
 //   - the pause toast for an Enrollment paused during the session.
 // The App opens on Today, as the Console does.
 import { View, div, svg } from "gpui-kit";
@@ -98,7 +98,7 @@ export default class Nav extends View {
     setShared("modules", now);
     const lost = [...before].filter((m) => !now.includes(m));
     if (!lost.length) return;
-    for (const m of lost) if (shared("undo")?.module !== m) toast(`${MODULES[m]} turned off`); // Settings said it here
+    for (const m of lost) if (shared("turned") !== m) toast(`${MODULES[m]} turned off`); // Settings said it here
     const stack = shared("stack") ?? [];
     const kept = stack.filter((e) => !lost.includes(PAGE_MODULE[e.page]));
     if (kept.length === stack.length) return;
@@ -275,22 +275,18 @@ export default class Nav extends View {
     this.show(stack[stack.length - 1]);
   }
 
-  /** z: the one undo, as the Console's action_undo. */
+  /** z: Undo of the newest Command, as the Console's action_undo (ADR 0021). */
   undo(cx) {
-    const u = shared("undo");
-    if (!u) return toast("Nothing to undo.");
-    setShared("undo", null);
     cx.spawn(async () => {
+      const c = await call("undo.newest", {});
+      if (!c) return toast("Nothing to undo.");
       try {
-        for (const [method, params] of u.steps) await call(`command.${method}`, params);
-        toast("Undone: back to how it was.");
+        await call("command.commands.undo", { command_id: c.id });
+        toast(`Undone: ${c.label}.`);
       } catch (e) {
         const off = String(e).match(/(\w+) is disabled/);
-        if (off) { // kept: it undoes once the Module is on again (FR-MOD-11)
-          if (!shared("undo")) setShared("undo", u);
-          return toast(`${off[1]} is disabled`, "warning");
-        }
-        toast(/Stale/i.test(String(e)) ? "Cannot undo: this thread was reconciled. Current state kept." : String(e), "error");
+        if (off) return toast(`${off[1]} is disabled`, "warning"); // kept: it undoes once the Module is on (FR-MOD-11)
+        toast(String(e?.message ?? e).replace(/^[\w.]+: /, ""), "warning"); // refused: changed since, a newer change
       }
     });
   }

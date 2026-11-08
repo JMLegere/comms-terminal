@@ -144,10 +144,9 @@ function snoozeOptions() {
   return [...out, { value: "typed", label: "Pick a time…" }];
 }
 
-/** Say what changed and offer z to put it back, as the Console's offer_undo; `steps` are the calls that undo it. */
-export function offerUndo(message, steps) {
-  if (steps) setShared("undo", { message, steps });
-  toast(steps ? `${message}  z undo` : message);
+/** Say what changed and that z puts it back, as the Console's offer_undo (z undoes the newest Command, ADR 0021). */
+export function offerUndo(message) {
+  toast(`${message}  z undo`);
 }
 
 export default class Thread extends View {
@@ -239,9 +238,8 @@ export default class Thread extends View {
     const id = this.id();
     if (!id) return;
     cx.spawn(async (cx) => {
-      const snap = await call("thread.snapshot", { thread_id: id }).catch(() => null);
       if ((await this.write("inbox.act", { thread_id: id, action }, null, cx)) === undefined) return;
-      offerUndo(message, snap && [["inbox.restore", { snap }]]);
+      offerUndo(message);
     });
   }
 
@@ -415,15 +413,12 @@ export default class Thread extends View {
     const id = this.id();
     const thread = this.view?.thread?.f ?? {};
     cx.spawn(async (cx) => {
-      const snap = await call("thread.snapshot", { thread_id: id }).catch(() => null);
-      if ((await this.write("inbox.block", { kind: s.kind, value: s.value, blocked: !s.blocked }, null, cx)) === undefined) return;
-      let message;
-      if (s.blocked) message = `Unblocked ${s.value}: new messages reach Todo again.`;
-      else if (ignore && thread.status_detail !== "IGNORED") {
-        await this.write("inbox.act", { thread_id: id, action: dc("Ignore") }, null, cx);
-        message = `Blocked ${s.value} and ignored this thread: new threads from them go straight to Ignored.`;
-      } else message = `Blocked ${s.value}: new threads from them go straight to Ignored.`;
-      offerUndo(message, [["inbox.block", { kind: s.kind, value: s.value, blocked: s.blocked }], ...(snap ? [["inbox.restore", { snap }]] : [])]);
+      const ignored = await this.write("inbox.block_sender",  // one Command: one z puts both back (ADR 0021)
+        { thread_id: id, kind: s.kind, value: s.value, blocked: !s.blocked, ignore: ignore && thread.status_detail !== "IGNORED" }, null, cx);
+      if (ignored === undefined) return;
+      offerUndo(s.blocked ? `Unblocked ${s.value}: new messages reach Todo again.`
+        : ignored ? `Blocked ${s.value} and ignored this thread: new threads from them go straight to Ignored.`
+          : `Blocked ${s.value}: new threads from them go straight to Ignored.`);
     });
   }
 

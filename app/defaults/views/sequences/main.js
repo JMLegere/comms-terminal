@@ -15,7 +15,7 @@ import { call, nextEvent, nextCommand, theme, shared, setShared, run, toast, foc
 const KIND = { email: "Email", call: "Call", linkedin: "LinkedIn", letter: "Letter", action: "Action", if: "If" }; // KIND_LABEL
 const ICON = { email: "\u{f01f0}", call: "\u{f0df0}", linkedin: "\u{f033b}", letter: "\u{f0d8c}", action: "\u{f027b}", if: "\u{f0641}",
   sequence: "\u{f027b}", archive: "\u{f003c}", warn: "\u{f002a}" };
-const offerUndo = (message, steps) => { setShared("undo", { message, steps }); toast(`${message}  z undo`); };
+const offerUndo = (message) => toast(`${message}  z undo`); // z undoes the newest Command (ADR 0021)
 
 /** Active Sequences, then the Archived header, then (shown) the archived ones (the Console's rows). */
 export function seqRows(all, showArchived) {
@@ -178,8 +178,7 @@ export default class Sequences extends View {
           const r = await this.write("sequences.delete_step", { step_id: st.id });
           if (!r) return;
           const [moved, undo] = r;
-          offerUndo(`Step ${st.position} ${st.kind === "if" ? "and its paths " : ""}deleted. ${moved} Enrollment${moved === 1 ? "" : "s"} on it moved on.`,
-            [["sequences.restore_step", { undo }]]);
+          offerUndo(`Step ${st.position} ${st.kind === "if" ? "and its paths " : ""}deleted. ${moved} Enrollment${moved === 1 ? "" : "s"} on it moved on.`);
           await this.loadSteps(cx);
         });
       case "move_down": case "move_up":
@@ -204,8 +203,7 @@ export default class Sequences extends View {
         const live = q.active + q.paused;
         const undo = await this.write("sequences.archive_sequence", { sequence_id: q.id, cancel_live: answer.value === "cancel" });
         if (undo === undefined) return;
-        offerUndo(`Archived ${q.name}${answer.value === "cancel" ? `: ${live} Enrollments Canceled.` : "."}`,
-          [["sequences.restore_sequence", { sequence_id: q.id, undo: undo ?? [] }]]);
+        offerUndo(`Archived ${q.name}${answer.value === "cancel" ? `: ${live} Enrollments Canceled.` : "."}`);
       });
     }
   }
@@ -235,7 +233,7 @@ export default class Sequences extends View {
   archive(q, cx) {
     if (q.archived_at) return cx.spawn(async () => {
       const r = await this.write("sequences.restore_sequence", { sequence_id: q.id, undo: [] });
-      if (r !== undefined) offerUndo(`Restored ${q.name}: it takes new Enrollments again.`, [["sequences.archive_sequence", { sequence_id: q.id, cancel_live: false }]]);
+      if (r !== undefined) offerUndo(`Restored ${q.name}: it takes new Enrollments again.`);
     });
     const live = q.active + q.paused;
     this.pick(`Archive ${q.name}`, live ? [{ value: "cancel", label: `Cancel the ${live} live Enrollments · Finished: Canceled` },
@@ -247,7 +245,7 @@ export default class Sequences extends View {
     cx.spawn(async () => { // as the Console: delete, then z undo puts it back; a used one is refused
       try {
         const rows = await call("command.sequences.delete_sequence", { sequence_id: q.id });
-        offerUndo(`Deleted ${q.name}.`, [["sequences.undelete_sequence", { rows }]]);
+        offerUndo(`Deleted ${q.name}.`);
       } catch (e) {
         toast(`Not deleted: ${String(e).replace(/^(Error|Refused): /, "")} Archive it (a).`, "error");
       }

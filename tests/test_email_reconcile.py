@@ -56,9 +56,9 @@ def activities(db):
 
 
 def persisted(db):
-    """The dump without audit log or change log rows: undo restores state and appends its own entries."""
+    """The dump without audit log, change log or Command log rows: undo restores state and appends its own entries."""
     return "\n".join(line for line in db.iterdump()
-                     if not line.startswith(('INSERT INTO "audit_log"', 'INSERT INTO "changes"',
+                     if not line.startswith(('INSERT INTO "audit_log"', 'INSERT INTO "changes"', 'INSERT INTO "commands"',
                                              """INSERT INTO "sqlite_sequence" VALUES('changes',""")))
 
 

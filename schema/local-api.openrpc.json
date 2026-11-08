@@ -294,6 +294,38 @@
    }
   },
   {
+   "name": "command.commands.undo",
+   "summary": "The commands.undo writer (write).",
+   "params": [
+    {
+     "name": "command_id",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": false,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
    "name": "command.files.store_file",
    "summary": "The files.store_file writer (service).",
    "params": [
@@ -531,6 +563,58 @@
    }
   },
   {
+   "name": "command.inbox.block_sender",
+   "summary": "The inbox.block_sender writer (write).",
+   "params": [
+    {
+     "name": "thread_id",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "kind",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "value",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "blocked",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "ignore",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": false,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
    "name": "command.inbox.create_case",
    "summary": "The inbox.create_case writer (create).",
    "params": [
@@ -659,12 +743,49 @@
    }
   },
   {
+   "name": "command.inbox.delete_rows",
+   "summary": "The inbox.delete_rows writer (write).",
+   "params": [
+    {
+     "name": "rows",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": false,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
    "name": "command.inbox.mark_needs_edit",
    "summary": "The inbox.mark_needs_edit writer (write).",
    "params": [
     {
      "name": "draft_id",
      "required": true,
+     "schema": {}
+    },
+    {
+     "name": "needs",
+     "required": false,
      "schema": {}
     },
     {
@@ -834,6 +955,38 @@
    "params": [
     {
      "name": "draft",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": false,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.inbox.restore_rows",
+   "summary": "The inbox.restore_rows writer (write).",
+   "params": [
+    {
+     "name": "rows",
      "required": true,
      "schema": {}
     },
@@ -1175,6 +1328,38 @@
    }
   },
   {
+   "name": "command.inbox.set_undo_window",
+   "summary": "The inbox.set_undo_window writer (write).",
+   "params": [
+    {
+     "name": "seconds",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": false,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
    "name": "command.inbox.stage",
    "summary": "The inbox.stage writer (create).",
    "params": [
@@ -1226,6 +1411,38 @@
     }
    ],
    "x-panel": true,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.inbox.unmerge_persons",
+   "summary": "The inbox.unmerge_persons writer (write).",
+   "params": [
+    {
+     "name": "rows",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": false,
    "result": {
     "name": "result",
     "schema": {}
@@ -2185,6 +2402,43 @@
    }
   },
   {
+   "name": "command.sequences.restore_schedule",
+   "summary": "The sequences.restore_schedule writer (write).",
+   "params": [
+    {
+     "name": "enrollment_id",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "old",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": false,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
    "name": "command.sequences.restore_sequence",
    "summary": "The sequences.restore_sequence writer (write).",
    "params": [
@@ -2965,6 +3219,34 @@
    }
   },
   {
+   "name": "history.page",
+   "summary": "History (ADR 0021): the Command log, newest first, each with its Source and whether it was undone; `service` false leaves out the Service's own work.",
+   "params": [
+    {
+     "name": "service",
+     "required": true,
+     "schema": {
+      "type": "boolean"
+     }
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
    "name": "issue.detail",
    "summary": "One Issue as the Console's right pane draws it (issue_markup), as segment lines, and its team's statuses for the status picker.",
    "params": [
@@ -3584,7 +3866,7 @@
   },
   {
    "name": "send.later",
-   "summary": "The send-later times a send menu offers: tomorrow and next Monday, at a random minute from 7 to 9 am.",
+   "summary": "The send-later times a send menu offers: tomorrow and next Monday, at a random minute from 7 to 9 am; and `window`, the Undo window in seconds that Send now waits (ADR 0021).",
    "params": [
     {
      "name": "origin",
@@ -4134,6 +4416,27 @@
       "type": "string"
      }
     },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "undo.newest",
+   "summary": "The Command z would undo (ADR 0021): {id, label, source, at}, or null when there is nothing to undo.",
+   "params": [
     {
      "name": "origin",
      "required": false,
