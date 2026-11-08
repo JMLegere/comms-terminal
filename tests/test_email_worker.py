@@ -89,6 +89,5 @@ def test_worker_routes_preserve_legacy_hooks_and_add_resend():
         for name in ("email", "slack", "quo", "resend", "linear")
     ]
     assert config["vars"] == {
-        "HOOK_URL": "https://hooks.agentmaple.com/hooks/email",
-        "MIRROR_HOOK_URL": "https://hooks-inbox.jmlegere.com/hooks/email",
+        "HOOK_URL": "https://hooks-inbox.jmlegere.com/hooks/email",
     }

@@ -12,6 +12,5 @@ routes = [
 ]
 
 [vars]
-HOOK_URL = "https://hooks.agentmaple.com/hooks/email"
-# Temporary independent copy during the Oracle migration; remove to restore source-only delivery.
-MIRROR_HOOK_URL = "https://hooks-inbox.jmlegere.com/hooks/email"
+# Oracle's ingest tunnel. hooks.agentmaple.com itself is this Worker's public route; its origin was the retired Workbox service.
+HOOK_URL = "https://hooks-inbox.jmlegere.com/hooks/email"
