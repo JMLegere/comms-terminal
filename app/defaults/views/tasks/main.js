@@ -14,8 +14,8 @@ const I = { email: "\u{f01f0}", call: "\u{f0df0}", linkedin: "\u{f033b}", letter
   warn: "\u{f002a}", sequence: "\u{f027b}", tasks: "\u{f05c7}", time: "\u{f0150}" };
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const pad = (n) => String(n).padStart(2, "0");
-// The one undo (nav owns z), as thread/main.js offerUndo.
-const offerUndo = (message, steps) => { setShared("undo", { message, steps }); toast(`${message}  z undo`); };
+// z (nav) undoes the newest Command (ADR 0021); a write here only says so.
+const offerUndo = (message) => toast(`${message}  z undo`); // z undoes the newest Command (ADR 0021)
 
 /** The When column: red "Nd" overdue, "HH:MM" later today, blank due today, "⏱ Wed 09:00" when a scheduled one sends. */
 export const whenOf = (r) => {
@@ -87,11 +87,11 @@ export default class Tasks extends View {
   }
 
   /** A Task write, undoable with z when the core hands back what undo_task needs. */
-  async write(method, params, message, t) {
+  async write(method, params, message, t, undoable = true) {  // a done Task is not undone (D-3)
     const next = t && this.nextAfter(t);
     try {
       const undo = await call(`command.${method}`, params);
-      if (undo && t) offerUndo(message, [["sequences.undo_task", { undo }]]);
+      if (undo && t && undoable) offerUndo(message);
       else if (message) toast(message);
       if (t) this.select(next);
     } catch (e) {
@@ -118,7 +118,7 @@ export default class Tasks extends View {
         if (t.kind === "email") return toast("An email Task is done when its Draft sends: ctrl+enter in the Draft, or enter to open its Thread.");
         if (t.kind === "if") return toast(`Pick a path: 1 ${t.true_label} · 2 ${t.false_label}.`);
         return cx.spawn(async () => this.write("sequences.complete_task", { task_id: t.id },
-          t.action_kind === "enroll" ? `Enrolled ${t.person} in ${t.enroll_sequence}.` : `Done: ${t.person}, Day ${t.day} ${KIND[t.kind] ?? t.kind}.`, t));
+          t.action_kind === "enroll" ? `Enrolled ${t.person} in ${t.enroll_sequence}.` : `Done: ${t.person}, Day ${t.day} ${KIND[t.kind] ?? t.kind}.`, t, false));
       case "skip":
         if (!t) return;
         return cx.spawn(async () => this.write("sequences.skip_task", { task_id: t.id },

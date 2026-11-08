@@ -584,9 +584,8 @@ class ThreadActions:
         tid = self.current_thread_id()
         if tid is None:
             return
-        snap = inbox.snapshot(self.app.db, tid)
         inbox.act(self.app.db, tid, action)
-        self.app.offer_undo(message, lambda: inbox.restore(self.app.db, snap))
+        self.app.offer_undo(message)
         self.after_change()
 
     def action_done(self):
@@ -621,21 +620,14 @@ class ThreadActions:
 
     def _block_sender(self, tid, s, ignore):
         """Block also Ignores the Thread when the sender is its only one; a block alone changes only new Threads."""
-        db = self.app.db
-        snap = inbox.snapshot(db, tid)
-        inbox.block(db, s["kind"], s["value"], not s["blocked"])
+        ignored = inbox.block_sender(self.app.db, tid, s["kind"], s["value"], not s["blocked"], ignore)  # one Command
         if s["blocked"]:
             message = f"Unblocked {s['value']}: new messages reach Todo again."
-        elif ignore and inbox.get_thread(db, tid).status_detail != "IGNORED":
-            inbox.act(db, tid, inbox.Ignore())
+        elif ignored:
             message = f"Blocked {s['value']} and ignored this thread: new threads from them go straight to Ignored."
         else:
             message = f"Blocked {s['value']}: new threads from them go straight to Ignored."
-
-        def undo():
-            inbox.block(db, s["kind"], s["value"], s["blocked"])
-            inbox.restore(db, snap)
-        self.app.offer_undo(message, undo)
+        self.app.offer_undo(message)
         self.after_change()
 
     def action_status(self):
@@ -1605,7 +1597,6 @@ class Composer:
         self.app.call_from_thread(self.sent)
 
     def sent(self):
-        self.app.undo = None  # a sent message cannot be unsent
         self.app.notify("Sent · Waiting for them: back to Todo when they reply, or in 4 days to follow up.")
 
 
@@ -3353,7 +3344,7 @@ class DraftsPage(Page):
         except Exception:
             self.app.notify("Draft not deleted · delete failed.", severity="error")
             return
-        self.app.offer_undo("Draft deleted.", lambda: inbox.restore_draft(self.app.db, draft))
+        self.app.offer_undo("Draft deleted.")
         self.refresh_data(select_id=neighbor)
 
     def action_new(self):
@@ -3629,8 +3620,7 @@ def set_member(app, person_id: int, name: str, domain: str, member: bool):
     except inbox.FreeMail:
         app.notify(f"Not added: {domain} is a free-mail or incomplete domain, never an Organization.", severity="error")
         return
-    app.offer_undo(f"Added {name} to {domain}." if member else f"Removed {name} from {domain}.",
-                   lambda: inbox.set_membership(app.db, person_id, domain, before))
+    app.offer_undo(f"Added {name} to {domain}." if member else f"Removed {name} from {domain}.")
     app.main.refresh_all()
 
 
@@ -3757,7 +3747,7 @@ def set_org_stage(app, org: dict, p: str | None = None):
             app.notify(f"Not changed: {e}", severity="error")
             return
         if entry is not None:
-            app.offer_undo(f"{org['name']} → {stage}.", lambda: pipeline.undo(app.db, entry))
+            app.offer_undo(f"{org['name']} → {stage}.")
         app.main.refresh_all()
     app.push_screen(Pick(f"Stage · {org['name']} ({pipeline.NAMES[p]})", opts), chosen)
 
@@ -3780,8 +3770,7 @@ def set_org_value(app, org: dict):
                 app.notify(f"Not changed: {e}", severity="error")
                 return
             if entry is not None:
-                app.offer_undo(f"{org['name']}: {pipeline.NAMES[p]} Value CAD {pipeline.parse_amount(text):,}.",
-                               lambda: pipeline.undo(app.db, entry))
+                app.offer_undo(f"{org['name']}: {pipeline.NAMES[p]} Value CAD {pipeline.parse_amount(text):,}.")
             app.main.refresh_all()
         app.push_screen(Ask(f"{pipeline.NAMES[p]} Value · {org['name']}", hint), typed)
     if org.get("person"):  # a Person's only Value is Fundraising's
@@ -4204,7 +4193,7 @@ class PersonPage(Page):
             message = (f"Unblocked {i['value']}: future messages follow normal Thread rules." if i["blocked"] else
                        f"Blocked messages from {i['value']}: existing Threads won't reopen on messages, edits or deletes; "
                        "new Threads start Ignored.")
-            self.app.offer_undo(message, lambda: inbox.block(self.app.db, i["kind"], i["value"], bool(i["blocked"])))
+            self.app.offer_undo(message)
             self.refresh_data()
 
     def action_rename(self):
@@ -4214,7 +4203,7 @@ class PersonPage(Page):
             if not text or text == old:
                 return
             inbox.rename_person(self.app.db, self.person_id, text)
-            self.app.offer_undo(f"Renamed {old} to {text}.", lambda: inbox.rename_person(self.app.db, self.person_id, old))
+            self.app.offer_undo(f"Renamed {old} to {text}.")
             self.refresh_data()
         self.app.push_screen(Ask(f"Rename {old}", old), renamed)
 
@@ -4236,8 +4225,7 @@ class PersonPage(Page):
         i = self.selected()
         if i:
             inbox.remove_identity(self.app.db, i["id"])
-            self.app.offer_undo(f"Removed {i['value']} from {self.person['name']}.",
-                                lambda: inbox.add_identity(self.app.db, self.person_id, i["kind"], i["value"]))
+            self.app.offer_undo(f"Removed {i['value']} from {self.person['name']}.")
             self.refresh_data()
 
 
@@ -4306,8 +4294,7 @@ class ChannelsPage(TablePage):
         if r:
             cid = self.slack_id()
             inbox.delete_channel_rule(self.app.db, r["id"])
-            self.app.offer_undo(f"Rule deleted: “{r['value']}” channels stop syncing.",
-                                lambda: inbox.add_channel_rule(self.app.db, cid, r["kind"], r["value"]))
+            self.app.offer_undo(f"Rule deleted: “{r['value']}” channels stop syncing.")
             self.refresh_data()
 
 
@@ -4627,8 +4614,7 @@ class DescriptionBox(Vertical):
         self.remove_class("open")
         if new != old:
             inbox.set_case_description(self.app.db, page.case_id, new)
-            self.app.offer_undo("Description saved.",
-                                lambda: inbox.set_case_description(self.app.db, page.case_id, old))
+            self.app.offer_undo("Description saved.")
         page.after_change()
 
     def action_cancel(self):
@@ -4904,7 +4890,7 @@ def enroll_person(app, person_id: int, name: str):
             app.notify(f"Not enrolled: {e}", severity="error")
             return
         app.offer_undo(f"Enrolled {name} in {names[sid]}: the first Task is due {sequences.first_due(app.db, eid)},"
-                       " under Tasks.", lambda: sequences.unenroll(app.db, eid))
+                       " under Tasks.")
         app.main.refresh_all()
 
     def chosen(sid):
@@ -4976,8 +4962,7 @@ def pick_task(app, person_id: int, choice: int):
         return
     t = asks[0]
     undo = sequences.pick(app.db, t["id"], choice)
-    app.offer_undo(f"{t['person']}: {t['subject']} → {t['true_label'] if choice else t['false_label']}.",
-                   lambda: sequences.undo_task(app.db, undo))
+    app.offer_undo(f"{t['person']}: {t['subject']} → {t['true_label'] if choice else t['false_label']}.")
     app.main.refresh_all()
 
 
@@ -5000,8 +4985,7 @@ def finish_enrollment(app, person_id: int):
                 app.notify(f"Not finished: {x}", severity="error")
                 return
             runs = " Its On completion ran." if why in sequences.FINISHING_REASONS else ""
-            app.offer_undo(f"Finished {e['sequence']}: {sequences.REASON_LABEL[why]}.{runs} Its unsent Task Drafts are gone.",
-                           lambda: sequences.restore_finish(app.db, undo))
+            app.offer_undo(f"Finished {e['sequence']}: {sequences.REASON_LABEL[why]}.{runs} Its unsent Task Drafts are gone.")
             app.main.refresh_all()
         options = FINISH_REASONS if e["reason"] is None else [r for r in FINISH_REASONS if r[0] in ("CANCELED", "UNSUBSCRIBED")]
         app.push_screen(Pick(f"Finish {e['sequence']}", options), go)
@@ -5351,13 +5335,13 @@ class TasksPage(Page):
             return
         nxt = self._next_after(t)
         try:
-            undo = sequences.complete_task(self.app.db, t["id"])
+            sequences.complete_task(self.app.db, t["id"])
         except sequences.Refused as e:
             self.app.notify(f"Not enrolled: {e}", severity="error")
             return
         done = f"Enrolled {t['person']} in {t['enroll_sequence']}." if t["action_kind"] == "enroll" else \
             f"Done: {t['person']}, Day {t['day']} {KIND_LABEL[t['kind']]}."
-        self.app.offer_undo(done, lambda: sequences.undo_task(self.app.db, undo))
+        self.app.notify(done)  # a done Task is not undone (D-3)
         self.refresh_data(select_id=nxt)
 
     def action_pick(self, choice):
@@ -5366,9 +5350,9 @@ class TasksPage(Page):
         if not t or t["kind"] != "if" or t["condition"] != "jeremy_picks":
             return
         nxt = self._next_after(t)
-        undo = sequences.pick(self.app.db, t["id"], choice)
+        sequences.pick(self.app.db, t["id"], choice)
         label = t["true_label"] if choice else t["false_label"]
-        self.app.offer_undo(f"{t['person']}: {t['subject']} → {label}.", lambda: sequences.undo_task(self.app.db, undo))
+        self.app.offer_undo(f"{t['person']}: {t['subject']} → {label}.")
         self.refresh_data(select_id=nxt)
 
     def action_skip(self):
@@ -5376,9 +5360,8 @@ class TasksPage(Page):
         if not t:
             return
         nxt = self._next_after(t)
-        undo = sequences.skip_task(self.app.db, t["id"])
-        self.app.offer_undo(f"Skipped: {t['person']}, Day {t['day']} {KIND_LABEL[t['kind']]}. The next Step counts from today.",
-                            lambda: sequences.undo_task(self.app.db, undo))
+        sequences.skip_task(self.app.db, t["id"])
+        self.app.offer_undo(f"Skipped: {t['person']}, Day {t['day']} {KIND_LABEL[t['kind']]}. The next Step counts from today.")
         self.refresh_data(select_id=nxt)
 
     def action_page(self, action):  # the Draft editor's x and y reach here
@@ -5725,8 +5708,7 @@ class SequencesPage(Page):
             return
         if q["archived_at"]:
             sequences.restore_sequence(self.app.db, q["id"])
-            self.app.offer_undo(f"Restored {q['name']}: it takes new Enrollments again.",
-                                lambda: sequences.archive_sequence(self.app.db, q["id"], False))
+            self.app.offer_undo(f"Restored {q['name']}: it takes new Enrollments again.")
             self.after_change()
             return
         live = q["active"] + q["paused"]
@@ -5735,8 +5717,7 @@ class SequencesPage(Page):
             if choice is None:
                 return
             undo = sequences.archive_sequence(self.app.db, q["id"], cancel_live=choice == "cancel")
-            self.app.offer_undo(f"Archived {q['name']}" + (f": {live} Enrollments Canceled." if choice == "cancel" else "."),
-                                lambda: sequences.restore_sequence(self.app.db, q["id"], undo))
+            self.app.offer_undo(f"Archived {q['name']}" + (f": {live} Enrollments Canceled." if choice == "cancel" else "."))
             self.after_change()
         options = ([("cancel", f"Cancel the {live} live Enrollments · Finished: Canceled"),
                     ("finish", "Let them finish · no new Enrollments")] if live else [("finish", "Archive · no new Enrollments")])
@@ -5752,7 +5733,7 @@ class SequencesPage(Page):
         except sequences.Refused as e:
             self.app.notify(f"Not deleted: {e} Archive it (a).", severity="error")
             return
-        self.app.offer_undo(f"Deleted {q['name']}.", lambda: sequences.undelete_sequence(self.app.db, rows))
+        self.app.offer_undo(f"Deleted {q['name']}.")
         self.after_change()
 
     def new_step(self):
@@ -5800,8 +5781,7 @@ class SequencesPage(Page):
         row = self.query_one("#steps", DataTable).cursor_row
         moved, undo = sequences.delete_step(self.app.db, st["id"])
         what = "and its paths " if st["kind"] == "if" else ""
-        self.app.offer_undo(f"Step {st['position']} {what}deleted. {moved} Enrollment{'s' * (moved != 1)} on it moved on.",
-                            lambda: sequences.restore_step(self.app.db, undo))
+        self.app.offer_undo(f"Step {st['position']} {what}deleted. {moved} Enrollment{'s' * (moved != 1)} on it moved on.")
         self.app.main.showing = None
         self.show_sequence(step_row=row)
 
@@ -7107,13 +7087,11 @@ class SettingsPage(TablePage):
             return
         on = module not in app.modules
 
-        def turn(value):
-            inbox.set_module(app.db, module, value)
-            app.refresh_modules()
-        turn(on)
+        inbox.set_module(app.db, module, on)
+        app.refresh_modules()
         app.main.refresh_chrome()
         self.refresh_data()
-        app.offer_undo(f"{inbox.MODULES[module]} turned {'on' if on else 'off'}.", lambda: turn(not on))
+        app.offer_undo(f"{inbox.MODULES[module]} turned {'on' if on else 'off'}.")
 
 
 SECTIONS = {"today": TodayPage, "threads": ThreadsPage, "people": PeoplePage, "organizations": OrganizationsPage,
@@ -7489,7 +7467,6 @@ class Console(App):
         self.source_checked = {}  # key -> ISO time of the last answer, for its Context source page (FR-MOD-16)
         self.case_view = 0  # the Cases section's Status view (#120)
         self.people_collapsed = set()  # People list letters folded shut
-        self.undo = None  # (message, restore) for the last change
         self.msg_states = {}  # thread id -> which messages, quotes, and recipient lines are open (#107)
         self.reactions, self.reaction_states = reactions, {}
         self.respond, self.respond_target = respond, None  # invite Responses (FR-13e); the target awaiting y/m/n
@@ -8350,38 +8327,31 @@ class Console(App):
         self._modules = inbox.modules_on(self.db)
         return before - self._modules
 
-    def offer_undo(self, message, restore):
-        """Say what changed and what it means; `u` puts it back."""
-        self.undo = (message, restore)
+    def offer_undo(self, message):
+        """Say what changed and what it means; z undoes it (the Command log, ADR 0021)."""
         self.notify(f"{message}  [b #45707a]z[/] undo")
 
     def action_undo(self):
-        if self.undo is None:
+        """z: Undo the newest Command from the Console, the App or the CLI (ADR 0021)."""
+        c = commands.newest(self.db)
+        if c is None:
             self.notify("Nothing to undo.")
             return
-        entry = self.undo
-        _, restore = entry
         try:
-            restore()
+            commands.undo(self.db, c["id"])
         except inbox.ModuleDisabled as e:  # kept: it undoes once the Module is on again (FR-MOD-11)
             self.notify(str(e).split(" on this Service")[0], severity="warning")
             return
-        except inbox.StaleThreadSnapshot:
-            self.undo = None
+        except (ValueError, KeyError) as e:  # refused (changed since, a newer change), stale, or offline
             self.main.refresh_all()
-            self.notify("Cannot undo: this thread was reconciled. Current state kept.")
+            self.notify(str(e.args[0]) if e.args else "Cannot undo.", severity="warning")
             return
-        except BaseException:
-            self.undo = None
-            raise
-        if self.undo is entry:  # a restore that offers its own undo keeps it
-            self.undo = None
         page = self.main.page
         if page is not None and hasattr(page, "after_change"):
             page.after_change()
         else:
             self.main.refresh_all()
-        self.notify("Undone: back to how it was.")
+        self.notify(f"Undone: {c['label']}.")
 
     def check_changes(self):
         """Refresh when the service has written (new mail, Slack messages, wake)."""
@@ -8395,8 +8365,6 @@ class Console(App):
                 self.outdated = True  # the service migrated the database past this console's code
                 self.notify("The inbox was upgraded while this console ran · quit (q) and start it again.",
                             severity="error", timeout=24 * 3600)
-            if self.remote is None:  # the laptop copy keeps undo: a stale target is refused when undone
-                self.undo = None  # new activity may have moved the Thread; restoring would hide it
             self.main.refresh_all()
             self.toast_pauses()
 

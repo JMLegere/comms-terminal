@@ -177,7 +177,7 @@ export default class Settings extends View {
     cx.notify();
     call("command.inbox.set_module", { module: m, enabled: value }).then(() => {
       const message = `${name} turned ${value ? "on" : "off"}.`;
-      setShared("undo", { message, module: m, steps: [["inbox.set_module", { module: m, enabled: !value }]] });
+      setShared("turned", m); // nav does not say it again
       toast(`${name} turned ${value ? "on" : "off"} · z undo`);
     }).catch((e) => {
       delete this.turned[m];

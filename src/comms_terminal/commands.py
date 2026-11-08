@@ -86,11 +86,13 @@ def _row(db, table: str, row_id):
     return None if r is None else json.loads(json.dumps(remote.encode(dict(r)), sort_keys=True))
 
 
-def _record(db, c: _Command, at: datetime) -> str:
+def _record(db, c: _Command, at: datetime) -> str | None:
     from . import remote
-    first = {}
+    if not _logged(db):  # a database before migration 43 (the old-schema tests) has no Command log
+        return None
+    first = {}  # each kind's shallowest depth: the outermost writer's own words win
     for depth, kind, value in c.said:
-        first.setdefault(kind, depth)
+        first[kind] = min(depth, first.get(kind, depth))
     texts = [v for d, k, v in c.said if k == "label"]
     words = next((v for d, k, v in c.said if k == "label" and d == first["label"]), None) if texts else None
     targets = list(dict.fromkeys(v for _, k, v in c.said if k == "target"))
@@ -105,6 +107,10 @@ def _record(db, c: _Command, at: datetime) -> str:
         " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
         (clock.iso(at), current_source(), c.writer, words or c.writer, f"{targets[0][0]}:{targets[0][1]}" if targets
          else None, guard, inv, reason, c.undoes)).fetchone()[0]
+
+
+def _logged(db) -> bool:
+    return db.execute("SELECT 1 FROM sqlite_schema WHERE name = 'commands'").fetchone() is not None
 
 
 def run(name, fn, db, args, kwargs):
@@ -133,16 +139,16 @@ def run(name, fn, db, args, kwargs):
             result = fn(db, *args, **kwargs)
             if db.total_changes != changed:  # a call that changed nothing is no Command
                 _record(db, c, at)
+            if hold:
+                db.held = False
+                db.commit()  # a failed commit (a deferred foreign key) rolls back below, Command and all
+            elif not was and db.in_transaction:  # ponytail: a connection that is not Held commits the Command alone
+                db.commit()
         except BaseException:
             if hold:
                 db.held = False
                 db.rollback()
             raise
-        if hold:
-            db.held = False
-            db.commit()
-        elif not was and db.in_transaction:  # ponytail: a connection that is not Held commits the Command alone
-            db.commit()
         return result
     finally:
         _state.reset(token)

@@ -29,7 +29,7 @@ def test_the_list_asks_with_this_machines_options_and_selects_the_first_issue(ou
 def test_the_issue_pane_changes_through_the_action_queue_with_undo(out):
     assert out["statusPicker"] == ["Done"]
     assert out["update"] == {"issue_id": "1", "fields": {"state_id": "s-done"}}
-    assert out["undo"] == [["issues.undo", {"action_id": "action-1"}]]
+    assert out["undo"] is None  # the Service keeps the undo (ADR 0021)
     assert out["plan"] == {"issue_id": "1", "day": "2026-11-10"}
     assert out["estimateRefused"] == "An estimate is whole points, or none."
     assert out["planned"] == ["2026-11-09", "2026-11-10", "2026-11-13", None]  # Monday Nov 9: fri is Nov 13

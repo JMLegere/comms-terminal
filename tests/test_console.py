@@ -11,7 +11,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import seed_demo  # noqa: E402
 
-from comms_terminal import clock, inbox  # noqa: E402
+from comms_terminal import clock, commands, inbox  # noqa: E402
 from comms_terminal.tui import (HELP, CasePage, CasesPage, Console, OrganizationPage, PeoplePage, PersonPage,  # noqa: E402
                                  ReplyError, ThreadsPage)
 
@@ -297,7 +297,7 @@ def test_person_page_toggles_block(tmp_path):
                    and "undo" in m for m in (n.message for n in app._notifications))
 
     async def check_undo_unblock(app, pilot):
-        assert blocked() == 1 and app.undo is None
+        assert blocked() == 1 and commands.newest(app.db) is None
 
     async def check_blocked(app, pilot):
         assert blocked() == 1
@@ -307,7 +307,7 @@ def test_person_page_toggles_block(tmp_path):
 
     # First row: ana.ruiz@gmail.com, seeded as blocked. Undo both unblock and block.
     run(app, [open_person, "b", check_unblocked, "z", check_undo_unblock, "b", "b", check_blocked, "z"])
-    assert blocked() == 0 and app.undo is None
+    assert blocked() == 0 and commands.newest(app.db) is None
 
 
 def test_person_page_renames_and_undo_restores(tmp_path):
@@ -371,7 +371,7 @@ def test_undo_restores_the_thread_after_done(tmp_path):
 
     run(app, [remember, "e", "z"])
     assert detail(path, seen["id"]) == seen["before"]
-    assert app.undo is None  # one level: a second u has nothing to undo
+    assert commands.newest(app.db) is None  # one level: a second u has nothing to undo
 
 
 def test_help_lists_every_thread_key(tmp_path):

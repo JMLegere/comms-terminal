@@ -22,7 +22,7 @@ import re
 from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from . import clock, inbox, platforms
+from . import clock, commands, inbox, platforms
 from . import pipeline as pipeline_mod
 from .writers import writer
 
@@ -75,21 +75,33 @@ def create_sequence(db, name: str, connection_id: int | None = None, *, now: dat
         connection_id = mail[0]["id"] if len(mail) == 1 else None
     at = clock.iso((now or clock.now()))
     with inbox._write_snapshot(db):
-        return db.execute("INSERT INTO sequences (name, connection_id, created_at, updated_at) VALUES (?, ?, ?, ?) RETURNING id",
-                          (name.strip(), connection_id, at, at)).fetchone()[0]
+        sid = db.execute("INSERT INTO sequences (name, connection_id, created_at, updated_at) VALUES (?, ?, ?, ?) RETURNING id",
+                         (name.strip(), connection_id, at, at)).fetchone()[0]
+    commands.label(f"New Sequence: {name.strip()}")
+    commands.target("sequences", sid)
+    commands.inverse("sequences.delete_sequence", sid)
+    return sid
 
 
 @writer("write", module="sequences")
 def rename_sequence(db, sequence_id: int, name: str, *, now: datetime | None = None) -> None:
     if not name.strip():
         raise ValueError("A Sequence needs a name.")
+    old = get_sequence(db, sequence_id)
     with db:
         db.execute("UPDATE sequences SET name = ?, updated_at = ? WHERE id = ?", (name.strip(), clock.iso((now or clock.now())), sequence_id))
+    commands.label(f"Renamed Sequence {old['name']} to {name.strip()}")
+    commands.target("sequences", sequence_id)
+    commands.inverse("sequences.rename_sequence", sequence_id, old["name"])
 
 
 @writer("write", module="sequences")
 def describe_sequence(db, sequence_id: int, description: str, *, now: datetime | None = None) -> None:
     """Its one-line "use when", shown in the Sequence list and the enroll picker."""
+    old = get_sequence(db, sequence_id)
+    commands.label(f"Sequence description: {old['name']}")
+    commands.target("sequences", sequence_id)
+    commands.inverse("sequences.describe_sequence", sequence_id, old["description"] or "")
     with inbox._write_snapshot(db):
         db.execute("UPDATE sequences SET description = ?, updated_at = ? WHERE id = ?",
                    (" ".join(description.split()), clock.iso((now or clock.now())), sequence_id))
@@ -99,6 +111,10 @@ def describe_sequence(db, sequence_id: int, description: str, *, now: datetime |
 def set_connection(db, sequence_id: int, connection_id: int, *, now: datetime | None = None) -> None:
     """Its email Tasks send from `connection_id`; Due Tasks flagged for having none get their Drafts on the next
     materialize."""
+    old = get_sequence(db, sequence_id)
+    commands.label(f"Sends from: {old['name']}")
+    commands.target("sequences", sequence_id)
+    commands.inverse("sequences.set_connection", sequence_id, old["connection_id"])
     with db:
         db.execute("UPDATE sequences SET connection_id = ?, updated_at = ? WHERE id = ?",
                    (connection_id, clock.iso((now or clock.now())), sequence_id))
@@ -125,6 +141,8 @@ def replace_sequence(db, plan: dict, dry_run: bool = False, *, now: datetime | N
             return replace_sequence(trial, plan, now=now)
         finally:
             trial.close()
+    commands.label(f"Applied Sequence: {plan.get('name', '')}")
+    commands.not_undoable("apply its earlier Markdown again")
     with inbox._write_snapshot(db):
         return _replace_sequence(db, plan)
 
@@ -253,11 +271,20 @@ def archive_sequence(db, sequence_id: int, cancel_live: bool, now: datetime | No
             for e in db.execute("SELECT id FROM enrollments WHERE sequence_id = ? AND state != 'FINISHED'",
                                 (sequence_id,)).fetchall():
                 undo.append(_finish(db, e["id"], "CANCELED", now))
+    commands.label(f"Archived {get_sequence(db, sequence_id)['name']}")
+    commands.target("sequences", sequence_id)
+    commands.inverse("sequences.restore_sequence", sequence_id, undo)
     return undo
 
 
 @writer("write", module="sequences")
 def restore_sequence(db, sequence_id: int, undo: list[dict] = (), *, now: datetime | None = None) -> None:
+    commands.label(f"Restored {get_sequence(db, sequence_id)['name']}")
+    commands.target("sequences", sequence_id)
+    if undo:
+        commands.not_undoable("it is an undo")
+    else:
+        commands.inverse("sequences.archive_sequence", sequence_id, False)
     with db:
         _tx(db)
         db.execute("UPDATE sequences SET archived_at = NULL, updated_at = ? WHERE id = ?", (clock.iso((now or clock.now())), sequence_id))
@@ -277,11 +304,16 @@ def delete_sequence(db, sequence_id: int, *, now: datetime | None = None) -> dic
         db.execute("UPDATE sequence_steps SET reply_to_step_id = NULL WHERE sequence_id = ?", (sequence_id,))
         db.execute("DELETE FROM sequence_steps WHERE sequence_id = ?", (sequence_id,))
         db.execute("DELETE FROM sequences WHERE id = ?", (sequence_id,))
+    commands.label(f"Deleted Sequence: {seq['name']}")
+    commands.target("sequences", sequence_id)
+    commands.inverse("sequences.undelete_sequence", dict(sequence=seq, steps=steps))
     return dict(sequence=seq, steps=steps)
 
 
 @writer("write", module="sequences")
 def undelete_sequence(db, rows: dict, *, now: datetime | None = None) -> None:
+    commands.label(f"Sequence back: {rows['sequence']['name']}")
+    commands.not_undoable("it is an undo")
     with db:
         _tx(db)
         _insert(db, "sequences", rows["sequence"])
@@ -430,6 +462,9 @@ def add_step(db, sequence_id: int, kind: str, after: int | None = None, *, secti
              "connect" if kind == "linkedin" else None, action_kind if kind == "action" else None,
              condition if kind == "if" else None)).fetchone()[0]
         _touch(db, sequence_id, now=now)
+    commands.label(f"Step added: {kind}")
+    commands.target("sequence_steps", step_id)
+    commands.inverse("sequences.delete_step", step_id)
     return step_id
 
 
@@ -462,9 +497,13 @@ def save_step(db, step_id: int, *, now: datetime | None = None, **fields) -> dic
         if row is None:
             raise KeyError(f"step {step_id}")
         if fields:
+            old = db.execute("SELECT * FROM sequence_steps WHERE id = ?", (step_id,)).fetchone()
             db.execute(f"UPDATE sequence_steps SET {', '.join(f'{k} = ?' for k in fields)} WHERE id = ?",
                        (*fields.values(), step_id))
             _touch(db, row["sequence_id"], now=now)
+            commands.label(f"Step {old['position']} edited")
+            commands.target("sequence_steps", step_id)
+            commands.inverse("sequences.save_step", step_id, **{k: old[k] for k in fields})
         return dict(db.execute("SELECT * FROM sequence_steps WHERE id = ?", (step_id,)).fetchone())
 
 
@@ -485,6 +524,9 @@ def move_step(db, step_id: int, delta: int, *, now: datetime | None = None) -> N
         db.execute("UPDATE sequence_steps SET position = ? WHERE id = ?", (st["position"], other["id"]))
         db.execute("UPDATE sequence_steps SET position = ? WHERE id = ?", (other["position"], step_id))
         _touch(db, st["sequence_id"], now=now)
+    commands.label(f"Step {st['position']} moved {'up' if delta < 0 else 'down'}")
+    commands.target("sequence_steps", step_id)
+    commands.inverse("sequences.move_step", step_id, -delta)
 
 
 @writer("write", module="sequences")
@@ -514,7 +556,11 @@ def delete_step(db, step_id: int, now: datetime | None = None) -> tuple[int, dic
         before = _max_task(db)
         states = [dict(db.execute("SELECT * FROM enrollments WHERE id = ?", (t["enrollment_id"],)).fetchone()) for t in open_tasks]
         materialize(db, now)
-    return len(open_tasks), dict(step=st, steps=gone, tasks=open_tasks, drafts=drafts, after=before, enrollments=states)
+    undo = dict(step=st, steps=gone, tasks=open_tasks, drafts=drafts, after=before, enrollments=states)
+    commands.label(f"Step {st['position']} deleted")
+    commands.target("sequence_steps", step_id)
+    commands.inverse("sequences.restore_step", undo)
+    return len(open_tasks), undo
 
 
 @writer("write", module="sequences")
@@ -522,6 +568,8 @@ def restore_step(db, undo: dict, *, now: datetime | None = None) -> None:
     """Put a deleted Step back (an If with its paths), with the Tasks and Drafts it removed; Tasks made since for
     those Enrollments go."""
     gone = undo.get("steps") or [undo["step"]]
+    commands.label(f"Step {undo['step']['position']} back")
+    commands.not_undoable("it is an undo")
     with db:
         _tx(db)
         enrollments = {t["enrollment_id"] for t in undo["tasks"]}
@@ -718,6 +766,10 @@ def enroll(db, person_id: int, sequence_id: int, now: datetime | None = None, st
                       organization_id if organization_id is not None else default_organization(db, person_id),
                       identity_id)
         materialize(db, now)
+    who = db.execute("SELECT display_name FROM persons WHERE id = ?", (person_id,)).fetchone()
+    commands.label(f"Enrolled {who[0] if who else person_id} in {get_sequence(db, sequence_id)['name']}")
+    commands.target("enrollments", eid)
+    commands.inverse("sequences.unenroll", eid)
     return eid
 
 
@@ -786,6 +838,8 @@ def _enroll(db, person_id: int, sequence_id: int, now: datetime, starts: str | N
 @writer("write", module="sequences")
 def unenroll(db, enrollment_id: int, *, now: datetime | None = None) -> None:
     """Undo an enroll before any Task is done: the Enrollment, its Tasks, and their unsent Drafts go."""
+    commands.label("Enrollment removed")
+    commands.not_undoable("enroll them again")
     with db:
         _tx(db)
         if db.execute("SELECT 1 FROM tasks WHERE enrollment_id = ? AND state != 'DUE'", (enrollment_id,)).fetchone():
@@ -799,6 +853,8 @@ def unenroll(db, enrollment_id: int, *, now: datetime | None = None) -> None:
 def task_new_thread(db, task_id: int, *, now: datetime | None = None) -> int:
     """A reply Task whose target was skipped starts a new Thread instead (FR-SEQ-8): a new email Draft with the
     replied-to Step's subject. Returns the Draft's id."""
+    commands.label("Task starts a new Thread")
+    commands.not_undoable("delete the Draft instead")
     with db:
         _tx(db)
         t = db.execute("SELECT t.*, s.body, s.reply_to_step_id, e.person_id, e.sequence_id FROM tasks t"
@@ -1069,6 +1125,8 @@ def _close(db, task_id: int, state: str, now: datetime, thread_id: int | None = 
 def complete_task(db, task_id: int, now: datetime | None = None) -> dict:
     """Jeremy did a non-email Task (FR-SEQ-9); an enroll Action enrolls the Person now, whatever its flag said.
     The next Step's Task follows. Returns what undo_task needs."""
+    commands.label("Task done")
+    commands.not_undoable("a done Task may have sent or enrolled")  # D-3
     now = now or clock.now()
     with db:
         _tx(db)
@@ -1098,12 +1156,17 @@ def skip_task(db, task_id: int, now: datetime | None = None) -> dict:
         undo = _close(db, task_id, "SKIPPED", now)
         db.execute("DELETE FROM composition_drafts WHERE task_id = ? AND sending_at IS NULL", (task_id,))
         materialize(db, now)
+    commands.label("Task skipped")
+    commands.target("tasks", task_id)
+    commands.inverse("sequences.undo_task", undo)
     return undo
 
 
 @writer("write", module="sequences")
 def undo_task(db, undo: dict, *, now: datetime | None = None) -> None:
     """Back to before complete_task or skip_task: the Task due again, its Draft and Enrollment as they were."""
+    commands.label("Task due again")
+    commands.not_undoable("it is an undo")
     with db:
         _tx(db)
         for t in db.execute("SELECT id FROM tasks WHERE enrollment_id IN (?, ?) AND id > ?",
@@ -1239,6 +1302,9 @@ def resume(db, enrollment_id: int, now: datetime | None = None) -> None:
         e = db.execute("SELECT * FROM enrollments WHERE id = ?", (enrollment_id,)).fetchone()
         if e is None or e["state"] != "PAUSED":
             raise Refused("Only a Paused Enrollment resumes.")
+        commands.label("Enrollment resumed")
+        commands.target("enrollments", enrollment_id)
+        commands.inverse("sequences.restore_finish", [dict(rollback=_mark(db))])
         db.execute("UPDATE enrollments SET state = CASE WHEN reason IS NULL THEN 'ACTIVE' ELSE 'FINISHING' END,"
                    " paused_at = NULL, pause_reason = NULL WHERE id = ?", (enrollment_id,))
         if not db.execute("SELECT 1 FROM tasks WHERE enrollment_id = ? AND state = 'DUE'", (enrollment_id,)).fetchone():
@@ -1271,7 +1337,22 @@ def reschedule(db, enrollment_id: int, start: date, now: datetime | None = None)
             old["tasks"][t["id"]] = t["due_at"]
             due = datetime.combine(start, time.fromisoformat(t["at_time"]) if t["at_time"] else time(0, 0), LOCAL)
             db.execute("UPDATE tasks SET due_at = ? WHERE id = ?", (clock.iso(due.astimezone(timezone.utc)), t["id"]))
+    commands.label(f"Enrollment starts {start.isoformat()}")
+    commands.target("enrollments", enrollment_id)
+    commands.inverse("sequences.restore_schedule", enrollment_id, old)
     return old
+
+
+@writer("write", module="sequences")
+def restore_schedule(db, enrollment_id: int, old: dict, *, now: datetime | None = None) -> None:
+    """Undo of reschedule: the Start date and each Due Task's due time as they were."""
+    commands.label("Enrollment date back")
+    commands.not_undoable("it is an undo")
+    with db:
+        _tx(db)
+        db.execute("UPDATE enrollments SET starts_at = ? WHERE id = ?", (old["starts_at"], enrollment_id))
+        for task_id, due in old["tasks"].items():
+            db.execute("UPDATE tasks SET due_at = ? WHERE id = ?", (due, task_id))
 
 
 def _finish(db, enrollment_id: int, reason: str, now: datetime) -> dict:
@@ -1302,6 +1383,8 @@ def finish(db, enrollment_id: int, reason: str, now: datetime | None = None) -> 
     they are in. Returns what restore_finish needs."""
     if reason not in END_REASONS:
         raise ValueError(f"reason is one of {', '.join(END_REASONS)}")
+    commands.label(f"Enrollment finished: {REASON_LABEL[reason]}")
+    commands.target("enrollments", enrollment_id)
     now = now or clock.now()
     with db:
         _tx(db)
@@ -1309,9 +1392,9 @@ def finish(db, enrollment_id: int, reason: str, now: datetime | None = None) -> 
         if e is None or e["state"] == "FINISHED":
             raise Refused("This Enrollment has already finished.")
         if reason == "UNSUBSCRIBED":
-            return _unsubscribe(db, e["person_id"], now)
+            return _finished(_unsubscribe(db, e["person_id"], now))
         if reason == "CANCELED":
-            return [_finish(db, enrollment_id, reason, now)]
+            return _finished([_finish(db, enrollment_id, reason, now)])
         if e["reason"] is not None:
             raise Refused(f"It is already finishing as {REASON_LABEL[e['reason']]}; Cancel it to stop its On completion.")
         mark = _mark(db)
@@ -1330,7 +1413,7 @@ def finish(db, enrollment_id: int, reason: str, now: datetime | None = None) -> 
             db.execute("INSERT INTO tasks (enrollment_id, step_id, due_at, state) VALUES (?, ?, ?, 'DUE')",
                        (enrollment_id, first["id"], clock.iso(due_date(now, first["gap_days"], first["at_time"]))))
         materialize(db, now)
-        return [dict(rollback=mark)]
+        return _finished([dict(rollback=mark)])
 
 
 def _mark(db) -> dict:
@@ -1368,6 +1451,11 @@ def _rollback(db, mark: dict) -> None:
         pipeline_mod.undo(db, r["id"])
 
 
+def _finished(undo: list[dict]) -> list[dict]:
+    commands.inverse("sequences.restore_finish", undo)
+    return undo
+
+
 @writer("create", module="sequences")
 def pick(db, task_id: int, choice: int, now: datetime | None = None) -> dict:
     """Jeremy answers an If that asks him (FR-SEQ-31): 1 takes its true path, 0 its false path. Returns what
@@ -1384,6 +1472,9 @@ def pick(db, task_id: int, choice: int, now: datetime | None = None) -> dict:
         undo = _close(db, task_id, "DONE", now)
         db.execute("UPDATE tasks SET choice = ? WHERE id = ?", (choice, task_id))
         materialize(db, now)
+    commands.label(f"Picked the {'first' if choice else 'second'} path")
+    commands.target("tasks", task_id)
+    commands.inverse("sequences.undo_task", undo)
     return undo
 
 
@@ -1404,6 +1495,8 @@ def _unsubscribe(db, person_id: int, now: datetime) -> list[dict]:
 
 @writer("write", module="sequences")
 def restore_finish(db, undo: list[dict], *, now: datetime | None = None) -> None:
+    commands.label("Enrollment back")
+    commands.not_undoable("it is an undo")
     with db:
         _tx(db)
         for u in undo:

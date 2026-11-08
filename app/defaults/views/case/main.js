@@ -15,7 +15,7 @@ const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const pad = (n) => String(n).padStart(2, "0");
 const stamp = (iso) => { const d = new Date(iso); return `${DAYS[d.getDay()]} ${MONTHS[d.getMonth()]} ${d.getDate()}, ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
-const offerUndo = (message, steps) => { setShared("undo", { message, steps }); toast(`${message}  z undo`); };
+const offerUndo = (message) => toast(`${message}  z undo`); // z undoes the newest Command (ADR 0021)
 export const DESCRIBE = "Add a description: what this Case is about, who is involved, what done looks like.  d edit";
 
 /** "N messages · last 2h" for a folded card, as the Console's. */
@@ -176,7 +176,7 @@ export default class Case extends View {
     if (text !== old) {
       try {
         await call("command.inbox.set_case_description", { case_id: this.c.id, description: text });
-        offerUndo("Description saved.", [["inbox.set_case_description", { case_id: this.c.id, description: old }]]);
+        offerUndo("Description saved.");
       } catch (e) {
         toast(String(e), "error");
       }

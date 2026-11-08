@@ -39,7 +39,7 @@ answers["command.issues.update"] = "action-1";
 pane.command(`status_set:${JSON.stringify({ value: "s-done", text: "" })}`, cx);
 await settle();
 out.update = calls.find((c) => c.method === "command.issues.update").params;
-out.undo = state.undo.steps;
+out.undo = state.undo ?? null;  // z undoes the newest Command on the Service (ADR 0021)
 pane.command(`planned:${JSON.stringify({ value: null, text: "2026-11-10" })}`, cx);
 await settle();
 out.plan = calls.find((c) => c.method === "command.issues.plan").params;

@@ -66,18 +66,23 @@ COMMANDS = {
 }
 SENDS = "it sends: Jeremy sends Drafts himself (Jeremy, 2026-10-29)"
 JEREMYS_TASK = "Jeremy does his own Tasks and answers his own Ifs"
-UNDO = "the console's undo, which replays a snapshot only the console holds"
+UNDO = "an Inverse that commands.undo runs (ADR 0021); agents use undo"
 CONSOLE_ONLY = {
     "files.upload_url": "a browser upload page on the LAN; agents use draft --attach",
+    "inbox.block_sender": "b on a Thread page (block and ignore as one change); agents use person block",
+    "inbox.delete_rows": UNDO,
     "inbox.restore": UNDO,
     "inbox.restore_draft": UNDO,
+    "inbox.restore_rows": UNDO,
     "inbox.schedule_draft": SENDS,
     "inbox.schedule_reply": SENDS,
+    "inbox.unmerge_persons": UNDO,
     "issues.undo": "the console's undo; set the field again instead",
     "pipeline.undo": UNDO + "; set the Stage or Value again instead",
     "sequences.complete_task": JEREMYS_TASK,
     "sequences.pick": JEREMYS_TASK,
     "sequences.restore_finish": UNDO,
+    "sequences.restore_schedule": UNDO,
     "sequences.restore_sequence": UNDO,
     "sequences.restore_step": UNDO,
     "sequences.undelete_sequence": UNDO,

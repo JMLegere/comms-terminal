@@ -15,7 +15,7 @@ find, update, create, undo, carry_update, carry_create.
 import json
 from datetime import date, datetime, time, timedelta
 
-from . import actions, clock, inbox
+from . import actions, clock, commands, inbox
 from .writers import writer
 
 FIELDS = ("identifier", "title", "description", "url", "team_id", "state_id", "priority", "estimate", "due_date",
@@ -150,7 +150,11 @@ def update(db, issue_id: str, fields: dict, *, now: datetime | None = None) -> s
     with inbox._write_snapshot(db):
         db.execute(f"UPDATE issues SET {', '.join(f'{k} = ?' for k in changed)} WHERE id = ?",
                    [*changed.values(), row["id"]])
-        return actions.enqueue(db, row["connection_id"], "issue_update", row["id"], changed, previous, True, now)
+        action = actions.enqueue(db, row["connection_id"], "issue_update", row["id"], changed, previous, True, now)
+    commands.label(f"{row['identifier']} {', '.join(changed)}: {row['title']}")
+    commands.target("issues", row["id"])
+    commands.inverse("issues.undo", action)  # a new Action sets the old values back (ADR 0020)
+    return action
 
 
 @writer("write")
@@ -160,6 +164,8 @@ def create(db, issue_id: str, team_id: str, title: str, *, description: str | No
     """A new Issue assigned to Jeremy, in the copy at once with the id the Client chose (so a repeated create
     cannot make two, FR-AQ-5), and the Action that creates it on Linear. Its identifier arrives when confirmed."""
     now = now or clock.now()
+    commands.label(f"New Issue: {title}")
+    commands.not_undoable("a new Linear Issue is not undone")  # D-3
     connection = issue_connection(db, "linear")
     if connection is None:
         raise ValueError("Linear has no Issue connection")
@@ -181,6 +187,8 @@ def create(db, issue_id: str, team_id: str, title: str, *, description: str | No
 @writer("write")
 def undo(db, action_id: str, *, now: datetime | None = None) -> str | None:
     """Undo of an Issue change is a new Action that sets the old values back (FR-AQ-6)."""
+    commands.label("Issue change undone")
+    commands.not_undoable("it is an undo")
     a = db.execute("SELECT * FROM actions WHERE id = ?", (action_id,)).fetchone()
     if a is None or a["kind"] != "issue_update":
         raise ValueError("only an Issue change can be undone; delete a new Issue in Linear")
@@ -281,6 +289,9 @@ def plan(db, issue_id: str, day: str | None, *, now: datetime | None = None) -> 
         day = date.fromisoformat(day).isoformat()
     with inbox._write_snapshot(db):
         db.execute("UPDATE issues SET planned_day = ? WHERE id = ?", (day, row["id"]))
+    commands.label(f"{row['identifier']} planned {day or 'for no day'}: {row['title']}")
+    commands.target("issues", row["id"])
+    commands.inverse("issues.plan", row["id"], row["planned_day"])
 
 
 def size_hours(issue, platform: str = "linear") -> float:
@@ -342,8 +353,11 @@ def set_urgency(db, name: str, value: float, *, now: datetime | None = None) -> 
     """Changes one urgency coefficient (FR-IS-8)."""
     if db.execute("SELECT 1 FROM urgency WHERE name = ?", (name,)).fetchone() is None:
         raise KeyError(f"no urgency coefficient {name}; see `comms-terminal urgency list`")
+    old = db.execute("SELECT value FROM urgency WHERE name = ?", (name,)).fetchone()[0]
     with inbox._write_snapshot(db):
         db.execute("UPDATE urgency SET value = ? WHERE name = ?", (float(value), name))
+    commands.label(f"Urgency {name} {float(value):g}")
+    commands.inverse("issues.set_urgency", name, old)
 
 
 PRIORITY_NAMES = {0: "none", 1: "urgent", 2: "high", 3: "medium", 4: "low"}

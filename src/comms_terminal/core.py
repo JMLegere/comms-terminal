@@ -568,6 +568,19 @@ def _actions_queue(core, db):
     return actions.queue(db)
 
 
+@query("undo.newest")
+def _undo_newest(core, db):
+    """The Command z would undo (ADR 0021): {id, label, source, at}, or null when there is nothing to undo."""
+    return commands.newest(db)
+
+
+@query("history.page", service="boolean")
+def _history(core, db, service):
+    """History (ADR 0021): the Command log, newest first, each with its Source and whether it was undone; `service`
+    false leaves out the Service's own work."""
+    return commands.history(db, service=service)
+
+
 @query("task.markdown", task_id="string")
 def _task_markdown(core, db, task_id):
     """One due Task as the Markdown `comms-terminal tasks` prints, for an agent."""
