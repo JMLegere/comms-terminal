@@ -41,5 +41,5 @@ def test_every_writer_is_a_command_and_panels_get_only_the_cli_ones():
     doc = {m["name"]: m for m in core.openrpc()["methods"]}
     assert {n.removeprefix("command.") for n in doc if n.startswith("command.")} == set(writers.WRITERS)
     assert {n.removeprefix("command.") for n, m in doc.items() if n.startswith("command.") and m["x-panel"]} == \
-        set(agent.COMMANDS)
+        set(agent.COMMANDS) - {"commands.undo"}  # the CLI may undo; a Panel may not (GLOSSARY Origin)
     assert all(not doc[n]["x-panel"] for n in core.SERVICE)

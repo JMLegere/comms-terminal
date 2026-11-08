@@ -14,6 +14,13 @@ def _console_opens_on_todo(request, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _service_source(monkeypatch):
+    """A Console sets its process's Command Source (ADR 0021); each test starts as the Service again."""
+    from comms_terminal import commands
+    monkeypatch.setattr(commands, "default", "service")
+
+
+@pytest.fixture(autouse=True)
 def _modules_on(request, monkeypatch):
     """A new Service starts with every Module off (ADR 0017); tests written before Modules expect them on, so a
     fresh test database gets all three on unless the test is marked `modules_off`."""

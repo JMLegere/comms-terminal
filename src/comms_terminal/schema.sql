@@ -498,3 +498,27 @@ CREATE TABLE urgency (  -- Taskwarrior-style coefficients for an Issue's urgency
 INSERT INTO urgency (name, value) VALUES ('due', 12), ('priority.urgent', 9), ('priority.high', 6),
   ('priority.medium', 3.9), ('priority.none', 1.95), ('priority.low', 0), ('started', 4), ('blocking', 8),
   ('blocked', -5), ('age', 2);
+
+-- Command log (ADR 0021)
+CREATE TABLE commands (  -- the Command log (ADR 0021): every change, its Source, words and Inverse; commands.py
+  id      TEXT PRIMARY KEY NOT NULL DEFAULT (new_id()),
+  at      TEXT NOT NULL,                       -- the writer's moment
+  source  TEXT NOT NULL CHECK (source IN ('console', 'app', 'cli', 'service')),
+  writer  TEXT NOT NULL,                       -- "inbox.act"; "service" for a Service pass
+  label   TEXT NOT NULL,                       -- what it did, in a few words ("Done: Intro call")
+  target  TEXT,                                -- the main record it changed, "threads:<id>"
+  guard   TEXT NOT NULL DEFAULT '[]',          -- JSON: [table, id, row as the Command left it]; Undo needs them so
+  inverse TEXT,                                -- JSON: [[writer, args, kwargs], ...] that put it back
+  reason  TEXT,                                -- why it has no Inverse
+  undoes  TEXT UNIQUE REFERENCES commands (id), -- an Undo: the Command it undid
+  CHECK (inverse IS NULL OR reason IS NULL)
+) STRICT;
+CREATE INDEX commands_at ON commands (at);
+CREATE TRIGGER commands_no_delete BEFORE DELETE ON commands
+BEGIN
+  SELECT RAISE(ABORT, 'the Command log is append-only');
+END;
+CREATE TRIGGER commands_no_update BEFORE UPDATE ON commands
+BEGIN
+  SELECT RAISE(ABORT, 'the Command log is append-only');
+END;

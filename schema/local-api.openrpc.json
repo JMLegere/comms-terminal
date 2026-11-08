@@ -294,6 +294,38 @@
    }
   },
   {
+   "name": "command.commands.undo",
+   "summary": "The commands.undo writer (write).",
+   "params": [
+    {
+     "name": "command_id",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": false,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
    "name": "command.files.store_file",
    "summary": "The files.store_file writer (service).",
    "params": [

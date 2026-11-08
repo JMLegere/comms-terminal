@@ -24,10 +24,10 @@ from email.parser import BytesHeaderParser
 from email.utils import getaddresses
 from typing import Protocol, Sequence
 
-from . import clock, files, platforms
+from . import clock, commands, files, platforms
 from .writers import writer
 
-SCHEMA_VERSION = 42
+SCHEMA_VERSION = 43
 WAIT = timedelta(days=4)  # Waiting for them ends after this with no reply: back to Todo to follow up (#116)
 EMAIL_CONFIRMATION_PENDING = "Email confirmation pending; wait for its sent receipt before replying."
 MIGRATIONS = {  # version -> statement that upgrades an existing database to it
@@ -882,6 +882,30 @@ ALTER TABLE actions_new RENAME TO actions;
 CREATE INDEX actions_due ON actions (state, due_at);
 CREATE INDEX actions_target ON actions (target, created_at);
 PRAGMA legacy_alter_table = OFF;"""
+# Every change is a Command with its Inverse, kept forever (ADR 0021).
+MIGRATIONS[43] = """CREATE TABLE commands (  -- the Command log (ADR 0021): every change, its Source, words and Inverse; commands.py
+  id      TEXT PRIMARY KEY NOT NULL DEFAULT (new_id()),
+  at      TEXT NOT NULL,                       -- the writer's moment
+  source  TEXT NOT NULL CHECK (source IN ('console', 'app', 'cli', 'service')),
+  writer  TEXT NOT NULL,                       -- "inbox.act"; "service" for a Service pass
+  label   TEXT NOT NULL,                       -- what it did, in a few words ("Done: Intro call")
+  target  TEXT,                                -- the main record it changed, "threads:<id>"
+  guard   TEXT NOT NULL DEFAULT '[]',          -- JSON: [table, id, row as the Command left it]; Undo needs them so
+  inverse TEXT,                                -- JSON: [[writer, args, kwargs], ...] that put it back
+  reason  TEXT,                                -- why it has no Inverse
+  undoes  TEXT UNIQUE REFERENCES commands (id), -- an Undo: the Command it undid
+  CHECK (inverse IS NULL OR reason IS NULL)
+) STRICT;
+CREATE INDEX commands_at ON commands (at);
+CREATE TRIGGER commands_no_delete BEFORE DELETE ON commands
+BEGIN
+  SELECT RAISE(ABORT, 'the Command log is append-only');
+END;
+CREATE TRIGGER commands_no_update BEFORE UPDATE ON commands
+BEGIN
+  SELECT RAISE(ABORT, 'the Command log is append-only');
+END;"""
+
 
 
 class SendUnknown(SendFailed):
@@ -1030,7 +1054,9 @@ class Sender(Protocol):
 
 # --- storage ---------------------------------------------------------------
 
-def connect(path: str = ":memory:", factory=sqlite3.Connection) -> sqlite3.Connection:
+def connect(path: str = ":memory:", factory=None) -> sqlite3.Connection:
+    from .writers import Held
+    factory = factory or Held  # a Command commits as a whole (ADR 0021)
     db = sqlite3.connect(path, factory=factory)
     db.row_factory = sqlite3.Row
     db.execute("PRAGMA foreign_keys = ON")
@@ -2676,6 +2702,7 @@ def act(db, thread_id: int, action: Action | Reopen, *, now: datetime | None = N
         t = get_thread(db, thread_id)
         thread_id = t.id
         now = (now or clock.now())
+        _act_command(db, t, action)
         if isinstance(action, SetCase):
             case_id = action.case_id
             if action.new_title is not None:
@@ -2687,6 +2714,28 @@ def act(db, thread_id: int, action: Action | Reopen, *, now: datetime | None = N
         elif nxt := transition((t.status, t.status_detail), action, has_replied=_has_replied(db, thread_id)):
             _set_status(db, thread_id, now, *nxt, cause="reopen" if isinstance(action, Reopen) else "action")
         return get_thread(db, thread_id)
+
+
+ACT_WORDS = {"Done": "Done", "Ignore": "Ignored", "Unignore": "Un-ignored", "Investigate": "Investigating",
+             "Wait": "Waiting for them", "MarkTodo": "Back to Todo", "Reopen": "Reopened by an import"}
+
+
+def _act_command(db, t: Thread, action) -> None:
+    """Act's Command (ADR 0021): its words, the Thread, and the snapshot that puts it back."""
+    commands.target("threads", t.id)
+    if isinstance(action, SetCase):
+        if action.new_title is not None:  # a new Case stays behind: not clean, so not undoable (D-3)
+            commands.label(f"New Case {action.new_title}: {t.title}")
+            commands.not_undoable("a new Case is not undone")
+            return
+        case = db.execute("SELECT title FROM cases WHERE id = ?", (action.case_id,)).fetchone()
+        commands.label(f"Case {case[0]}: {t.title}" if case else f"Out of its Case: {t.title}")
+    elif isinstance(action, Snooze):
+        commands.label(f"Snoozed{' until ' + action.until.strftime('%Y-%m-%d %H:%M') if action.until else ''}: "
+                       f"{t.title}")
+    else:
+        commands.label(f"{ACT_WORDS.get(type(action).__name__, type(action).__name__)}: {t.title}")
+    commands.inverse("inbox.restore", snapshot(db, t.id))
 
 
 def reply(db, thread_id: int, text: str, sender: Sender,

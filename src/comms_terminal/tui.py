@@ -41,7 +41,7 @@ from textual.widgets import DataTable, DirectoryTree, Input, OptionList, Static,
 from textual.widgets.option_list import Option
 from textual.worker import WorkerCancelled, get_current_worker
 
-from . import actions, calendar as cal, clock, files, gcal, inbox, issues, pipeline, render, sequences
+from . import actions, calendar as cal, clock, commands, files, gcal, inbox, issues, pipeline, render, sequences
 from .health import problem
 from .icons import ICON
 from .platforms import FORMATS, PLATFORMS, kind_of
@@ -7473,6 +7473,7 @@ class Console(App):
     def __init__(self, db_path: str, reply=None, sources=None, send_draft=None, slack_conversations=None,
                  files=FILE_SERVER, remote=None, syncer=None, *, reactions=None, respond=None):
         super().__init__()
+        commands.default = "console"  # this process's changes are Console Commands (ADR 0021)
         self.remote, self.syncer = remote, syncer  # Comms Terminal's laptop copy (remote.py, ADR 0004)
         self.db_path, self.send_reply, self.view, self.cursor = db_path, reply, 0, {}
         self.home = self.HOME

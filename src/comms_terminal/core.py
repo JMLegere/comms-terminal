@@ -30,7 +30,7 @@ from datetime import datetime
 from importlib import resources
 from pathlib import Path
 
-from . import agent, calendar, files, inbox, pipeline, remote, render, sequences, writers
+from . import agent, calendar, commands, files, inbox, pipeline, remote, render, sequences, writers
 
 LOG = logging.getLogger("comms_terminal.core")
 GENERATION = 1  # the Local API's protocol generation: a breaking change starts the next one (ADR 0013)
@@ -39,7 +39,7 @@ HEARTBEAT = 15  # seconds between heartbeat events
 BACKLOG = 1000  # events a slow subscriber may fall behind before it gets "missed"
 MAX_IMAGE = 5 * 1024 * 1024  # a remote image larger than this stays as its alt text
 ORIGINS = ("view", "panel")
-VIEW_ONLY = set(agent.CONSOLE_ONLY)  # commands a Panel may not run (sending, Tasks, undo, upload links)
+VIEW_ONLY = set(agent.CONSOLE_ONLY) | {"commands.undo"}  # a Panel may not send, do Tasks, undo, or make upload links
 DOMAIN_ERRORS = tuple(remote.ERRORS.values())
 
 
@@ -948,6 +948,7 @@ class Core:
             self.call_from_thread(_rebase, syncer)
         if remote_ is not None:
             remote_.app = self
+            remote_.source = "app"  # the App's writes are App Commands on the Service too (ADR 0021)
         threading.Thread(target=self._heartbeat, daemon=True).start()
 
     # The interface Remote and Syncer report to, as the Console's app does.
@@ -1107,7 +1108,8 @@ class Core:
         def run():
             try:
                 inbox.admit(self.db, name, (), kwargs)  # a call into an off Module is refused (ADR 0017)
-                result = target(self.db, **kwargs)
+                with commands.source("app"):  # the App's Commands (ADR 0021)
+                    result = target(self.db, **kwargs)
                 if self.proxies is None:
                     self.db.commit()
             finally:
