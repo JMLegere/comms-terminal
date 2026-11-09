@@ -269,3 +269,13 @@ def test_cli_plans_issues_and_pins(db, capsys, monkeypatch):
     cli(db, "issue", "BIZ-2", "--unpin")
     assert issues.find(db, "BIZ-2")["pinned"] == 0
     assert db.execute("SELECT count(*) FROM actions").fetchone()[0] == 0  # local only (AS-PL-11)
+
+
+def test_due_now_is_yesterday_to_tomorrow_by_due_date_or_planned_day(db):
+    day = date(2026, 11, 9)
+    i = lambda due=None, planned=None: {"due_date": due, "planned_day": planned, "completed_at": None,
+                                         "canceled_at": None}
+    assert issues.due_now(i(due="2026-11-08"), day) and issues.due_now(i(planned="2026-11-10"), day)
+    assert not issues.due_now(i(due="2026-11-07"), day) and issues.overdue(i(due="2026-11-07"), day)
+    assert not issues.overdue(i(due="2026-09-22", planned="2026-11-09"), day)  # planned today: due now
+    assert not issues.on_today(i(planned="2026-11-11"), day) and not issues.on_today(i(), day)

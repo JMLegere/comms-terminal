@@ -417,21 +417,27 @@ def warnings(db, now: datetime | None = None) -> dict[str, list[str]]:
     return out
 
 
+def due_now(i: dict, day: date) -> bool:
+    """Due now (FR-PL-11): open, with its due date or Planned day from yesterday to tomorrow, the 24 hours either
+    side of now. Today counts it as today's work."""
+    lo, hi = (day - timedelta(days=1)).isoformat(), (day + timedelta(days=1)).isoformat()
+    return _open(i) and any(v and lo <= v <= hi for v in (i["due_date"], i["planned_day"]))
+
+
 def overdue(i: dict, day: date) -> bool:
-    """An Overdue Issue (FR-PL-11): open, with its Planned day or due date before `day`."""
-    d = day.isoformat()
-    return _open(i) and bool((i["planned_day"] and i["planned_day"] < d) or (i["due_date"] and i["due_date"] < d))
+    """An Overdue Issue (FR-PL-11): open, not due now, with its Planned day or due date before yesterday."""
+    lo = (day - timedelta(days=1)).isoformat()
+    return _open(i) and not due_now(i, day) and any(v and v < lo for v in (i["due_date"], i["planned_day"]))
 
 
 def on_today(i: dict, day: date) -> bool:
-    """Today lists it (FR-PL-12): open, with its Planned day or due date today or earlier."""
-    d = day.isoformat()
-    return _open(i) and bool((i["planned_day"] and i["planned_day"] <= d) or (i["due_date"] and i["due_date"] <= d))
+    """Today lists it (FR-PL-12): due now or Overdue."""
+    return due_now(i, day) or overdue(i, day)
 
 
 def today_load(db, now: datetime | None = None) -> dict:
-    """Today's figures (FR-PL-13): its capacity, the hours of the Issues it lists that are not Overdue ("used"),
-    and the hours of its Overdue Issues, apart."""
+    """Today's figures (FR-PL-13): its capacity, the hours of the Issues due now ("used"), and the hours of its
+    Overdue Issues, apart."""
     now = now or clock.now()
     day = today(now)
     rows = [i for i in issues(db) if on_today(i, day)] if "issues" in inbox.modules_on(db) else []

@@ -11,7 +11,8 @@ Decision:
 - **Pinned** (`f`) Issues are left alone, with or without a day. A Pinned Issue's day still uses that day's capacity; a Pinned Overdue Issue uses today's.
 - **Today's capacity** is the hours left before 18:00, less busy time, at most 9 hours.
 - **One run is one Command**; Undo puts back every Planned day it changed (ADR 0021). Undo refuses once a Linear read has rewritten any of those Issues, at most 30 minutes later.
-- **Rollover is removed**, and with it the Slip status. An unfinished Issue keeps its passed Planned day, shows on Today as Overdue, and moves on the next Plan Issues. Nothing about planning is ever written to Linear.
+- **Rollover is removed**, and with it the Slip status. An unfinished Issue keeps its passed Planned day, stays on Today (Due now for a day, then Overdue), and moves on the next Plan Issues. Nothing about planning is ever written to Linear.
+- **Today** lists Issues that are Due now (due date or Planned day from yesterday to tomorrow; their hours count as today's) and Overdue Issues (older; their hours shown apart). Jeremy, 2026-11-09, after the first live run read "0 of 4 h · 4 h overdue" for a full day: "next 24h to last 24h counts as due now", "due or planned in the window".
 
 ## Considered Options
 

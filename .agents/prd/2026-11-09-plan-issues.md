@@ -65,9 +65,9 @@ Status: **C** confirmed by Jeremy (discovery or grill), **P** proposed here.
 | FR-PL-8 | One run is one Command: label "Planned N Issues", a target per Issue whose Planned day changed, and an Inverse of `issues.plan` calls restoring each old day. A run that changes nothing records nothing. | C (grill) | P2 | `tests/test_undo_roundtrip.py`, `tests/test_planning.py` |
 | FR-PL-9 | Pin and unpin an Issue; local only, never sent; undoable. A pin survives Linear reads and webhooks. | C | P1, P2 | `tests/test_planning.py`, `tests/test_issues.py` |
 | FR-PL-10 | Day capacity for today counts hours from now to 18:00 (at most 9) less busy time in that window; after 18:00 today's capacity is 0. Other days unchanged (FR-IS-6). | C (grill: 18:00); busy window P | P2 | `tests/test_planning.py` |
-| FR-PL-11 | Overdue Issue: open, and Planned day or due date before today. | C | P2 | `tests/test_planning.py` |
-| FR-PL-12 | Today lists open Issues with Planned day or due date today or earlier, in one urgency-sorted list; Overdue rows are marked. | C | P2, P4 | `tests/test_today_ui.py`, `tests/app_today_view.mjs` |
-| FR-PL-13 | Today's pane shows today's figure (used of capacity: sizes of listed Issues that are not Overdue) and Overdue hours, apart. | C | P2, P4 | `tests/test_today_ui.py`, `tests/app_today_view.mjs` |
+| FR-PL-11 | Due now: open, with due date or Planned day from yesterday to tomorrow. Overdue Issue: open, not Due now, with Planned day or due date before yesterday. (Revised 2026-11-09 after the first live run; was "before today".) | C | P2 | `tests/test_planning.py` |
+| FR-PL-12 | Today lists Due now and Overdue Issues in one urgency-sorted list; Overdue rows are marked. (Revised 2026-11-09; was "Planned day or due date today or earlier".) | C | P2, P4 | `tests/test_today_ui.py`, `tests/app_today_view.mjs` |
+| FR-PL-13 | Today's pane shows today's figure (used of capacity: sizes of Due now Issues) and Overdue hours, apart. | C | P2, P4 | `tests/test_today_ui.py`, `tests/app_today_view.mjs` |
 | FR-PL-14 | Keys in Console and App, on the Issues page and Today: `p` Plan Issues, `w` the Planned day picker for one Issue, `f` pin/unpin. Pinned rows show a pin mark. | C | P4 | `tests/test_app_parity.py`, `tests/test_issues_ui.py` (Proposed, new), `tests/app_issues_view.mjs` |
 | FR-PL-15 | CLI: `comms-terminal issues plan` runs Plan Issues; `comms-terminal issue ID --pin` / `--unpin`. Agents may run both. | C | P3 | `tests/test_cli_parity.py`, `tests/test_planning.py` |
 | FR-PL-16 | Rollover and the Slip status are removed: nothing moves Planned days at midnight and nothing writes a status to Linear for a slip. Retires FR-IS-10. | C (grill, ADR 0023) | P2 | `tests/test_planning.py` (rollover tests removed), `features/issues.feature` |
@@ -94,7 +94,7 @@ Status: **C** confirmed by Jeremy (discovery or grill), **P** proposed here.
 - **AS-PL-6** Plan Issues at 19:00 puts nothing new on today.
 - **AS-PL-7** Plan Issues then Undo restores every Planned day; Undo after a Linear full read is refused with "it changed since".
 - **AS-PL-8** Friday's unfinished Issue is still planned for Friday on Monday, shows on Today marked Overdue, and nothing was sent to Linear.
-- **AS-PL-9** Today lists an Issue due today but planned Thursday, counted in today's figure; an Issue due yesterday and planned Friday is listed as Overdue.
+- **AS-PL-9** (revised) Issues due yesterday, planned tomorrow, or planned today though long past due are Due now and counted in today's figure; one due last Friday and planned Friday is Overdue; one planned Wednesday is not listed. Was: an Issue due yesterday and planned Friday is listed as Overdue.
 - **AS-PL-10** Running Plan Issues twice with no change records one Command.
 - **AS-PL-11** `issues plan` from the CLI gives the same plan as `p`.
 
@@ -257,6 +257,8 @@ Verify: `uv run pytest tests/test_today_ui.py tests/test_issues_ui.py (new) test
 | 21 | 2026-11-09 | Accept 30-minute undo window; separate table rejected | Jeremy, grill | approved | — |
 | 22 | 2026-11-09 | Pinned Overdue counts against today; keep all four warnings; ADR 0023 | Jeremy, grill | approved | — |
 | 23 | 2026-11-09 | Today: one list with Overdue marked (two groups rejected) | Jeremy, grill | approved | — |
+| 24b | 2026-11-09 | Shipped #47 (`61db232`); first live Plan Issues placed 57 Issues; Today read "0 of 4 h · 4 h overdue" | Jeremy "ship it", "Run it now" | done | — |
+| 25 | 2026-11-09 | "next 24h to last 24h counts as due now"; "due or planned in the window": Due now = due date or Planned day yesterday–tomorrow; Overdue only older | Jeremy, ask-tool | approved | #19 Overdue = before today; FR-PL-11–13 wording |
 | 24 | 2026-11-09 | Design grill shared understanding confirmed | Jeremy, ask-tool | approved | — |
 
 ## 8. Work log

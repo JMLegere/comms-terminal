@@ -104,16 +104,20 @@ Feature: Issues
     And Today lists "BIZ-5" as Overdue
     And Linear received no request
 
-  @AS-PL-9 @FR-PL-12 @FR-PL-13
-  Scenario: Today lists Issues due today and Overdue Issues, with their hours apart
-    Given an Issue "BIZ-70 Tell NBIF the date" assigned to Jeremy, due "2026-11-09" and planned for "2026-11-12"
-    And an Issue "BIZ-71 Batched reply to NBIF" assigned to Jeremy, due "2026-11-08" and planned for "2026-11-13"
+  @AS-PL-9 @FR-PL-11 @FR-PL-12 @FR-PL-13
+  Scenario: Today counts Issues due or planned from yesterday to tomorrow as due now, and older ones as Overdue
+    Given an Issue "BIZ-70 Tell NBIF the date" assigned to Jeremy, due "2026-11-08" and planned for "2026-11-12"
+    And an Issue "BIZ-71 Batched reply to NBIF" assigned to Jeremy, due "2026-11-06" and planned for "2026-11-13"
     And an Issue "BIZ-72 Warm-up outreach" assigned to Jeremy with status "Todo" and Planned day "2026-11-10"
+    And an Issue "BIZ-73 Board resolution" assigned to Jeremy, due "2026-11-02" and planned for "2026-11-09"
+    And an Issue "BIZ-74 Investor list" assigned to Jeremy with status "Todo" and Planned day "2026-11-11"
     When Today is read on Monday
     Then Today lists "BIZ-70" for today
+    And Today lists "BIZ-72" for today
+    And Today lists "BIZ-73" for today
     And Today lists "BIZ-71" as Overdue
-    And Today does not list "BIZ-72"
-    And Today's figures are "1 h of 8 h" and "1 h" Overdue
+    And Today does not list "BIZ-74"
+    And Today's figures are "3 h of 8 h" and "1 h" Overdue
 
   @AS-IQ-6 @FR-IS-9
   Scenario: An Issue planned after its due date is flagged
