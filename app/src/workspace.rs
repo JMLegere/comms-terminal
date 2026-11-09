@@ -81,6 +81,7 @@ const DEFAULTS: &[(&str, &str, bool)] = &[
     ("views/issue/main.js", include_str!("../defaults/views/issue/main.js"), true),
     ("views/actions/main.js", include_str!("../defaults/views/actions/main.js"), true),
     ("views/history/main.js", include_str!("../defaults/views/history/main.js"), true),
+    ("views/change/main.js", include_str!("../defaults/views/change/main.js"), true),
     ("layouts/main.json", include_str!("../defaults/layouts/main.json"), false),
     ("keys.json", include_str!("../defaults/keys.json"), false),
     ("settings.json", include_str!("../defaults/settings.json"), false),
@@ -146,6 +147,8 @@ const PREVIOUS: &[(&str, u64)] = &[
     ("keys.json", 0xb4f6fe76e1ac3b7d),
     ("keys.json", 0xb4244a89c7ab0dd3),    ("layouts/main.json", 0x486a0e4aec1ea574),
     ("keys.json", 0x8fad973448474b78),
+    ("layouts/main.json", 0x471a72fca14e6470),
+    ("keys.json", 0xcce20263f132a473),
 ];
 
 fn fnv(bytes: &[u8]) -> u64 {

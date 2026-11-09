@@ -2,7 +2,7 @@
 // each change with its time, words, Source and whether it was undone; v shows or hides the Service's own work.
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, v_virtual_list, VirtualListScrollHandle } from "gpui-base";
-import { call, nextEvent, nextCommand, theme, shared, setShared, focusMain, toast } from "comms";
+import { call, nextEvent, nextCommand, theme, shared, setShared, run, focusMain, toast } from "comms";
 
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -55,6 +55,8 @@ export default class History extends View {
   target() {
     const c = this.rows[this.at];
     if (c && shared("page") === "history") {
+      setShared("command", c); // the detail pane shows this change in full (views/change)
+      run("change.show");
       setShared("target", { col: "list", label: c.label, keys: [["v", this.service ? "hide Service work" : "show Service work"]] });
     }
   }
@@ -91,7 +93,7 @@ export default class History extends View {
       .child(h_flex().h(30).flex_none().px(12).gap(8).items_center().border_b(1).border_color(t.border).text_size(12)
         .child(div().text_color(t.accent).child("\u{f02da}"))
         .child(div().font_medium().text_color(t.foreground).child("history"))
-        .child(div().text_color(t.dim).child(`every change · z undoes the newest from a Client · v Service work ${this.service ? "shown" : "hidden"}`)))
+        .child(div().text_color(t.dim).child(`Service work ${this.service ? "shown" : "hidden"}`)))
       .when(Boolean(this.error), (el) => el.child(div().p(12).text_size(12).text_color(t.danger).child(this.error ?? "")))
       .when(!this.error && !this.rows.length, (el) => el.child(div().p(16).text_color(t.muted).child("No changes yet.")))
       .child(div().flex_1().min_h(0).px(4).py(4).child(

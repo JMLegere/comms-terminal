@@ -113,7 +113,7 @@
                 "actions:thread": "thread",
                 "actions:task": "task",
                 "actions:person": "person",
-                "history": null,
+                "history": "change",
                 "today:issue": "issue"
               }
             }
