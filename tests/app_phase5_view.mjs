@@ -1,5 +1,5 @@
 // Phase 5: Calendar, Cases and Tasks as the Console's (AS-CONF-14..16), run in the shipped views.
-// Usage: node --experimental-vm-modules app_phase5_view.mjs join|fold|reply|task-stale|task-enter|undo|scheduled|grid
+// Usage: node --experimental-vm-modules app_phase5_view.mjs join|fold|reply|task-stale|task-reload|task-enter|undo|scheduled|grid
 import { answers, calls, cx, input, load, ran, settle, state, tasks, texts, toasts } from "./app_view_kit.mjs";
 
 const kase = process.argv[2];
@@ -49,6 +49,22 @@ if (kase === "join") { // D95: o toasts the link; Ctrl+click opens it
   out.selected = [state.draft, state.detail, state.task ?? null];
   task.load(cx); await settle();                          // a change arrives: the Task view reloads
   out.after = [state.draft, state.detail];
+} else if (kase === "task-reload") { // a Today reload leaves the Task's Draft editor in the pane
+  const Today = await load("today"), Task = await load("task");
+  state.page = "today";
+  const today = make(Today, { data: null, cases: {}, at: 0 });
+  answers["today.page"] = { threads: [], tasks: [{ id: "k1", kind: "email", person: "Ana", group: "overdue", day: 1 }],
+    drafts: [], paused: [], unattended: [] };
+  today.load(cx); await settle();                         // arrives on the Task
+  answers["task.pane"] = { draft: { id: "d-task", thread_id: null } };
+  const task = make(Task, { pane: null, context: [] });
+  task.loadContext = () => {};
+  task.load(cx, true); await settle();                    // task.show: its New Thread Draft takes the pane
+  out.shown = [state.draft, state.detail];
+  ran.length = 0;
+  today.load(cx); await settle();                         // an autosave (or any change) reloads Today
+  out.after = [state.draft, state.detail, state.task ?? null];
+  out.reshown = ran.filter((c) => c === "task.show");
 } else if (kase === "task-enter") { // FR-UD-6: a Reply Draft in place, no page change
   const Task = await load("task");
   make(Task, { pane: { draft: { id: "d1", thread_id: "t9" } } }).open(cx);

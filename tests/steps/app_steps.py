@@ -1179,6 +1179,18 @@ def pane_keeps_reply_draft(app):
     assert app.phase5["after"] == ["d-reply", "thread"]
 
 
+@when("the inbox changes while the Task stays selected")
+def inbox_changes_on_task(app):
+    app.phase5 = phase5_view("task-reload")
+
+
+@then("the Draft editor keeps the pane and the Task is not shown again")
+def draft_keeps_pane(app):
+    assert app.phase5["shown"] == ["d-task", "draft"]
+    assert app.phase5["after"] == ["d-task", "draft", "k1"]
+    assert app.phase5["reshown"] == []
+
+
 @given("the App's Tasks page with an overdue call Task and a scheduled email Task")
 def tasks_with_scheduled(app):
     pass

@@ -363,6 +363,13 @@ Feature: App
     When Jeremy selects a Reply Draft row and then the inbox changes
     Then the pane keeps the Reply Draft he selected
 
+  @AS-CONF-16 @FR-CONF-10 @FR-UD-6
+  Scenario: A Task's Draft keeps the pane while Today reloads
+    # Jeremy, 2026-11-09: each autosave reloaded Today, which put the Task pane back over the Draft he was typing in.
+    Given Today with an email Task whose New Thread Draft was shown
+    When the inbox changes while the Task stays selected
+    Then the Draft editor keeps the pane and the Task is not shown again
+
   @AS-CONF-17 @FR-CONF-10
   Scenario: Archiving a used Sequence explains itself and can be undone
     Given a Sequence in the App with three live Enrollments
