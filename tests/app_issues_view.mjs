@@ -47,18 +47,23 @@ pane.command(`estimate_set:${JSON.stringify({ value: null, text: "1.5" })}`, cx)
 out.estimateRefused = toasts.at(-1);
 out.planned = ["today", "tomorrow", "fri", "none"].map((t) => Issue.ns.plannedDay(t, new Date(2026, 10, 9)));
 
-// The Action Queue: a header per day with its counts per Connection, then each row.
+// The Action Queue (ADR 0022): a header per section and per day with its counts by kind; it opens at now.
 const Actions = await load("actions");
-out.queue = Actions.ns.queueItems([
-  { kind: "action", id: "a1", day: "2026-11-09", at: "2026-11-09T14:00:00Z", connection: "Linear" },
-  { kind: "task", id: "t1", day: "2026-11-09", at: "2026-11-09T15:00:00Z", connection: null },
-  { kind: "draft", id: "d1", day: "2026-11-10", at: "2026-11-10T13:00:00Z", connection: "Gmail" }])
-  .map((it) => it.header ? `${it.header} | ${it.counts}` : it.key);
-// History (ADR 0021): the Command log below, a header per local day, newest first.
-out.history = Actions.ns.historyItems([
+const qrows = [
+  { key: "draft:d1", section: "upcoming", day: "2026-11-10", at: "2026-11-10T13:00:00Z", kind: "email" },
+  { key: "wake:t1", section: "in_flight", day: "2026-11-09", at: "2026-11-09T14:00:00Z", kind: "wake" },
+  { key: "woke:a1", section: "sent", day: "2026-11-09", at: "2026-11-09T10:00:00Z", kind: "wake" }];
+out.queue = Actions.ns.queueItems(qrows, { "2026-11-10": { email: 1 }, "2026-11-09": { wake: 2 } })
+  .map((it) => it.header ? `${it.header} | ${it.counts ?? ""}` : it.key);
+out.now = Actions.ns.nowIndex(qrows);
+// History (ADR 0021, 0022): its own page, a header per local day, newest first.
+const History = await load("history");
+out.history = History.ns.historyItems([
   { id: "c2", at: "2026-11-10T15:00:00", label: "Undo: Done: Intro call", source_name: "Console", undoes: "c1", undone: false },
   { id: "c1", at: "2026-11-10T14:00:00", label: "Done: Intro call", source_name: "App", undoes: null, undone: true }])
   .map((it) => it.header ?? `${it.command.label} | ${it.command.source_name}${it.command.undone ? " | undone" : ""}`);
+const Nav = await load("nav");
+out.badge = [Nav.ns.badge([25, 1]), Nav.ns.badge([25, 0]), Nav.ns.badge([0, 0])];
 
 // Today: the issues pane holds today's Planned Issues, and its keys reach the Issue pane.
 const Today = await load("today");
@@ -66,7 +71,6 @@ const panes = Today.ns.paneItems({ issues: [issue("7")] }, {});
 out.today = panes.issues.map((it) => it.key);
 
 // The rail: Connections grouped under one header per kind (ADR 0018); Context connections are not among them.
-const Nav = await load("nav");
 out.rail = Nav.ns.connectionRows([
   { id: 3, platform: "linear", kind: "issue", name: "Linear" }, { id: 1, platform: "gmail", kind: "email", name: "Gmail" },
   { id: 4, platform: "linear", kind: "context", name: "Linear" }, { id: 2, platform: "slack", kind: "slack", name: "Slack" },
