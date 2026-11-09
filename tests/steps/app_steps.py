@@ -234,6 +234,22 @@ def composer_view(case):
     return json.loads(result.stdout)
 
 
+@given("an App Composer on a New Thread Draft")
+def composer_new_thread_draft(app):
+    pass
+
+
+@when("Jeremy types while an autosave is under way, and then presses esc")
+def typed_during_save(app):
+    app.composer = composer_view("typed-during-save")
+
+
+@then("the Draft stays Unsaved once that save returns, and esc saves the later text")
+def later_text_saved(app):
+    assert app.composer["unsaved"] is True
+    assert app.composer["saved"] == [["First words", 1], ["First words and more", 2]]
+
+
 @when("Jeremy presses Ctrl Enter and chooses Send now in the Draft editor")
 def send_in_app_draft_editor(app):
     app.draft_send = composer_view(f"send:{app.draft_kind}:{getattr(app, 'empty_draft_field', '')}")
@@ -1177,6 +1193,18 @@ def pane_keeps_reply_draft(app):
     assert app.phase5["shown"] == ["d-task", "draft"]
     assert app.phase5["selected"] == ["d-reply", "thread", None]  # a Reply Draft shows in its Thread (decision #144)
     assert app.phase5["after"] == ["d-reply", "thread"]
+
+
+@when("the inbox changes while the Task stays selected")
+def inbox_changes_on_task(app):
+    app.phase5 = phase5_view("task-reload")
+
+
+@then("the Draft editor keeps the pane and the Task is not shown again")
+def draft_keeps_pane(app):
+    assert app.phase5["shown"] == ["d-task", "draft"]
+    assert app.phase5["after"] == ["d-task", "draft", "k1"]
+    assert app.phase5["reshown"] == []
 
 
 @given("the App's Tasks page with an overdue call Task and a scheduled email Task")

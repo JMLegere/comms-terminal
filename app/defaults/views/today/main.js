@@ -186,7 +186,7 @@ export default class Today extends View {
         const first = Math.max(0, rows.findIndex((x) => x.r)); // on arrival: the first Thread, not its header
         this.at = again >= 0 ? again : keep ? Math.min(this.at, Math.max(rows.length - 1, 0)) : first;
         this.error = null;
-        this.select(cx);
+        this.select(cx, true);
       } catch (e) {
         this.error = String(e);
       }
@@ -225,7 +225,7 @@ export default class Today extends View {
     cx.notify();
   }
 
-  select(cx) {
+  select(cx, reload = false) {
     let row = this.rows()[this.at];
     if (this.held && row?.key !== this.held.item.key) { // FR-UD-9: the selection left the held row; it takes its new place
       this.held = null;
@@ -234,6 +234,9 @@ export default class Today extends View {
     }
     if (!row || shared("page") !== "today") return;
     const r = row.r;
+    // A reload on the same Task leaves the pane alone: the Task may have swapped in its Draft or Thread, and the task
+    // view reloads itself on rows. Showing it again put the Task over the Draft on every autosave (the flicker).
+    if (reload && row.kind === "tasks" && shared("task") === r?.id) return this.target();
     const inPlace = row.kind === "drafts" && Boolean(r?.thread_id); // a Reply Draft shows as its Thread (decision #144)
     setShared("thread", row.kind === "threads" ? r?.id ?? null : inPlace ? r.thread_id : null);
     setShared("detail", inPlace ? "thread" : DETAIL[row.kind]);
