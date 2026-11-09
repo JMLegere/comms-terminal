@@ -427,5 +427,5 @@ def draft_locked(linear_issues, text):
 
 @then(parsers.parse('the Action Queue lists the send with outcome "{state}"'))
 def queue_lists_send(linear_issues, state):
-    rows = [r for r in actions.queue(linear_issues.db, NOW) if r["what"] == "Send"]
-    assert [(r["target"], r["state"], r["source"]) for r in rows] == [(linear_issues.draft["subject"], state, "Draft")]
+    rows = [r for r in actions.queue(linear_issues.db, NOW) if r["what"] == "Send" and r["section"] == "sent"]
+    assert [(r["target"].split(" · ")[0], r["outcome"]) for r in rows] == [(linear_issues.draft["subject"], state)]

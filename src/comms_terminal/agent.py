@@ -266,7 +266,7 @@ def add_parsers(sub):
         t.add_argument(kind, help="a Stage name" if kind == "stage" else "CAD, e.g. 90000 or 90k")
         t.add_argument("--at", help="backdate it: YYYY-MM-DD (seeding past Stages)")
     sub.add_parser("issues", help="Jeremy's Issues (ADR 0019): identifier, status, priority, Planned day, title")
-    sub.add_parser("actions", help="the Action Queue (ADR 0020): what is waiting to leave, by day")
+    sub.add_parser("actions", help="the Action Queue (ADR 0022): Actions that wait for a time, Upcoming, In flight and Sent")
     u = sub.add_parser("undo", help="undo the newest change from the Console, the App or the CLI (ADR 0021)")
     u.add_argument("--show", action="store_true", help="print what undo would undo, and undo nothing")
     h = sub.add_parser("history", help="the Command log, newest first: time, source, what, undone (ADR 0021)")
@@ -412,8 +412,8 @@ def _run(a, db):
         elif a.cmd == "actions":
             from . import actions
             for r in actions.queue(db):
-                print(f"{r['day']}\t{r['state']}\t{r['what']}\t{r['target'] or ''}\t{r['connection'] or ''}"
-                      + (f"\t{r['error']}" if r["error"] else ""))
+                print(f"{r['at'][:16].replace('T', ' ')}\t{r['section']}\t{r['kind']}\t{r['what']}\t{r['target'] or ''}"
+                      + (f"\t{r['outcome']}" if r["outcome"] else "") + (f"\t{r['error']}" if r["error"] else ""))
         elif a.cmd == "undo":
             print(undo_cmd(db, a), end="")
         elif a.cmd == "history":

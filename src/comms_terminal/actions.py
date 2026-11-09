@@ -96,53 +96,97 @@ def latest_refusal(db, target: str) -> str | None:
     return f"Not saved: {row['error']}" if row and row["state"] == "refused" else None
 
 
-# --- The Action Queue page (FR-UI-4): Actions, and what is scheduled to leave, as Lemlist's Outreach queue -------
+# --- The Action Queue page (ADR 0022): one timeline of Actions that wait for a time ------------------------------
 
 LABEL = {"issue_update": "Issue change", "issue_create": "New Issue", "send": "Send", "respond": "Respond"}
+KINDS = ("email", "sms", "slack", "wake", "enrol", "step")  # what each day counts, in this order
+SENT_DAYS = 7  # Sent reaches back this far; Upcoming has no end
+SECTIONS = ("upcoming", "in_flight", "sent")
+_MESSAGE_KIND = {"gmail": "email", "fastmail": "email", "quo": "sms", "slack": "slack"}
+_WAKE = {"WAITING_FOR_DURATION": "Snooze ends", "WAITING_FOR_CUSTOMER": "Follow-up"}
 
 
-def queue(db, now: datetime | None = None, days: int = 7) -> list[dict]:
-    """Rows by day for the Action Queue page: every Action not yet confirmed, those confirmed today, and what is
-    scheduled to leave in the next `days` (scheduled Drafts, coming Tasks, Enrollment starts). Each row: day, at,
-    what, target, source, connection, state, error."""
+def queue(db, now: datetime | None = None) -> list[dict]:
+    """The Action Queue (ADR 0022): every Action that waits for a time and will happen with no act from Jeremy (a
+    scheduled send, a Snooze wake, a follow-up return, an Enrollment start, an Action Step), and each that happened
+    in the last SENT_DAYS, read from the records that already hold its time and outcome. Writes nothing.
+
+    Each row: key, section (upcoming, in_flight, sent), kind (KINDS), at, day (local date), what, target, target_kind
+    (draft, thread, person, task), target_id, outcome (confirmed, refused, unknown, or None), error. Sorted as one
+    timeline: Upcoming furthest ahead first, then In flight, then Sent newest first."""
     from datetime import timedelta
 
-    from .sequences import LOCAL
+    from .sequences import ACTION_LABEL, LOCAL
     now = now or clock.now()
-    day = now.astimezone(LOCAL).date()
-    until = clock.iso(datetime.combine(day + timedelta(days=days), datetime.min.time(), LOCAL))
-    local_day = lambda at: datetime.fromisoformat(at).astimezone(LOCAL).date().isoformat()  # noqa: E731
+    at_now, since = clock.iso(now), clock.iso(now - timedelta(days=SENT_DAYS))
     rows = []
-    for a in db.execute(
-            "SELECT a.*, c.platform, c.label, i.identifier, i.title FROM actions a"
-            " JOIN connections c ON c.id = a.connection_id LEFT JOIN issues i ON i.id = a.target"
-            " WHERE a.state != 'confirmed' OR a.done_at >= ? ORDER BY a.created_at, a.id",
-            (clock.iso(datetime.combine(day, datetime.min.time(), LOCAL)),)):
-        issue = a["kind"].startswith("issue_")
-        rows.append({"kind": "action", "id": a["id"], "day": local_day(a["due_at"]), "at": a["due_at"],
-                     "what": LABEL.get(a["kind"], a["kind"]),
-                     "target": f"{a['identifier'] or ''} {a['title'] or ''}".strip() if issue
-                     else json.loads(a["payload"]).get("label", ""),
-                     "target_id": a["target"], "source": "Issue" if issue else "Draft" if a["kind"] == "send"
-                     else "Calendar", "connection": a["label"], "state": a["state"], "error": a["error"]})
-    for d in db.execute('SELECT d.id, d.subject, d."to", d.send_at, c.label FROM composition_drafts d'
-                        " LEFT JOIN connections c ON c.id = d.connection_id WHERE d.send_at IS NOT NULL AND d.send_at < ?",
-                        (until,)):
-        rows.append({"kind": "draft", "id": d["id"], "day": local_day(d["send_at"]), "at": d["send_at"],
-                     "what": "Send", "target": d["subject"] or f"message to {d['to']}", "target_id": d["id"],
-                     "source": "Draft", "connection": d["label"], "state": "scheduled", "error": None})
-    for t in db.execute("SELECT t.id, t.due_at, s.kind, p.display_name, q.name FROM tasks t"
-                        " JOIN sequence_steps s ON s.id = t.step_id JOIN enrollments e ON e.id = t.enrollment_id"
-                        " JOIN sequences q ON q.id = e.sequence_id JOIN persons p ON p.id = e.person_id"
-                        " WHERE t.state = 'DUE' AND t.due_at < ?", (until,)):
-        rows.append({"kind": "task", "id": t["id"], "day": max(local_day(t["due_at"]), day.isoformat()),
-                     "at": t["due_at"], "what": f"{t['kind'].title()} Task", "target": t["display_name"],
-                     "target_id": t["id"], "source": t["name"], "connection": None, "state": "scheduled", "error": None})
-    for e in db.execute("SELECT e.id, e.starts_at, p.display_name, q.name FROM enrollments e JOIN persons p"
-                        " ON p.id = e.person_id JOIN sequences q ON q.id = e.sequence_id"
-                        " WHERE e.starts_at IS NOT NULL AND e.state != 'FINISHED' AND e.starts_at < ?", (until,)):
-        rows.append({"kind": "enrollment", "id": e["id"], "day": max(local_day(e["starts_at"]), day.isoformat()),
-                     "at": e["starts_at"], "what": "Enrollment starts", "target": e["display_name"],
-                     "target_id": e["id"], "source": e["name"], "connection": None, "state": "scheduled",
-                     "error": None})
-    return sorted(rows, key=lambda r: (r["day"], r["at"]))
+
+    def add(key, section, kind, at, what, target, target_kind, target_id, outcome=None, error=None):
+        rows.append({"key": key, "section": section, "kind": kind, "at": at,
+                     "day": datetime.fromisoformat(at).astimezone(LOCAL).date().isoformat(), "what": what,
+                     "target": target, "target_kind": target_kind, "target_id": target_id, "outcome": outcome,
+                     "error": error})
+
+    def ahead(at):
+        return "upcoming" if at > at_now else "in_flight"
+
+    for d in db.execute('SELECT d.id, d.kind, d.subject, d."to", d.send_at, t.title FROM composition_drafts d'
+                        " LEFT JOIN threads t ON t.id = d.thread_id WHERE d.send_at IS NOT NULL"):
+        add(f"draft:{d['id']}", ahead(d["send_at"]), d["kind"], d["send_at"], "Send",
+            " · ".join(x for x in (d["subject"] or d["title"], d["to"]) if x), "draft", d["id"])
+    for a in db.execute("SELECT a.*, c.platform FROM actions a JOIN connections c ON c.id = a.connection_id"
+                        " WHERE a.kind = 'send' AND (a.state IN ('scheduled', 'running') OR a.created_at >= ?)",
+                        (since,)):
+        done = a["state"] in ("confirmed", "refused", "unknown")
+        draft = db.execute("SELECT 1 FROM composition_drafts WHERE id = ?", (a["target"],)).fetchone()
+        add(f"action:{a['id']}", "sent" if done else "in_flight", _MESSAGE_KIND.get(a["platform"], "email"),
+            a["done_at"] or a["due_at"], "Send", json.loads(a["payload"]).get("label", ""),
+            "draft" if draft else None, a["target"] if draft else None,
+            a["state"] if done else None, a["error"])
+    for t in db.execute("SELECT id, title, status_detail, snoozed_until, follow_up_at FROM threads"
+                        " WHERE merged_into IS NULL AND ((status_detail = 'WAITING_FOR_DURATION' AND snoozed_until"
+                        " IS NOT NULL) OR (status_detail = 'WAITING_FOR_CUSTOMER' AND follow_up_at IS NOT NULL))"):
+        at = t["snoozed_until"] if t["status_detail"] == "WAITING_FOR_DURATION" else t["follow_up_at"]
+        add(f"wake:{t['id']}", ahead(at), "wake", at, _WAKE[t["status_detail"]], t["title"], "thread", t["id"])
+    for w in db.execute("SELECT a.id, a.occurred_at, a.old_detail, t.id AS thread_id, t.title FROM audit_log a"
+                        " JOIN threads t ON t.id = a.thread_id WHERE a.cause = 'woke' AND a.occurred_at >= ?",
+                        (since,)):
+        add(f"woke:{w['id']}", "sent", "wake", w["occurred_at"], _WAKE.get(w["old_detail"], "Snooze ends"),
+            w["title"], "thread", w["thread_id"], "confirmed")
+    if "sequences" in inbox.modules_on(db):
+        for e in db.execute("SELECT e.id, e.state, e.starts_at, e.person_id, p.display_name, q.name FROM enrollments e"
+                            " JOIN persons p ON p.id = e.person_id JOIN sequences q ON q.id = e.sequence_id"
+                            " WHERE e.starts_at IS NOT NULL AND e.state != 'PAUSED' AND e.starts_at >= ?", (since,)):
+            started = e["starts_at"] <= at_now  # a start just happens: its first Task counts from it
+            if not started and e["state"] != "ACTIVE":
+                continue
+            add(f"enrol:{e['id']}", "sent" if started else "upcoming", "enrol", e["starts_at"],
+                "Enrollment starts", f"{e['display_name']} · {e['name']}", "person", e["person_id"],
+                "confirmed" if started else None)
+        for k in db.execute("SELECT k.id, k.state, k.due_at, k.done_at, s.action_kind, p.display_name, q.name"
+                            " FROM tasks k JOIN sequence_steps s ON s.id = k.step_id"
+                            " JOIN enrollments e ON e.id = k.enrollment_id JOIN persons p ON p.id = e.person_id"
+                            " JOIN sequences q ON q.id = e.sequence_id WHERE s.kind = 'action'"
+                            " AND ((k.state = 'DUE' AND k.flag IS NULL) OR (k.state = 'DONE' AND k.done_at >= ?))",
+                            (since,)):
+            done = k["state"] == "DONE"
+            add(f"step:{k['id']}", "sent" if done else ahead(k["due_at"]), "step",
+                k["done_at"] if done else k["due_at"], ACTION_LABEL.get(k["action_kind"], "Action Step"),
+                f"{k['display_name']} · {k['name']}", "task", k["id"], "confirmed" if done else None)
+    rank = {s: i for i, s in enumerate(SECTIONS)}
+    rows.sort(key=lambda r: r["at"], reverse=True)
+    return sorted(rows, key=lambda r: rank[r["section"]])
+
+
+def counts(rows: list[dict]) -> dict[str, dict[str, int]]:
+    """Each day's Actions by kind, in KINDS order: {day: {kind: n}}."""
+    out: dict[str, dict[str, int]] = {}
+    for r in rows:
+        day = out.setdefault(r["day"], {})
+        day[r["kind"]] = day.get(r["kind"], 0) + 1
+    return {d: {k: c[k] for k in KINDS if k in c} for d, c in out.items()}
+
+
+def badge(rows: list[dict]) -> tuple[int, int]:
+    """The rail's two numbers: Upcoming, then In flight."""
+    return (sum(r["section"] == "upcoming" for r in rows), sum(r["section"] == "in_flight" for r in rows))

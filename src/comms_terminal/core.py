@@ -30,7 +30,7 @@ from datetime import datetime
 from importlib import resources
 from pathlib import Path
 
-from . import agent, calendar, commands, files, inbox, pipeline, remote, render, sequences, writers
+from . import actions, agent, calendar, commands, files, inbox, pipeline, remote, render, sequences, writers
 
 LOG = logging.getLogger("comms_terminal.core")
 GENERATION = 1  # the Local API's protocol generation: a breaking change starts the next one (ADR 0013)
@@ -102,8 +102,7 @@ def _shell(core, db):
             "organizations": db.execute("SELECT count(*) FROM organizations").fetchone()[0],
             "issues": db.execute("SELECT count(*) FROM issues WHERE completed_at IS NULL AND canceled_at IS NULL"
                                  ).fetchone()[0],
-            "actions": db.execute("SELECT count(*) FROM actions WHERE state IN ('scheduled', 'running', 'unknown')"
-                                  ).fetchone()[0],
+            "actions": list(actions.badge(actions.queue(db))),
             "channels": db.execute("SELECT count(*) FROM channels WHERE kind != 'mailbox'").fetchone()[0],
             "cases": dict(Counter(c["status"] for c in inbox.case_queue(db))),
             "pipelines": {p.lower(): rail_share(db, p) for p in pipeline.PIPELINES},
@@ -564,10 +563,10 @@ def _issue_detail(core, db, issue_id):
 
 @query("actions.queue")
 def _actions_queue(core, db):
-    """The Action Queue page (FR-UI-4): Actions not yet confirmed or confirmed today, and what is scheduled to
-    leave in the next week, by day."""
-    from . import actions
-    return actions.queue(db)
+    """The Action Queue (ADR 0022): rows of every Action that waits for a time, as one timeline (Upcoming furthest
+    ahead first, In flight, Sent newest first, 7 days), and each day's counts by kind."""
+    rows = actions.queue(db)
+    return {"rows": rows, "counts": actions.counts(rows)}
 
 
 @query("undo.newest")
