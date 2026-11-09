@@ -6625,38 +6625,38 @@ class ActionQueuePage(TablePage):
 
     MARK = {"confirmed": "✓", "refused": "✗", "unknown": "?"}
 
+    EMPTY_SECTION = {"upcoming": "Nothing scheduled", "in_flight": "Nothing in flight",
+                     "sent": "Nothing sent in the last 7 days"}
+
     def rows(self):
-        """A band per section with its count, a muted header per day with its counts by kind, the rows under it, and
-        a NOW line between the future and the past (PRD 2026-11-08-action-queue, hierarchy)."""
-        out, section, day, now_shown = [], None, None, False
+        """Three sections, always shown, each a band with its count; a muted header per day with its counts by kind
+        and the rows under it; a NOW bar between the future (Upcoming) and the rest (PRD 2026-11-08-action-queue)."""
+        out = []
         found = actions.queue(self.app.db)
         counts = actions.counts(found)
-        total = Counter(r["section"] for r in found)
         teal = "#45707a"
-
-        def now_line():
-            out.append(({"header": "now"}, ("", f"[{teal}]{'─' * 12}[/]", f"[b {teal}]NOW {clock.now().astimezone(sequences.LOCAL):%H:%M}[/]")))
-        for r in found:
-            if r["section"] != section:
-                if not now_shown and r["section"] != "upcoming":
-                    now_line()
-                    now_shown = True
-                section, day = r["section"], None
-                words = f"{self.SECTION[section].upper()} · " + ("last 7 days · " if section == "sent" else "") + str(total[section])
-                out.append(({"header": section}, ("", f"[b {teal}]{words}[/]" if section == "in_flight" else f"[b]{words}[/]", "")))
-            if r["day"] != day:
-                day = r["day"]
-                n = " · ".join(f"{k} {c}" for k, c in counts[day].items())
-                out.append(({"header": f"{section}:{day}"}, ("", f"[#7c6f64]  {date.fromisoformat(day):%a %b %-d}[/]",
-                                                             f"[#a89984]{n}[/]")))
-            past = r["section"] == "sent"
-            mark = f"[{self.OUTCOME[r['outcome']]}]{self.MARK[r['outcome']]}[/] " if r["outcome"] else "  "
-            what = f"[#928374]{escape(r['what'])}[/]" if past else escape(r["what"])
-            target = f"[#928374]{escape(r['target'] or '')}[/]" if past else escape(r["target"] or "")
-            out.append((r, (f"[#928374]{datetime.fromisoformat(r['at']).astimezone(sequences.LOCAL):%H:%M}[/]",
-                            f"  {mark}{what}", target)))
-        if found and not now_shown:
-            now_line()
+        for section in actions.SECTIONS:
+            mine = [r for r in found if r["section"] == section]
+            words = f"{self.SECTION[section].upper()} · " + ("last 7 days · " if section == "sent" else "") + str(len(mine))
+            out.append(({"header": section}, ("", f"[b]{words}[/]", "")))
+            if not mine:
+                out.append(({"header": f"{section}:empty"}, ("", f"[#a89984]  {self.EMPTY_SECTION[section]}[/]", "")))
+            day = None
+            for r in mine:
+                if r["day"] != day:
+                    day = r["day"]
+                    n = " · ".join(f"{k} {c}" for k, c in counts[day].items())
+                    out.append(({"header": f"{section}:{day}"}, ("", f"[#7c6f64]  {date.fromisoformat(day):%a %b %-d}[/]",
+                                                                 f"[#a89984]{n}[/]")))
+                past = r["section"] == "sent"
+                mark = f"[{self.OUTCOME[r['outcome']]}]{self.MARK[r['outcome']]}[/] " if r["outcome"] else "  "
+                what = f"[#928374]{escape(r['what'])}[/]" if past else escape(r["what"])
+                target = f"[#928374]{escape(r['target'] or '')}[/]" if past else escape(r["target"] or "")
+                out.append((r, (f"[#928374]{datetime.fromisoformat(r['at']).astimezone(sequences.LOCAL):%H:%M}[/]",
+                                f"  {mark}{what}", target)))
+            if section == "upcoming":
+                now = clock.now().astimezone(sequences.LOCAL)
+                out.append(({"header": "now"}, (f"[b {teal}]NOW[/]", f"[b {teal}]{now:%H:%M} {'━' * 14}[/]", f"[{teal}]{'━' * 30}[/]")))
         return out
 
     def now_row(self) -> int:

@@ -56,6 +56,8 @@ const qrows = [
 out.queue = Actions.ns.queueItems(qrows, { "2026-11-10": { email: 1 }, "2026-11-09": { wake: 2 } }, new Date(2026, 10, 9, 21, 41))
   .map((it) => it.now ?? (it.header ? `${it.header} | ${it.counts ?? ""}` : it.key));
 out.now = Actions.ns.nowIndex(qrows);
+out.queueEmpty = Actions.ns.queueItems([], {}, new Date(2026, 10, 9, 21, 41))
+  .map((it) => it.now ?? (it.header ? `${it.header} | ${it.counts ?? ""}` : it.key));
 const Nav = await load("nav");
 out.badge = [Nav.ns.badge([25, 1]), Nav.ns.badge([25, 0]), Nav.ns.badge([0, 0])];
 

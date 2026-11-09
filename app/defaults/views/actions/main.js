@@ -13,33 +13,30 @@ const OUTCOME = { confirmed: "green", refused: "red", unknown: "yellow" };
 const MARK = { confirmed: "✓", refused: "✗", unknown: "?" };
 const pad = (n) => String(n).padStart(2, "0");
 
-/** The timeline's items (PRD 2026-11-08-action-queue, hierarchy): a band per section with its count, a muted header
- * per day with its counts by kind, the rows under it, and a NOW line between the future and the past. */
+const EMPTY = { upcoming: "Nothing scheduled", in_flight: "Nothing in flight", sent: "Nothing sent in the last 7 days" };
+
+/** The timeline's items (PRD 2026-11-08-action-queue, hierarchy): three sections, always shown, each a band with its
+ * count; a muted header per day with its counts by kind and the rows under it; a NOW bar between the future
+ * (Upcoming) and the rest. */
 export function queueItems(rows, counts, now = new Date()) {
   const items = [];
-  const total = {};
-  for (const r of rows) total[r.section] = (total[r.section] ?? 0) + 1;
-  let section = null, day = null, nowShown = false;
-  const nowLine = () => {
-    nowShown = true;
-    items.push({ key: "now", now: `NOW ${pad(now.getHours())}:${pad(now.getMinutes())}` });
-  };
-  for (const r of rows) {
-    if (r.section !== section) {
-      if (!nowShown && r.section !== "upcoming") nowLine();
-      section = r.section; day = null;
-      items.push({ key: `s-${section}`, band: section,
-        header: `${SECTION[section].toUpperCase()} · ${section === "sent" ? "last 7 days · " : ""}${total[section]}` });
+  for (const section of Object.keys(SECTION)) {
+    const mine = rows.filter((r) => r.section === section);
+    items.push({ key: `s-${section}`, band: section,
+      header: `${SECTION[section].toUpperCase()} · ${section === "sent" ? "last 7 days · " : ""}${mine.length}` });
+    if (!mine.length) items.push({ key: `e-${section}`, empty: EMPTY[section] });
+    let day = null;
+    for (const r of mine) {
+      if (r.day !== day) {
+        day = r.day;
+        const [y, m, d] = day.split("-").map(Number), at = new Date(y, m - 1, d);
+        items.push({ key: `d-${section}-${day}`, header: `${DAYS[at.getDay()]} ${MONTHS[at.getMonth()]} ${d}`,
+          counts: Object.entries(counts?.[day] ?? {}).map(([k, n]) => `${k} ${n}`).join(" · ") });
+      }
+      items.push({ key: r.key, row: r });
     }
-    if (r.day !== day) {
-      day = r.day;
-      const [y, m, d] = day.split("-").map(Number), at = new Date(y, m - 1, d);
-      items.push({ key: `d-${section}-${day}`, header: `${DAYS[at.getDay()]} ${MONTHS[at.getMonth()]} ${d}`,
-        counts: Object.entries(counts?.[day] ?? {}).map(([k, n]) => `${k} ${n}`).join(" · ") });
-    }
-    items.push({ key: r.key, row: r });
+    if (section === "upcoming") items.push({ key: "now", now: `NOW ${pad(now.getHours())}:${pad(now.getMinutes())}` });
   }
-  if (rows.length && !nowShown) nowLine(); // only future rows: now sits below them
   return items;
 }
 
@@ -117,16 +114,15 @@ export default class Actions extends View {
     const t = theme();
     const items = queueItems(this.rows, this.counts);
     const selected = this.rows[this.at];
-    const band = (it) => h_flex().h(26).px(8).gap(8).items_center().rounded(4)
-      .when(it.band === "in_flight", (el) => el.bg(t.selected).border_l(3).border_color(t.accent))
-      .when(it.band !== "in_flight", (el) => el.border_b(1).border_color(t.border))
-      .child(div().text_size(12).font_semibold().text_color(it.band === "in_flight" ? t.accent : t.foreground).child(it.header));
+    const band = (it) => h_flex().h(26).px(8).gap(8).items_center().border_b(1).border_color(t.border)
+      .child(div().text_size(12).font_semibold().text_color(t.foreground).child(it.header));
+    const empty = (it) => h_flex().h(26).pl(24).items_center().child(div().text_color(t.dim).child(it.empty));
     const dayHeader = (it) => h_flex().h(26).pl(16).pr(8).items_center().text_size(11.5)
       .child(div().flex_1().text_color(t.muted).child(it.header))
       .child(div().flex_none().text_color(t.dim).child(it.counts ?? ""));
     const nowLine = (it) => h_flex().h(26).px(8).gap(8).items_center()
-      .child(div().flex_1().h(1).bg(t.accent))
-      .child(div().flex_none().text_size(11).font_semibold().text_color(t.accent).child(it.now));
+      .child(div().flex_none().text_size(11).font_semibold().text_color(t.accent).child(it.now))
+      .child(div().flex_1().h(2).bg(t.accent));
     const row = (r) => {
       const at = new Date(r.at), past = r.section === "sent";
       return h_flex().h(26).pl(24).pr(8).gap(8).rounded(4).items_center()
@@ -136,13 +132,12 @@ export default class Actions extends View {
         .child(div().flex_none().text_color(past ? t.muted : t.foreground).child(r.what)) // the target keeps the width
         .child(div().flex_1().min_w(0).truncate().text_color(past ? t.muted : t.strong ?? t.foreground).child(r.target ?? ""));
     };
-    const item = (it) => it.now ? nowLine(it) : it.band ? band(it) : it.header ? dayHeader(it) : row(it.row);
+    const item = (it) => it.now ? nowLine(it) : it.band ? band(it) : it.empty ? empty(it) : it.header ? dayHeader(it) : row(it.row);
     return v_flex().size_full().min_h(0).bg(t.background).text_size(13)
       .child(h_flex().h(30).flex_none().px(12).gap(8).items_center().border_b(1).border_color(t.border).text_size(12)
         .child(div().text_color(t.accent).child("\u{f048a}"))
         .child(div().font_medium().text_color(t.foreground).child("action queue")))
       .when(Boolean(this.error), (el) => el.child(div().p(12).text_size(12).text_color(t.danger).child(this.error ?? "")))
-      .when(!this.error && !this.rows.length, (el) => el.child(div().p(16).text_color(t.muted).child("Nothing is scheduled to happen by itself.")))
       .child(div().flex_1().min_h(0).px(4).py(4).child(
         v_virtual_list("actions", items.length, 26, (i) => items[i].key,
           (range) => items.slice(range.start, range.end).map(item))

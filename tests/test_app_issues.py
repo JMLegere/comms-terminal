@@ -39,6 +39,8 @@ def test_the_action_queue_is_a_timeline_with_day_counts_and_today_holds_issues(o
     assert out["queue"] == ["UPCOMING · 1 | ", "Tue Nov 10 | email 1", "draft:d1", "NOW 21:41",
                             "IN FLIGHT · 1 | ", "Mon Nov 9 | wake 2", "wake:t1",
                             "SENT · last 7 days · 1 | ", "Mon Nov 9 | wake 2", "woke:a1"]
+    assert out["queueEmpty"] == ["UPCOMING · 0 | ", "e-upcoming", "NOW 21:41", "IN FLIGHT · 0 | ", "e-in_flight",
+                                 "SENT · last 7 days · 0 | ", "e-sent"]  # three sections, always
     assert out["now"] == 1  # opens at the first row at or after now
     assert out["badge"] == ["25 · 1", 25, ""]
     assert out["today"] == ["issues-7"]
