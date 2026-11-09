@@ -83,6 +83,7 @@ ICON = {
     "warn": "\U000f002a",           # md-alert_outline
     "issues": "\U000f0756",         # md-format_list_checks: Issues (ADR 0019)
     "actions": "\U000f048a",        # md-send: the Action Queue (ADR 0020)
+    "history": "\U000f02da",        # md-history: History, the Command log (ADR 0021, 0022)
     "status": "\U000f0996",         # md-progress_clock
     "ignore": "\U000f06d1",         # md-eye_off_outline
     "add_case": "\U000f0c40",       # md-briefcase_plus_outline
