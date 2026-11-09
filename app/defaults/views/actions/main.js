@@ -113,10 +113,9 @@ export default class Actions extends View {
       return h_flex().h(26).px(8).gap(8).rounded(4).items_center()
         .border_l(3).border_color(r === selected ? t.accent : t.background).when(r === selected, (el) => el.bg(t.selected))
         .child(div().w(44).flex_none().text_color(t.muted).child(`${pad(at.getHours())}:${pad(at.getMinutes())}`))
-        .child(div().w(44).flex_none().text_color(t.muted).child(r.kind))
-        .child(div().w(132).flex_none().truncate().text_color(t.foreground).child(r.what))
-        .child(div().flex_1().min_w(0).truncate().text_color(t.strong ?? t.foreground).child(r.target ?? ""))
-        .when(Boolean(r.outcome), (el) => el.child(div().flex_none().text_color(t[OUTCOME[r.outcome]] ?? t.muted).child(r.outcome)));
+        .child(div().flex_none().text_color(t.foreground).child(r.what)) // the outcome rides with What, so the target keeps the width
+        .when(Boolean(r.outcome), (el) => el.child(div().flex_none().text_color(t[OUTCOME[r.outcome]] ?? t.muted).child(r.outcome)))
+        .child(div().flex_1().min_w(0).truncate().text_color(t.strong ?? t.foreground).child(r.target ?? ""));
     };
     return v_flex().size_full().min_h(0).bg(t.background).text_size(13)
       .child(h_flex().h(30).flex_none().px(12).gap(8).items_center().border_b(1).border_color(t.border).text_size(12)
