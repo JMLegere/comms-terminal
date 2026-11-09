@@ -6638,7 +6638,8 @@ class ActionQueuePage(TablePage):
         for section in actions.SECTIONS:
             mine = [r for r in found if r["section"] == section]
             words = f"{self.SECTION[section].upper()} · " + ("last 7 days · " if section == "sent" else "") + str(len(mine))
-            out.append(({"header": section}, ("", f"[b]{words}[/]", "")))
+            faded = section == "sent"  # Sent is the past: faded (Jeremy, 2026-11-08)
+            out.append(({"header": section}, ("", f"[b #a89984]{words}[/]" if faded else f"[b]{words}[/]", "")))
             if not mine:
                 out.append(({"header": f"{section}:empty"}, ("", f"[#a89984]  {self.EMPTY_SECTION[section]}[/]", "")))
             day = None
@@ -6646,14 +6647,13 @@ class ActionQueuePage(TablePage):
                 if r["day"] != day:
                     day = r["day"]
                     n = " · ".join(f"{k} {c}" for k, c in counts[day].items())
-                    out.append(({"header": f"{section}:{day}"}, ("", f"[#7c6f64]  {date.fromisoformat(day):%a %b %-d}[/]",
-                                                                 f"[#a89984]{n}[/]")))
-                past = r["section"] == "sent"
+                    out.append(({"header": f"{section}:{day}"}, ("", f"[{'#bdae93' if faded else '#7c6f64'}]  {date.fromisoformat(day):%a %b %-d}[/]",
+                                                                 f"[{'#d5c4a1' if faded else '#a89984'}]{n}[/]")))
                 mark = f"[{self.OUTCOME[r['outcome']]}]{self.MARK[r['outcome']]}[/] " if r["outcome"] else "  "
-                what = f"[#928374]{escape(r['what'])}[/]" if past else escape(r["what"])
-                target = f"[#928374]{escape(r['target'] or '')}[/]" if past else escape(r["target"] or "")
-                out.append((r, (f"[#928374]{datetime.fromisoformat(r['at']).astimezone(sequences.LOCAL):%H:%M}[/]",
-                                f"  {mark}{what}", target)))
+                what = f"[#a89984]{escape(r['what'])}[/]" if faded else escape(r["what"])
+                target = f"[#a89984]{escape(r['target'] or '')}[/]" if faded else escape(r["target"] or "")
+                at = datetime.fromisoformat(r["at"]).astimezone(sequences.LOCAL)
+                out.append((r, (f"[{'#bdae93' if faded else '#928374'}]{at:%H:%M}[/]", f"  {mark}{what}", target)))
             if section == "upcoming":
                 now = clock.now().astimezone(sequences.LOCAL)
                 out.append(({"header": "now"}, (f"[b {teal}]NOW[/]", f"[b {teal}]{now:%H:%M} {'━' * 14}[/]", f"[{teal}]{'━' * 30}[/]")))

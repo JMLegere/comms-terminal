@@ -24,13 +24,13 @@ export function queueItems(rows, counts, now = new Date()) {
     const mine = rows.filter((r) => r.section === section);
     items.push({ key: `s-${section}`, band: section,
       header: `${SECTION[section].toUpperCase()} · ${section === "sent" ? "last 7 days · " : ""}${mine.length}` });
-    if (!mine.length) items.push({ key: `e-${section}`, empty: EMPTY[section] });
+    if (!mine.length) items.push({ key: `e-${section}`, section, empty: EMPTY[section] });
     let day = null;
     for (const r of mine) {
       if (r.day !== day) {
         day = r.day;
         const [y, m, d] = day.split("-").map(Number), at = new Date(y, m - 1, d);
-        items.push({ key: `d-${section}-${day}`, header: `${DAYS[at.getDay()]} ${MONTHS[at.getMonth()]} ${d}`,
+        items.push({ key: `d-${section}-${day}`, section, header: `${DAYS[at.getDay()]} ${MONTHS[at.getMonth()]} ${d}`,
           counts: Object.entries(counts?.[day] ?? {}).map(([k, n]) => `${k} ${n}`).join(" · ") });
       }
       items.push({ key: r.key, row: r });
@@ -114,18 +114,20 @@ export default class Actions extends View {
     const t = theme();
     const items = queueItems(this.rows, this.counts);
     const selected = this.rows[this.at];
-    const band = (it) => h_flex().h(26).px(8).gap(8).items_center().border_b(1).border_color(t.border)
-      .child(div().text_size(12).font_semibold().text_color(t.foreground).child(it.header));
-    const empty = (it) => h_flex().h(26).pl(24).items_center().child(div().text_color(t.dim).child(it.empty));
-    const dayHeader = (it) => h_flex().h(26).pl(16).pr(8).items_center().text_size(11.5)
+    const FADE = 0.5; // Sent is the past: faded (Jeremy, 2026-11-08)
+    const fade = (el, it) => (it.section ?? it.band) === "sent" ? el.opacity(FADE) : el;
+    const band = (it) => fade(h_flex().h(26).px(8).gap(8).items_center().border_b(1).border_color(t.border)
+      .child(div().text_size(12).font_semibold().text_color(t.foreground).child(it.header)), it);
+    const empty = (it) => fade(h_flex().h(26).pl(24).items_center().child(div().text_color(t.dim).child(it.empty)), it);
+    const dayHeader = (it) => fade(h_flex().h(26).pl(16).pr(8).items_center().text_size(11.5)
       .child(div().flex_1().text_color(t.muted).child(it.header))
-      .child(div().flex_none().text_color(t.dim).child(it.counts ?? ""));
+      .child(div().flex_none().text_color(t.dim).child(it.counts ?? "")), it);
     const nowLine = (it) => h_flex().h(26).px(8).gap(8).items_center()
       .child(div().flex_none().text_size(11).font_semibold().text_color(t.accent).child(it.now))
       .child(div().flex_1().h(2).bg(t.accent));
     const row = (r) => {
       const at = new Date(r.at), past = r.section === "sent";
-      return h_flex().h(26).pl(24).pr(8).gap(8).rounded(4).items_center()
+      return h_flex().h(26).pl(24).pr(8).gap(8).rounded(4).items_center().when(past && r !== selected, (el) => el.opacity(FADE))
         .border_l(3).border_color(r === selected ? t.accent : t.background).when(r === selected, (el) => el.bg(t.selected))
         .child(div().w(40).flex_none().text_color(t.muted).child(`${pad(at.getHours())}:${pad(at.getMinutes())}`))
         .child(div().w(12).flex_none().text_color(t[OUTCOME[r.outcome]] ?? t.muted).child(MARK[r.outcome] ?? ""))
