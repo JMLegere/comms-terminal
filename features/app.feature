@@ -406,6 +406,12 @@ Feature: App
     And the Reply Draft shows Reply, Reply all and its "Re:" subject, the New Thread Draft its Connection and Subject
     And esc on the Reply Draft saves its text and keeps the Draft
 
+  @AS-UD-1 @FR-UD-1
+  Scenario: Text typed while an autosave is under way stays Unsaved and is saved next
+    Given an App Composer on a New Thread Draft
+    When Jeremy types while an autosave is under way, and then presses esc
+    Then the Draft stays Unsaved once that save returns, and esc saves the later text
+
   @AS-UD-9 @FR-UD-1
   Scenario: A Slack and an SMS Draft open in the Composer with their destination and no Subject
     Given an App Composer on a Slack New Thread Draft and one on an SMS Reply Draft

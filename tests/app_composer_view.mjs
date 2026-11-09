@@ -1,7 +1,7 @@
 // Unified Drafts in the App (.agents/prd/2026-11-03-unified-drafts.md, AS-UD-1, 3, 5–9): the one Composer, the Draft
 // review list in place, next after an action and the keep-place rule, run in the shipped views.
 // Usage: node --experimental-vm-modules app_composer_view.mjs send:<Reply Draft|New Thread Draft>[:To|Body]
-//   | keys | fields | unknown | inplace | next | today-next | keep | order
+//   | keys | typed-during-save | fields | unknown | inplace | next | today-next | keep | order
 import { answers, calls, cx, focused, keyHandlers, load, ran, settle, state, tasks, texts, toasts } from "./app_view_kit.mjs";
 
 const [kase, kind, empty] = (process.argv[2] ?? "").split(":");
@@ -177,6 +177,21 @@ if (kase === "send") { // AS-UD-1/3: ctrl+enter saves the typed text as a revisi
   answers["today.page"] = page(["a"]);
   today.load(cx); await settle();
   out.after_last = today.rows()[today.at].key;
+} else if (kase === "typed-during-save") { // a keystroke during a save is not marked Saved by that save
+  const view = await draftComposer();
+  const c = view.composer;
+  let answer;
+  answers["command.inbox.save_draft"] = () => new Promise((resolve) => { answer = resolve; });
+  type(c.body, "First words");
+  const saving = c.save(cx);                              // the autosave goes out
+  type(c.body, "First words and more");                   // Jeremy keeps typing
+  answer({ revision: 2 });
+  await saving;
+  out.unsaved = Boolean(c.unsaved);
+  answers["command.inbox.save_draft"] = { revision: 3 };
+  view.command("close", cx);
+  await settle();
+  out.saved = calls.filter((x) => x.method === "command.inbox.save_draft").map((x) => [x.params.values.body, x.params.expected_revision]);
 } else if (kase === "keep") { // AS-UD-8: a reply typed on a Thread selected in the threads pane keeps it there
   const Today = await load("today");
   state.page = "today";

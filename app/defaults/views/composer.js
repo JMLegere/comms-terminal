@@ -164,7 +164,7 @@ export class Composer {
   /** Saves with the revision this Composer read. Resolves to the saved Draft (null: an emptied reply removed its
    * Draft), or undefined when the save was refused (the notice says why). */
   async save(cx, message, values) {
-    const d = this.draft, at = this.opened, reply = this.reply;
+    const d = this.draft, at = this.opened, reply = this.reply, typed = this.edits;
     if (this.locked() || !(reply || d)) return d;
     if (!this.unsaved && !values) { if (message) toast(message); return d; }
     const v = values ?? this.values();
@@ -179,7 +179,7 @@ export class Composer {
       }
       if (at !== this.opened) return saved; // Jeremy moved on to another Draft while this one saved
       this.draft = saved ?? null;
-      this.setUnsaved(false);
+      if (typed === this.edits) this.setUnsaved(false); // text typed during the save stays Unsaved; its autosave or esc saves it
       this.said = this.saveError = null;
       if (message) toast(message);
       cx.notify();

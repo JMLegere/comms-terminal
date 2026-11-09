@@ -234,6 +234,22 @@ def composer_view(case):
     return json.loads(result.stdout)
 
 
+@given("an App Composer on a New Thread Draft")
+def composer_new_thread_draft(app):
+    pass
+
+
+@when("Jeremy types while an autosave is under way, and then presses esc")
+def typed_during_save(app):
+    app.composer = composer_view("typed-during-save")
+
+
+@then("the Draft stays Unsaved once that save returns, and esc saves the later text")
+def later_text_saved(app):
+    assert app.composer["unsaved"] is True
+    assert app.composer["saved"] == [["First words", 1], ["First words and more", 2]]
+
+
 @when("Jeremy presses Ctrl Enter and chooses Send now in the Draft editor")
 def send_in_app_draft_editor(app):
     app.draft_send = composer_view(f"send:{app.draft_kind}:{getattr(app, 'empty_draft_field', '')}")
