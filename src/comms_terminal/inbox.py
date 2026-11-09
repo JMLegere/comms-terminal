@@ -27,7 +27,7 @@ from typing import Protocol, Sequence
 from . import clock, commands, files, platforms
 from .writers import writer
 
-SCHEMA_VERSION = 44
+SCHEMA_VERSION = 45
 WAIT = timedelta(days=4)  # Waiting for them ends after this with no reply: back to Todo to follow up (#116)
 EMAIL_CONFIRMATION_PENDING = "Email confirmation pending; wait for its sent receipt before replying."
 MIGRATIONS = {  # version -> statement that upgrades an existing database to it
@@ -919,6 +919,10 @@ INSERT INTO modules_new (id, enabled) SELECT id, enabled FROM modules;
 DROP TABLE modules;
 ALTER TABLE modules_new RENAME TO modules;
 INSERT INTO modules (id, enabled) VALUES ('issues', 1);"""
+
+# Plan Issues (ADR 0023): a Pinned flag on each Issue and SuperPlan's feasibility boost among the urgency coefficients.
+MIGRATIONS[45] = """ALTER TABLE issues ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0 CHECK (pinned IN (0, 1));
+INSERT INTO urgency (name, value) VALUES ('feasibility', 5);"""
 
 
 class SendUnknown(SendFailed):

@@ -163,7 +163,7 @@ The local route defaults omitted arrays to `[]`; explicit `null`, non-array valu
 
 ### 3e-2. Linear Issues: write key, webhook, Worker route (ADR 0019, ADR 0020)
 
-The same `linear-token` now backs two Connections: Linear's Context connection and its Issue connection (ADR 0018). The Issue connection keeps a copy of Jeremy's assigned Issues (open, plus those closed in 30 days), reads them all every 30 minutes, takes signed Issue events at `/hooks/linear`, and sends Jeremy's changes (status, priority, estimate, due date, title, description, new Issues, and the Slip status on Rollover) through the Action Queue. The Planned day never goes to Linear.
+The same `linear-token` now backs two Connections: Linear's Context connection and its Issue connection (ADR 0018). The Issue connection keeps a copy of Jeremy's assigned Issues (open, plus those closed in 30 days), reads them all every 30 minutes, takes signed Issue events at `/hooks/linear`, and sends Jeremy's changes (status, priority, estimate, due date, title, description, and new Issues) through the Action Queue. The Planned day and Pinned never go to Linear, and nothing is written for a slipped Issue (ADR 0023).
 
 Each step below needs Jeremy's explicit go; none runs with a push.
 

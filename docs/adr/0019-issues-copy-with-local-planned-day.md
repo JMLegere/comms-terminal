@@ -1,6 +1,6 @@
 # Issues are a copy of their Platform's records; the Planned day never leaves Comms Terminal
 
-Status: accepted (2026-11-07). Discovery: `.agents/discovery/2026-11-07-linear-daily-scheduling.md`. Design: `.agents/design/2026-11-07-issues-and-action-queue.md`.
+Status: accepted (2026-11-07); Rollover, the Slip status and the Blocked consequence superseded by ADR 0023 (2026-11-09). Discovery: `.agents/discovery/2026-11-07-linear-daily-scheduling.md`. Design: `.agents/design/2026-11-07-issues-and-action-queue.md`.
 
 Jeremy works comms in Comms Terminal but his ~57 Linear issues only in Linear, where nothing says which day he will do each, whether a day is overbooked, or what slipped. He wants to manage Issues in Comms Terminal as Super Productivity (with his SuperPlan plugin) and Sunsama let him, while Linear stays the source of truth.
 

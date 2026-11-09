@@ -352,15 +352,76 @@ def size(linear_issues, identifier, hours):
     assert issues.size_hours(by_identifier(linear_issues, identifier)) == float(hours)
 
 
-@when(parsers.parse("Jeremy's day changes to Saturday {day}"))
-def day_changes(linear_issues, day):
-    linear_issues.moved = issues.rollover(linear_issues.db, datetime.combine(
-        date.fromisoformat(day), time(0, 1), LOCAL).astimezone(timezone.utc))
+PRIORITIES = {"Urgent": 1, "High": 2, "Medium": 3, "Low": 4, "No priority": 0}
 
 
-@then("no Action was made")
-def no_action(linear_issues):
-    no_request(linear_issues)
+@given(parsers.re(r'an Issue "(?P<name>[^"]+)" assigned to Jeremy with priority "(?P<priority>[^"]+)"'
+                  r'(?: and Estimate (?P<points>\d+))?$'))
+def issue_priority(linear_issues, name, priority, points):
+    _given_issue(linear_issues, name, priority=PRIORITIES[priority], **({"estimate": int(points)} if points else {}))
+
+
+@given(parsers.re(r'an Issue "(?P<name>[^"]+)" assigned to Jeremy, due "(?P<due>[^"]+)" and planned for "(?P<day>[^"]+)"'))
+def issue_due_and_day(linear_issues, name, due, day):
+    _given_issue(linear_issues, name, day=day, dueDate=due)
+
+
+@given(parsers.parse('"{identifier}" is Pinned'))
+def pinned(linear_issues, identifier):
+    issues.pin(linear_issues.db, identifier, True, now=NOW)
+
+
+@when("Jeremy runs Plan Issues")
+def run_plan_issues(linear_issues):
+    from comms_terminal import commands
+    with commands.source("console"):
+        issues.plan_all(linear_issues.db, now=NOW)
+
+
+@when(parsers.parse("Jeremy runs Plan Issues on Monday at {at}"))
+def run_plan_issues_at(linear_issues, at):
+    issues.plan_all(linear_issues.db, now=datetime.combine(
+        date.fromisoformat(DAYS["Monday"]), time.fromisoformat(at), LOCAL).astimezone(timezone.utc))
+
+
+@when("Jeremy presses Undo")
+def presses_undo(linear_issues):
+    from comms_terminal import commands
+    with commands.source("console"):
+        commands.undo(linear_issues.db, commands.newest(linear_issues.db)["id"], now=NOW)
+
+
+@then(parsers.parse('"{identifier}" has no Planned day'))
+def has_no_planned_day(linear_issues, identifier):
+    assert by_identifier(linear_issues, identifier)["planned_day"] is None
+
+
+@when("Today is read on Monday")
+def read_today(linear_issues):
+    view = issues.view(linear_issues.db, {"grouping": "none", "completed": "none"}, NOW, today_list=True)
+    linear_issues.today = {i["identifier"]: i for _, i in issues.flat(view)}
+    linear_issues.load = issues.today_load(linear_issues.db, NOW)
+
+
+@then(parsers.parse('Today lists "{identifier}" as Overdue'))
+def today_overdue(linear_issues, identifier):
+    assert linear_issues.today[identifier]["overdue"] is True
+
+
+@then(parsers.parse('Today lists "{identifier}" for today'))
+def today_for_today(linear_issues, identifier):
+    assert linear_issues.today[identifier]["overdue"] is False
+
+
+@then(parsers.parse('Today does not list "{identifier}"'))
+def today_lacks(linear_issues, identifier):
+    assert identifier not in linear_issues.today
+
+
+@then(parsers.parse('Today\'s figures are "{used} h of {capacity} h" and "{overdue} h" Overdue'))
+def today_figures(linear_issues, used, capacity, overdue):
+    load = linear_issues.load
+    assert (load["used"], load["capacity"], load["overdue"]) == (float(used), float(capacity), float(overdue))
 
 
 @when("Warnings are read on Monday")

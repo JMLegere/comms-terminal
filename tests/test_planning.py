@@ -1,14 +1,15 @@
-"""Planning (PRD FR-IS-5–10, FR-IS-13): Planned day, Day capacity, urgency, warnings, Rollover, and their CLI."""
+"""Planning (PRD FR-IS-5–9, FR-IS-13; FR-PL-1–18): Planned day, Day capacity, urgency, warnings, Plan Issues,
+Pinned, Today, and their CLI."""
 
 import io
-import json
 import sys
-from datetime import date, datetime, time, timezone
+import time as clock_time
+from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import pytest
 
-from comms_terminal import agent, calendar, inbox, issues, linear
+from comms_terminal import agent, calendar, commands, inbox, issues, linear
 
 LOCAL = ZoneInfo("America/Halifax")
 MONDAY = datetime(2026, 11, 9, 14, 0, tzinfo=timezone.utc)  # 10:00 Halifax
@@ -59,12 +60,15 @@ def test_capacity_merges_overlaps_and_skips_free_and_declined(db):
     assert issues.capacity(db, TUESDAY, MONDAY) == {"capacity": 6.0, "used": 2.0, "left": 4.0}
 
 
-def test_today_counts_only_what_is_left(db):
+def test_today_counts_only_what_is_left_before_18(db):
     event(db, "past", MONDAY.astimezone(LOCAL).date(), "08:00", "09:30")
     event(db, "later", MONDAY.astimezone(LOCAL).date(), "15:00", "16:00")
-    at_22 = datetime(2026, 11, 10, 2, 0, tzinfo=timezone.utc)  # Monday 22:00 Halifax: 2 hours left today
-    assert issues.capacity(db, date(2026, 11, 9), MONDAY)["capacity"] == 8.0  # 9 less the hour still to come
-    assert issues.capacity(db, date(2026, 11, 9), at_22)["capacity"] == 2.0
+    event(db, "evening", MONDAY.astimezone(LOCAL).date(), "19:00", "20:00")  # after the working day: not counted
+    at_17 = datetime(2026, 11, 9, 21, 0, tzinfo=timezone.utc)  # Monday 17:00 Halifax
+    at_22 = datetime(2026, 11, 10, 2, 0, tzinfo=timezone.utc)  # Monday 22:00 Halifax
+    assert issues.capacity(db, date(2026, 11, 9), MONDAY)["capacity"] == 7.0  # 10:00 to 18:00, less 15:00-16:00
+    assert issues.capacity(db, date(2026, 11, 9), at_17)["capacity"] == 1.0
+    assert issues.capacity(db, date(2026, 11, 9), at_22)["capacity"] == 0
 
 
 def test_weekends_and_busy_all_day_events_hold_none(db):
@@ -105,19 +109,103 @@ def test_warnings_far_out_oversized_and_due(db):
     assert w["id-BIZ-3"] == ["Larger than a day"] and "id-BIZ-2" not in w
 
 
-def test_rollover_moves_to_the_next_workday_once_and_writes_the_slip_status(db):
-    add(db, "BIZ-1", state_id="doing")
-    add(db, "BIZ-2", state_id="done", completed_at="2026-11-12")
-    add(db, "BIZ-3", state_id="blocked")
-    for n in ("BIZ-1", "BIZ-2", "BIZ-3"):
-        issues.plan(db, n, "2026-11-13", now=MONDAY)  # Friday
-    saturday = datetime.combine(date(2026, 11, 14), time(9), LOCAL).astimezone(timezone.utc)
-    assert issues.rollover(db, saturday) == 2
-    assert [issues.find(db, n)["planned_day"] for n in ("BIZ-1", "BIZ-2", "BIZ-3")] == \
-        ["2026-11-16", "2026-11-13", "2026-11-16"]
-    acts = db.execute("SELECT target, payload FROM actions").fetchall()
-    assert [(a["target"], json.loads(a["payload"])) for a in acts] == [("id-BIZ-1", {"state_id": "blocked"})]
-    assert issues.rollover(db, saturday) == 0  # each pass moves only what has passed
+def local(day, at):
+    return datetime.combine(day, time.fromisoformat(at), LOCAL).astimezone(timezone.utc)
+
+
+def days(db, *names):
+    return [issues.find(db, n)["planned_day"] for n in names]
+
+
+def all_day(db, uid, day):
+    with db:
+        db.execute("INSERT INTO events (uid, ics, first_seen_at, changed_at) VALUES (?, ?, ?, ?)",
+                   (uid, f"BEGIN:VEVENT\r\nUID:{uid}\r\nSUMMARY:Off\r\nDTSTART;VALUE=DATE:{day:%Y%m%d}\r\n"
+                         f"DTEND;VALUE=DATE:{day + timedelta(days=1):%Y%m%d}\r\nEND:VEVENT\r\n",
+                    MONDAY.isoformat(), MONDAY.isoformat()))
+
+
+def test_feasibility_boost_follows_superplan(db):
+    c = issues.coefficients(db)
+    assert c["feasibility"] == 5
+    room = {date(2026, 11, 9): 8, date(2026, 11, 10): 0}.get
+    due = lambda d: {"due_date": d, "estimate": None}
+    assert issues._feasibility(due("2026-11-10"), lambda d: room(d, 9), date(2026, 11, 9), c) == 3.75  # 1 day
+    assert issues._feasibility(due("2026-11-06"), lambda d: 9, date(2026, 11, 9), c) == 5  # already passed: 0 days
+    assert issues._feasibility(due("2026-11-11"), lambda d: 9, date(2026, 11, 9), c) == 2  # 3 days
+    assert issues._feasibility(due("2026-11-30"), lambda d: 9, date(2026, 11, 9), c) == 0
+    assert issues._feasibility({"due_date": None}, lambda d: 9, date(2026, 11, 9), c) == 0
+
+
+def test_an_issue_with_no_room_before_its_due_date_goes_first(db):
+    issues.set_urgency(db, "due", 0, now=MONDAY)  # isolate the boost from the due ramp
+    all_day(db, "off", TUESDAY)
+    event(db, "busy", date(2026, 11, 11), "09:00", "17:00")  # Wednesday holds 1 hour
+    add(db, "BIZ-1", priority=2)  # High: 6
+    add(db, "BIZ-2", due_date="2026-11-10")  # No priority 1.95, no workday left that holds it: +5
+    issues.plan_all(db, now=local(date(2026, 11, 9), "19:00"))
+    assert days(db, "BIZ-2", "BIZ-1") == ["2026-11-11", "2026-11-12"]
+
+
+def test_a_pinned_overdue_issue_uses_todays_capacity(db):
+    add(db, "BIZ-1", estimate=14)  # 7 hours, pinned to last Friday
+    issues.plan(db, "BIZ-1", "2026-11-06", now=MONDAY)
+    issues.pin(db, "BIZ-1", True, now=MONDAY)
+    add(db, "BIZ-2", estimate=4)  # 2 hours: today holds 8 - 7 = 1
+    issues.plan_all(db, now=MONDAY)
+    assert days(db, "BIZ-1", "BIZ-2") == ["2026-11-06", "2026-11-10"]
+
+
+def test_plan_issues_skips_weekends(db):
+    friday = local(date(2026, 11, 13), "10:00")  # 8 hours left
+    for n in range(10):
+        add(db, f"BIZ-{n:02}")
+    issues.plan_all(db, now=friday)
+    planned = [i["planned_day"] for i in issues.issues(db)]
+    assert planned.count("2026-11-13") == 8 and planned.count("2026-11-16") == 2
+
+
+def test_a_run_that_changes_nothing_records_no_command(db):
+    add(db, "BIZ-1")
+    with commands.source("console"):
+        assert issues.plan_all(db, now=MONDAY) == 1
+        before = db.execute("SELECT count(*) FROM commands").fetchone()[0]
+        assert issues.plan_all(db, now=MONDAY) == 0
+    assert db.execute("SELECT count(*) FROM commands").fetchone()[0] == before
+
+
+def test_undo_of_a_run_is_refused_once_linear_rewrites_an_issue(db):
+    add(db, "BIZ-1")
+    with commands.source("console"):
+        issues.plan_all(db, now=MONDAY)
+        add(db, "BIZ-1", updated_at="2026-11-09")  # a full read takes Linear's newer version
+        with pytest.raises(commands.Refused, match="changed since"):
+            commands.undo(db, commands.newest(db)["id"], now=MONDAY)
+
+
+def test_a_pin_survives_linear_and_is_never_sent(db):
+    add(db, "BIZ-1")
+    issues.pin(db, "BIZ-1", True, now=MONDAY)
+    add(db, "BIZ-1", updated_at="2026-11-09", title="Renamed")
+    assert issues.find(db, "BIZ-1")["pinned"] == 1
+    assert db.execute("SELECT count(*) FROM actions").fetchone()[0] == 0
+
+
+def test_an_overdue_issue_is_not_larger_than_its_passed_day(db):
+    add(db, "BIZ-1")
+    issues.plan(db, "BIZ-1", "2026-11-06", now=MONDAY)
+    assert issues.warnings(db, MONDAY) == {}
+    groups = issues.view(db, {"grouping": "planned_day"}, MONDAY)["groups"]
+    assert [("capacity" in g) for g in groups] == [False]  # a passed day's group shows no "N of 0 h"
+
+
+def test_plan_issues_is_fast(db):
+    for n in range(100):
+        add(db, f"BIZ-{n:03}", estimate=n % 7 or None, priority=n % 5, due_date=f"2026-11-{10 + n % 20}")
+    started = clock_time.perf_counter()
+    issues.plan_all(db, now=MONDAY)
+    assert clock_time.perf_counter() - started < 1.0  # NFR-1
+    assert all(i["planned_day"] for i in issues.issues(db))
 
 
 def test_a_webhook_keeps_the_last_reads_relations(db):
@@ -166,3 +254,18 @@ def test_cli_plans_and_sets_urgency(db, capsys, monkeypatch):
     assert "due\t10" in capsys.readouterr().out.splitlines()
     with pytest.raises(SystemExit):
         cli(db, "urgency", "set", "nope", "1")
+
+
+def test_cli_plans_issues_and_pins(db, capsys, monkeypatch):
+    monkeypatch.setattr(agent.clock, "now", lambda: MONDAY)
+    add(db, "BIZ-1", priority=1)
+    add(db, "BIZ-2")
+    cli(db, "issue", "BIZ-2", "--pin")
+    assert "· Pinned" in capsys.readouterr().out
+    cli(db, "issues", "plan")
+    out = capsys.readouterr().out
+    assert out.startswith("Planned 1 Issue\n") and "BIZ-1\tTodo\turgent\t2026-11-09" in out
+    assert days(db, "BIZ-2") == [None]
+    cli(db, "issue", "BIZ-2", "--unpin")
+    assert issues.find(db, "BIZ-2")["pinned"] == 0
+    assert db.execute("SELECT count(*) FROM actions").fetchone()[0] == 0  # local only (AS-PL-11)

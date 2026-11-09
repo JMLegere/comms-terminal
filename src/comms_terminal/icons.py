@@ -82,6 +82,7 @@ ICON = {
     "archive": "\U000f120e",        # md-archive_outline
     "warn": "\U000f002a",           # md-alert_outline
     "issues": "\U000f0756",         # md-format_list_checks: Issues (ADR 0019)
+    "pin": "\U000f0403",            # md-pin: a Pinned Issue (ADR 0023)
     "actions": "\U000f048a",        # md-send: the Action Queue (ADR 0020)
     "status": "\U000f0996",         # md-progress_clock
     "ignore": "\U000f06d1",         # md-eye_off_outline

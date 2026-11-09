@@ -466,7 +466,8 @@ CREATE TABLE issues (  -- a copy of each Issue assigned to Jeremy; the Platform 
   canceled_at   TEXT,
   data          TEXT NOT NULL DEFAULT '{}', -- display-only extras (project, cycle, labels, parent, team key)
   planned_day   TEXT,                       -- local only, never sent (ADR 0019)
-  copied_at     TEXT NOT NULL               -- when the copy last took the Platform's version
+  copied_at     TEXT NOT NULL,              -- when the copy last took the Platform's version
+  pinned        INTEGER NOT NULL DEFAULT 0 CHECK (pinned IN (0, 1))  -- Plan Issues leaves it alone; local only (ADR 0023)
 ) STRICT;
 CREATE INDEX issues_planned ON issues (planned_day);
 
@@ -497,7 +498,7 @@ CREATE TABLE urgency (  -- Taskwarrior-style coefficients for an Issue's urgency
 ) STRICT;
 INSERT INTO urgency (name, value) VALUES ('due', 12), ('priority.urgent', 9), ('priority.high', 6),
   ('priority.medium', 3.9), ('priority.none', 1.95), ('priority.low', 0), ('started', 4), ('blocking', 8),
-  ('blocked', -5), ('age', 2);
+  ('blocked', -5), ('age', 2), ('feasibility', 5);
 
 -- Command log (ADR 0021)
 CREATE TABLE commands (  -- the Command log (ADR 0021): every change, its Source, words and Inverse; commands.py

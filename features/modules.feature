@@ -100,9 +100,9 @@ Feature: Modules
     When the Console opens
     Then the rail keeps "Action Queue" and drops "Issues"
 
-  @ADR-0017
-  Scenario: Rollover waits while Issues is off
+  @ADR-0017 @FR-PL-18
+  Scenario: Plan Issues is refused while Issues is off
     Given Issues is off
     And an unfinished Issue planned for last Friday
-    When Rollover runs on Monday
-    Then the Issue is still planned for last Friday and nothing is queued for Linear
+    When Plan Issues runs on Monday
+    Then it is refused and the Issue is still planned for last Friday

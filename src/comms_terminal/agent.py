@@ -41,6 +41,8 @@ COMMANDS = {
     "inbox.unstage": "draft --detach",
     "issues.create": "issue new",
     "issues.plan": "issue ID --plan",
+    "issues.plan_all": "issues plan",
+    "issues.pin": "issue ID --pin/--unpin",
     "issues.set_urgency": "urgency set",
     "issues.update": "issue ID --title/--description/--status/--priority/--estimate/--due",
     "pipeline.set_stage": "pipeline stage",
@@ -265,7 +267,10 @@ def add_parsers(sub):
         t.add_argument("pipeline")
         t.add_argument(kind, help="a Stage name" if kind == "stage" else "CAD, e.g. 90000 or 90k")
         t.add_argument("--at", help="backdate it: YYYY-MM-DD (seeding past Stages)")
-    sub.add_parser("issues", help="Jeremy's Issues (ADR 0019): identifier, status, priority, Planned day, title")
+    t = sub.add_parser("issues", help="Jeremy's Issues (ADR 0019): identifier, status, priority, Planned day, title;"
+                                      " `issues plan` runs Plan Issues (ADR 0023)")
+    t.add_argument("action", nargs="?", choices=["plan"], help="plan: give every open Issue that is not Pinned a"
+                                                               " Planned day (local only; undo undoes it)")
     sub.add_parser("actions", help="the Action Queue (ADR 0022): Actions that wait for a time, Upcoming, In flight and Sent")
     u = sub.add_parser("undo", help="undo the newest change from the Console, the App or the CLI (ADR 0021)")
     u.add_argument("--show", action="store_true", help="print what undo would undo, and undo nothing")
@@ -283,6 +288,9 @@ def add_parsers(sub):
     t.add_argument("--estimate", help="points (Linear: 1 point = 30 minutes), or none")
     t.add_argument("--due", help="YYYY-MM-DD, or none")
     t.add_argument("--plan", help="the Planned day: YYYY-MM-DD, today, tomorrow, or none (local only)")
+    pin = t.add_mutually_exclusive_group()
+    pin.add_argument("--pin", action="store_true", help="Plan Issues leaves it alone (local only)")
+    pin.add_argument("--unpin", action="store_true", help="Plan Issues may move it again")
     u = sub.add_parser("urgency", help="the urgency coefficients (Taskwarrior-style), or set one")
     us = u.add_subparsers(dest="urgency_cmd", required=True)
     us.add_parser("list", help="every coefficient and its value")
@@ -319,7 +327,8 @@ def issue_markdown(i: dict) -> str:
     name = {v: k for k, v in PRIORITY.items()}[i["priority"]]
     lines = [f"# {i['identifier']} · {i['title']}", "",
              f"- Status: {i['state_name'] or '-'} · Priority: {name} · Estimate: {i['estimate'] or '-'}"
-             f" · Due: {i['due_date'] or '-'} · Planned day: {i['planned_day'] or '-'}"]
+             f" · Due: {i['due_date'] or '-'} · Planned day: {i['planned_day'] or '-'}"
+             + (" · Pinned" if i.get("pinned") else "")]
     if i.get("not_saved"):
         lines.append(f"- {i['not_saved']}")
     if i.get("url"):
@@ -348,6 +357,8 @@ def issue_cmd(db, a) -> str:
         day = {"today": issues.today(), "tomorrow": issues.today() + timedelta(days=1)}.get(a.plan)
         issues.plan(db, row["id"], None if a.plan == "none" else (day or date.fromisoformat(a.plan)).isoformat(),
                     now=clock.now())
+    if getattr(a, "pin", False) or getattr(a, "unpin", False):
+        issues.pin(db, row["id"], bool(a.pin), now=clock.now())
     return issue_markdown(next(i for i in issues.issues(db) if i["id"] == row["id"]))
 
 
@@ -402,6 +413,9 @@ def _run(a, db):
         elif a.cmd == "pipeline":
             print(pipeline_cmd(db, a), end="")
         elif a.cmd == "issues":
+            if getattr(a, "action", None) == "plan":
+                n = issues.plan_all(db, now=clock.now())
+                print(f"Planned {n} Issue{'s' if n != 1 else ''}")
             name = {v: k for k, v in PRIORITY.items()}
             for i in issues.issues(db):
                 if not (i["completed_at"] or i["canceled_at"]):

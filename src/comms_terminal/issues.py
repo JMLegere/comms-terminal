@@ -259,8 +259,11 @@ ISSUE_BY_ID = """query IssueById($id: String!) { issue(id: $id) { id identifier 
 DAY_HOURS = 9                # a workday's capacity before busy time (FR-IS-6)
 DEFAULT_HOURS = 1            # an Issue with no estimate (FR-IS-7)
 POINT_HOURS = {"linear": 0.5}  # one estimate point, per Issue connection's Platform: Linear 1 point = 30 minutes
-SLIP_STATUS = {"linear": "Blocked"}  # the status a Rollover sets, per Platform (GLOSSARY: Slip status)
 DUE_SOON_DAYS = 7            # an Unplanned Issue due this soon warns (FR-IS-13)
+DAY_END = time(18)           # Jeremy's working day ends: today's capacity counts only the hours before it (ADR 0023)
+FEASIBILITY = ((0, 1.0), (1, 0.75), (3, 0.4))  # SuperPlan: at most this many days of room before the due date,
+                                               # this share of the feasibility coefficient (FR-PL-2)
+HORIZON_DAYS = 3650          # Plan Issues' safety cap, not a planning horizon (FR-PL-4)
 
 
 def _open(i) -> bool:
@@ -271,12 +274,6 @@ def today(now: datetime | None = None) -> date:
     """Jeremy's day (America/Halifax, as Sequences count days)."""
     from .sequences import LOCAL
     return (now or clock.now()).astimezone(LOCAL).date()
-
-
-def next_workday(d: date) -> date:
-    while d.weekday() >= 5:
-        d += timedelta(days=1)
-    return d
 
 
 @writer("write", module="issues")
@@ -306,8 +303,8 @@ def _busy_hours(db, day: date, now: datetime) -> float | None:
     from .sequences import LOCAL
     lo = datetime.combine(day, time(), LOCAL)
     hi = lo + timedelta(days=1)
-    if day == today(now):
-        lo = max(lo, now.astimezone(LOCAL))
+    if day == today(now):  # today: only what is still to come before the working day ends (FR-PL-10)
+        lo, hi = max(lo, now.astimezone(LOCAL)), datetime.combine(day, DAY_END, LOCAL)
     spans = []
     for e in calendar.expand(db, day, day + timedelta(days=1), deleted=False):
         if not e["busy"]:
@@ -327,20 +324,25 @@ def _busy_hours(db, day: date, now: datetime) -> float | None:
     return total
 
 
+def _room(db, day: date, now: datetime) -> float:
+    """A day's hours before any Issue: 9 less busy time; today only the hours left before DAY_END; a passed day or
+    a busy All-day Event none (FR-IS-6, FR-PL-10)."""
+    from .sequences import LOCAL
+    busy = _busy_hours(db, day, now)
+    if busy is None or day < today(now):
+        return 0.0
+    hours = DAY_HOURS if day > today(now) else min(DAY_HOURS, max(0.0, (datetime.combine(
+        day, DAY_END, LOCAL) - now.astimezone(LOCAL)).total_seconds() / 3600))
+    return max(0.0, hours - busy)
+
+
 def capacity(db, day: date, now: datetime | None = None) -> dict:
     """A day's capacity and use (FR-IS-6): {"capacity", "used", "left"} in hours. Weekends hold none unless an
-    Issue is planned there; a busy All-day Event makes the day 0."""
-    from .sequences import LOCAL
+    Issue is planned there."""
     now = now or clock.now()
     planned = [i for i in issues(db) if i["planned_day"] == day.isoformat() and _open(i)]
     used = sum(size_hours(i) for i in planned)
-    busy = _busy_hours(db, day, now)
-    if busy is None or (day.weekday() >= 5 and not planned) or day < today(now):
-        cap = 0.0
-    else:
-        hours_left = DAY_HOURS if day > today(now) else min(DAY_HOURS, (datetime.combine(
-            day + timedelta(days=1), time(), LOCAL) - now.astimezone(LOCAL)).total_seconds() / 3600)
-        cap = max(0.0, hours_left - busy)
+    cap = 0.0 if day.weekday() >= 5 and not planned else _room(db, day, now)
     return {"capacity": round(cap, 2), "used": round(used, 2), "left": round(cap - used, 2)}
 
 
@@ -403,9 +405,10 @@ def warnings(db, now: datetime | None = None) -> dict[str, list[str]]:
             p = n / (len(planned) - 1) * 100
             if (date.fromisoformat(i["planned_day"]) - day).days > 100 - p:
                 found.append("Planned too far out for its urgency")
-        cap = caps.setdefault(i["planned_day"], capacity(db, date.fromisoformat(i["planned_day"]), now))
-        if size_hours(i) > cap["capacity"]:
-            found.append("Larger than a day")
+        if i["planned_day"] >= day.isoformat():  # a passed day has no capacity left; that Issue is Overdue instead
+            cap = caps.setdefault(i["planned_day"], capacity(db, date.fromisoformat(i["planned_day"]), now))
+            if size_hours(i) > cap["capacity"]:
+                found.append("Larger than a day")
         if found:
             out[i["id"]] = found
     for i in open_:
@@ -414,28 +417,99 @@ def warnings(db, now: datetime | None = None) -> dict[str, list[str]]:
     return out
 
 
-def rollover(db, now: datetime | None = None) -> int:
-    """Each unfinished Issue planned before Jeremy's today moves to the next workday, and its Slip status goes to
-    the Platform as an Action (FR-IS-10). Run each pass of the Service's loop; it moves only what has passed.
-    Returns how many moved. While Issues is off it does nothing, so no Slip status reaches the Platform for a hidden
-    Module; Issues that passed meanwhile roll on the first pass after it is on again (ADR 0017)."""
-    if "issues" not in inbox.modules_on(db):
-        return 0
+def overdue(i: dict, day: date) -> bool:
+    """An Overdue Issue (FR-PL-11): open, with its Planned day or due date before `day`."""
+    d = day.isoformat()
+    return _open(i) and bool((i["planned_day"] and i["planned_day"] < d) or (i["due_date"] and i["due_date"] < d))
+
+
+def on_today(i: dict, day: date) -> bool:
+    """Today lists it (FR-PL-12): open, with its Planned day or due date today or earlier."""
+    d = day.isoformat()
+    return _open(i) and bool((i["planned_day"] and i["planned_day"] <= d) or (i["due_date"] and i["due_date"] <= d))
+
+
+def today_load(db, now: datetime | None = None) -> dict:
+    """Today's figures (FR-PL-13): its capacity, the hours of the Issues it lists that are not Overdue ("used"),
+    and the hours of its Overdue Issues, apart."""
     now = now or clock.now()
-    target = next_workday(today(now))
-    moved = 0
-    for i in issues(db):
-        if not i["planned_day"] or i["planned_day"] >= today(now).isoformat() or not _open(i):
-            continue
-        with inbox._write_snapshot(db):
-            db.execute("UPDATE issues SET planned_day = ? WHERE id = ?", (target.isoformat(), i["id"]))
-        platform = db.execute("SELECT platform FROM connections WHERE id = ?", (i["connection_id"],)).fetchone()[0]
-        slip = db.execute("SELECT id FROM issue_statuses WHERE team_id = ? AND name = ?",
-                          (i["team_id"], SLIP_STATUS.get(platform))).fetchone()
-        if slip is not None and i["state_id"] != slip["id"]:
-            update(db, i["id"], {"state_id": slip["id"]}, now=now)
-        moved += 1
-    return moved
+    day = today(now)
+    rows = [i for i in issues(db) if on_today(i, day)] if "issues" in inbox.modules_on(db) else []
+    cap = capacity(db, day, now)["capacity"]
+    used = sum(size_hours(i) for i in rows if not overdue(i, day))
+    late = sum(size_hours(i) for i in rows if overdue(i, day))
+    return {"capacity": cap, "used": round(used, 2), "left": round(cap - used, 2), "overdue": round(late, 2)}
+
+
+@writer("write", module="issues")
+def pin(db, issue_id: str, pinned: bool, *, now: datetime | None = None) -> None:
+    """Pins or unpins an Issue (FR-PL-9): Plan Issues leaves a Pinned Issue alone. Local only."""
+    row = find(db, issue_id)
+    if row is None:
+        raise KeyError(f"no Issue {issue_id}")
+    with inbox._write_snapshot(db):
+        db.execute("UPDATE issues SET pinned = ? WHERE id = ?", (int(bool(pinned)), row["id"]))
+    commands.label(f"{row['identifier']} {'pinned' if pinned else 'unpinned'}: {row['title']}")
+    commands.target("issues", row["id"])
+    commands.inverse("issues.pin", row["id"], bool(row["pinned"]))
+
+
+def _feasibility(i: dict, room, day0: date, c: dict) -> float:
+    """SuperPlan's boost (FR-PL-2): the fewer workdays from today to the due date that still hold the Issue, the
+    more of the feasibility coefficient it gains."""
+    if not i["due_date"]:
+        return 0.0
+    due, size, days, d = date.fromisoformat(i["due_date"]), size_hours(i), 0, day0
+    while d <= due and days <= FEASIBILITY[-1][0]:
+        if d.weekday() < 5 and room(d) >= size:
+            days += 1
+        d += timedelta(days=1)
+    return next((c["feasibility"] * share for most, share in FEASIBILITY if days <= most), 0.0)
+
+
+@writer("write", module="issues")
+def plan_all(db, *, now: datetime | None = None) -> int:
+    """Plan Issues (ADR 0023, FR-PL-1–8): every open Issue that is not Pinned gets a Planned day. Workdays fill from
+    today on; each takes the most urgent remaining Issue that still fits, until none does. An Issue larger than a
+    workday goes on today and uses none of it. Pinned Issues keep their days and use their capacity; a Pinned
+    Overdue Issue uses today's. One Command; Undo puts back each Planned day it changed. Returns how many changed."""
+    now = now or clock.now()
+    day0, c = today(now), coefficients(db)
+    open_ = [i for i in issues(db) if _open(i)]
+    pinned = [i for i in open_ if i["pinned"] and i["planned_day"]]
+    rooms: dict[date, float] = {}
+
+    def room(d: date) -> float:  # a workday's hours left before this run places anything
+        if d not in rooms:
+            fixed = sum(size_hours(i) for i in pinned if i["planned_day"] == d.isoformat()
+                        or (d == day0 and i["planned_day"] < d.isoformat()))
+            rooms[d] = _room(db, d, now) - fixed if d.weekday() < 5 else 0.0
+        return rooms[d]
+
+    movable = [i for i in open_ if not i["pinned"]]
+    score = {i["id"]: urgency(i, c, day0) + _feasibility(i, room, day0, c) for i in movable}
+    queue = sorted((i for i in movable if size_hours(i) <= DAY_HOURS), key=lambda i: (-score[i["id"]], i["identifier"]))
+    placed = {i["id"]: day0.isoformat() for i in movable if size_hours(i) > DAY_HOURS}  # oversized (FR-PL-5)
+    d = day0
+    for _ in range(HORIZON_DAYS):  # ponytail: an Issue no workday can hold walks the whole cap, one calendar read a day
+        if not queue:
+            break
+        left = room(d)
+        while (pick := next((i for i in queue if size_hours(i) <= left + 1e-9), None)) is not None:
+            placed[pick["id"]] = d.isoformat()
+            left -= size_hours(pick)
+            queue.remove(pick)
+        d += timedelta(days=1)
+    changed = [i for i in movable if i["planned_day"] != placed.get(i["id"])]
+    if not changed:
+        return 0
+    with inbox._write_snapshot(db):
+        db.executemany("UPDATE issues SET planned_day = ? WHERE id = ?", [(placed.get(i["id"]), i["id"]) for i in changed])
+    commands.label(f"Planned {len(changed)} Issue{'s' if len(changed) != 1 else ''}")
+    for i in changed:
+        commands.target("issues", i["id"])
+        commands.inverse("issues.plan", i["id"], i["planned_day"])
+    return len(changed)
 
 
 # --- The Issues page (FR-UI-1): Linear's List with its Display options, plus Planned day and Urgency -----------
@@ -499,9 +573,9 @@ def _order_key(i: dict, by: str):
     return (-datetime.fromisoformat(i["updated_at"].replace("Z", "+00:00")).timestamp(),)  # newest change first
 
 
-def view(db, options: dict | None = None, now: datetime | None = None, day_only: str | None = None) -> dict:
-    """The Issues page as groups (and sub-groups) of Issues, each with its urgency, size, warnings and "Not saved";
-    a Planned day group carries its Day capacity. `day_only` keeps one Planned day (Today's section)."""
+def view(db, options: dict | None = None, now: datetime | None = None, today_list: bool = False) -> dict:
+    """The Issues page as groups (and sub-groups) of Issues, each with its urgency, size, warnings, Overdue mark and
+    "Not saved"; a Planned day group carries its Day capacity. `today_list` keeps what Today lists (FR-PL-12)."""
     now = now or clock.now()
     o, day = display(options), today(now)
     c, warns = coefficients(db), warnings(db, now)
@@ -514,9 +588,10 @@ def view(db, options: dict | None = None, now: datetime | None = None, day_only:
             continue
         if not o["sub_issues"] and i["data"].get("parent"):
             continue
-        if day_only is not None and i["planned_day"] != day_only:
+        if today_list and not on_today(i, day):
             continue
-        shown.append(i | {"urgency": urgency(i, c, day), "size": size_hours(i), "warnings": warns.get(i["id"], [])})
+        shown.append(i | {"urgency": urgency(i, c, day), "size": size_hours(i), "warnings": warns.get(i["id"], []),
+                          "overdue": overdue(i, day)})
 
     def groups(rows, by, level):
         found: dict = {}
@@ -533,7 +608,7 @@ def view(db, options: dict | None = None, now: datetime | None = None, day_only:
         out = []
         for (key, title), members in sorted(found.items(), key=lambda kv: kv[0][0]):
             g = {"title": title, "count": len(members)}
-            if by == "planned_day" and key[0] == 0:
+            if by == "planned_day" and key[0] == 0 and key[1] >= day.isoformat():  # a passed day holds only Overdue
                 g["capacity"] = capacity(db, date.fromisoformat(key[1]), now)
             if level == 0 and o["subgrouping"] != "none" and o["subgrouping"] != by:
                 g["groups"] = groups(members, o["subgrouping"], 1)

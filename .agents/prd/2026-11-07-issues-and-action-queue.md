@@ -10,6 +10,7 @@
 | Topic | Manage Linear Issues inside Comms Terminal (Planned day, capacity, warnings, edits) with one optimistic Action Queue for everything Comms Terminal carries out. |
 | Sources | `.agents/discovery/2026-11-07-linear-daily-scheduling.md` (approved through Phase 4); `.agents/design/2026-11-07-issues-and-action-queue.md` (proposed); ADRs 0017, 0018, 0019 (proposed); `GLOSSARY.md` (Issues section, Action, Action Queue); code at `origin/main` `85b5540`. |
 | History limits | The full conversation of 2026-11-07 was available. Earlier sessions are known only through the artifacts cited. |
+| Superseded in part | FR-IS-10 (Rollover and its Slip status) is retired by ADR 0023 and `.agents/prd/2026-11-09-plan-issues.md` (2026-11-09); FR-UI-2's Today list is replaced by FR-PL-12 and FR-PL-13 there. |
 | Implementation authorization | **The entire PRD** (Jeremy, 2026-11-07: "execute the entire prd", after P0–P3 gates). P7's push to `main`, Worker deploy, Linear key and webhook still need Jeremy's explicit go and hands (PRD §5 P7). |
 
 ## 2. Executive framing

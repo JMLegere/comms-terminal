@@ -118,6 +118,8 @@ CASES = {
     "issues.update": (None, lambda db, ids, x: issues.update(db, issue(db), {"priority": 4 if db.execute(
         "SELECT priority FROM issues WHERE id = ?", (issue(db),)).fetchone()[0] != 4 else 1})),
     "issues.plan": (None, lambda db, ids, x: issues.plan(db, issue(db), "2030-01-07")),
+    "issues.plan_all": (None, lambda db, ids, x: issues.plan_all(db)),  # the demo's Issues all get days
+    "issues.pin": (None, lambda db, ids, x: issues.pin(db, issue(db), True)),
     "issues.set_urgency": (None, lambda db, ids, x: issues.set_urgency(db, "due", 20)),
     "sequences.create_sequence": (None, lambda db, ids, x: sequences.create_sequence(db, "Outreach", "1")),
     "sequences.rename_sequence": (lambda db, ids: outreach(db)[0],

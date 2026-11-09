@@ -31,6 +31,8 @@ def test_the_issue_pane_changes_through_the_action_queue_with_undo(out):
     assert out["update"] == {"issue_id": "1", "fields": {"state_id": "s-done"}}
     assert out["undo"] is None  # the Service keeps the undo (ADR 0021)
     assert out["plan"] == {"issue_id": "1", "day": "2026-11-10"}
+    assert out["planAll"][0] == {} and "Planned 3 Issues" in str(out["planAll"][1])  # p: Plan Issues (FR-PL-14)
+    assert out["pin"] == {"issue_id": "1", "pinned": True} and out["forwardedAll"] == "issue.plan_all"
     assert out["estimateRefused"] == "An estimate is whole points, or none."
     assert out["planned"] == ["2026-11-09", "2026-11-10", "2026-11-13", None]  # Monday Nov 9: fri is Nov 13
 

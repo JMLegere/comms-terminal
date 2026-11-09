@@ -377,28 +377,32 @@ A work item assigned to Jeremy on a Platform that has an Issue connection, such 
 _Avoid_: Task (that is a Sequence Task), Case, Ticket, To-do
 
 **Issue connection**:
-A Connection to a tracker that is the source of truth for Issues, with changes going both ways: Linear now, Jira later. Each has its own Slip status and estimate unit.
+A Connection to a tracker that is the source of truth for Issues, with changes going both ways: Linear now, Jira later. Each has its own estimate unit.
 _Avoid_: Issue provider, Context connection (read-only), Integration
 
 **Planned day**:
-The day Jeremy intends to work an Issue. It lives only in Comms Terminal, is never sent to the Issue's Platform, and is never the Issue's due date.
+The day an Issue is to be worked, set by Plan Issues or by Jeremy. It lives only in Comms Terminal, is never sent to the Issue's Platform, and is never the Issue's due date. An unfinished Issue keeps a passed Planned day until the next Plan Issues.
 _Avoid_: Scheduled date, Do date, Due date (for this), Day plan (there is none: a day's Issues are just the Issues with that Planned day)
 
+**Plan Issues**:
+The one action that gives every open Issue that is not Pinned a Planned day, most urgent first, filling each workday up to its Day capacity from today on. Each run starts afresh, and Undo puts back the Planned days from before it.
+_Avoid_: Auto-schedule, Autoplan, Rollover
+
+**Pinned**:
+An Issue that Plan Issues leaves alone, with or without a Planned day. Jeremy pins and unpins; it stays in Comms Terminal.
+_Avoid_: Fixed, Locked
+
 **Day capacity**:
-How much Issue work one workday fits: 9 hours less the hours Jeremy is busy on his calendar. An Issue counts 1 hour unless its estimate says otherwise; weekends hold none unless Jeremy plans there.
+How much Issue work one workday fits: 9 hours less the hours Jeremy is busy on his calendar, and today only the hours left before the working day ends at 18:00. An Issue counts 1 hour unless its estimate says otherwise; weekends hold none unless Jeremy plans there.
 _Avoid_: Load, Bandwidth, WIP limit
 
 **Unplanned**:
 An open Issue with no Planned day.
 _Avoid_: Backlog (that is a Linear status), Unscheduled
 
-**Rollover**:
-The automatic move of an unfinished Issue from a passed Planned day to the next workday, which also sets its Slip status.
-_Avoid_: Carry-over, Reschedule, Slip (for the move)
-
-**Slip status**:
-The status a Rollover sets on the Issue's Platform, chosen per Issue connection: Blocked in Linear.
-_Avoid_: Blocked (alone; that flags an Identity)
+**Overdue Issue**:
+An open Issue whose Planned day or due date is before today. Today shows its hours apart from today's Day capacity.
+_Avoid_: Late, Slipped, Due Task (that is a Sequence Task)
 
 ## Calendar
 
