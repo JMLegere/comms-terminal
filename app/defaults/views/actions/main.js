@@ -4,7 +4,7 @@
 // Thread, Task or Person); Enter moves to it. It opens at now. History is its own page (views/history).
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, v_virtual_list, VirtualListScrollHandle } from "gpui-base";
-import { call, nextEvent, nextCommand, theme, shared, setShared, focusMain } from "comms";
+import { call, nextEvent, nextCommand, theme, shared, setShared, run, focusMain } from "comms";
 
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -81,6 +81,7 @@ export default class Actions extends View {
     if (!r || shared("page") !== "actions") return;
     if (r.target_kind) setShared(r.target_kind, r.target_id);
     setShared("detail", r.target_kind ?? null);
+    if (r.target_kind) run(`${r.target_kind}.show`); // the detail view loads the record now, as Today does
     setShared("target", { col: "list", label: `${r.what} · ${r.target ?? ""}`, keys: r.target_kind ? [["enter", "open"]] : [] });
   }
 

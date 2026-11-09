@@ -158,18 +158,19 @@ def queue(db, now: datetime | None = None) -> list[dict]:
     def ahead(at):
         return "upcoming" if at > at_now else "in_flight"
 
-    for d in db.execute('SELECT d.id, d.kind, d.subject, d."to", d.send_at, t.title FROM composition_drafts d'
+    for d in db.execute('SELECT d.id, d.kind, d.subject, d."to", d.send_at, d.thread_id, t.title FROM composition_drafts d'
                         " LEFT JOIN threads t ON t.id = d.thread_id WHERE d.send_at IS NOT NULL"):
-        add(f"draft:{d['id']}", ahead(d["send_at"]), d["kind"], d["send_at"], "Send",
-            " · ".join(x for x in (d["subject"] or d["title"], d["to"]) if x), "draft", d["id"])
+        add(f"draft:{d['id']}", ahead(d["send_at"]), d["kind"], d["send_at"], "Send",  # a Reply Draft opens as its Thread
+            " · ".join(x for x in (d["subject"] or d["title"], d["to"]) if x),
+            *(("thread", d["thread_id"]) if d["thread_id"] else ("draft", d["id"])))
     for a in db.execute("SELECT a.*, c.platform FROM actions a JOIN connections c ON c.id = a.connection_id"
                         " WHERE a.kind = 'send' AND (a.state IN ('scheduled', 'running') OR a.created_at >= ?)",
                         (since,)):
         done = a["state"] in ("confirmed", "refused", "unknown")
-        draft = db.execute("SELECT 1 FROM composition_drafts WHERE id = ?", (a["target"],)).fetchone()
+        draft = db.execute("SELECT id, thread_id FROM composition_drafts WHERE id = ?", (a["target"],)).fetchone()
+        opens = (("thread", draft["thread_id"]) if draft["thread_id"] else ("draft", draft["id"])) if draft else (None, None)
         add(f"action:{a['id']}", "sent" if done else "in_flight", _MESSAGE_KIND.get(a["platform"], "email"),
-            a["done_at"] or a["due_at"], "Send", json.loads(a["payload"]).get("label", ""),
-            "draft" if draft else None, a["target"] if draft else None,
+            a["done_at"] or a["due_at"], "Send", json.loads(a["payload"]).get("label", ""), *opens,
             a["state"] if done else None, a["error"])
     for t in db.execute("SELECT id, title, status_detail, snoozed_until, follow_up_at FROM threads"
                         " WHERE merged_into IS NULL AND ((status_detail = 'WAITING_FOR_DURATION' AND snoozed_until"
