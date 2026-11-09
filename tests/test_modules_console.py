@@ -6,8 +6,9 @@ from test_console import run, seeded
 
 
 def rail_text(app):
+    """Every rail row's words, including rows scrolled out of view (History and Settings sit at the bottom)."""
     rail = app.main.rail
-    return "\n".join(rail.render_line(y).text for y in range(rail.content_size.height))
+    return "\n".join(str(rail.get_option_at_index(i).prompt) for i in range(rail.option_count))
 
 
 def toasts(app):
