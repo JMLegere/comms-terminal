@@ -400,8 +400,12 @@ _Avoid_: Load, Bandwidth, WIP limit
 An open Issue with no Planned day.
 _Avoid_: Backlog (that is a Linear status), Unscheduled
 
+**Due now**:
+An open Issue whose due date or Planned day falls from yesterday to tomorrow, the 24 hours either side of now. Today counts its hours as today's work.
+_Avoid_: Due today, Due soon (that is a warning for Unplanned Issues)
+
 **Overdue Issue**:
-An open Issue whose Planned day or due date is before today. Today shows its hours apart from today's Day capacity.
+An open Issue that is not Due now, with its Planned day or due date before yesterday. Today shows its hours apart from today's Day capacity.
 _Avoid_: Late, Slipped, Due Task (that is a Sequence Task)
 
 ## Calendar
