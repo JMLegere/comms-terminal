@@ -36,8 +36,9 @@ def test_the_issue_pane_changes_through_the_action_queue_with_undo(out):
 
 
 def test_the_action_queue_is_a_timeline_with_day_counts_and_today_holds_issues(out):  # FR-AQT-9, -11, -13
-    assert out["queue"] == ["Upcoming | ", "Tue Nov 10 | email 1", "draft:d1", "In flight | ", "Mon Nov 9 | wake 2",
-                            "wake:t1", "Sent | ", "Mon Nov 9 | wake 2", "woke:a1"]
+    assert out["queue"] == ["UPCOMING · 1 | ", "Tue Nov 10 | email 1", "draft:d1", "NOW 21:41",
+                            "IN FLIGHT · 1 | ", "Mon Nov 9 | wake 2", "wake:t1",
+                            "SENT · last 7 days · 1 | ", "Mon Nov 9 | wake 2", "woke:a1"]
     assert out["now"] == 1  # opens at the first row at or after now
     assert out["badge"] == ["25 · 1", 25, ""]
     assert out["today"] == ["issues-7"]

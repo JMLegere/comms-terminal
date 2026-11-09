@@ -10,16 +10,26 @@ const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const SECTION = { upcoming: "Upcoming", in_flight: "In flight", sent: "Sent" };
 const OUTCOME = { confirmed: "green", refused: "red", unknown: "yellow" };
+const MARK = { confirmed: "✓", refused: "✗", unknown: "?" };
 const pad = (n) => String(n).padStart(2, "0");
 
-/** Rows with a header per section and per day ("Tue Nov 10" and "email 2 · wake 1"), as the Console's rows(). */
-export function queueItems(rows, counts) {
+/** The timeline's items (PRD 2026-11-08-action-queue, hierarchy): a band per section with its count, a muted header
+ * per day with its counts by kind, the rows under it, and a NOW line between the future and the past. */
+export function queueItems(rows, counts, now = new Date()) {
   const items = [];
-  let section = null, day = null;
+  const total = {};
+  for (const r of rows) total[r.section] = (total[r.section] ?? 0) + 1;
+  let section = null, day = null, nowShown = false;
+  const nowLine = () => {
+    nowShown = true;
+    items.push({ key: "now", now: `NOW ${pad(now.getHours())}:${pad(now.getMinutes())}` });
+  };
   for (const r of rows) {
     if (r.section !== section) {
+      if (!nowShown && r.section !== "upcoming") nowLine();
       section = r.section; day = null;
-      items.push({ key: `s-${section}`, header: SECTION[section], section: true });
+      items.push({ key: `s-${section}`, band: section,
+        header: `${SECTION[section].toUpperCase()} · ${section === "sent" ? "last 7 days · " : ""}${total[section]}` });
     }
     if (r.day !== day) {
       day = r.day;
@@ -29,6 +39,7 @@ export function queueItems(rows, counts) {
     }
     items.push({ key: r.key, row: r });
   }
+  if (rows.length && !nowShown) nowLine(); // only future rows: now sits below them
   return items;
 }
 
@@ -106,18 +117,26 @@ export default class Actions extends View {
     const t = theme();
     const items = queueItems(this.rows, this.counts);
     const selected = this.rows[this.at];
-    const header = (it) => h_flex().h(26).px(8).gap(8).items_center()
-      .child(div().font_semibold().text_color(it.section ? t.foreground : t.muted).child(it.header))
-      .child(div().text_color(t.dim).child(it.counts ?? ""));
+    const band = (it) => h_flex().h(26).px(8).gap(8).items_center().rounded(4)
+      .when(it.band === "in_flight", (el) => el.bg(t.selected).border_l(3).border_color(t.accent))
+      .when(it.band !== "in_flight", (el) => el.border_b(1).border_color(t.border))
+      .child(div().text_size(12).font_semibold().text_color(it.band === "in_flight" ? t.accent : t.foreground).child(it.header));
+    const dayHeader = (it) => h_flex().h(26).pl(16).pr(8).items_center().text_size(11.5)
+      .child(div().flex_1().text_color(t.muted).child(it.header))
+      .child(div().flex_none().text_color(t.dim).child(it.counts ?? ""));
+    const nowLine = (it) => h_flex().h(26).px(8).gap(8).items_center()
+      .child(div().flex_1().h(1).bg(t.accent))
+      .child(div().flex_none().text_size(11).font_semibold().text_color(t.accent).child(it.now));
     const row = (r) => {
-      const at = new Date(r.at);
-      return h_flex().h(26).px(8).gap(8).rounded(4).items_center()
+      const at = new Date(r.at), past = r.section === "sent";
+      return h_flex().h(26).pl(24).pr(8).gap(8).rounded(4).items_center()
         .border_l(3).border_color(r === selected ? t.accent : t.background).when(r === selected, (el) => el.bg(t.selected))
-        .child(div().w(44).flex_none().text_color(t.muted).child(`${pad(at.getHours())}:${pad(at.getMinutes())}`))
-        .child(div().flex_none().text_color(t.foreground).child(r.what)) // the outcome rides with What, so the target keeps the width
-        .when(Boolean(r.outcome), (el) => el.child(div().flex_none().text_color(t[OUTCOME[r.outcome]] ?? t.muted).child(r.outcome)))
-        .child(div().flex_1().min_w(0).truncate().text_color(t.strong ?? t.foreground).child(r.target ?? ""));
+        .child(div().w(40).flex_none().text_color(t.muted).child(`${pad(at.getHours())}:${pad(at.getMinutes())}`))
+        .child(div().w(12).flex_none().text_color(t[OUTCOME[r.outcome]] ?? t.muted).child(MARK[r.outcome] ?? ""))
+        .child(div().flex_none().text_color(past ? t.muted : t.foreground).child(r.what)) // the target keeps the width
+        .child(div().flex_1().min_w(0).truncate().text_color(past ? t.muted : t.strong ?? t.foreground).child(r.target ?? ""));
     };
+    const item = (it) => it.now ? nowLine(it) : it.band ? band(it) : it.header ? dayHeader(it) : row(it.row);
     return v_flex().size_full().min_h(0).bg(t.background).text_size(13)
       .child(h_flex().h(30).flex_none().px(12).gap(8).items_center().border_b(1).border_color(t.border).text_size(12)
         .child(div().text_color(t.accent).child("\u{f048a}"))
@@ -126,7 +145,7 @@ export default class Actions extends View {
       .when(!this.error && !this.rows.length, (el) => el.child(div().p(16).text_color(t.muted).child("Nothing is scheduled to happen by itself.")))
       .child(div().flex_1().min_h(0).px(4).py(4).child(
         v_virtual_list("actions", items.length, 26, (i) => items[i].key,
-          (range) => items.slice(range.start, range.end).map((it) => (it.header ? header(it) : row(it.row))))
+          (range) => items.slice(range.start, range.end).map(item))
           .size_full().track_scroll(this.scroll).on_item_click((key, cx) => {
             const at = this.rows.findIndex((r) => r.key === key);
             if (at < 0) return;

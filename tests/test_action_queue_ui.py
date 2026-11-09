@@ -33,14 +33,14 @@ def test_the_queue_is_a_timeline_opening_at_now_with_day_counts(tmp_path):  # FR
         page = app.main.current
         assert isinstance(page, ActionQueuePage)
         text = table_text(app)
-        seen["sections"] = [s for s in ("Upcoming", "In flight", "Sent") if s in text]
+        seen["sections"] = [s for s in ("UPCOMING", "NOW", "IN FLIGHT", "SENT") if s in text]
         seen["counts"] = "wake" in text
         seen["at_now"] = page.selected()
         await pilot.press("enter")
         await pilot.pause()
         seen["opened"] = app.main.thread_view.thread_id if app.main.thread_view else None
     run(app, [go])
-    assert seen["sections"][:2] == ["Upcoming", "In flight"] and seen["counts"]
+    assert seen["sections"][:3] == ["UPCOMING", "NOW", "IN FLIGHT"] and seen["counts"]
     assert (seen["at_now"]["section"], seen["at_now"]["target_id"]) == ("in_flight", t)
     assert seen["opened"] == t
 

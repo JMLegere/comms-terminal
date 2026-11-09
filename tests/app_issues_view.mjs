@@ -53,8 +53,8 @@ const qrows = [
   { key: "draft:d1", section: "upcoming", day: "2026-11-10", at: "2026-11-10T13:00:00Z", kind: "email" },
   { key: "wake:t1", section: "in_flight", day: "2026-11-09", at: "2026-11-09T14:00:00Z", kind: "wake" },
   { key: "woke:a1", section: "sent", day: "2026-11-09", at: "2026-11-09T10:00:00Z", kind: "wake" }];
-out.queue = Actions.ns.queueItems(qrows, { "2026-11-10": { email: 1 }, "2026-11-09": { wake: 2 } })
-  .map((it) => it.header ? `${it.header} | ${it.counts ?? ""}` : it.key);
+out.queue = Actions.ns.queueItems(qrows, { "2026-11-10": { email: 1 }, "2026-11-09": { wake: 2 } }, new Date(2026, 10, 9, 21, 41))
+  .map((it) => it.now ?? (it.header ? `${it.header} | ${it.counts ?? ""}` : it.key));
 out.now = Actions.ns.nowIndex(qrows);
 const Nav = await load("nav");
 out.badge = [Nav.ns.badge([25, 1]), Nav.ns.badge([25, 0]), Nav.ns.badge([0, 0])];
