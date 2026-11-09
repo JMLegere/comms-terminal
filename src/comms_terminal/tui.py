@@ -6618,7 +6618,7 @@ class ActionQueuePage(TablePage):
     TITLE = f"{ICON['actions']} action queue"
     RAIL = "actions"
     SIDE = f"{ICON['actions']} action"
-    COLUMNS = ("", "Kind", "What", "Target", "Outcome")
+    COLUMNS = ("", "What", "Target")  # the outcome rides with What, so the target keeps the width
     EMPTY = "Nothing is scheduled to happen by itself."
     SECTION = {"upcoming": "Upcoming", "in_flight": "In flight", "sent": "Sent"}
     OUTCOME = {"confirmed": "#6c782e", "refused": "#c14a4a", "unknown": "#b47109"}
@@ -6630,15 +6630,15 @@ class ActionQueuePage(TablePage):
         for r in found:
             if r["section"] != section:
                 section, day = r["section"], None
-                out.append(({"header": section}, ("", f"[b]{self.SECTION[section]}[/]", "", "", "")))
+                out.append(({"header": section}, ("", f"[b]{self.SECTION[section]}[/]", "")))
             if r["day"] != day:
                 day = r["day"]
                 n = " · ".join(f"{k} {c}" for k, c in counts[day].items())
                 out.append(({"header": f"{section}:{day}"}, ("", f"[b #7c6f64]{date.fromisoformat(day):%a %b %-d}[/]",
-                                                             f"[#928374]{n}[/]", "", "")))
-            outcome = f"[{self.OUTCOME.get(r['outcome'], '#928374')}]{r['outcome']}[/]" if r["outcome"] else ""
+                                                             f"[#928374]{n}[/]")))
+            outcome = f" [{self.OUTCOME.get(r['outcome'], '#928374')}]{r['outcome']}[/]" if r["outcome"] else ""
             out.append((r, (f"[#928374]{datetime.fromisoformat(r['at']).astimezone(sequences.LOCAL):%H:%M}[/]",
-                            f"[#928374]{r['kind']}[/]", escape(r["what"]), escape(r["target"] or ""), outcome)))
+                            escape(r["what"]) + outcome, escape(r["target"] or ""))))
         return out
 
     def now_row(self) -> int:
@@ -6692,7 +6692,7 @@ class HistoryPage(TablePage):
     TITLE = f"{ICON['history']} history"
     RAIL = "history"
     SIDE = f"{ICON['history']} change"
-    COLUMNS = ("", "What", "Source")
+    COLUMNS = ("", "What")  # Source beside the words: a narrow pane shows two columns
     EMPTY = "No changes yet."
     BINDINGS = TablePage.BINDINGS + [Binding("v", "toggle_service", "Service work")]
     service = True  # the Service's own Commands show (FR-UN-19)
@@ -6703,9 +6703,9 @@ class HistoryPage(TablePage):
             at = datetime.fromisoformat(c["at"]).astimezone(sequences.LOCAL)
             if at.date() != day:
                 day = at.date()
-                out.append(({"header": f"history:{day}"}, ("", f"[b #7c6f64]{day:%a %b %-d}[/]", "")))
+                out.append(({"header": f"history:{day}"}, ("", f"[b #7c6f64]{day:%a %b %-d}[/]")))
             words = f"[#928374]{escape(c['label'])} · undone[/]" if c["undone"] else escape(c["label"])
-            out.append((c | {"kind": "command"}, (f"[#928374]{at:%H:%M}[/]", words, f"[#928374]{c['source_name']}[/]")))
+            out.append((c | {"kind": "command"}, (f"[#928374]{at:%H:%M}[/]", f"{words}  [#928374]{c['source_name']}[/]")))
         return out
 
     def action_toggle_service(self):
