@@ -245,8 +245,9 @@ def test_email_signature_failure_reason_shows_on_the_connection():
     def error():
         return db.execute("SELECT last_error FROM connections WHERE id = ?", (cid,)).fetchone()[0]
 
-    for headers, why in [({}, "unsigned"), (sign(str(int(ts) - 3600)), "stale timestamp"),
-                         (sign(ts, b"wrong"), "bad signature")]:
+    assert serve.intake(db, "gmail", {}, raw, b"k", now) == (401, "")
+    assert error() is None  # unsigned: internet noise, not the Worker (AS-19)
+    for headers, why in [(sign(str(int(ts) - 3600)), "stale timestamp"), (sign(ts, b"wrong"), "bad signature")]:
         assert serve.intake(db, "gmail", headers, raw, b"k", now) == (401, "")
         assert error() == f"inbound request failed signature check ({why})"
     assert serve.intake(db, "gmail", sign(ts), raw, b"k", now)[0] == 204
@@ -694,3 +695,11 @@ def test_slack_reactions_is_not_a_public_hook_or_remote_ledger_call(tmp_path, mo
         assert not any("reaction" in name for name in remote.CALLS)
     finally:
         public.server_close()
+
+
+def test_every_hook_adapter_names_its_signature_header():  # AS-19: intake reads it on every 401
+    import importlib
+    from comms_terminal.platforms import PLATFORMS
+    for path, choose in serve.HOOKS.items():
+        adapter = importlib.import_module(f"comms_terminal.{PLATFORMS[choose({})].adapter}")
+        assert adapter.SIGNATURE_HEADER, path

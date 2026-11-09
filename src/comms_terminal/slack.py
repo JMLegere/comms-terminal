@@ -51,6 +51,9 @@ def _reaction_http_error(error):
     return message
 
 
+SIGNATURE_HEADER = "X-Slack-Signature"  # a request without it never came from the Platform (AS-19)
+
+
 def verify(headers, body: bytes, signing_secret: bytes, now: datetime) -> bool:
     """Slack v0 signature over "v0:<timestamp>:<body>"."""
     ts, sig = headers.get("X-Slack-Request-Timestamp", ""), headers.get("X-Slack-Signature", "")

@@ -265,7 +265,7 @@ Executable form: `features/<domain>.feature` (Gherkin via pytest-bdd), each scen
 - **AS-16**: A Snooze with no date is refused, and the Thread stays as it was (FR-OA-10; superseded the earlier "indefinitely" scenario).
 - **AS-17**: Jeremy replies to a Slack Thread from the console. → The reply posts from his Slack profile in the Thread's conversation; the Thread is Snoozed / Waiting for them.
 - **AS-18**: Jeremy replies to an email directly in Gmail. → Not seen; the Thread stays Todo (accepted Plain limitation, decision #55).
-- **AS-19**: An inbound mail request arrives without the shared secret. → Rejected; nothing stored; email health shows broken.
+- **AS-19**: An inbound request carries the Platform's signature header, but the signature is wrong or stale. → Rejected; nothing stored; the Connection shows broken. A request with no signature header at all is rejected the same way but leaves the Connection's health as it was: anyone can reach a public hook route, so only a request that claims to come from the Platform says something about the Connection (2026-11-09).
 - **AS-20**: Logan deletes a Slack message on a Thread. → A Delete Activity is added; the message's stored content is cleared; the Thread moves to Todo / Needs next response (FR-6c).
 
 ### Traceability

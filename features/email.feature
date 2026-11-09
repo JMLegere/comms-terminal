@@ -57,6 +57,14 @@ Feature: Email
     And no Activity or Thread is created
     And the email Connection has a Last Error
 
+  @AS-19 @NFR-4
+  Scenario: A request with no signature at all is refused and leaves the Connection healthy
+    Given an email Connection with no Last Error
+    When a request reaches /hooks/email with no X-Inbox-Signature
+    Then the response is 401
+    And no Activity or Thread is created
+    And the email Connection has no Last Error
+
   @AS-4 @FR-3
   Scenario: Ingest keeps exact Thread Ref matches separate from the subject
     Given Ingest has received emails:

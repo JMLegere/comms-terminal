@@ -162,6 +162,13 @@ def bad_email_hook(ctx):
     ctx.status, _ = serve.intake(ctx.db, "gmail", headers, raw_mail(), EMAIL_SECRET, NOW)
 
 
+@when("a request reaches /hooks/email with no X-Inbox-Signature")
+def unsigned_email_hook(ctx):
+    ctx.totals = totals(ctx)
+    ctx.status, _ = serve.intake(ctx.db, "gmail", {"X-Inbox-Timestamp": str(int(NOW.timestamp()))}, raw_mail(),
+                                 EMAIL_SECRET, NOW)
+
+
 @then(parsers.parse("the response is {status:d}"))
 def response_status(ctx, status):
     assert ctx.status == status
@@ -176,6 +183,11 @@ def nothing_created(ctx):
 def has_last_error(ctx, platform):
     cid = {"email": EMAIL, "Slack": SLACK}[platform]
     assert connection(ctx, cid)["last_error"]
+
+
+@then(parsers.parse("the {platform} Connection has no Last Error"))
+def has_no_last_error(ctx, platform):
+    assert connection(ctx, {"email": EMAIL, "Slack": SLACK}[platform])["last_error"] is None
 
 
 # --- Slack -----------------------------------------------------------------

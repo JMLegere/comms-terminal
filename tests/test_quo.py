@@ -87,10 +87,13 @@ def test_photo_is_an_attachment_and_group_texts_are_dropped():
 
 
 def test_unsigned_or_unconnected():
-    """The intake records a bad signature as the Connection's Last Error, and answers 503 with no Connection."""
+    """The intake records a bad signature as the Connection's Last Error, refuses an unsigned request without
+    one (anyone can reach the route, AS-19), and answers 503 with no Connection."""
     db, cid = setup()
     body = event("message.received", "AC1", "hi", ANA, [ME])
     assert serve.intake(db, "quo", {}, body, KEY, NOW) == (401, "")
+    assert db.execute("SELECT last_error FROM connections WHERE id = ?", (cid,)).fetchone()[0] is None
+    assert serve.intake(db, "quo", {**signed(body), "webhook-signature": "v1,AAAA"}, body, KEY, NOW) == (401, "")
     assert db.execute("SELECT last_error FROM connections WHERE id = ?", (cid,)).fetchone()[0] == \
         "inbound request failed signature check"
     assert serve.intake(db, "quo", signed(body), body, KEY, NOW)[0] < 300  # a signed request clears it

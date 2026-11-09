@@ -30,6 +30,9 @@ TRANSCRIPTS = {"call.transcript.completed": "transcript", "call.voicemail.comple
 SEND_URL = "https://api.openphone.com/v1/messages"
 
 
+SIGNATURE_HEADER = "webhook-signature"  # a request without it never came from the Platform (AS-19)
+
+
 def verify(headers, body: bytes, key: bytes, now: datetime) -> bool:
     """Standard Webhooks: base64 HMAC-SHA256 over "<webhook-id>.<webhook-timestamp>.<body>" with the
     base64-decoded `whsec_` key; webhook-signature holds space-separated "v1,<sig>" entries."""
