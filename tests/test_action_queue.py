@@ -159,3 +159,21 @@ def test_day_counts_and_badge(db):
     day = rows[0]["day"]
     assert actions.counts(rows)[day] == {"email": 2, "wake": 1}
     assert actions.badge(rows) == (3, 0)
+
+
+def test_a_step_of_a_paused_or_finished_enrollment_is_off(db):  # the timed pass carries only Active or Finishing
+    db, _ = db
+    before = seeded(db)
+    s = sq.create_sequence(db, "Later step", now=NOW)
+    sq.add_step(db, s, "email", now=NOW)
+    sq.add_step(db, s, "action", action_kind="set_stage", now=NOW)
+    e = sq.enroll(db, person(db), s, now=NOW)
+    with db:  # a due Action Step Task, as a finished Enrollment can leave behind
+        step = db.execute("SELECT id FROM sequence_steps WHERE sequence_id = ? AND kind = 'action'", (s,)).fetchone()[0]
+        db.execute("INSERT INTO tasks (enrollment_id, step_id, due_at, state) VALUES (?, ?, ?, 'DUE')",
+                   (e, step, (NOW - timedelta(days=4)).isoformat()))
+    assert [r["kind"] for r in mine(db, before)] == ["step"]
+    for state in ("PAUSED", "FINISHED"):
+        with db:
+            db.execute("UPDATE enrollments SET state = ?, reason = 'CANCELED' WHERE id = ?", (state, e))
+        assert [r for r in mine(db, before) if r["kind"] == "step"] == []

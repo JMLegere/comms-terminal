@@ -196,7 +196,8 @@ def queue(db, now: datetime | None = None) -> list[dict]:
                             " FROM tasks k JOIN sequence_steps s ON s.id = k.step_id"
                             " JOIN enrollments e ON e.id = k.enrollment_id JOIN persons p ON p.id = e.person_id"
                             " JOIN sequences q ON q.id = e.sequence_id WHERE s.kind = 'action'"
-                            " AND ((k.state = 'DUE' AND k.flag IS NULL) OR (k.state = 'DONE' AND k.done_at >= ?))",
+                            " AND ((k.state = 'DUE' AND k.flag IS NULL AND e.state IN ('ACTIVE', 'FINISHING'))"
+                            " OR (k.state = 'DONE' AND k.done_at >= ?))",  # the runner's rule (_auto_tasks)
                             (since,)):
             done = k["state"] == "DONE"
             add(f"step:{k['id']}", "sent" if done else ahead(k["due_at"]), "step",
