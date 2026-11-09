@@ -24,7 +24,9 @@ def enqueue(db, connection_id: str, kind: str, target: str, payload: dict, previ
                        clock.iso(now), clock.iso(now))).fetchone()[0]
 
 
-CARRIED = ("issue_update", "issue_create")  # what run() carries out; sends and Responds run inline (journal)
+CARRIED = ("issue_update", "issue_create", "send", "respond")  # every Action that reaches a Platform (ADR 0022)
+PRESSED = ("send", "respond")  # started on Jeremy's word and carried at once (start, carry); a stuck one is swept late
+STUCK = 600  # seconds a pressed Action may run before a pass calls it interrupted
 
 
 def _due(db, now: datetime) -> list:
@@ -34,13 +36,39 @@ def _due(db, now: datetime) -> list:
                       (clock.iso(now), *CARRIED)).fetchall()
 
 
-def journal(db, connection_id: str, kind: str, target: str, label: str, now: datetime) -> str:
-    """An Action carried out inline where it already was (a send, a Respond): recorded running, never resent by
-    run() (PRD P6). settle() records its outcome."""
+def start(db, connection_id: str, kind: str, target: str, payload: dict, safe: bool, now: datetime) -> str:
+    """An Action Jeremy's press carries at once (a send, a Respond): recorded running, so run() never picks it up
+    while carry() works it. The caller writes it in the same transaction as its claim."""
     return db.execute("INSERT INTO actions (connection_id, kind, target, payload, safe, state, attempts, due_at,"
-                      " created_at) VALUES (?, ?, ?, ?, 0, 'running', 1, ?, ?) RETURNING id",
-                      (connection_id, kind, str(target), json.dumps({"label": label}), clock.iso(now),
-                       clock.iso(now))).fetchone()[0]
+                      " created_at) VALUES (?, ?, ?, ?, ?, 'running', 1, ?, ?) RETURNING id",
+                      (connection_id, kind, str(target), json.dumps(payload, sort_keys=True), int(safe),
+                       clock.iso(now), clock.iso(now))).fetchone()[0]
+
+
+def carry(db, action_id: str, client, now: datetime) -> dict:
+    """Carry out one started Action now with its carrier and record the outcome; returns the carrier's answer, so
+    the press that started it can answer as it always has (ADR 0022)."""
+    a = db.execute("SELECT a.*, c.platform FROM actions a JOIN connections c ON c.id = a.connection_id WHERE a.id = ?",
+                   (action_id,)).fetchone()
+    try:
+        out = _carriers()[a["kind"]](db, a, client, now)
+    except Exception as e:
+        _finish(db, action_id, {"outcome": "unknown", "error": str(e)[:200]}, clock.now())
+        raise
+    _finish(db, action_id, out, clock.now())
+    return out
+
+
+def _finish(db, action_id: str, out: dict, now: datetime) -> None:
+    outcome, error = out["outcome"], out.get("error")
+    with db:
+        if outcome in ("confirmed", "refused"):
+            db.execute("UPDATE actions SET state = ?, error = ?, done_at = ? WHERE id = ?",
+                       (outcome, error, clock.iso(now), action_id))
+        elif outcome == "broken":
+            db.execute("UPDATE actions SET state = 'scheduled', error = ? WHERE id = ?", (error, action_id))
+        else:
+            db.execute("UPDATE actions SET state = 'unknown', error = ? WHERE id = ?", (error, action_id))
 
 
 def settle(db, action_id: str, outcome: str, error: str | None, now: datetime) -> None:
@@ -50,34 +78,34 @@ def settle(db, action_id: str, outcome: str, error: str | None, now: datetime) -
 
 
 def _carriers():
-    from . import issues
-    return {"issue_update": issues.carry_update, "issue_create": issues.carry_create}
+    from . import issues, meetings
+    return {"issue_update": issues.carry_update, "issue_create": issues.carry_create, "send": inbox.carry_send,
+            "respond": meetings.carry_respond}
 
 
-def run(db, clients: dict, now: datetime) -> int:
+def run(db, clients: dict, now: datetime, senders=None) -> int:
     """One pass: each due Action in order, per Connection; a broken or unanswered one holds that Connection's later
-    Actions to keep their order. `clients` maps a Platform to its writer. Returns how many were carried out."""
+    Actions to keep their order. `clients` maps a Platform to its writer; `senders` (serve.Senders) gives a send its
+    Connection's sender. Returns how many were carried out."""
+    from datetime import timedelta
     with db:  # a pass that died mid-Action left it running: whether it happened is unknown
         db.execute("UPDATE actions SET state = 'unknown', error = 'interrupted' WHERE state = 'running'"
-                   f" AND kind IN ({', '.join('?' * len(CARRIED))})", CARRIED)
+                   " AND (kind NOT IN (?, ?) OR due_at < ?)", (*PRESSED, clock.iso(now - timedelta(seconds=STUCK))))
     carriers, held, done = _carriers(), set(), 0
     for a in _due(db, now):
-        client = clients.get(a["platform"])
+        if a["kind"] == "send":
+            row = db.execute("SELECT * FROM connections WHERE id = ?", (a["connection_id"],)).fetchone()
+            client = senders.get(row) if senders is not None else None
+        else:
+            client = clients.get(a["platform"])
         if a["connection_id"] in held or client is None:
             continue
         with db:
             db.execute("UPDATE actions SET state = 'running', attempts = attempts + 1 WHERE id = ?", (a["id"],))
         out = carriers[a["kind"]](db, a, client, now)
         outcome, error = out["outcome"], out.get("error")
-        with db:
-            if outcome in ("confirmed", "refused"):
-                db.execute("UPDATE actions SET state = ?, error = ?, done_at = ? WHERE id = ?",
-                           (outcome, error, clock.iso(now), a["id"]))
-                done += 1
-            elif outcome == "broken":
-                db.execute("UPDATE actions SET state = 'scheduled', error = ? WHERE id = ?", (error, a["id"]))
-            else:
-                db.execute("UPDATE actions SET state = 'unknown', error = ? WHERE id = ?", (error, a["id"]))
+        _finish(db, a["id"], out, now)
+        done += outcome in ("confirmed", "refused")
         last = db.execute("SELECT last_error FROM connections WHERE id = ?", (a["connection_id"],)).fetchone()[0]
         if outcome == "broken":
             inbox.set_connection_error(db, a["connection_id"], WRITES_BROKEN + error)

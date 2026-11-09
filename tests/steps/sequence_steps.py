@@ -172,10 +172,22 @@ def schedule_task_draft(outreach, day):
 
 @when(parsers.parse("the scheduled send fails on {day}"))
 def scheduled_send_fails(outreach, day):
-    """As serve.py's send loop: claim the due sends, then record the failure."""
+    """As serve.py's send loop: claim the due sends; the provider refuses each (ADR 0022)."""
+    from comms_terminal import actions
+
+    class Refusing:
+        def send(self, *a, **k):
+            raise inbox.SendFailed("refused")
+
+        def send_new(self, *a, **k):
+            raise inbox.SendFailed("refused")
+
+    class Senders:
+        def get(self, row):
+            return Refusing()
     outreach.now = DAYS[day]
-    for d in inbox.claim_due_drafts(outreach.db, outreach.now):
-        inbox.set_send_error(outreach.db, d["id"], "refused")
+    inbox.claim_due_sends(outreach.db, outreach.now, lambda d: None)
+    actions.run(outreach.db, {}, outreach.now, senders=Senders())
 
 
 @then(parsers.parse("the Tasks page on {day} lists:"))

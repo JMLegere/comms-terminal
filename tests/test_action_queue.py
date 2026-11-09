@@ -75,11 +75,11 @@ def test_send_outcomes_show_in_sent_for_seven_days(db):
     db, _ = db
     before = seeded(db)
     conn = db.execute("SELECT id FROM connections WHERE platform = 'gmail' LIMIT 1").fetchone()[0]
-    ok = actions.journal(db, conn, "send", "gone-1", "Intro · ana@acme.com", NOW - timedelta(days=1))
+    ok = actions.start(db, conn, "send", "gone-1", {"label": "Intro · ana@acme.com"}, False, NOW - timedelta(days=1))
     actions.settle(db, ok, "confirmed", None, NOW - timedelta(days=1))
-    old = actions.journal(db, conn, "send", "gone-2", "Old · lee@x.com", NOW - timedelta(days=8))
+    old = actions.start(db, conn, "send", "gone-2", {"label": "Old · lee@x.com"}, False, NOW - timedelta(days=8))
     actions.settle(db, old, "refused", "Gmail refused", NOW - timedelta(days=8))
-    lost = actions.journal(db, conn, "send", "gone-3", "Lost · raj@x.com", NOW - timedelta(hours=1))
+    lost = actions.start(db, conn, "send", "gone-3", {"label": "Lost · raj@x.com"}, False, NOW - timedelta(hours=1))
     actions.settle(db, lost, "unknown", "timed out", NOW - timedelta(hours=1))
     rows = mine(db, before)
     assert [(r["section"], r["kind"], r["target"], r["outcome"]) for r in rows] == [
@@ -90,7 +90,7 @@ def test_issue_changes_responds_and_tasks_jeremy_does_stay_off(db):
     db, _ = db
     before = seeded(db)
     conn = db.execute("SELECT id FROM connections WHERE platform = 'gmail' LIMIT 1").fetchone()[0]
-    r = actions.journal(db, conn, "respond", "ev1", "Accept · Pints", NOW)
+    r = actions.start(db, conn, "respond", "ev1", {"label": "Accept · Pints"}, False, NOW)
     actions.settle(db, r, "refused", "no", NOW)
     actions.enqueue(db, conn, "issue_update", "i1", {"priority": 1}, {"priority": 0}, True, NOW)
     s = sq.create_sequence(db, "Intro", now=NOW)

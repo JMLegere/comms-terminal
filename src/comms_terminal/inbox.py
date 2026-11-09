@@ -1,6 +1,6 @@
 """The inbox module: Threads, Status, Activities, Persons, Organizations, Blocks, Cases, and Drafts.
 
-Interface: ingest, act, reply, wake, reopen_imported, reconcile_email_threads; people operations block, add_identity, remove_identity; save_draft, save_reply_draft, schedule_draft, schedule_reply, claim_due_drafts, reply_drafts, get_draft, delete_draft, restore_draft, list_drafts, recipient_names, recipient_threads.
+Interface: ingest, act, reply, wake, reopen_imported, reconcile_email_threads; people operations block, add_identity, remove_identity; save_draft, save_reply_draft, schedule_draft, schedule_reply, claim_due_sends, send_draft, carry_send, reply_drafts, get_draft, delete_draft, restore_draft, list_drafts, recipient_names, recipient_threads.
 Design: docs/design/api-and-database.md.
 """
 
@@ -1382,18 +1382,6 @@ def schedule_reply(db, thread_id: int, body: str, to: list[str], cc: list[str], 
         return schedule_draft(db, d["id"], send_at, now=now)
 
 
-def claim_due_drafts(db, now: datetime) -> list[dict]:
-    """The Drafts whose send time has come, with that time cleared so each is tried once."""
-    # ponytail: a service crash between this claim and the send leaves an unscheduled Draft with no send_error
-    with db:
-        if not db.in_transaction:
-            db.execute("BEGIN IMMEDIATE")
-        due = [dict(r) for r in db.execute("SELECT * FROM composition_drafts WHERE send_at <= ? AND sending_at IS NULL"
-                                           " ORDER BY send_at, id", (clock.iso(now),))]
-        db.executemany("UPDATE composition_drafts SET send_at = NULL WHERE id = ?", [(d["id"],) for d in due])
-    return due
-
-
 def set_send_error(db, draft_id: int, error: str) -> None:
     with db:
         db.execute("UPDATE composition_drafts SET send_error = ? WHERE id = ?", (error, draft_id))
@@ -1564,45 +1552,110 @@ def send_draft(db, draft_id: int, revision: int, sender: Sender, *, again: bool 
     Jeremy sends there, so it joins the conversation's Thread unless the conversation has been quiet long enough
     (FR-33).
 
-    `sending_at` is set before the provider call and cleared only on a refusal, so a send whose outcome is
-    unknown leaves the Draft locked; `again` is Jeremy's explicit choice to send it once more anyway.
+    The send is an Action the Action runner carries (ADR 0022): claimed here with the send lock, then carried at
+    once (`carry_send`) so the press answers as before. `sending_at` is set with the claim and cleared only on a
+    refusal, so a send whose outcome is unknown leaves the Draft locked; `again` is Jeremy's explicit choice to
+    send it once more anyway.
     """
-    from . import sequences
+    from . import actions
     with db:
         if not db.in_transaction:
             db.execute("BEGIN IMMEDIATE")
-        d = get_draft(db, draft_id)
-        if d["revision"] != revision:
-            raise DraftConflict("Draft changed since this revision; reload before sending.")
-        if d["sending_at"] and not again:
-            raise SendUnknown("Send outcome unknown; check before sending again.")
-        files = staged_files(db, draft_id=draft_id)
-        started = clock.now()
-        at = clock.iso(started)
+        d, connection_id = _claim_send(db, draft_id, revision, again)
+        action = actions.start(db, connection_id, "send", draft_id, _send_payload(db, d), False, clock.now())
+    out = actions.carry(db, action, sender, clock.now())
+    if out["outcome"] == "confirmed":
+        return get_thread(db, out["thread_id"])
+    if out.get("problem"):
+        raise ValueError(out["error"])
+    raise (SendUnknown if out["outcome"] == "unknown" else SendFailed)(out["error"])
+
+
+def _send_payload(db, d) -> dict:
+    """A send Action's payload: the Draft, its revision, and the words the Action Queue shows."""
+    title = d["subject"] or (get_thread(db, d["thread_id"]).title if d["thread_id"] is not None else None)
+    return {"draft_id": d["id"], "revision": d["revision"],
+            "label": " · ".join(x for x in (title, d["to"]) if x) or f"message to {d['to'] or 'nobody'}"}
+
+
+def _claim_send(db, draft_id, revision, again=False):
+    """Check one Draft can go and lock it for sending (inside the caller's transaction); returns (draft, its
+    Connection). DraftConflict, SendUnknown (locked) or ValueError (a problem) leave it as it was."""
+    from . import sequences
+    d = get_draft(db, draft_id)
+    if d["revision"] != revision:
+        raise DraftConflict("Draft changed since this revision; reload before sending.")
+    if d["sending_at"] and not again:
+        raise SendUnknown("Send outcome unknown; check before sending again.")
+    if db.execute("SELECT 1 FROM actions WHERE kind = 'send' AND target = ? AND state IN ('scheduled', 'running')",
+                  (str(draft_id),)).fetchone():
+        raise SendUnknown("This Draft is already being sent.")
+    files = staged_files(db, draft_id=draft_id)
+    if d["thread_id"] is not None:
+        connection_id = _reply_send(db, d, files, None, clock.now())[0]
+    else:
+        problem = draft_problem(d, files) or sequences.send_problem(db, d)  # size check included, so _send's cannot fail after the claim
+        if problem:
+            raise ValueError(problem)
+        connection_id = d["connection_id"]
+    db.execute("UPDATE composition_drafts SET sending_at = ? WHERE id = ?", (clock.iso(clock.now()), draft_id))
+    return d, connection_id
+
+
+def carry_send(db, action, sender, now: datetime) -> dict:
+    """The Action runner's carrier for a send (ADR 0022): the provider call and record of one claimed Draft.
+    Confirmed: the Draft is gone and its message recorded. Refused (or a problem found at the last moment): the lock
+    is cleared, and a scheduled send keeps the reason as the Draft's send_error. Unknown: the lock stays."""
+    p = json.loads(action["payload"])
+    draft_id = p["draft_id"]
+    d = db.execute("SELECT * FROM composition_drafts WHERE id = ?", (draft_id,)).fetchone()
+    if d is None:
+        return {"outcome": "refused", "error": "The Draft was deleted before it was sent."}
+    d = get_draft(db, draft_id)
+    files = staged_files(db, draft_id=draft_id)
+    started = clock.now()
+    try:
+        if sender is None:
+            raise SendFailed("Not connected for sending")
         if d["thread_id"] is not None:
             connection_id, fmt, call, record, settle = _reply_send(db, d, files, sender, started)
         else:
-            problem = draft_problem(d, files) or sequences.send_problem(db, d)  # size check included, so _send's cannot fail after the claim
-            if problem:
-                raise ValueError(problem)
             connection_id, fmt = d["connection_id"], d["kind"]
-            call, record, settle = _new_send(db, d, files, sender, started, at)
-        db.execute("UPDATE composition_drafts SET sending_at = ? WHERE id = ?", (at, draft_id))
-        from . import actions  # the send shows on the Action Queue with its outcome (ADR 0020, PRD P6)
-        action = actions.journal(db, connection_id, "send", draft_id,
-                                 d["subject"] or f"message to {d['to'] or 'nobody'}", started)
-    try:
+            call, record, settle = _new_send(db, d, files, sender, started, clock.iso(started))
         thread = _send(db, connection_id, fmt, files, call, record, settle=settle, draft_id=draft_id)
-    except SendUnknown as e:  # the Draft stays locked, as before; the Action says unknown and is never resent
-        actions.settle(db, action, "unknown", str(e)[:200], clock.now())
-        raise
-    except SendFailed as e:
+    except SendUnknown as e:
+        return {"outcome": "unknown", "error": str(e)[:200]}
+    except (SendFailed, ValueError) as e:
         with db:
-            db.execute("UPDATE composition_drafts SET sending_at = NULL WHERE id = ?", (draft_id,))
-        actions.settle(db, action, "refused", str(e)[:200], clock.now())
-        raise
-    actions.settle(db, action, "confirmed", None, clock.now())
-    return thread
+            db.execute("UPDATE composition_drafts SET sending_at = NULL" + (", send_error = ?" if p.get("scheduled") else "")
+                       + " WHERE id = ?", ((str(e) or type(e).__name__, draft_id) if p.get("scheduled") else (draft_id,)))
+        return {"outcome": "refused", "error": str(e)[:200], "problem": isinstance(e, ValueError)}
+    return {"outcome": "confirmed", "thread_id": thread.id}
+
+
+def claim_due_sends(db, now: datetime, can_send) -> list[str]:
+    """The Drafts whose send time has come, in one transaction: each loses its send time, takes the send lock and
+    becomes a send Action the runner carries (ADR 0022), so none can leave twice and a cancelled one never leaves.
+    `can_send(draft)` names why a Draft cannot go (no sender); such a Draft keeps the reason as its send_error.
+    Returns the new Actions' ids."""
+    from . import actions
+    started = []
+    with db:
+        if not db.in_transaction:
+            db.execute("BEGIN IMMEDIATE")
+        for d in [dict(r) for r in db.execute("SELECT * FROM composition_drafts WHERE send_at <= ? AND sending_at IS NULL"
+                                              " ORDER BY send_at, id", (clock.iso(now),))]:
+            db.execute("UPDATE composition_drafts SET send_at = NULL WHERE id = ?", (d["id"],))
+            try:
+                if why := can_send(d):
+                    raise SendFailed(why)
+                d, connection_id = _claim_send(db, d["id"], d["revision"])
+            except (SendFailed, ValueError, DraftConflict) as e:
+                db.execute("UPDATE composition_drafts SET send_error = ? WHERE id = ?", (str(e) or type(e).__name__, d["id"]))
+                continue
+            aid = actions.enqueue(db, connection_id, "send", d["id"], _send_payload(db, d) | {"scheduled": True}, None, False, now)
+            started.append(aid)
+    return started
 
 
 def _new_send(db, d, files, sender, started, at):
