@@ -74,8 +74,7 @@
                 "event": null,
                 "case": null,
                 "issues": "issues",
-                "actions": "actions",
-                "history": "history"
+                "actions": "actions"
               }
             },
             {
@@ -113,7 +112,6 @@
                 "actions:thread": "thread",
                 "actions:task": "task",
                 "actions:person": "person",
-                "history": "change",
                 "today:issue": "issue"
               }
             }

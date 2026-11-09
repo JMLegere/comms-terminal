@@ -3,7 +3,7 @@
 from datetime import timedelta
 
 from comms_terminal import clock, commands, inbox
-from comms_terminal.tui import ActionQueuePage, Console, HistoryPage
+from comms_terminal.tui import ActionQueuePage, Console
 from test_console import run, seeded
 
 
@@ -45,7 +45,7 @@ def test_the_queue_is_a_timeline_opening_at_now_with_day_counts(tmp_path):  # FR
     assert seen["opened"] == t
 
 
-def test_history_is_its_own_page_above_settings_and_the_rail_shows_two_numbers(tmp_path):  # FR-AQT-12, -13
+def test_the_rail_shows_two_numbers_and_has_no_history_page(tmp_path):  # FR-AQT-13; History page dropped
     path, _ = seeded(tmp_path)
     snooze(path, "Intro call", -1)
     app = Console(path)
@@ -54,14 +54,8 @@ def test_history_is_its_own_page_above_settings_and_the_rail_shows_two_numbers(t
     async def go(app, pilot):
         rail = app.main.rail
         opts = [rail.get_option_at_index(i) for i in range(rail.option_count)]
-        ids = [o.id for o in opts]
-        seen["order"] = ids.index("history") == ids.index("settings") - 1
+        seen["ids"] = [o.id for o in opts]
         seen["badge"] = str(next(o.prompt for o in opts if o.id == "actions"))
-        app.main.go("history")
-        await pilot.pause()
-        seen["page"] = isinstance(app.main.current, HistoryPage)
-        await pilot.press("v")
-        seen["service"] = app.main.current.service
     run(app, [go])
-    assert seen["order"] and seen["page"] and seen["service"] is False
+    assert "history" not in seen["ids"] and seen["ids"][-1] == "settings"
     assert " · 1" in seen["badge"]  # Upcoming · In flight

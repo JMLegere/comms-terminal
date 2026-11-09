@@ -309,12 +309,5 @@
     "down": "actions.next",
     "up": "actions.prev",
     "enter": "actions.enter"
-  },
-  "page:history": {
-    "j": "history.next",
-    "k": "history.prev",
-    "down": "history.next",
-    "up": "history.prev",
-    "v": "history.toggle_service"
   }
 }

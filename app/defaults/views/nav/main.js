@@ -355,12 +355,6 @@ export default class Nav extends View {
           .when(active, (el) => el.font_semibold()).child(i.label))
         .child(tail);
     };
-    // History sits just above Settings (PRD 2026-11-08-action-queue FR-AQT-12).
-    const history = h_flex().id("rail-history").h(30).px(8).mx(8).mt(6).flex_none().rounded(8).items_center().gap(9).cursor_pointer()
-      .when(shared("page") === "history" && !shared("settings"), (el) => el.bg(t.selected)).hover((st) => st.bg(t.hover))
-      .on_click(() => this.go("history"))
-      .child(svg("icons/history.svg").size(14).flex_none().text_color(t.muted))
-      .child(div().flex_1().text_color(t.foreground).child("History"));
     // Settings sits at the bottom-left, as herdr-app's gear (FR-SET-1); the rail scrolls above it.
     const gear = h_flex().id("rail-settings").h(30).px(8).mx(8).my(6).flex_none().rounded(8).items_center().gap(9).cursor_pointer()
       .when(Boolean(shared("settings")), (el) => el.bg(t.selected)).hover((st) => st.bg(t.hover))
@@ -372,6 +366,6 @@ export default class Nav extends View {
       .child(v_flex().id("rail").flex_1().min_h(0).overflow_y_scroll().pb(12)
         .children(this.items().map(row))
         .when(Boolean(this.error), (el) => el.child(div().px(16).py(8).text_size(11.5).text_color(t.danger).child(this.error ?? ""))))
-      .child(div().flex_none().border_t(1).border_color(t.border).child(history).child(gear));
+      .child(div().flex_none().border_t(1).border_color(t.border).child(gear));
   }
 }

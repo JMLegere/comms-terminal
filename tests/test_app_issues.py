@@ -41,7 +41,6 @@ def test_the_action_queue_is_a_timeline_with_day_counts_and_today_holds_issues(o
     assert out["now"] == 1  # opens at the first row at or after now
     assert out["badge"] == ["25 · 1", 25, ""]
     assert out["today"] == ["issues-7"]
-    assert out["history"] == ["Tue Nov 10", "Undo: Done: Intro call | Console", "Done: Intro call | App | undone"]
 
 
 def test_the_rail_groups_connections_by_kind(out):

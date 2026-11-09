@@ -56,12 +56,6 @@ const qrows = [
 out.queue = Actions.ns.queueItems(qrows, { "2026-11-10": { email: 1 }, "2026-11-09": { wake: 2 } })
   .map((it) => it.header ? `${it.header} | ${it.counts ?? ""}` : it.key);
 out.now = Actions.ns.nowIndex(qrows);
-// History (ADR 0021, 0022): its own page, a header per local day, newest first.
-const History = await load("history");
-out.history = History.ns.historyItems([
-  { id: "c2", at: "2026-11-10T15:00:00", label: "Undo: Done: Intro call", source_name: "Console", undoes: "c1", undone: false },
-  { id: "c1", at: "2026-11-10T14:00:00", label: "Done: Intro call", source_name: "App", undoes: null, undone: true }])
-  .map((it) => it.header ?? `${it.command.label} | ${it.command.source_name}${it.command.undone ? " | undone" : ""}`);
 const Nav = await load("nav");
 out.badge = [Nav.ns.badge([25, 1]), Nav.ns.badge([25, 0]), Nav.ns.badge([0, 0])];
 

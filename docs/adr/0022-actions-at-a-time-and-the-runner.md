@@ -21,6 +21,6 @@ Decision:
 ## Consequences
 
 - Decision 60 of the Issues PRD (sends and Responds run inline, journaled) is superseded once sends and Responds move onto the runner; the page and read model ship first.
-- `actions.queue` is rewritten; the App shows the Action Queue with a detail pane of the record behind the selected row; History moves to its own page.
+- `actions.queue` is rewritten; the App shows the Action Queue with a detail pane of the record behind the selected row; History has no page in the Clients (Jeremy, 2026-11-08: undo needs only the Command log; `comms-terminal history` keeps it readable).
 - Failures show only as the row's label in Sent ("just in the row for now"); a missed unknown send is the accepted risk.
 - An Issue change or Respond that fails shows only on its own record, not on the queue.

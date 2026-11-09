@@ -543,7 +543,7 @@ Every Command, kept forever on the Service and copied to each laptop like any ot
 _Avoid_: Change log (the laptop sync's record of row changes, ADR 0012), Audit log, Activity
 
 **History**:
-The Command log as Jeremy reads it: its own page, by day, with each Command's time, Source and words, and whether it was undone. Service Commands can be hidden.
+The Command log as `comms-terminal history` prints it, by day, with each Command's time, Source and words, and whether it was undone; Service Commands can be left out. The Clients have no History page: z undoes the newest Command and its toast names it.
 _Avoid_: Activity, Timeline, Feed
 
 **Undo window**:

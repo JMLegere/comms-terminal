@@ -19,7 +19,6 @@ SCROLLS = "Panes scroll with the wheel or trackpad"  # the Thread takes space/pg
 
 APP = {
     ("MainScreen", "go('settings')"): "settings.open",
-    ("HistoryPage", "toggle_service"): "history.toggle_service",
     (THREAD, "reply('sender')"): "thread.reply_sender", (THREAD, "reply('all')"): "thread.reply_all",
     (THREAD, "done"): "thread.done", (THREAD, "pause"): "thread.snooze", (THREAD, "block_sender"): "thread.block",
     (THREAD, "ignore"): "thread.ignore", (THREAD, "case"): "thread.case", (THREAD, "status"): "thread.status",

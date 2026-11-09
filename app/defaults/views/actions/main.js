@@ -1,7 +1,7 @@
 // The Action Queue, as the Console's ActionQueuePage (ADR 0022, PRD 2026-11-08-action-queue FR-AQT-9, -11): every
 // Action that waits for a time, as one timeline: Upcoming furthest ahead first, In flight, then Sent from the last
 // 7 days. Each day counts its Actions by kind. The detail pane shows the record behind the selected row (a Draft,
-// Thread, Task or Person); Enter moves to it. It opens at now. History is its own page (views/history).
+// Thread, Task or Person); Enter moves to it. It opens at now.
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, v_virtual_list, VirtualListScrollHandle } from "gpui-base";
 import { call, nextEvent, nextCommand, theme, shared, setShared, run, focusMain } from "comms";

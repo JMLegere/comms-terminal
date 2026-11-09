@@ -841,7 +841,7 @@ class Rail(OptionList):
             state = {"ok": f"[#6c782e]{ICON['ok']}[/]", "checking": "[#928374]…[/]"}.get(st, f"[#c14a4a]{ICON['broken']}[/]")
             label = title if st in ("ok", "checking") else f"[#c14a4a]{title}[/]"
             opts.append(Option(f" [#654735]{ICON[icon]}[/] {label}{' ' * (22 - len(title))}{state}", id=f"context:{key}"))
-        opts += [gap, item("history", "history", "History"), item("settings", "settings", "Settings")]
+        opts += [gap, item("settings", "settings", "Settings")]
         shown = [(o.prompt, o.id, o.disabled) for o in opts]
         if shown != getattr(self, "shown", None):  # unchanged rows: no rebuild, so no redraw (the 60 s flash)
             self.shown = shown
@@ -6614,7 +6614,7 @@ class IssuesPage(Page):
 class ActionQueuePage(TablePage):
     """The Action Queue (ADR 0022): every Action that waits for a time, as one timeline: Upcoming furthest ahead
     first, In flight, then Sent from the last 7 days. Each day counts its Actions by kind; Enter opens the record
-    behind a row. It opens at now."""
+    behind a row. It opens at now. The Command log has no page; `comms-terminal history` reads it."""
     TITLE = f"{ICON['actions']} action queue"
     RAIL = "actions"
     SIDE = f"{ICON['actions']} action"
@@ -6684,51 +6684,6 @@ class ActionQueuePage(TablePage):
             page = TasksPage() if kind == "task" else DraftsPage()
             self.app.main.open(lambda: page)
             self.app.call_after_refresh(lambda: page.refresh_data(select_id=rid))
-
-
-class HistoryPage(TablePage):
-    """History (ADR 0021, 0022): the Command log, newest first, by day, on its own page; v shows or hides the
-    Service's own work."""
-    TITLE = f"{ICON['history']} history"
-    RAIL = "history"
-    SIDE = f"{ICON['history']} change"
-    COLUMNS = ("", "What")  # Source beside the words: a narrow pane shows two columns
-    EMPTY = "No changes yet."
-    BINDINGS = TablePage.BINDINGS + [Binding("v", "toggle_service", "Service work")]
-    service = True  # the Service's own Commands show (FR-UN-19)
-
-    def rows(self):
-        out, day = [], None
-        for c in commands.history(self.app.db, service=self.service, limit=500):
-            at = datetime.fromisoformat(c["at"]).astimezone(sequences.LOCAL)
-            if at.date() != day:
-                day = at.date()
-                out.append(({"header": f"history:{day}"}, ("", f"[b #7c6f64]{day:%a %b %-d}[/]")))
-            words = f"[#928374]{escape(c['label'])} · undone[/]" if c["undone"] else escape(c["label"])
-            out.append((c | {"kind": "command"}, (f"[#928374]{at:%H:%M}[/]", f"{words}  [#928374]{c['source_name']}[/]")))
-        return out
-
-    def action_toggle_service(self):
-        self.service = not self.service
-        self.refresh_data()
-        self.app.notify("Service work " + ("shown" if self.service else "hidden"))
-
-    def show_selected(self):
-        r = self.selected()
-        if not r or "header" in r:
-            return
-        self.app.main.show_side(f"[b]{escape(r['label'])}[/]\n\n[#928374]Source[/]  {r['source_name']}\n"
-                                f"[#928374]When[/]  {datetime.fromisoformat(r['at']).astimezone(sequences.LOCAL):%a %b %-d %H:%M}\n"
-                                + ("[#928374]Undone[/]\n" if r["undone"] else "")
-                                + (f"[#928374]No undo[/]  {escape(r['reason'])}\n" if r["reason"] else ""))
-
-    def on_data_table_row_highlighted(self, event):
-        event.stop()
-        self.show_selected()
-
-    def refresh_data(self):
-        super().refresh_data()
-        self.show_selected()
 
 
 # --- Calendar (ADR 0005) -------------------------------------------------------
@@ -7193,8 +7148,7 @@ class SettingsPage(TablePage):
 
 SECTIONS = {"today": TodayPage, "threads": ThreadsPage, "people": PeoplePage, "organizations": OrganizationsPage,
             "cases": CasesPage, "channels": ChannelsPage, "tasks": TasksPage, "sequences": SequencesPage,
-            "calendar": CalendarPage, "issues": IssuesPage, "actions": ActionQueuePage,
-            "history": HistoryPage}
+            "calendar": CalendarPage, "issues": IssuesPage, "actions": ActionQueuePage}
 
 
 class MainScreen(Screen):
