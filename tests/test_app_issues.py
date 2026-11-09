@@ -35,10 +35,15 @@ def test_the_issue_pane_changes_through_the_action_queue_with_undo(out):
     assert out["planned"] == ["2026-11-09", "2026-11-10", "2026-11-13", None]  # Monday Nov 9: fri is Nov 13
 
 
-def test_the_action_queue_heads_each_day_with_its_counts_and_today_holds_issues(out):
-    assert out["queue"] == ["Mon Nov 9 | Linear 1 · console 1", "action-a1", "task-t1", "Tue Nov 10 | Gmail 1", "draft-d1"]
+def test_the_action_queue_is_a_timeline_with_day_counts_and_today_holds_issues(out):  # FR-AQT-9, -11, -13
+    assert out["queue"] == ["UPCOMING · 1 | ", "Tue Nov 10 | email 1", "draft:d1", "NOW 21:41",
+                            "IN FLIGHT · 1 | ", "Mon Nov 9 | wake 2", "wake:t1",
+                            "SENT · last 7 days · 1 | ", "Mon Nov 9 | wake 2", "woke:a1"]
+    assert out["queueEmpty"] == ["UPCOMING · 0 | ", "e-upcoming", "NOW 21:41", "IN FLIGHT · 0 | ", "e-in_flight",
+                                 "SENT · last 7 days · 0 | ", "e-sent"]  # three sections, always
+    assert out["now"] == 1  # opens at the first row at or after now
+    assert out["badge"] == ["25 · 1", 25, ""]
     assert out["today"] == ["issues-7"]
-    assert out["history"] == ["Tue Nov 10", "Undo: Done: Intro call | Console", "Done: Intro call | App | undone"]
 
 
 def test_the_rail_groups_connections_by_kind(out):

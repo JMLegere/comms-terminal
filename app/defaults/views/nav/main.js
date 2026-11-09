@@ -61,6 +61,12 @@ export function current() {
   return base.page;
 }
 
+/** The Action Queue's two numbers (FR-AQT-13): Upcoming, then In flight when any. */
+export function badge(pair) {
+  const [upcoming, inFlight] = Array.isArray(pair) ? pair : [pair ?? 0, 0];
+  return inFlight ? `${upcoming} · ${inFlight}` : upcoming || "";
+}
+
 export default class Nav extends View {
   init(_props, cx) {
     this.summary = {};
@@ -308,7 +314,7 @@ export default class Nav extends View {
       ...STATUS.map((n) => ({ id: `cases:${n}`, icon: ICON[n], label: n, count: (h.cases ?? {})[n] ?? 0, module: "cases" })),
       { header: "work" },
       { id: "issues", icon: "list-checks", label: "Issues", count: h.issues || "", module: "issues" },
-      { id: "actions", icon: "clock", label: "Action Queue", count: h.actions || "" },
+      { id: "actions", icon: "clock", label: "Action Queue", count: badge(h.actions) },
       { header: "playbook", module: "sequences" },
       { id: "tasks", icon: "list-checks", label: "Tasks", count: due || "", module: "sequences" },
       { id: "sequences", icon: "workflow", label: "Sequences", module: "sequences",

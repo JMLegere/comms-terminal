@@ -349,12 +349,22 @@ One connected account on a Platform, of one kind: an Email, SMS, Slack, Calendar
 _Avoid_: Source, Account, Integration
 
 **Action**:
-One thing Comms Terminal carries out itself, on Jeremy's word or on a schedule: a send, a Respond, a reaction, an Issue change, or an Action Step's effect. Each is either safe to repeat or not; a send is not, so one whose outcome is unknown is never repeated by itself.
-_Avoid_: Job, Operation, Action item (that is a Task Jeremy does)
+One thing Comms Terminal carries out itself, on Jeremy's word or at a time, each with the time it happens: a send, a Respond, a reaction, an Issue change, an Action Step's effect, a Snooze wake, a follow-up return, or an Enrollment start. An Action that reaches a Platform (a send, a Respond, a reaction, an Issue change) can come back refused or with its outcome unknown; the rest only change Comms Terminal and just happen. Each is either safe to repeat or not; a send is not, so one whose outcome is unknown is never repeated by itself.
+_Avoid_: Job, Operation, Timer, Action item (that is a Task Jeremy does)
 
 **Action Queue**:
-Every Action that is scheduled, running, refused, or of unknown outcome, by day and by Connection, so Jeremy sees what is about to leave and what did not.
+Every Action that waits for a time and will happen with no further act from Jeremy (a scheduled send, a Snooze wake, a follow-up return, an Enrollment start, an Action Step), and every such Action from the last 7 days, as one timeline: Upcoming at the top, furthest ahead first, then In flight, then Sent, newest first. Each day counts its Actions by kind. Actions that happen the moment Jeremy asks (an Issue change, a Respond, a reaction) are not on it; a refused one shows on its own record. Tasks Jeremy does are not on it, nor is an Action Step that waits for him.
 _Avoid_: Outbox, Outreach queue, Send queue
+
+**Upcoming**:
+The Action Queue's section of Actions whose time is still ahead, however far.
+
+**In flight**:
+The Action Queue's section of Actions being carried out now, or due and waiting to be carried out or tried again.
+
+**Sent**:
+The Action Queue's section of Actions with nothing left to happen by themselves, from the last 7 days, each labelled with its outcome: confirmed, refused or unknown.
+_Avoid_: Done (that is a Status), Completed
 
 **Context connection**:
 A Connection that Comms Terminal only reads, to show context beside Threads, Persons, Organizations, and Cases: Tana, Attio, or Linear. It holds no Threads.
@@ -533,7 +543,7 @@ Every Command, kept forever on the Service and copied to each laptop like any ot
 _Avoid_: Change log (the laptop sync's record of row changes, ADR 0012), Audit log, Activity
 
 **History**:
-The Command log as Jeremy reads it: on the Action Queue page, below the Action Queue, by day, with each Command's time, Source and words, and whether it was undone. Service Commands can be hidden.
+The Command log as `comms-terminal history` prints it, by day, with each Command's time, Source and words, and whether it was undone; Service Commands can be left out. The Clients have no History page: z undoes the newest Command and its toast names it.
 _Avoid_: Activity, Timeline, Feed
 
 **Undo window**:

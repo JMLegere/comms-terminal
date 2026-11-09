@@ -230,3 +230,24 @@ def respond_recorded(db, uid: str, status: str, rid: str | None = None) -> int |
         title=o["title"], data={"meeting": meeting, "to": [p["email"] for p in people]}, channel_name=o["title"],
         synchronous="meeting", participants=tuple(inbox.Identity("email", p["email"], p["name"] or None) for p in people)))
     return db.execute("SELECT id FROM activities WHERE native_id = ?", (native_id,)).fetchone()[0]
+
+
+def carry_respond(db, action, client, now) -> dict:
+    """The Action runner's carrier for a Respond (ADR 0022): Jeremy's invite answer through Google Calendar, safe to
+    repeat. Writes health apart from the feed's (FR-IR-10); a confirmed answer adds its Meeting Activity. Returns the
+    Platform's answer, with outcome confirmed, refused or unknown."""
+    import json
+
+    from . import gcal, inbox
+    p = json.loads(action["payload"])
+    if client is None:
+        return {"outcome": "unknown", "error": "Google Calendar writes are not connected"}
+    out = client.respond(p["uid"], p["rid"], p["answer"])
+    if (c := _connection(db)) is not None:
+        if out.get("broken"):
+            inbox.set_connection_error(db, c["id"], gcal.WRITES_BROKEN + out["error"])
+        elif out["outcome"] in ("confirmed", "refused") and (c["last_error"] or "").startswith(gcal.WRITES_BROKEN):
+            inbox.set_connection_error(db, c["id"], None)
+    if out["outcome"] == "confirmed":
+        respond_recorded(db, p["uid"], out["status"], p["rid"])
+    return out

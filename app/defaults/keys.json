@@ -308,7 +308,6 @@
     "k": "actions.prev",
     "down": "actions.next",
     "up": "actions.prev",
-    "enter": "actions.enter",
-    "v": "actions.toggle_service"
+    "enter": "actions.enter"
   }
 }

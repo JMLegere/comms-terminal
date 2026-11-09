@@ -800,11 +800,11 @@ class Rail(OptionList):
                 icon_name, color = VIEW_ICON[name]
                 opts.append(item(f"cases:{i}", icon_name, name, case_counts[name], color))
         open_issues = db.execute("SELECT count(*) FROM issues WHERE completed_at IS NULL AND canceled_at IS NULL").fetchone()[0]
-        waiting = db.execute("SELECT count(*) FROM actions WHERE state IN ('scheduled', 'running', 'unknown')"
-                             ).fetchone()[0]  # what has yet to reach its Platform
+        upcoming, in_flight = actions.badge(actions.queue(db))  # the rail's two numbers (FR-AQT-13)
         opts += [gap, header("issues", "work")] + ([item("issues", "issues", "Issues", open_issues or "")]
                                                     if "issues" in on else []) + [
-                 item("actions", "actions", "Action Queue", waiting or "")]
+                 item("actions", "actions", "Action Queue",
+                      f"{upcoming} · {in_flight}" if in_flight else (upcoming or ""))]
         if "sequences" in on:
             due = len(sequences.tasks_due(db))
             opts += [gap, header("sequence", "playbook"), item("tasks", "tasks", "Tasks", due or ""),
@@ -6612,73 +6612,73 @@ class IssuesPage(Page):
 
 
 class ActionQueuePage(TablePage):
-    """The Action Queue (FR-UI-4): Actions not yet confirmed or confirmed today, and what is scheduled to leave this
-    week (scheduled Drafts, coming Tasks, Enrollment starts), by day, as Lemlist's Outreach queue."""
+    """The Action Queue (ADR 0022): every Action that waits for a time, as one timeline: Upcoming furthest ahead
+    first, In flight, then Sent from the last 7 days. Each day counts its Actions by kind; Enter opens the record
+    behind a row. It opens at now. The Command log has no page; `comms-terminal history` reads it."""
     TITLE = f"{ICON['actions']} action queue"
     RAIL = "actions"
     SIDE = f"{ICON['actions']} action"
-    COLUMNS = ("", "What", "Target", "State", "Source", "Connection")  # State before what clips in a narrow pane
-    EMPTY = "Nothing is waiting to leave."
-    BINDINGS = TablePage.BINDINGS + [Binding("v", "toggle_service", "Service work in History")]
-    service = True  # History shows the Service's own Commands (FR-UN-19)
-    STATE = {"scheduled": "#928374", "running": "#45707a", "confirmed": "#6c782e", "refused": "#c14a4a",
-             "unknown": "#b47109"}
+    COLUMNS = ("", "What", "Target")  # the outcome rides with What, so the target keeps the width
+    EMPTY = "Nothing is scheduled to happen by itself."
+    SECTION = {"upcoming": "Upcoming", "in_flight": "In flight", "sent": "Sent"}
+    OUTCOME = {"confirmed": "#6c782e", "refused": "#c14a4a", "unknown": "#b47109"}
+
+    MARK = {"confirmed": "✓", "refused": "✗", "unknown": "?"}
+
+    EMPTY_SECTION = {"upcoming": "Nothing scheduled", "in_flight": "Nothing in flight",
+                     "sent": "Nothing sent in the last 7 days"}
 
     def rows(self):
-        out, day = [], None
+        """Three sections, always shown, each a band with its count; a muted header per day with its counts by kind
+        and the rows under it; a NOW bar between the future (Upcoming) and the rest (PRD 2026-11-08-action-queue)."""
+        out = []
         found = actions.queue(self.app.db)
-        per_day = {}
-        for r in found:
-            per_day.setdefault(r["day"], {}).setdefault(r["connection"] or "console", 0)
-            per_day[r["day"]][r["connection"] or "console"] += 1
-        for r in found:
-            if r["day"] != day:
-                day = r["day"]
-                counts = " · ".join(f"{escape(k)} {n}" for k, n in per_day[day].items())
-                out.append(({"header": day}, ("", f"[b #7c6f64]{date.fromisoformat(day):%a %b %-d}[/]",
-                                              f"[#928374]{counts}[/]", "", "", "")))
-            state = f"[{self.STATE.get(r['state'], '#928374')}]{r['state']}[/]"
-            out.append((r, (f"[#928374]{datetime.fromisoformat(r['at']).astimezone(sequences.LOCAL):%H:%M}[/]",
-                            escape(r["what"]), escape(r["target"] or ""), state,
-                            f"[#928374]{escape(r['source'] or '')}[/]", f"[#928374]{escape(r['connection'] or '')}[/]")))
-        if not found:  # the Action Queue's own empty state, above History
-            out.append(({"header": "empty"}, ("", f"[#928374]{self.EMPTY}[/]", "", "", "", "")))
-        return out + self.history_rows()
-
-    def history_rows(self):
-        """History (ADR 0021): the Command log below the Action Queue, newest first, by day."""
-        out, day = [({"header": "history"}, ("", f"[b]{ICON['actions']} History[/]",
-                                              "[#928374]every change · z undoes the newest from a Client[/]", "",
-                                              "[#928374]v Service work " + ("shown" if self.service else "hidden") + "[/]",
-                                              ""))], None
-        for c in commands.history(self.app.db, service=self.service, limit=200):
-            at = datetime.fromisoformat(c["at"]).astimezone(sequences.LOCAL)
-            if at.date() != day:
-                day = at.date()
-                out.append(({"header": f"history:{day}"}, ("", f"[b #7c6f64]{day:%a %b %-d}[/]", "", "", "", "")))
-            mark = " · undone" if c["undone"] else ""  # Source and mark beside the words: a narrow pane shows two columns
-            words = f"[#928374]{escape(c['label'])}[/]" if c["undone"] else escape(c["label"])
-            out.append((c | {"kind": "command"}, (f"[#928374]{at:%H:%M}[/]",
-                                                  f"{words}  [#928374]{c['source_name']}{mark}[/]", "", "", "", "")))
+        counts = actions.counts(found)
+        teal = "#45707a"
+        for section in actions.SECTIONS:
+            mine = [r for r in found if r["section"] == section]
+            words = f"{self.SECTION[section].upper()} · " + ("last 7 days · " if section == "sent" else "") + str(len(mine))
+            faded = section == "sent"  # Sent is the past: faded (Jeremy, 2026-11-08)
+            out.append(({"header": section}, ("", f"[b #a89984]{words}[/]" if faded else f"[b]{words}[/]", "")))
+            if not mine:
+                out.append(({"header": f"{section}:empty"}, ("", f"[#a89984]  {self.EMPTY_SECTION[section]}[/]", "")))
+            day = None
+            for r in mine:
+                if r["day"] != day:
+                    day = r["day"]
+                    n = " · ".join(f"{k} {c}" for k, c in counts[day].items())
+                    out.append(({"header": f"{section}:{day}"}, ("", f"[{'#bdae93' if faded else '#7c6f64'}]  {date.fromisoformat(day):%a %b %-d}[/]",
+                                                                 f"[{'#d5c4a1' if faded else '#a89984'}]{n}[/]")))
+                mark = f"[{self.OUTCOME[r['outcome']]}]{self.MARK[r['outcome']]}[/] " if r["outcome"] else "  "
+                what = f"[#a89984]{escape(r['what'])}[/]" if faded else escape(r["what"])
+                target = f"[#a89984]{escape(r['target'] or '')}[/]" if faded else escape(r["target"] or "")
+                at = datetime.fromisoformat(r["at"]).astimezone(sequences.LOCAL)
+                out.append((r, (f"[{'#bdae93' if faded else '#928374'}]{at:%H:%M}[/]", f"  {mark}{what}", target)))
+            if section == "upcoming":
+                now = clock.now().astimezone(sequences.LOCAL)
+                out.append(({"header": "now"}, (f"[b {teal}]NOW[/]", f"[b {teal}]{now:%H:%M} {'━' * 14}[/]", f"[{teal}]{'━' * 30}[/]")))
         return out
 
-    def action_toggle_service(self):
-        self.service = not self.service
-        self.refresh_data()
+    def now_row(self) -> int:
+        """The first row at or after now: In flight, else the first Sent row, else the last."""
+        for n, (r, _) in enumerate(self.items):
+            if "header" not in r and r["section"] != "upcoming":
+                return n
+        return max(len(self.items) - 1, 0)
+
+    def on_mount(self):
+        super().on_mount()
+        if self.items:
+            self.query_one(DataTable).move_cursor(row=self.now_row())
 
     def show_selected(self):
         r = self.selected()
         if not r or "header" in r:
             return
-        if r.get("kind") == "command":
-            self.app.main.show_side(f"[b]{escape(r['label'])}[/]\n\n[#928374]Source[/]  {r['source_name']}\n"
-                                    f"[#928374]When[/]  {datetime.fromisoformat(r['at']).astimezone(sequences.LOCAL):%a %b %-d %H:%M}\n"
-                                    + ("[#928374]Undone[/]\n" if r["undone"] else "")
-                                    + (f"[#928374]No undo[/]  {escape(r['reason'])}\n" if r["reason"] else ""))
-            return
+        when = datetime.fromisoformat(r["at"]).astimezone(sequences.LOCAL)
         self.app.main.show_side(f"[b]{escape(r['what'])}[/]  {escape(r['target'] or '')}\n\n"
-                                f"[#928374]State[/]  {r['state']}\n[#928374]Source[/]  {escape(r['source'] or '')}\n"
-                                + (f"[#928374]Connection[/]  {escape(r['connection'])}\n" if r["connection"] else "")
+                                f"[#928374]{self.SECTION[r['section']]}[/]  {when:%a %b %-d %H:%M}\n"
+                                + (f"[#928374]Outcome[/]  {r['outcome']}\n" if r["outcome"] else "")
                                 + (f"\n[{PALETTE['red']}]{escape(r['error'])}[/]" if r["error"] else ""))
 
     def on_data_table_row_highlighted(self, event):
@@ -6690,16 +6690,18 @@ class ActionQueuePage(TablePage):
         self.show_selected()
 
     def open(self, r):
-        if "header" in r or r.get("kind") == "command":
+        """Enter: the record behind the row, where it lives."""
+        if "header" in r or r["target_id"] is None:
             return
-        if r["kind"] == "action" and r["source"] == "Issue":
-            page = IssuesPage()
+        kind, rid = r["target_kind"], r["target_id"]
+        if kind == "thread":
+            self.app.main.open_thread(rid)
+        elif kind == "person":
+            self.app.main.open(lambda: PersonPage(rid))
+        elif kind in ("task", "draft"):
+            page = TasksPage() if kind == "task" else DraftsPage()
             self.app.main.open(lambda: page)
-            self.app.call_after_refresh(lambda: page.refresh_data(r["target_id"]))
-        elif r["kind"] in ("task", "draft"):
-            page = TasksPage() if r["kind"] == "task" else DraftsPage()
-            self.app.main.open(lambda: page)
-            self.app.call_after_refresh(lambda: page.refresh_data(select_id=r["target_id"]))
+            self.app.call_after_refresh(lambda: page.refresh_data(select_id=rid))
 
 
 # --- Calendar (ADR 0005) -------------------------------------------------------

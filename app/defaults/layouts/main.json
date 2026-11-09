@@ -108,6 +108,10 @@
                 "case": "case",
                 "issues": "issue",
                 "actions": null,
+                "actions:draft": "draft",
+                "actions:thread": "thread",
+                "actions:task": "task",
+                "actions:person": "person",
                 "today:issue": "issue"
               }
             }

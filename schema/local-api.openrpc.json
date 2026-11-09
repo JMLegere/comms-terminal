@@ -8,7 +8,7 @@
  "methods": [
   {
    "name": "actions.queue",
-   "summary": "The Action Queue page (FR-UI-4): Actions not yet confirmed or confirmed today, and what is scheduled to leave in the next week, by day.",
+   "summary": "The Action Queue (ADR 0022): rows of every Action that waits for a time, as one timeline (Upcoming furthest ahead first, In flight, Sent newest first, 7 days), and each day's counts by kind.",
    "params": [
     {
      "name": "origin",

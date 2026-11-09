@@ -185,7 +185,7 @@ def test_cli_changes_and_lists_issues(db, capsys, monkeypatch):
     assert "NEW\t-\tnone\t-\tBook the closing call" in lines and lines[0].startswith("BIZ-1\tDone\thigh")
 
 
-def test_a_respond_that_reaches_google_shows_on_the_action_queue(db):
+def test_a_respond_that_reaches_google_is_an_action_off_the_queue(db):
     from comms_terminal import serve
     with db:
         db.execute("INSERT INTO connections (platform, external_id, self_id, label, connected_at)"
@@ -202,7 +202,7 @@ def test_a_respond_that_reaches_google_shows_on_the_action_queue(db):
             return self.out
     serve.handle_respond(db, json.dumps({"event_uid": "ev1", "answer": "accept"}).encode(),
                          Google({"outcome": "unknown", "error": "Google did not answer"}))
-    rows = [r for r in actions.queue(db, NOW) if r["what"] == "Respond"]
-    assert [(r["target"], r["state"], r["error"], r["source"]) for r in rows] == [
-        ("Accept · Pints", "unknown", "Google did not answer", "Calendar")]
+    assert [(a["kind"], a["state"], a["error"]) for a in db.execute("SELECT * FROM actions")] == [
+        ("respond", "unknown", "Google did not answer")]
+    assert [r for r in actions.queue(db, NOW) if r["what"] == "Respond"] == []  # a Respond is not on the queue (ADR 0022)
     assert actions.run(db, {"linear": Fake()}, NOW) == 0  # run() never resends a Respond: it ran inline

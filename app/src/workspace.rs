@@ -144,6 +144,8 @@ const PREVIOUS: &[(&str, u64)] = &[
     ("keys.json", 0xb4f6fe76e1ac3b7d),
     ("keys.json", 0xb4244a89c7ab0dd3),    ("layouts/main.json", 0x486a0e4aec1ea574),
     ("keys.json", 0x8fad973448474b78),
+    ("layouts/main.json", 0x471a72fca14e6470),
+    ("keys.json", 0xcce20263f132a473),
 ];
 
 fn fnv(bytes: &[u8]) -> u64 {

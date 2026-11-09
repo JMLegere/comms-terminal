@@ -215,25 +215,15 @@ def handle_respond(db, body: bytes, client: gcal.Client | None) -> tuple[int, di
         return 503, {"outcome": "unavailable", "error": "Google Calendar writes are not connected"}
     uid, rid = target
     c0 = meetings._connection(db)
-    with db:  # on the Action Queue with its outcome (ADR 0020, PRD P6), committed before Google is asked
-        action = c0 and actions.journal(db, c0["id"], "respond", uid,
-                                        f"{req['answer'].title()} · {_event_title(db, uid)}", clock.now())
-    try:
+    payload = {"uid": uid, "rid": rid, "answer": req["answer"], "label": f"{req['answer'].title()} · {_event_title(db, uid)}"}
+    if c0 is None:  # no Google Calendar Connection row to hold an Action: answer as before, unrecorded
         out = client.respond(uid, rid, req["answer"])
-    except Exception:
-        if action:
-            actions.settle(db, action, "unknown", "Respond did not finish", clock.now())
-        raise
-    if action:
-        actions.settle(db, action, out["outcome"] if out["outcome"] in ("confirmed", "refused") else "unknown",
-                       out.get("error"), clock.now())
-    if (c := meetings._connection(db)) is not None:  # writes health (FR-IR-10), apart from the feed's
-        if out.get("broken"):
-            inbox.set_connection_error(db, c["id"], gcal.WRITES_BROKEN + out["error"])
-        elif out["outcome"] in ("confirmed", "refused") and (c["last_error"] or "").startswith(gcal.WRITES_BROKEN):
-            inbox.set_connection_error(db, c["id"], None)
-    if out["outcome"] == "confirmed":
-        meetings.respond_recorded(db, uid, out["status"], rid)
+        if out["outcome"] == "confirmed":
+            meetings.respond_recorded(db, uid, out["status"], rid)
+        return RESPOND_STATUS[out["outcome"]], out
+    with db:  # an Action the runner carries (ADR 0022), started now and answered at once; safe to repeat
+        action = actions.start(db, c0["id"], "respond", uid, payload, True, clock.now())
+    out = actions.carry(db, action, client, clock.now())
     return RESPOND_STATUS[out["outcome"]], out
 
 
@@ -300,24 +290,22 @@ def handle_send_draft(db, body: bytes, senders: Senders) -> tuple[int, dict]:
 
 
 def send_due(db, senders: Senders, now: datetime) -> int:
-    """Send each Draft whose send-later time has come through `send_draft`: a Reply Draft into its Thread, any
-    other as a new one. Its time is cleared first, so a refused send, or one whose outcome is unknown, is never
-    repeated; the reason stays on the Draft as send_error. Returns how many went out."""
-    import logging
-    sent = 0
-    for d in inbox.claim_due_drafts(db, now):
-        try:
-            r = db.execute("SELECT * FROM connections WHERE id = ?", (d["connection_id"],)).fetchone()
-            sender = senders.get(r) if r else None
-            if sender is None:
-                name = (r["label"] or r["platform"]) if r else "No Connection"
-                raise inbox.SendFailed(f"{name} is not connected for sending")
-            inbox.send_draft(db, d["id"], inbox.get_draft(db, d["id"])["revision"], sender)
-            sent += 1
-        except Exception as e:  # noqa: BLE001 - one failed Draft must not stop the others
-            inbox.set_send_error(db, d["id"], str(e) or type(e).__name__)
-            logging.getLogger("comms_terminal.send_later").info("scheduled send of draft %s failed: %s", d["id"], e)
-    return sent
+    """Each Draft whose send-later time has come becomes a send Action (inbox.claim_due_sends), and the Action
+    runner carries them in order per Connection (ADR 0022): a Reply Draft into its Thread, any other as a new one.
+    A refused send keeps its reason on the Draft as send_error; one whose outcome is unknown stays locked; neither
+    is repeated by itself. Returns how many went out."""
+    def can_send(d):
+        r = db.execute("SELECT * FROM connections WHERE id = ?", (d["connection_id"],)).fetchone() if d["connection_id"] else None
+        if d["thread_id"] is None and (r is None or senders.get(r) is None):
+            name = (r["label"] or r["platform"]) if r else "No Connection"
+            return f"{name} is not connected for sending"
+        return None
+    started = inbox.claim_due_sends(db, now, can_send)
+    if started:
+        actions.run(db, {}, now, senders=senders)
+    marks = ",".join("?" * len(started))
+    return db.execute(f"SELECT count(*) FROM actions WHERE id IN ({marks}) AND state = 'confirmed'", started).fetchone()[0] \
+        if started else 0
 
 
 def handle_slack_conversations(db, body: bytes, senders: Senders) -> tuple[int, dict]:
@@ -948,7 +936,7 @@ def files_server(db_path: str, host: str, port: int) -> ThreadingHTTPServer:
 
 
 def wake_loop(db_path: str, stop: threading.Event, every: float = 60, kick: threading.Event | None = None,
-              get: dict | None = None, senders: Senders | None = None) -> None:
+              get: dict | None = None, senders: Senders | None = None, writer=None) -> None:
     """wake() each minute and send the scheduled Drafts that are due; reconcile durable receipts before slow file
     downloads. Hook `kick` also wakes this pass (after acknowledgement, NFR-A5); old files and change-log entries
     expire once a day (NFR-A6, ADR 0012)."""
@@ -969,7 +957,8 @@ def wake_loop(db_path: str, stop: threading.Event, every: float = 60, kick: thre
                     send_due(db, senders, now)
                 inbox.reconcile_resend_receipts(db)
                 issues.rollover(db, now)  # unfinished Issues from a passed Planned day move on (FR-IS-10)
-                actions.run(db, action_clients(), now)  # the Action Queue (ADR 0020)
+                actions.run(db, action_clients() | ({"gcal": writer} if writer is not None else {}), now,
+                            senders=senders)  # every Action that reaches a Platform (ADR 0020, 0022)
                 fetch_pending(db, get or {})
                 if expired is None or now - expired >= timedelta(days=1):
                     expired = now
@@ -1093,7 +1082,8 @@ def run(db_path: str, socket_path: str, host: str, port: int, files_host: str | 
         servers.append(files_server(db_path, files_host, files_port))
     threads = [threading.Thread(target=s.serve_forever, daemon=True) for s in servers]
     threads.append(threading.Thread(target=wake_loop, args=(db_path, stop, 60, kick,
-                                                      files.getters(credential("slack-user-token")), senders), daemon=True))
+                                                      files.getters(credential("slack-user-token")), senders, writer),
+                                    daemon=True))
     threads.append(threading.Thread(target=probe_loop, args=(db_path, senders.shared, stop), daemon=True))
     if feed := credential(calendar.CREDENTIAL):
         threads.append(threading.Thread(target=calendar_loop, args=(db_path, feed.decode(), stop), daemon=True))
