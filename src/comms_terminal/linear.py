@@ -368,6 +368,9 @@ def full_read(client, now: datetime) -> tuple[str, list[dict], list[dict]]:
     return viewer["id"], issues, statuses
 
 
+SIGNATURE_HEADER = "Linear-Signature"  # a request without it never came from the Platform (AS-19)
+
+
 def verify(headers, body: bytes, secret: bytes, now: datetime) -> str | None:
     """None when Linear signed this body (hex HMAC-SHA256 of the raw body in Linear-Signature) within the last
     minute (webhookTimestamp, ms), else why not (linear.app/developers/webhooks, "Securing Webhooks")."""

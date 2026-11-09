@@ -32,6 +32,9 @@ AUTO_REPLY_HEADERS = (
 )
 
 
+SIGNATURE_HEADER = "X-Inbox-Signature"  # a request without it never came from the Platform (AS-19)
+
+
 def verify(headers, body: bytes, secret: bytes, now: datetime) -> bool:
     """HMAC-SHA256 over "<timestamp>.<recipient>.<body>" when the Worker sends X-Inbox-To (#113), else
     over "<timestamp>.<body>" (Workers deployed before it); sent as X-Inbox-Signature: sha256=<hex>."""

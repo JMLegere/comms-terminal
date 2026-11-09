@@ -731,7 +731,8 @@ SIGNATURE_ERROR = "inbound request failed signature check"
 
 def intake(db, platform: str, headers, body: bytes, secret: bytes, now: datetime, *args) -> tuple[int, str]:
     """Every inbound webhook: the Platform's Connection (503 when there is none) goes to its adapter's
-    `handle_hook`, which verifies and parses; a failed signature check (401) records a Last Error (AS-19).
+    `handle_hook`, which verifies and parses; a failed signature check (401) records a Last Error when the request carries the Platform's
+    signature header; an unsigned one is refused and changes nothing (AS-19).
     Email picks the Connection whose Inbound address is the envelope recipient (X-Inbox-To), else the Platform's
     first: every email Connection's forward reaches the same Worker and signing secret."""
     to = (headers.get("X-Inbox-To") or "").lower() if platform in platforms.EMAIL else ""
@@ -741,11 +742,13 @@ def intake(db, platform: str, headers, body: bytes, secret: bytes, now: datetime
     if connection is None:
         return 503, f"no {platforms.PLATFORMS[platform].title} Connection"
     p = platforms.PLATFORMS[connection["platform"]]
-    out = importlib.import_module(f".{p.adapter}", __package__).handle_hook(db, connection, headers, body, secret,
-                                                                            now, *args)
+    adapter = importlib.import_module(f".{p.adapter}", __package__)
+    out = adapter.handle_hook(db, connection, headers, body, secret, now, *args)
     status, text = out if isinstance(out, tuple) else (out, "")
     if status == 401:  # the adapter's reason goes on the Connection page, not back to the caller
-        inbox.set_connection_error(db, connection["id"], f"{SIGNATURE_ERROR} ({text})" if text else SIGNATURE_ERROR)
+        if headers.get(adapter.SIGNATURE_HEADER):  # anyone can POST a public route; only a signed one is the Platform
+            inbox.set_connection_error(db, connection["id"],
+                                       f"{SIGNATURE_ERROR} ({text})" if text else SIGNATURE_ERROR)
         return status, ""
     if status < 300 and (connection["last_error"] or "").startswith(SIGNATURE_ERROR):  # a signed request clears it
         inbox.set_connection_error(db, connection["id"], None)
