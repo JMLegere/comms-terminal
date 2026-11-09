@@ -142,12 +142,13 @@ def _today(core, db):
     """Today: Todo Threads, due Tasks (an email Task with its Draft until sent) and the Drafts list, each item once
     (each Draft with `recipient`, as drafts.list),
     Paused Enrollments (each with `finishing`, the label of the reason it finishes as, or null) and Unattended
-    Organizations; and today's Planned Issues (FR-UI-2) with the day's `issues_capacity`."""
+    Organizations; and the Issues Today lists (FR-PL-12: planned or due today or earlier, each with `overdue`) with
+    `issues_capacity`: today's capacity, `used` by the Issues that are not Overdue, and `overdue` hours (FR-PL-13)."""
     from . import issues
     t = dict(_shared(core, "today", inbox.today, db))
-    day = issues.view(db, {"grouping": "none", "completed": "none"}, day_only=issues.today().isoformat())
+    day = issues.view(db, {"grouping": "none", "completed": "none"}, today_list=True)
     t["issues"] = [i for _, i in issues.flat(day)]
-    t["issues_capacity"] = issues.capacity(db, issues.today())
+    t["issues_capacity"] = issues.today_load(db)
     t["drafts"] = [d | {"recipient": inbox.recipient_names(db, d["to"] or "", d["kind"])} for d in t["drafts"]]
     t["paused"] = [e | {"finishing": sequences.REASON_LABEL[e["reason"]] if e["reason"] else None} for e in t["paused"]]
     return t
@@ -532,13 +533,13 @@ def _tasks(core, db):
 @query("issues.view", options="object", today="boolean")
 def _issues_view(core, db, options=None, today=False):
     """The Issues page (FR-UI-1) as groups of Issues under the Display options given (each missing one at its
-    default), or with `today` today's Planned Issues (FR-UI-2); each Issue has its urgency, size, warnings and
-    `not_saved`, and a Planned day group its capacity. `rows` is the same list flattened, for a virtual list."""
+    default), or with `today` the Issues Today lists (FR-PL-12); each Issue has its urgency, size, warnings,
+    `overdue`, `pinned` and `not_saved`, and a Planned day group its capacity; with `today`, `capacity` also has
+    `overdue` hours (FR-PL-13). `rows` is the same list flattened, for a virtual list."""
     from . import issues
-    v = issues.view(db, {"grouping": "none", "completed": "none"} if today else options,
-                    day_only=issues.today().isoformat() if today else None)
+    v = issues.view(db, {"grouping": "none", "completed": "none"} if today else options, today_list=bool(today))
     if today:
-        v["capacity"] = issues.capacity(db, issues.today())
+        v["capacity"] = issues.today_load(db)
     v["rows"] = [{"kind": kind, **({"issue": x} if kind == "issue" else {k: x.get(k) for k in ("title", "count",
                                                                                               "capacity")})}
                  for kind, x in issues.flat(v)]

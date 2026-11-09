@@ -43,6 +43,15 @@ out.undo = state.undo ?? null;  // z undoes the newest Command on the Service (A
 pane.command(`planned:${JSON.stringify({ value: null, text: "2026-11-10" })}`, cx);
 await settle();
 out.plan = calls.find((c) => c.method === "command.issues.plan").params;
+answers["command.issues.plan_all"] = 3;  // p: Plan Issues (ADR 0023)
+pane.command("plan_all", cx);
+await settle();
+out.planAll = [calls.find((c) => c.method === "command.issues.plan_all").params, toasts.at(-1)];
+pane.command("pin", cx);  // f: pin the Issue
+await settle();
+out.pin = calls.find((c) => c.method === "command.issues.pin").params;
+list.command("plan_all", cx);
+out.forwardedAll = ran.at(-1);
 pane.command(`estimate_set:${JSON.stringify({ value: null, text: "1.5" })}`, cx);
 out.estimateRefused = toasts.at(-1);
 out.planned = ["today", "tomorrow", "fri", "none"].map((t) => Issue.ns.plannedDay(t, new Date(2026, 10, 9)));

@@ -51,6 +51,7 @@ APP = {
     ("CasePage", "down"): "case.next", ("CasePage", "up"): "case.prev", ("CasePage", "toggle"): "case.toggle",
     ("CasePage", "describe"): "case.describe",
     ("IssuesPage", "down"): "issues.next", ("IssuesPage", "up"): "issues.prev", ("IssuesPage", "plan"): "issue.plan",
+    ("IssuesPage", "plan_all"): "issue.plan_all", ("IssuesPage", "pin"): "issue.pin",
     ("IssuesPage", "status"): "issue.status", ("IssuesPage", "priority"): "issue.priority",
     ("IssuesPage", "estimate"): "issue.estimate", ("IssuesPage", "due"): "issue.due", ("IssuesPage", "title"): "issue.title",
     ("IssuesPage", "new"): "issues.new", ("IssuesPage", "open_link"): "issue.open", ("IssuesPage", "display"): "issues.display",

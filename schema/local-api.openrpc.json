@@ -1548,6 +1548,43 @@
    }
   },
   {
+   "name": "command.issues.pin",
+   "summary": "The issues.pin writer (write).",
+   "params": [
+    {
+     "name": "issue_id",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "pinned",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": true,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
    "name": "command.issues.plan",
    "summary": "The issues.plan writer (write).",
    "params": [
@@ -1561,6 +1598,33 @@
      "required": true,
      "schema": {}
     },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": true,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.issues.plan_all",
+   "summary": "The issues.plan_all writer (write).",
+   "params": [
     {
      "name": "now",
      "required": false,
@@ -3276,7 +3340,7 @@
   },
   {
    "name": "issues.view",
-   "summary": "The Issues page (FR-UI-1) as groups of Issues under the Display options given (each missing one at its default), or with `today` today's Planned Issues (FR-UI-2); each Issue has its urgency, size, warnings and `not_saved`, and a Planned day group its capacity. `rows` is the same list flattened, for a virtual list.",
+   "summary": "The Issues page (FR-UI-1) as groups of Issues under the Display options given (each missing one at its default), or with `today` the Issues Today lists (FR-PL-12); each Issue has its urgency, size, warnings, `overdue`, `pinned` and `not_saved`, and a Planned day group its capacity; with `today`, `capacity` also has `overdue` hours (FR-PL-13). `rows` is the same list flattened, for a virtual list.",
    "params": [
     {
      "name": "options",
@@ -4379,7 +4443,7 @@
   },
   {
    "name": "today.page",
-   "summary": "Today: Todo Threads, due Tasks (an email Task with its Draft until sent) and the Drafts list, each item once (each Draft with `recipient`, as drafts.list), Paused Enrollments (each with `finishing`, the label of the reason it finishes as, or null) and Unattended Organizations; and today's Planned Issues (FR-UI-2) with the day's `issues_capacity`.",
+   "summary": "Today: Todo Threads, due Tasks (an email Task with its Draft until sent) and the Drafts list, each item once (each Draft with `recipient`, as drafts.list), Paused Enrollments (each with `finishing`, the label of the reason it finishes as, or null) and Unattended Organizations; and the Issues Today lists (FR-PL-12: planned or due today or earlier, each with `overdue`) with `issues_capacity`: today's capacity, `used` by the Issues that are not Overdue, and `overdue` hours (FR-PL-13).",
    "params": [
     {
      "name": "origin",

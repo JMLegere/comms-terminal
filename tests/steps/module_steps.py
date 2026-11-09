@@ -139,18 +139,22 @@ def issue_planned_friday(ctx):
         ctx.db.execute("UPDATE issues SET planned_day = '2026-11-06'")
 
 
-@when("Rollover runs on Monday")
-def rollover_monday(ctx):
+@when("Plan Issues runs on Monday")
+def plan_issues_monday(ctx):
     from datetime import datetime, timezone
     from comms_terminal import issues
-    ctx.moved = issues.rollover(ctx.db, datetime(2026, 11, 9, 14, tzinfo=timezone.utc))
+    try:
+        inbox.admit(ctx.db, "issues.plan_all")  # where a Client call enters (ADR 0017)
+        issues.plan_all(ctx.db, now=datetime(2026, 11, 9, 14, tzinfo=timezone.utc))
+        ctx.refused = None
+    except inbox.ModuleDisabled as e:
+        ctx.refused = e
 
 
-@then("the Issue is still planned for last Friday and nothing is queued for Linear")
-def rollover_waited(ctx):
-    assert ctx.moved == 0
+@then("it is refused and the Issue is still planned for last Friday")
+def plan_issues_refused(ctx):
+    assert ctx.refused is not None
     assert ctx.db.execute("SELECT planned_day FROM issues").fetchone()[0] == "2026-11-06"
-    assert ctx.db.execute("SELECT count(*) FROM actions").fetchone()[0] == 0
 
 
 # --- AS-MOD-2: Cases off --------------------------------------------------------------------------------------

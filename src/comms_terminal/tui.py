@@ -6301,10 +6301,12 @@ def save_issue_display(options: dict) -> None:
 
 
 def capacity_markup(cap: dict | None) -> str:
+    """A day's "used of capacity"; Today's also gives its Overdue hours apart (FR-PL-13)."""
     if not cap:
         return ""
     over = cap["used"] > cap["capacity"]
-    return f"[{PALETTE['red'] if over else '#928374'}]{cap['used']:g} of {cap['capacity']:g} h[/]"
+    late = f" [{PALETTE['red']}]· {cap['overdue']:g} h overdue[/]" if cap.get("overdue") else ""
+    return f"[{PALETTE['red'] if over else '#928374'}]{cap['used']:g} of {cap['capacity']:g} h[/]{late}"
 
 
 def issue_cell(i: dict, prop: str) -> str:
@@ -6318,7 +6320,7 @@ def issue_cell(i: dict, prop: str) -> str:
     if prop == "due_date":
         return escape(i["due_date"] or "")
     if prop == "planned_day":
-        return escape(i["planned_day"] or "")
+        return escape(i["planned_day"] or "") + (f" {ICON['pin']}" if i.get("pinned") else "")
     if prop == "labels":
         return escape(", ".join(i["data"].get("labels", [])))
     if prop == "team":
@@ -6334,15 +6336,18 @@ def issue_markup(i: dict) -> str:
         value = issue_cell(i, k)
         if value:
             lines.append(f"[{grey}]{PROPERTY_LABEL[k]}[/]  {value}")
-    lines.append(f"[{grey}]Size[/]  {i['size']:g} h · [{grey}]Urgency[/]  {i['urgency']:.1f}")
+    lines.append(f"[{grey}]Size[/]  {i['size']:g} h · [{grey}]Urgency[/]  {i['urgency']:.1f}"
+                 + (f" · {ICON['pin']} Pinned" if i.get("pinned") else ""))
+    if i.get("overdue"):
+        lines.append(f"[{red}]Overdue[/]")
     for w in i["warnings"]:
         lines.append(f"[{red}]{ICON['warn']} {escape(w)}[/]")
     if i.get("not_saved"):
         lines.append(f"[{red}]{escape(i['not_saved'])}[/]")
     if i.get("url"):
         lines.append(f"[link='{render.target(i['url'])}']{escape(i['url'])}[/link]")
-    lines += ["", f"[{grey}]p plan · s status · i priority · e estimate · d due · t title · n new · o open in Linear"
-                  " · v display · z undo[/]"]
+    lines += ["", f"[{grey}]p plan Issues · w day · f pin · s status · i priority · e estimate · d due · t title"
+                  " · n new · o open in Linear · v display · z undo[/]"]
     if i.get("description"):
         lines += ["", escape(i["description"])]
     return "\n".join(lines)
@@ -6350,14 +6355,16 @@ def issue_markup(i: dict) -> str:
 
 class IssuesPage(Page):
     """Jeremy's Issues (FR-UI-1): Linear's List with its Display options, plus Planned day and Urgency. Today's
-    section (FR-UI-2) is this list kept to today's Planned day."""
+    section is this list kept to what Today lists (FR-PL-12): planned or due today or earlier, Overdue marked.
+    p runs Plan Issues, w sets one Issue's Planned day, f pins (ADR 0023)."""
     TITLE = f"{ICON['issues']} issues"
     MODULE = "issues"
     RAIL = "issues"
     KIND = "issues"
     SIDE = f"{ICON['issues']} issue"
     BINDINGS = [Binding("j", "down", "move", key_display="j/k"), Binding("k", "up", show=False),
-                Binding("p", "plan", "plan"), Binding("s", "status", "status"), Binding("i", "priority", show=False),
+                Binding("p", "plan_all", "plan"), Binding("w", "plan", "day"), Binding("f", "pin", "pin"),
+                Binding("s", "status", "status"), Binding("i", "priority", show=False),
                 Binding("e", "estimate", show=False), Binding("d", "due", show=False), Binding("t", "title", show=False),
                 Binding("n", "new", "new"), Binding("o", "open_link", show=False), Binding("v", "display", "display"),
                 Binding("z", "undo_issue", show=False)]
@@ -6365,7 +6372,7 @@ class IssuesPage(Page):
 
     def __init__(self, today: bool = False):
         super().__init__()
-        self.today, self.items, self.last_action = today, [], None
+        self.today, self.items = today, []
 
     def compose(self):
         yield ClickTable(id="table", cursor_type="row", show_header=False)
@@ -6387,8 +6394,7 @@ class IssuesPage(Page):
     def view(self):
         db = self.app.db
         if self.today:
-            return issues.view(db, {"grouping": "none", "completed": "none"},
-                               day_only=issues.today().isoformat())
+            return issues.view(db, {"grouping": "none", "completed": "none"}, today_list=True)
         return issues.view(db, issue_display())
 
     def refresh_data(self, select_id=None):
@@ -6411,6 +6417,7 @@ class IssuesPage(Page):
             for kind, x in rows:
                 if kind == "issue":
                     mark = f"[{PALETTE['red']}]{ICON['warn']}[/] " if x["warnings"] or x.get("not_saved") else ""
+                    mark += f"[b {PALETTE['red']}]overdue[/] " if x.get("overdue") else ""
                     table.add_row(f"[#928374]{escape(x['identifier'])}[/]", mark + escape(x["title"]),
                                   *[issue_cell(x, p) for p in props])
                 else:
@@ -6426,8 +6433,7 @@ class IssuesPage(Page):
         if rebuild or table.cursor_row != row:
             table.move_cursor(row=row)
         if self.today:
-            cap = issues.capacity(self.app.db, issues.today())
-            self.capacity = cap
+            self.capacity = issues.today_load(self.app.db)
         else:
             o = self.options
             self.query_one("#below").update(
@@ -6472,7 +6478,7 @@ class IssuesPage(Page):
 
     def change(self, i, fields, what):
         try:
-            self.last_action = issues.update(self.app.db, i["id"], fields, now=clock.now())
+            issues.update(self.app.db, i["id"], fields, now=clock.now())
         except (KeyError, ValueError) as e:
             self.app.notify(str(e.args[0] if e.args else e), severity="error")
             return
@@ -6500,6 +6506,26 @@ class IssuesPage(Page):
             self.app.notify(f"{i['identifier']}: " + (f"planned for {value}" if value else "Unplanned"))
             self.refresh_data(i["id"])
         self.app.push_screen(Ask(f"Plan {i['identifier']} for", "today, tomorrow, mon…sun, YYYY-MM-DD, none"), go)
+
+    def action_plan_all(self):
+        """p: Plan Issues (ADR 0023): every open Issue that is not Pinned gets a Planned day."""
+        try:
+            n = issues.plan_all(self.app.db, now=clock.now())
+        except inbox.ModuleDisabled as e:
+            return self.app.notify(str(e), severity="warning")
+        if not n:
+            return self.app.notify("Plan Issues: every Issue already sits on its day.")
+        self.app.offer_undo(f"Planned {n} Issue{'s' if n != 1 else ''}.")
+        self.refresh_data()
+
+    def action_pin(self):
+        """f: pin or unpin the Issue; Plan Issues leaves a Pinned Issue alone (FR-PL-9)."""
+        i = self.selected()
+        if i is None:
+            return
+        issues.pin(self.app.db, i["id"], not i.get("pinned"), now=clock.now())
+        self.app.offer_undo(f"{i['identifier']}: " + ("unpinned" if i.get("pinned") else "pinned"))
+        self.refresh_data(i["id"])
 
     def action_status(self):
         i = self.selected()
@@ -6559,7 +6585,7 @@ class IssuesPage(Page):
                     return
                 import uuid
                 try:
-                    self.last_action = issues.create(self.app.db, str(uuid.uuid4()), team_id, title, now=clock.now())
+                    issues.create(self.app.db, str(uuid.uuid4()), team_id, title, now=clock.now())
                 except ValueError as e:
                     return self.app.notify(str(e), severity="error")
                 self.app.notify("New Issue: its identifier arrives when Linear confirms.")
@@ -6573,15 +6599,8 @@ class IssuesPage(Page):
         self.app.notify(f"[link='{render.target(url)}']{escape(url)}[/link]" if url else "No Linear link yet.")
 
     def action_undo_issue(self):
-        if self.last_action is None:
-            return self.app.notify("Nothing to undo here.")
-        try:
-            issues.undo(self.app.db, self.last_action, now=clock.now())
-        except ValueError as e:
-            return self.app.notify(str(e), severity="error")
-        self.last_action = None
-        self.app.notify("Undone: the old value goes back to Linear.")
-        self.refresh_data()
+        """z: Undo the newest Command, as everywhere else (ADR 0021); a Plan Issues run undoes whole."""
+        self.app.action_undo()
 
     def action_display(self):
         o = issue_display()

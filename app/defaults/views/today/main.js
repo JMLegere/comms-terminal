@@ -24,7 +24,7 @@ const I = { TODO: "\u{f0766}", tasks: "\u{f05c7}", edited: "\u{f0cb6}", sequence
   today: "\u{f05a8}", done: "\u{f012c}", SNOOZED: "\u{f04b2}", warn: "\u{f002a}", case: "\u{f0814}",
   email: "\u{f01f0}", slack: "\u{f04b1}", sms: "\u{f011c}", time: "\u{f0150}",
   call: "\u{f0df0}", linkedin: "\u{f033b}", letter: "\u{f0d8c}", action: "\u{f027b}", if: "\u{f0641}", meeting: "\u{f0ed8}",
-  issues: "\u{f0756}" };
+  issues: "\u{f0756}", pin: "\u{f0403}" };
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const pad = (n) => String(n).padStart(2, "0");
@@ -39,8 +39,8 @@ const ROUTE = {
     "2": "tasks.pick_second" },
   drafts: { n: "drafts.new", x: "drafts.delete", y: "drafts.copy", "ctrl-s": "draft.save", "ctrl-enter": "draft.send" },
   paused: { "r": "person.resume", "f": "person.finish" },
-  issues: { p: "issue.plan", s: "issue.status", i: "issue.priority", e: "issue.estimate", d: "issue.due", t: "issue.title",
-    o: "issue.open" }, // today's Planned Issues (FR-UI-2), as the Issues page
+  issues: { p: "issue.plan_all", w: "issue.plan", f: "issue.pin", s: "issue.status", i: "issue.priority", e: "issue.estimate",
+    d: "issue.due", t: "issue.title", o: "issue.open" }, // the Issues Today lists (FR-PL-12), as the Issues page
   unattended: { s: "organization.stage", v: "organization.value" }, // as its Organization page
   unattended_person: { p: "person.stage", v: "person.value" }, // a Person in Fundraising or Talent (ADR 0016)
 };
@@ -317,9 +317,10 @@ export default class Today extends View {
         const late = (this.data?.tasks ?? []).filter((x) => x.group === "overdue").length;
         return late ? [div().font_semibold().text_color(t.red).child(`${late} overdue`)] : [];
       })()],
-      issues: [pill(`${I.issues} issues · ${counts.issues}`, t.blue), ...(() => { // with the day's capacity (FR-UI-2)
+      issues: [pill(`${I.issues} issues · ${counts.issues}`, t.blue), ...(() => { // today's capacity, Overdue hours apart (FR-PL-13)
         const c = this.data?.issues_capacity;
-        return c ? [div().text_color(c.used > c.capacity ? t.red : t.muted).child(`${c.used} of ${c.capacity} h`)] : [];
+        return c ? [div().text_color(c.used > c.capacity ? t.red : t.muted).child(`${c.used} of ${c.capacity} h`),
+          ...(c.overdue ? [div().font_semibold().text_color(t.red).child(`${c.overdue} h overdue`)] : [])] : [];
       })()],
       drafts: [pill(`${I.edited} drafts · ${counts.drafts}`, t.blue)],
       paused: [pill(`${I.sequence} paused · ${counts.paused}`, t.yellow)],
@@ -379,8 +380,9 @@ export default class Today extends View {
           return el.child(div().w(16).flex_none().text_color((r.warnings ?? []).length || r.not_saved ? t.red : t.muted)
             .child((r.warnings ?? []).length || r.not_saved ? I.warn : I.issues))
             .child(div().w(80).flex_none().text_color(t.muted).child(r.identifier ?? ""))
+            .when(Boolean(r.overdue), (e) => e.child(div().flex_none().font_semibold().text_color(t.red).child("overdue")))
             .child(div().flex_1().min_w(0).truncate().text_color(t.foreground).child(r.title ?? ""))
-            .child(div().flex_none().text_color(t.muted).child(r.state_name ?? ""));
+            .child(div().flex_none().text_color(t.muted).child(`${r.pinned ? `${I.pin} ` : ""}${r.state_name ?? ""}`));
         case "paused":
           return el.child(div().w(16).flex_none().text_color(t.yellow).child(I.sequence)).child(name(r.person))
             .child(div().flex_1().min_w(0).truncate().text_color(t.muted).child(`${r.sequence ?? ""}${r.finishing ? ` · finishing as ${r.finishing}` : ""}`))

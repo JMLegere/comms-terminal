@@ -956,7 +956,6 @@ def wake_loop(db_path: str, stop: threading.Event, every: float = 60, kick: thre
                 if senders is not None:
                     send_due(db, senders, now)
                 inbox.reconcile_resend_receipts(db)
-                issues.rollover(db, now)  # unfinished Issues from a passed Planned day move on (FR-IS-10)
                 actions.run(db, action_clients() | ({"gcal": writer} if writer is not None else {}), now,
                             senders=senders)  # every Action that reaches a Platform (ADR 0020, 0022)
                 fetch_pending(db, get or {})

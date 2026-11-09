@@ -69,7 +69,8 @@ export default class Issue extends View {
   target() {
     if (shared("focus") !== "detail" || !this.issue) return;
     setShared("target", { col: "detail", label: `Issue · ${this.issue.identifier} ${this.issue.title}`,
-      keys: [["p", "plan"], ["s", "status"], ["i", "priority"], ["e", "estimate"], ["d", "due"], ["t", "title"], ["o", "open"]] });
+      keys: [["p", "plan"], ["w", "day"], ["f", "pin"], ["s", "status"], ["i", "priority"], ["e", "estimate"], ["d", "due"],
+        ["t", "title"], ["o", "open"]] });
   }
 
   /** One field set through the Action Queue: shown at once; z sends the old value back. */
@@ -99,6 +100,15 @@ export default class Issue extends View {
       case "show": return this.load(cx);
       case "focus_entry": this.target(); return cx.notify();
       case "next": case "prev": return run(name === "next" ? "app.scroll_down" : "app.scroll_up");
+      case "plan_all": // p: Plan Issues (ADR 0023), every open Issue that is not Pinned; z undoes the run
+        return cx.spawn(async () => {
+          try {
+            const n = await call("command.issues.plan_all", {});
+            toast(n ? `Planned ${n} Issue${n === 1 ? "" : "s"} · z undoes` : "Plan Issues: every Issue already sits on its day.");
+          } catch (e) {
+            toast(String(e).replace(/^Error: /, ""), "error");
+          }
+        });
     }
     if (!i) return;
     switch (name) {
@@ -109,6 +119,15 @@ export default class Issue extends View {
             const day = plannedDay(answer.text);
             await call("command.issues.plan", { issue_id: i.id, day });
             toast(`${i.identifier}: ${day ? `planned for ${day}` : "Unplanned"}`);
+          } catch (e) {
+            toast(String(e).replace(/^Error: /, ""), "error");
+          }
+        });
+      case "pin": // f: Plan Issues leaves a Pinned Issue alone (FR-PL-9)
+        return cx.spawn(async () => {
+          try {
+            await call("command.issues.pin", { issue_id: i.id, pinned: !i.pinned });
+            toast(`${i.identifier}: ${i.pinned ? "unpinned" : "pinned"} · z undoes`);
           } catch (e) {
             toast(String(e).replace(/^Error: /, ""), "error");
           }

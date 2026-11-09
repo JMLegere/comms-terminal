@@ -109,7 +109,7 @@ export default class Issues extends View {
     if (shared("page") !== "issues" || shared("focus") === "detail") return;
     const i = this.issues().find((x) => x.id === shared("issue"));
     if (i) setShared("target", { col: "list", label: `Issue · ${i.identifier} ${i.title}`,
-      keys: [["p", "plan"], ["s", "status"], ["n", "new"], ["v", "display"], ["enter", "open"]] });
+      keys: [["p", "plan"], ["w", "day"], ["f", "pin"], ["s", "status"], ["n", "new"], ["v", "display"], ["enter", "open"]] });
   }
 
   command(c, cx) {
@@ -152,8 +152,8 @@ export default class Issues extends View {
             toast(String(e).replace(/^Error: /, ""), "error");
           }
         });
-      default: // plan, status and the other field keys act on the Issue in the right pane
-        if (["plan", "status", "priority", "estimate", "due", "title", "open"].includes(name)) return run(`issue.${name}`);
+      default: // Plan Issues, pin, the day and the field keys act through the Issue in the right pane
+        if (["plan_all", "plan", "pin", "status", "priority", "estimate", "due", "title", "open"].includes(name)) return run(`issue.${name}`);
     }
   }
 

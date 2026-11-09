@@ -4,10 +4,13 @@ Feature: Issues
   hook (linear.handle_hook) keep the copy (issues.upsert). Plan (issues.plan) sets or clears a Planned day, which
   never goes to Linear. Day Capacity (issues.capacity) is 9 hours less Jeremy's busy calendar time; an Issue's
   Size is its Estimate times 30 minutes, else 1 hour. Warnings (issues.warnings) flag deadline misses, Issues
-  planned too far out for their urgency, oversized Issues, and Unplanned Issues due soon. Rollover
-  (issues.rollover) runs when Jeremy's day changes. Linear here is a fake that records each request; nothing
-  reaches Linear. Times are Jeremy's (Halifax); "Monday" is 2026-11-09, "Tuesday" 2026-11-10, "Friday"
-  2026-11-13, and "next Monday" 2026-11-16.
+  planned too far out for their urgency, oversized Issues, and Unplanned Issues due soon. Plan Issues
+  (issues.plan_all, ADR 0023; FR-PL-1–18 in .agents/prd/2026-11-09-plan-issues.md) gives every open Issue that is
+  not Pinned a Planned day, most urgent first, filling each workday up to its Day Capacity; today's capacity ends
+  at 18:00. Today (issues.view with today) lists Overdue Issues and today's Issues. Linear here is a fake that
+  records each request; nothing reaches Linear. Times are Jeremy's (Halifax); "Monday" is 2026-11-09 and it is
+  10:00 unless a step says otherwise, "Tuesday" 2026-11-10, "Wednesday" 2026-11-11, "Friday" 2026-11-13, "last
+  Friday" 2026-11-06.
 
   Background:
     Given an Issue connection to Linear for Jeremy
@@ -47,19 +50,70 @@ Feature: Issues
     When Full Read finds "BIZ-4" assigned to "Logan"
     Then the copy has no Issue "BIZ-4"
 
-  @AS-IQ-5 @FR-IS-10
-  Scenario: Rollover moves Friday's unfinished Issue to Monday and sets its Slip status
-    Given an Issue "BIZ-5 Accept NBIF term sheet" assigned to Jeremy with status "Making It Happen" and Planned day "2026-11-13"
-    When Jeremy's day changes to Saturday 2026-11-14
-    Then "BIZ-5" has Planned day "2026-11-16"
-    And an Action sets "BIZ-5" to status "Blocked"
+  @AS-PL-1 @FR-PL-1 @FR-PL-4 @FR-PL-10
+  Scenario: Plan Issues fills Monday by urgency up to its capacity, then Tuesday
+    Given Jeremy has a Meeting on Monday from 11:00 to 14:00 with Invite state "Accepted"
+    And an Issue "BIZ-10 Accept NBIF term sheet" assigned to Jeremy with priority "Urgent"
+    And an Issue "BIZ-11 Certify share registers" assigned to Jeremy with priority "High"
+    And an Issue "BIZ-12 Build Vetra runtime" assigned to Jeremy with priority "Medium" and Estimate 8
+    And an Issue "BIZ-13 Upload logo" assigned to Jeremy with priority "Low"
+    When Jeremy runs Plan Issues
+    Then "BIZ-10" has Planned day "2026-11-09"
+    And "BIZ-11" has Planned day "2026-11-09"
+    And "BIZ-13" has Planned day "2026-11-09"
+    And "BIZ-12" has Planned day "2026-11-10"
+    And Linear received no request
 
-  @AS-IQ-5 @FR-IS-10
-  Scenario: Rollover leaves finished Issues alone
-    Given an Issue "BIZ-6 Stop End-session alerts" assigned to Jeremy with status "Done" and Planned day "2026-11-13"
-    When Jeremy's day changes to Saturday 2026-11-14
-    Then "BIZ-6" has Planned day "2026-11-13"
-    And no Action was made
+  @AS-PL-2 @AS-PL-3 @FR-PL-1 @FR-PL-9
+  Scenario: Plan Issues leaves Pinned Issues alone
+    Given an Issue "BIZ-20 Present WMI webinar" assigned to Jeremy with status "Todo" and Planned day "2026-11-11"
+    And an Issue "BIZ-21 Investor kit" assigned to Jeremy
+    And "BIZ-20" is Pinned
+    And "BIZ-21" is Pinned
+    When Jeremy runs Plan Issues
+    Then "BIZ-20" has Planned day "2026-11-11"
+    And "BIZ-21" has no Planned day
+
+  @AS-PL-5 @FR-PL-5
+  Scenario: An Issue larger than a workday goes on today
+    Given an Issue "BIZ-40 Data room" assigned to Jeremy with Estimate 40
+    When Jeremy runs Plan Issues
+    Then "BIZ-40" has Planned day "2026-11-09"
+    And "BIZ-40" has the warning "Larger than a day"
+
+  @AS-PL-6 @FR-PL-10
+  Scenario: After 18:00 Plan Issues puts nothing new on today
+    Given an Issue "BIZ-50 Dallas status check" assigned to Jeremy
+    When Jeremy runs Plan Issues on Monday at 19:00
+    Then "BIZ-50" has Planned day "2026-11-10"
+
+  @AS-PL-7 @FR-PL-8
+  Scenario: Undo puts back every Planned day a run changed
+    Given an Issue "BIZ-60 Org progress report" assigned to Jeremy
+    And an Issue "BIZ-61 Org engagement view" assigned to Jeremy with status "Todo" and Planned day "2026-11-12"
+    When Jeremy runs Plan Issues
+    And Jeremy presses Undo
+    Then "BIZ-60" has no Planned day
+    And "BIZ-61" has Planned day "2026-11-12"
+
+  @AS-PL-8 @FR-PL-11 @FR-PL-12 @FR-PL-16
+  Scenario: An unfinished Issue keeps its passed day and is Overdue on Today
+    Given an Issue "BIZ-5 Accept NBIF term sheet" assigned to Jeremy with status "Making It Happen" and Planned day "2026-11-06"
+    When Today is read on Monday
+    Then "BIZ-5" has Planned day "2026-11-06"
+    And Today lists "BIZ-5" as Overdue
+    And Linear received no request
+
+  @AS-PL-9 @FR-PL-12 @FR-PL-13
+  Scenario: Today lists Issues due today and Overdue Issues, with their hours apart
+    Given an Issue "BIZ-70 Tell NBIF the date" assigned to Jeremy, due "2026-11-09" and planned for "2026-11-12"
+    And an Issue "BIZ-71 Batched reply to NBIF" assigned to Jeremy, due "2026-11-08" and planned for "2026-11-13"
+    And an Issue "BIZ-72 Warm-up outreach" assigned to Jeremy with status "Todo" and Planned day "2026-11-10"
+    When Today is read on Monday
+    Then Today lists "BIZ-70" for today
+    And Today lists "BIZ-71" as Overdue
+    And Today does not list "BIZ-72"
+    And Today's figures are "1 h of 8 h" and "1 h" Overdue
 
   @AS-IQ-6 @FR-IS-9
   Scenario: An Issue planned after its due date is flagged

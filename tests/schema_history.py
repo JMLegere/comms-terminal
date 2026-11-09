@@ -41,6 +41,7 @@ def _integer_keys_sql() -> str:
 
 
 UNDO = {
+    45: "DELETE FROM urgency WHERE name = 'feasibility'; ALTER TABLE issues DROP COLUMN pinned;",
     44: """DELETE FROM modules WHERE id = 'issues';
 CREATE TABLE modules_old (  -- each Module's setting for this Service; no row means off (ADR 0017)
   id      TEXT PRIMARY KEY CHECK (id IN ('pipelines', 'sequences', 'cases')),
