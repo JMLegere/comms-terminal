@@ -583,6 +583,16 @@ def _history(core, db, service):
     return commands.history(db, service=service)
 
 
+@query("issue.markdown", issue_id="string")
+def _issue_markdown(core, db, issue_id):
+    """One Issue as the Markdown `comms-terminal issue` prints, for an agent."""
+    from . import issues
+    i = next((i for i in issues.issues(db) if i["id"] == issue_id), None)
+    if i is None:
+        raise ApiError(-32602, f"no Issue {issue_id}")
+    return agent.issue_markdown(i) + f"\nFresh copy: `comms-terminal issue {issue_id}`\n"
+
+
 @query("task.markdown", task_id="string")
 def _task_markdown(core, db, task_id):
     """One due Task as the Markdown `comms-terminal tasks` prints, for an agent."""

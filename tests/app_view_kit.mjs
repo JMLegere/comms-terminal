@@ -86,6 +86,7 @@ export async function load(name) {
   View.deps = Object.fromEntries(Object.entries(deps).map(([k, m]) => [k, m.namespace])); // its own files' exports
   return View;
 }
+export const clipboard = [];
 export const cx = { notify() {}, stop_propagation() {}, spawn(fn) { const t = fn(cx); tasks.push(t); return t; },
-  timer: { after() {} } }; // timers never fire: a test drives the view itself
+  write_to_clipboard(text) { clipboard.push(text); }, timer: { after() {} } }; // timers never fire: a test drives the view itself
 export const settle = () => Promise.all(tasks.splice(0));

@@ -1,6 +1,6 @@
 // One Issue in the right pane, as the Console's issue_markup (ADR 0019, PRD FR-UI-1): its fields, warnings, a refused
 // change ("Not saved: …") and its description. Its keys change it through the Action Queue (ADR 0020): p plan (local
-// only), s status, i priority, e estimate, d due, t title, o opens it in Linear; z undoes the last change (nav's undo).
+// only), s status, i priority, e estimate, d due, t title, o opens it in Linear, y copies it as Markdown for an agent; z undoes the last change (nav's undo).
 // Shared "issue" names the Issue; the Issues page and Today's issues pane set it.
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
@@ -70,7 +70,7 @@ export default class Issue extends View {
     if (shared("focus") !== "detail" || !this.issue) return;
     setShared("target", { col: "detail", label: `Issue · ${this.issue.identifier} ${this.issue.title}`,
       keys: [["p", "plan"], ["w", "day"], ["f", "pin"], ["s", "status"], ["i", "priority"], ["e", "estimate"], ["d", "due"],
-        ["t", "title"], ["o", "open"]] });
+        ["t", "title"], ["o", "open"], ["y", "copy"]] });
   }
 
   /** One field set through the Action Queue: shown at once; z sends the old value back. */
@@ -157,6 +157,15 @@ export default class Issue extends View {
       case "title": return this.ask(`Title of ${i.identifier}`, i.title, "title_set");
       case "title_set": return answer.text.trim() && cx.spawn(async () => this.change({ title: answer.text.trim() }, "title changed"));
       case "open": return i.url ? open(i.url) : toast("No Linear link yet: it arrives when Linear confirms.");
+      case "copy":
+        return cx.spawn(async (cx) => {
+          try {
+            cx.write_to_clipboard(await call("issue.markdown", { issue_id: i.id }));
+            toast("Copied the Issue for an agent.");
+          } catch (e) {
+            toast(String(e), "error");
+          }
+        });
     }
   }
 
