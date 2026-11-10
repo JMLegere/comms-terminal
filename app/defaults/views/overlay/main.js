@@ -23,7 +23,7 @@ const LABEL = {
   "person.finish": "Finish", "person.organizations": "Organizations",
   "organization.stage": "Stage", "organization.value": "Value", "organization.people": "People", "pipeline.copy": "Copy for agent",
   "connection.add": "Add rule", "connection.delete": "Delete rule",
-  "tasks.done": "Done · next", "tasks.skip": "Skip · next", "tasks.person": "Person", "tasks.copy": "Copy for agent",
+  "tasks.done": "Done · next", "tasks.skip": "Skip · next", "tasks.person": "Person", "tasks.copy": "Copy for agent", "issue.copy": "Copy for agent",
   "tasks.new_thread": "New Thread for the Task",
   "sequence.edit": "Steps", "sequences.new": "New Sequence", "sequences.archive": "Archive / restore", "sequences.delete": "Delete Sequence",
   "sequences.rename": "Rename Sequence", "sequences.describe": "Use when", "sequences.sends_from": "Sends from",

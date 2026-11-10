@@ -1,6 +1,6 @@
 // Issues, the Issue pane, the Action Queue and Today's issues pane (PRD 2026-11-07 FR-UI-1, FR-UI-2, FR-UI-4), run
 // in the shipped views with the kit's doubles. Usage: node --experimental-vm-modules app_issues_view.mjs
-import { answers, calls, cx, load, ran, settle, state, texts, toasts } from "./app_view_kit.mjs";
+import { answers, calls, clipboard, cx, load, ran, settle, state, texts, toasts } from "./app_view_kit.mjs";
 
 const out = {};
 const make = (View, fields) => Object.assign(Object.create(View.prototype), fields);
@@ -52,6 +52,12 @@ await settle();
 out.pin = calls.find((c) => c.method === "command.issues.pin").params;
 list.command("plan_all", cx);
 out.forwardedAll = ran.at(-1);
+answers["issue.markdown"] = "# BIZ-1 · Title 1\n";  // y: the Issue as Markdown for an agent
+pane.command("copy", cx);
+await settle();
+out.copy = [calls.find((c) => c.method === "issue.markdown").params, clipboard.at(-1), toasts.at(-1)];
+list.command("copy", cx);
+out.forwardedCopy = ran.at(-1);
 pane.command(`estimate_set:${JSON.stringify({ value: null, text: "1.5" })}`, cx);
 out.estimateRefused = toasts.at(-1);
 out.planned = ["today", "tomorrow", "fri", "none"].map((t) => Issue.ns.plannedDay(t, new Date(2026, 10, 9)));
@@ -74,6 +80,7 @@ out.badge = [Nav.ns.badge([25, 1]), Nav.ns.badge([25, 0]), Nav.ns.badge([0, 0])]
 const Today = await load("today");
 const panes = Today.ns.paneItems({ issues: [issue("7")] }, {});
 out.today = panes.issues.map((it) => it.key);
+out.todayCopy = Today.ns.keysOf("issues").find(([k]) => k === "y");
 
 // The rail: Connections grouped under one header per kind (ADR 0018); Context connections are not among them.
 out.rail = Nav.ns.connectionRows([

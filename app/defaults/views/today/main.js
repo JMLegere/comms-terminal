@@ -40,7 +40,7 @@ const ROUTE = {
   drafts: { n: "drafts.new", x: "drafts.delete", y: "drafts.copy", "ctrl-s": "draft.save", "ctrl-enter": "draft.send" },
   paused: { "r": "person.resume", "f": "person.finish" },
   issues: { p: "issue.plan_all", w: "issue.plan", f: "issue.pin", s: "issue.status", i: "issue.priority", e: "issue.estimate",
-    d: "issue.due", t: "issue.title", o: "issue.open" }, // the Issues Today lists (FR-PL-12), as the Issues page
+    d: "issue.due", t: "issue.title", o: "issue.open", y: "issue.copy" }, // the Issues Today lists (FR-PL-12), as the Issues page
   unattended: { s: "organization.stage", v: "organization.value" }, // as its Organization page
   unattended_person: { p: "person.stage", v: "person.value" }, // a Person in Fundraising or Talent (ADR 0016)
 };

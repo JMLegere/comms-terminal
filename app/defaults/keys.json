@@ -302,6 +302,7 @@
     "d": "issue.due",
     "t": "issue.title",
     "o": "issue.open",
+    "y": "issue.copy",
     "n": "issues.new",
     "v": "issues.display"
   },

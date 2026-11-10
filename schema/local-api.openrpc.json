@@ -3339,6 +3339,34 @@
    }
   },
   {
+   "name": "issue.markdown",
+   "summary": "One Issue as the Markdown `comms-terminal issue` prints, for an agent.",
+   "params": [
+    {
+     "name": "issue_id",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
    "name": "issues.view",
    "summary": "The Issues page (FR-UI-1) as groups of Issues under the Display options given (each missing one at its default), or with `today` the Issues Today lists (FR-PL-12); each Issue has its urgency, size, warnings, `overdue`, `pinned` and `not_saved`, and a Planned day group its capacity; with `today`, `capacity` also has `overdue` hours (FR-PL-13). `rows` is the same list flattened, for a virtual list.",
    "params": [

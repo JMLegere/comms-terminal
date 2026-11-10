@@ -172,3 +172,14 @@ def test_full_read_merges_open_and_recently_closed_and_takes_statuses():
     assert statuses == [{"id": "todo", "team_id": "team", "name": "Todo", "type": "unstarted", "position": 0}]
     filters = [v["filter"] for v in client.asked if v and "filter" in v]
     assert all(f["assignee"] == {"isMe": {"eq": True}} and "or" not in f for f in filters) and len(filters) == 3
+
+
+def test_issue_markdown_is_what_y_copies_for_an_agent(db):
+    from comms_terminal import core
+    cid = inbox.ensure_connection(db, "linear", "issue", NOW)
+    issues.upsert(db, cid, issue(description="Do the thing."), NOW)
+    md = core._issue_markdown(None, db, "id-BIZ-1")
+    assert md.startswith("# BIZ-1 · Title BIZ-1\n") and "Do the thing." in md
+    assert md.endswith("Fresh copy: `comms-terminal issue id-BIZ-1`\n")
+    with pytest.raises(core.ApiError):
+        core._issue_markdown(None, db, "missing")

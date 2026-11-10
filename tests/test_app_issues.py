@@ -33,6 +33,8 @@ def test_the_issue_pane_changes_through_the_action_queue_with_undo(out):
     assert out["plan"] == {"issue_id": "1", "day": "2026-11-10"}
     assert out["planAll"][0] == {} and "Planned 3 Issues" in str(out["planAll"][1])  # p: Plan Issues (FR-PL-14)
     assert out["pin"] == {"issue_id": "1", "pinned": True} and out["forwardedAll"] == "issue.plan_all"
+    assert out["copy"] == [{"issue_id": "1"}, "# BIZ-1 · Title 1\n", "Copied the Issue for an agent."]
+    assert out["forwardedCopy"] == "issue.copy"  # y on the list copies the selected Issue
     assert out["estimateRefused"] == "An estimate is whole points, or none."
     assert out["planned"] == ["2026-11-09", "2026-11-10", "2026-11-13", None]  # Monday Nov 9: fri is Nov 13
 
@@ -46,6 +48,7 @@ def test_the_action_queue_is_a_timeline_with_day_counts_and_today_holds_issues(o
     assert out["now"] == 1  # opens at the first row at or after now
     assert out["badge"] == ["25 · 1", 25, ""]
     assert out["today"] == ["issues-7"]
+    assert out["todayCopy"] == ["y", "copy"]  # y on a Today Issue row copies it, as on a Thread
 
 
 def test_the_rail_groups_connections_by_kind(out):
