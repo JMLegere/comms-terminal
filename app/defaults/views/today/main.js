@@ -1,6 +1,6 @@
-// Today (GLOSSARY), as the Console's TodayPage (ADR 0014): five bordered panes stacked in order, each with its pill
-// title — threads (a Threads list fixed to Todo: Status and Case headers), tasks (OVERDUE / DUE TODAY / LATER TODAY,
-// with a red "N overdue"), drafts, paused and unattended; an empty pane hides and the last one shown takes the spare
+// Today (GLOSSARY), as the Console's TodayPage (ADR 0014): bordered panes stacked in order, each with its pill
+// title — threads (a Threads list fixed to Todo: Status and Case headers), drafts, paused, tasks (OVERDUE / DUE TODAY /
+// LATER TODAY, with a red "N overdue"), issues and unattended; an empty pane hides and the last one shown takes the spare
 // height. ↓/↑ (j/k) run on from one pane into the next, tab jumps to the next pane, and the row under the cursor fills
 // the right pane (shared "detail" picks its view). A key acts on the row's own kind: r replies on a Thread and
 // resumes a Paused Enrollment; x ignores a Thread, skips a Task and deletes a Draft. Thread keys reach only a Thread
@@ -28,7 +28,7 @@ const I = { TODO: "\u{f0766}", tasks: "\u{f05c7}", edited: "\u{f0cb6}", sequence
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const pad = (n) => String(n).padStart(2, "0");
-const PANES = ["threads", "tasks", "issues", "drafts", "paused", "unattended"];
+const PANES = ["threads", "drafts", "paused", "tasks", "issues", "unattended"];
 const DETAIL = { threads: null, tasks: "task", issues: "issue", drafts: "draft", paused: "paused", unattended: "unattended" };
 // What each key does on each kind of row (the Console's Today hands a key to the list that holds the cursor).
 const THREAD_KEYS = { r: "reply_sender", a: "reply_all", e: "done", g: "snooze", b: "block", m: "ignore", x: "ignore", l: "case",
