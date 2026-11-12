@@ -287,7 +287,7 @@ def _deadline(pipeline, due: date) -> date:
 ROLLUP = ("Todo", "Snoozed", "Done")  # an Organization's roll-up order: an Ignored Thread holds nothing open
 
 
-def attention(db, people: bool = False) -> dict:
+def attention(db, people: bool = False, reads: tuple | None = None) -> dict:
     """Each Organization in a Pipeline, or with people=True each Person in one, read from its People's Threads and
     Enrollments (FR-OA-4, FR-OA-5; never stored): {id: {rollup, wakes, last, unattended, stages}}.
 
@@ -297,18 +297,21 @@ def attention(db, people: bool = False) -> dict:
     of its Person's; a Person counts all of theirs. Done with no Threads. wakes: the earliest time a Snoozed one
     comes back (None for Todo, Done, or a Snooze with no date). last: the latest message in those Threads.
     unattended: in an open or paying Stage, Done, and with none of its People on an upcoming Event (FR-OA-5).
-    stages: {pipeline: Stage}."""
+    stages: {pipeline: Stage}. `reads` is (inbox._members, inbox.person_thread_ids) when the caller has them."""
     held = {}
     for (o, p), st in _state(_entries(db)).items():
         if st["stage"] and (p in PEOPLE) == people:
             held.setdefault(o, {})[p] = st["stage"]
     if not held:
         return {}
-    members, threads = inbox._members(db), inbox.person_thread_ids(db)
-    status = {r["id"]: r for r in db.execute(  # one grouped scan: a subquery per Thread on the view took 390 ms live
-        "SELECT t.id, t.status_detail, COALESCE(t.follow_up_at, t.snoozed_until) AS wakes, m.last FROM threads t"
-        " LEFT JOIN (SELECT thread_id, max(occurred_at) AS last FROM thread_activities WHERE kind = 'MESSAGE'"
-        " GROUP BY thread_id) m ON m.thread_id = t.id WHERE t.merged_into IS NULL")}
+    members, threads = reads or (inbox._members(db), inbox.person_thread_ids(db))
+    # Two scans joined here: a subquery per Thread on the view took 390 ms live, and SQLite joins the grouped
+    # subquery by scanning it once per Thread (113 ms on 1,700 Threads; 8 ms this way).
+    last = dict(db.execute("SELECT thread_id, max(occurred_at) FROM thread_activities WHERE kind = 'MESSAGE'"
+                           " GROUP BY thread_id").fetchall())
+    status = {r["id"]: dict(r) | {"last": last.get(r["id"])} for r in db.execute(
+        "SELECT id, status_detail, COALESCE(follow_up_at, snoozed_until) AS wakes FROM threads"
+        " WHERE merged_into IS NULL")}
     by_org: dict[int, list] = {}  # org -> (state, next Task due) of each unfinished Enrollment for it
     by_person: dict[int, list] = {}  # the same, for Enrollments that name no Organization
     every: dict[int, list] = {}  # the same, for every Enrollment of a Person
@@ -386,9 +389,9 @@ def label(s: dict) -> str:
 def unattended(db) -> list[dict]:
     """Organizations and People in an open or paying Stage with nothing open (Today's group), by name: id, domain
     (None for a Person), name, person_id (a Person's id, else None), organizations, stages, last."""
-    out = []
+    out, reads = [], (inbox._members(db), inbox.person_thread_ids(db))  # both passes read the same
     for people in (False, True):
-        att = attention(db, people)
+        att = attention(db, people, reads)
         found = {k: v for k, v in att.items() if v["unattended"]}
         subjects = _subjects(db, people) if found else {}
         out += [{**subjects[k], "person_id": k if people else None, "stages": a["stages"], "last": a["last"]}

@@ -279,3 +279,20 @@ def test_due_now_is_yesterday_to_tomorrow_by_due_date_or_planned_day(db):
     assert not issues.due_now(i(due="2026-11-07"), day) and issues.overdue(i(due="2026-11-07"), day)
     assert not issues.overdue(i(due="2026-09-22", planned="2026-11-09"), day)  # planned today: due now
     assert not issues.on_today(i(planned="2026-11-11"), day) and not issues.on_today(i(), day)
+
+
+def test_day_lookup_finds_what_a_one_day_expansion_finds(db):
+    """Capacity reads days from one cached year (calendar.on_day): each day still holds every occurrence a one-day
+    expansion finds, and All-day Events exactly their own days."""
+    event(db, "late", TUESDAY, "22:00", "23:59", "RRULE:FREQ=WEEKLY;COUNT=3\r\n")
+    event(db, "overnight", TUESDAY, "23:00", "23:30")
+    with db:
+        db.execute("INSERT INTO events (uid, ics, first_seen_at, changed_at) VALUES ('trip', ?, ?, ?)",
+                   ("BEGIN:VEVENT\r\nUID:trip\r\nSUMMARY:Trip\r\nDTSTART;VALUE=DATE:20261112\r\n"
+                    "DTEND;VALUE=DATE:20261114\r\nEND:VEVENT\r\n", MONDAY.isoformat(), MONDAY.isoformat()))
+    today = MONDAY.astimezone(LOCAL).date()
+    for n in range(-3, 30):
+        day = today + timedelta(days=n)
+        found = {e["id"] for e in calendar.on_day(db, day, today)}
+        assert {e["id"] for e in calendar.expand(db, day, day + timedelta(days=1), deleted=False)} <= found, day
+        assert any(i.startswith("trip|") for i in found) == (date(2026, 11, 12) <= day < date(2026, 11, 14)), day
