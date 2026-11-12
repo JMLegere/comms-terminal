@@ -161,6 +161,15 @@ if (kase === "send") { // AS-UD-1/3: ctrl+enter saves the typed text as a revisi
   answers["drafts.list"] = [row("c")];
   drafts.load(cx); await settle();
   out.deleted_last = state.draft;
+} else if (kase === "reply-send-now") { // Send now waits the Undo window; the Threads list still moves on, as a send at once
+  const view = await threadComposer();
+  answers["command.inbox.schedule_draft"] = {};
+  view.composer.window = 10;
+  await view.composer.sendPicked("send", cx);
+  out.send_now = state.advance?.thread ?? null;
+  view.composer.reply = { thread: "thread-1" }; view.composer.window = 0; state.advance = null;
+  await view.composer.sendPicked(LATER.tomorrow, cx);     // Send tomorrow: the Thread waits in Todo, as before
+  out.tomorrow = state.advance?.thread ?? null;
 } else if (kase === "today-next") { // AS-UD-7 on Today's drafts pane
   const Today = await load("today"), Drafts = await load("drafts");
   state.page = "today";
