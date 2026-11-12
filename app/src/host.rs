@@ -219,6 +219,22 @@ pub fn module(origin: &'static str, commands: async_channel::Receiver<String>) -
             }
             Ok(HostValue::Null)
         })
+        .function("reveal", |args| {
+            // FR-A5: save a stored Attachment in Downloads and select it in the file manager, off the UI thread.
+            let url = args.string(0)?.to_owned();
+            let name = args.string(1)?.to_owned();
+            std::thread::spawn(move || {
+                let event = match crate::reveal::reveal(&url, &name) {
+                    Ok(path) => {
+                        crate::log::write("reveal", json!({"name": name}));
+                        json!({"message": format!("Saved to {}", path.display()), "severity": "information"})
+                    }
+                    Err(e) => json!({"message": format!("Could not open {name}: {e:#}"), "severity": "error"}),
+                };
+                broadcast(&json!({"kind": "toast", "data": event}));
+            });
+            Ok(HostValue::Null)
+        })
         .function("toast", |args| {
             let message = args.string(0)?.to_owned();
             let severity = args.get(1).map(from_host).and_then(|v| v.as_str().map(str::to_owned)).unwrap_or("information".into());

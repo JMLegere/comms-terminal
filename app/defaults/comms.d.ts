@@ -27,6 +27,8 @@ export function setShared(key: string, value: unknown): boolean;
 
 /** Open a link in the default browser: an http, https or mailto link, such as an Attachment's `url`. */
 export function open(url: string): void;
+/** Save a stored Attachment (its signed `url`) as `name` in Downloads, then show it selected in the file manager. */
+export function reveal(url: string, name: string): void;
 
 /** Show a timed notification, bottom right, as the core's own toasts show; `timeout` in seconds (5 by default). */
 export function toast(message: string, severity?: "information" | "warning" | "error", timeout?: number): void;

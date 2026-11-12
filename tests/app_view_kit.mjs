@@ -8,10 +8,13 @@ export const calls = [], tasks = [], toasts = [], ran = [], answers = {}, state 
 export const keyHandlers = []; // every on_key_down handler a render attached, newest last
 export const texts = [];       // every string a render put in an element
 export const focused = [];     // every input given the keyboard, in order
+export const clicks = [];      // every on_click handler a render attached, in order
+export const opened = [], revealed = []; // links open() opened; Attachments reveal() saved and showed
 function element() {
   const el = new Proxy({}, { get(_target, name) {
     if (name === "when") return (condition, render) => condition ? render(el) : el;
     if (name === "on_key_down") return (handler) => { keyHandlers.push(handler); return el; };
+    if (name === "on_click") return (handler) => { clicks.push(handler); return el; };
     if (name === "child") return (c) => { if (typeof c === "string") texts.push(c); return el; };
     return () => el;
   } });
@@ -41,7 +44,7 @@ const comms = {
     return (typeof a === "function" ? a(params) : a) ?? null;
   },
   nextEvent: () => new Promise(() => {}), nextCommand: () => new Promise(() => {}), theme: () => ({}),
-  shared: (key) => state[key], setShared: (key, value) => { state[key] = value; }, run(c) { ran.push(c); }, open() {},
+  shared: (key) => state[key], setShared: (key, value) => { state[key] = value; }, run(c) { ran.push(c); }, open(url) { opened.push(url); }, reveal(url, name) { revealed.push({ url, name }); },
   focusMain() {}, mark() {}, toast(m) { toasts.push(m); }, keys: () => ({}), moduleOf: () => null, status: () => state.status ?? {},
   fonts: () => ["Alpha Mono", "Beta Sans"], settings: () => state.settingsFile ?? {}, logTail: () => state.log ?? [],
   setting(key, value) { calls.push({ method: "setting", params: { key, value } }); return true; },

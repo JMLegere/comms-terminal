@@ -6,6 +6,7 @@ mod control;
 mod host;
 mod layout;
 mod log;
+mod reveal;
 mod rpc;
 mod theme;
 mod window;

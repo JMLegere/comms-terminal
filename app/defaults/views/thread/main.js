@@ -8,8 +8,11 @@
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { MessageBody } from "gpui-component";
-import { call, nextEvent, nextCommand, theme, shared, setShared, mark, open, run, focusMain, toast } from "comms";
+import { call, nextEvent, nextCommand, theme, shared, setShared, mark, open, reveal, run, focusMain, toast } from "comms";
 import { Composer } from "./composer.js";
+
+/** A chip whose link is the Service's own copy (`/f/<sha>`), as opposed to one pending, failed, or never copied. */
+const stored = (a) => Boolean(a.sha && a.url?.includes(`/f/${a.sha}`)) && a.state !== "pending" && a.state !== "failed";
 
 // Status detail: Nerd Font glyph (icons.py), colour token, label (inbox.DETAIL_LABEL).
 const GLYPH = {
@@ -644,14 +647,15 @@ export default class Thread extends View {
       .child(div().rounded(6).bg("#ffffff").p(8).child(MessageBody(`${m.id}:${b.loaded ? 1 : 0}`, b.html)));
   }
 
-  /** Attachment chips: each opens its stored copy, or the message in its service; "not copied" while it is not. */
+  /** Attachment chips: a stored copy opens in Files, selected in Downloads; one not copied yet opens the message in
+   *  its service and says "not copied". */
   files(items, t, label) {
     if (!items?.length) return null;
     return h_flex().flex_wrap().gap(6).items_center().text_size(12)
       .when(Boolean(label), (el) => el.child(div().text_color(t.dim).child(label)))
       .children(items.map((a, i) =>
         h_flex().id(`${label ?? "f"}-${i}-${a.name}`).gap(4).px(8).py(2).rounded(6).border(1).border_color(t.border)
-          .text_color(a.url ? t.accent : t.muted).when(Boolean(a.url), (el) => el.cursor_pointer().on_click(() => open(a.url)))
+          .text_color(a.url ? t.accent : t.muted).when(Boolean(a.url), (el) => el.cursor_pointer().on_click(() => stored(a) ? reveal(a.url, a.name ?? "attachment") : open(a.url)))
           .child(div().child(`${I.attachment} ${a.name ?? "file"}`))
           .when(a.state === "pending" || a.state === "failed", (el) => el.child(div().text_color(t.dim).child("· not copied")))));
   }
