@@ -141,7 +141,7 @@ def _calendars(db):
                 series.add(r["uid"])
         deleted = {(r["uid"], r["recurrence_id"]): r["deleted_at"]
                    for r in db.execute("SELECT uid, recurrence_id, deleted_at FROM events WHERE deleted_at IS NOT NULL")}
-        _cache.update(key=key, value=(live, gone, series, deleted), expanded={})
+        _cache.update(key=key, value=(live, gone, series, deleted), expanded={}, days=None)
     return _cache["value"]
 
 
@@ -202,6 +202,32 @@ def expand(db, start: date, end: date, deleted: bool = True) -> list[dict]:
             out = [e for e in out if not e["deleted_at"]]
         kept[key] = sorted(out, key=lambda e: (not e["all_day"], clock.local(e["start"])))
     return list(kept[key])  # callers read the occurrences and never change them
+
+
+def on_day(db, day: date, today: date) -> list[dict]:
+    """The live occurrences that may touch the local `day`: All-day ones exactly, timed ones within a day either
+    side (callers clip them to the day). Issue capacity asks day by day, up to one call per planned day on every
+    refresh, and each one-day `expand` walks every series again (about 100 ms on a real calendar). So days in the
+    year ahead come from the same cached year as `now_and_next`, sorted into days once per change."""
+    first, last = today - timedelta(days=1), today + timedelta(days=366)
+    if not first <= day < last:
+        return expand(db, day, day + timedelta(days=1), deleted=False)
+    _calendars(db)  # clears the kept days when the stored Events change
+    window = (first, last, frozenset(me(db)))
+    kept = _cache.get("days")
+    if kept is None or kept[0] != window:
+        kept = (window, {})
+        one = timedelta(days=1)
+        for e in expand(db, first, last, deleted=False):
+            if e["all_day"]:
+                d, end = e["start"], max(e["end"], e["start"] + one)
+            else:
+                d, end = clock.local(e["start"]).date() - one, clock.local(e["end"]).date() + 2 * one
+            while d < end:
+                kept[1].setdefault(d, []).append(e)
+                d += one
+        _cache["days"] = kept
+    return kept[1].get(day, [])
 
 
 def current(db, event: dict) -> dict | None:

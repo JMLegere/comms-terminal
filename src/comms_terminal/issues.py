@@ -306,7 +306,7 @@ def _busy_hours(db, day: date, now: datetime) -> float | None:
     if day == today(now):  # today: only what is still to come before the working day ends (FR-PL-10)
         lo, hi = max(lo, now.astimezone(LOCAL)), datetime.combine(day, DAY_END, LOCAL)
     spans = []
-    for e in calendar.expand(db, day, day + timedelta(days=1), deleted=False):
+    for e in calendar.on_day(db, day, today(now)):
         if not e["busy"]:
             continue
         if e["all_day"]:
@@ -336,11 +336,11 @@ def _room(db, day: date, now: datetime) -> float:
     return max(0.0, hours - busy)
 
 
-def capacity(db, day: date, now: datetime | None = None) -> dict:
+def capacity(db, day: date, now: datetime | None = None, rows: list[dict] | None = None) -> dict:
     """A day's capacity and use (FR-IS-6): {"capacity", "used", "left"} in hours. Weekends hold none unless an
-    Issue is planned there."""
+    Issue is planned there. `rows` is `issues(db)` when the caller has it: callers ask for many days at once."""
     now = now or clock.now()
-    planned = [i for i in issues(db) if i["planned_day"] == day.isoformat() and _open(i)]
+    planned = [i for i in (issues(db) if rows is None else rows) if i["planned_day"] == day.isoformat() and _open(i)]
     used = sum(size_hours(i) for i in planned)
     cap = 0.0 if day.weekday() >= 5 and not planned else _room(db, day, now)
     return {"capacity": round(cap, 2), "used": round(used, 2), "left": round(cap - used, 2)}
@@ -406,7 +406,9 @@ def warnings(db, now: datetime | None = None) -> dict[str, list[str]]:
             if (date.fromisoformat(i["planned_day"]) - day).days > 100 - p:
                 found.append("Planned too far out for its urgency")
         if i["planned_day"] >= day.isoformat():  # a passed day has no capacity left; that Issue is Overdue instead
-            cap = caps.setdefault(i["planned_day"], capacity(db, date.fromisoformat(i["planned_day"]), now))
+            if i["planned_day"] not in caps:
+                caps[i["planned_day"]] = capacity(db, date.fromisoformat(i["planned_day"]), now, open_)
+            cap = caps[i["planned_day"]]
             if size_hours(i) > cap["capacity"]:
                 found.append("Larger than a day")
         if found:
@@ -588,7 +590,8 @@ def view(db, options: dict | None = None, now: datetime | None = None, today_lis
     statuses = {r["id"]: dict(r) for r in db.execute("SELECT * FROM issue_statuses")}
     keep = COMPLETED[o["completed"]]
     shown = []
-    for i in issues(db) if "issues" in inbox.modules_on(db) else ():  # Issues off: an empty page and pane (ADR 0017)
+    rows = issues(db) if "issues" in inbox.modules_on(db) else []
+    for i in rows:  # Issues off: an empty page and pane (ADR 0017)
         closed = i["completed_at"] or i["canceled_at"]
         if closed and (keep is None or (now - datetime.fromisoformat(closed.replace("Z", "+00:00"))).days >= keep):
             continue
@@ -615,7 +618,7 @@ def view(db, options: dict | None = None, now: datetime | None = None, today_lis
         for (key, title), members in sorted(found.items(), key=lambda kv: kv[0][0]):
             g = {"title": title, "count": len(members)}
             if by == "planned_day" and key[0] == 0 and key[1] >= day.isoformat():  # a passed day holds only Overdue
-                g["capacity"] = capacity(db, date.fromisoformat(key[1]), now)
+                g["capacity"] = capacity(db, date.fromisoformat(key[1]), now, rows)
             if level == 0 and o["subgrouping"] != "none" and o["subgrouping"] != by:
                 g["groups"] = groups(members, o["subgrouping"], 1)
             else:
