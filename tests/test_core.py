@@ -299,3 +299,21 @@ def test_drafts_answer_with_names_problems_and_the_editor_details(demo_core):
     lines = call(demo_core, "today.side", kind="paused", id=str(person[0]))["result"]
     assert lines[0] == [[person[1], None, True, None]]
     assert lines[-1][0][0] == "r resume · f finish · enter opens the Person"
+
+
+def test_an_answer_that_only_confirms_a_laptop_write_reloads_nothing(service, laptop_core):
+    """The Service's answer to the App's own write leaves the copy as it was: no second rows event, so the views do
+    not reload again while the next Thread opens."""
+    _, _, _, tid = service
+    c, rem, syncer = laptop_core
+    call(c, "command.inbox.act", thread_id=tid, action=remote.encode(inbox.Done()))
+    assert rem.drain(10)
+    got = []
+    c.subscribe(got.append)
+    body = syncer.once(timeout=6)
+    body = body or syncer.once(timeout=6)  # the first may come before the Service notices
+    assert body and body.get("changes")
+    c.call_from_thread(c.apply_snapshot, syncer, body)
+    threading.Event().wait(0.1)
+    assert syncer.changed == [] and not [m for m in got if m["params"]["kind"] == "rows"]
+    assert c.call_from_thread(inbox.get_thread, c.db, tid).status == "DONE"

@@ -699,6 +699,21 @@ def install(tui, remote: Remote, caps: dict):
     files.file_url = signed_urls(caps)  # Attachment bytes and files-secret stay on the service (ADR 0004)
 
 
+def _read(db, changes) -> list | None:
+    """The copy's rows a Change set names, as they stand now (None: unreadable, so taken as changed)."""
+    keys, out = {}, []
+    try:
+        for c in changes:
+            tbl = c["tbl"]
+            if tbl not in keys:
+                keys[tbl] = "id" if any(col[1] == "id" for col in db.execute(f'PRAGMA table_info("{tbl}")')) else "rowid"
+            r = db.execute(f'SELECT * FROM "{tbl}" WHERE {keys[tbl]} = ?', (c["row_id"],)).fetchone()
+            out.append(None if r is None else tuple(r))
+    except sqlite3.Error:
+        return None
+    return out
+
+
 def mirror():
     """An in-memory base: the inbox's SQL functions (column defaults name them), no foreign-key checks, since rows
     arrive in the service's order."""
@@ -778,7 +793,9 @@ class Syncer:
 
     def apply(self, db, body) -> bool:
         """On the console's thread: bring the base up to the answer, make the copy the base, and replay the
-        console's unconfirmed writes on it. `changed` keeps the (table, id) pairs a Change set touched (None: all)."""
+        console's unconfirmed writes on it. `changed` keeps the (table, id) pairs a Change set touched (None: all; []
+        when the copy reads as it did before, as when the answer only confirms the console's own writes)."""
+        before = None
         if "db" in body:
             base = mirror()
             base.deserialize(gzip.decompress(base64.b64decode(body["db"])))
@@ -788,6 +805,7 @@ class Syncer:
         elif self.base is None:
             return False
         else:
+            before = _read(db, body["changes"])
             self._patch(body["changes"])
             self.changed = [(c["tbl"], c["row_id"]) for c in body["changes"]]
         self.since, self.cursor = body["since"], body["cursor"]
@@ -801,6 +819,8 @@ class Syncer:
                     getattr(MODULES[module], fn)(db, *args, **kwargs)
             except Exception as e:  # noqa: BLE001 - the service will refuse it too; its answer reverts it
                 LOG.info("replay %s failed: %s", name, e)
+        if before is not None and _read(db, body["changes"]) == before:
+            self.changed = []  # nothing the console shows moved: no repaint, no reload (the App's send, Done, save)
         self.base.backup(saved := sqlite3.connect(self.base_path))
         saved.close()
         tmp = self.token_file.with_name(".sync-token.part")

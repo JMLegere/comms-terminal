@@ -1000,6 +1000,9 @@ class Core:
         if syncer.apply(self.db, body):
             self.check_copy()
             changed = syncer.changed
+            if changed == []:  # the answer only confirmed what the copy shows: the views keep their rows
+                self.answers = {}  # but answer the next queries from the rebased copy
+                return
             self.publish("rows", {"changed": None if changed is None else [list(c) for c in changed]})
 
     def check_copy(self):
