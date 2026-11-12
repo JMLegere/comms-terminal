@@ -792,3 +792,25 @@ def test_thread_opens_at_its_newest_messages(tmp_path):
     assert seen[0][0] > 0 and seen[0][1] == seen[0][0]  # opened: newest messages in view
     assert seen[1][1] == seen[1][0]  # another Thread opened in the same pane
     assert seen[2][1] == 0  # a repaint keeps the reader's place
+
+
+@pytest.mark.undo_window
+def test_send_now_in_the_undo_window_moves_the_queue_on(tmp_path):
+    """Send now schedules the reply for the Undo window (ADR 0021); the queue still moves on, as after a send."""
+    path, ids = seeded(tmp_path)
+    app = Console(path, reply=lambda *a: {})
+    seen = {}
+
+    async def open_ana(app, pilot):
+        app.main.open_thread(ids["ana"])
+
+    async def before(app, pilot):
+        seen["next"] = page(app).next_thread_id()
+
+    async def after(app, pilot):
+        seen["now"] = page(app).current_thread_id()
+
+    run(app, [open_ana, before, "r", *"ok", "ctrl+enter", "enter", after])
+    assert seen["next"] not in (None, ids["ana"])
+    assert seen["now"] == seen["next"]
+    assert inbox.reply_draft(inbox.connect(path), ids["ana"])["send_at"]  # it waits out the window

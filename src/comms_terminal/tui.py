@@ -1854,9 +1854,12 @@ class ReplyBox(Composer, Vertical):
                 return
             if choice == "send":  # it waits out the Undo window on the Service (ADR 0021)
                 self.app.offer_undo(f"Sending in {window} s.")
+                self.app.main.pending_select = getattr(self.app.main.list, "next_thread_id", lambda: None)()
             else:
                 self.app.notify(f"Sends {stamp(later[choice].isoformat())}." if later[choice] else "Unscheduled · kept as a draft.")
             self.action_close()
+            if choice == "send" and (page := self.app.main.page) is not None:
+                page.after_change()  # the queue moves on, as after a send at once
 
         self.app.push_screen(Pick("Send", options), chosen)
 

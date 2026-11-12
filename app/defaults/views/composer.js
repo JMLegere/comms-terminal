@@ -241,7 +241,8 @@ export class Composer {
     const window = choice === "send" ? this.window ?? 0 : 0;
     if (choice === "send" && !window) return this.dispatch(false, cx);
     if (window) choice = new Date(Date.now() + window * 1000).toISOString(); // it waits out the Undo window
-    setShared("advance", { draft: d.id, at: Date.now() }); // a list moves on to the next Draft (FR-UD-7)
+    // A list moves on to the next Draft (FR-UD-7); Send now on a reply moves the Threads list on too, as a send at once.
+    setShared("advance", { draft: d.id, ...(window && this.reply ? { thread: this.reply.thread } : {}), at: Date.now() });
     try {
       await call("command.inbox.schedule_draft", { draft_id: d.id, send_at: choice === "unschedule" ? null : { $dt: choice } });
       toast(window ? `Sending in ${window} s.  z undo` : choice === "unschedule" ? "Unscheduled · kept as a draft." : `Sends ${stamp(choice)}.`);
