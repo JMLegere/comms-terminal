@@ -1004,11 +1004,11 @@ def today_keys(app):
     app.phase4 = phase4_view("keys")
 
 
-@then("x ignores the Thread, skips the Task and deletes the Draft, r resumes the Paused Enrollment, and tab moves to the Task")
+@then("x ignores the Thread, skips the Task and deletes the Draft, r resumes the Paused Enrollment, and tab moves to the Draft")
 def today_routes(app):
     assert app.phase4["x"] == {"threads": ["thread.ignore"], "tasks": ["tasks.skip"], "drafts": ["drafts.delete"], "paused": []}
     assert app.phase4["r"] == {"threads": ["thread.reply_sender"], "tasks": [], "drafts": [], "paused": ["person.resume"]}
-    assert app.phase4["tab"] == "tasks"
+    assert app.phase4["tab"] == "drafts"  # Drafts and Paused stack above Tasks (Jeremy, 2026-11-12)
 
 
 @given("Today in the App with an Unattended Organization in two Stages")

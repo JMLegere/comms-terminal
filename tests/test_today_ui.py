@@ -52,8 +52,8 @@ def test_console_opens_on_today_with_three_lists_and_the_rail_count(tmp_path):
 
     run(Console(path), [scenario])
     assert seen["page"] is TodayPage
-    assert seen["counts"] == [6, 1, 0, 1, 0, 0] and seen["shown"] == [True, True, False, True, False, False]  # no Issues
-    assert "threads · 6" in seen["titles"][0] and "tasks · 1" in seen["titles"][1] and "drafts · 1" in seen["titles"][3]
+    assert seen["counts"] == [6, 1, 0, 1, 0, 0] and seen["shown"] == [True, True, False, True, False, False]  # no Paused, Issues or Unattended
+    assert "threads · 6" in seen["titles"][0] and "drafts · 1" in seen["titles"][1] and "tasks · 1" in seen["titles"][3]
     assert seen["rail"][0] == "today" and "  8[/]" in seen["rail"][1]
     assert isinstance(seen["list"], ThreadsPage) and seen["right"] is ThreadView
 
@@ -69,26 +69,27 @@ def test_down_runs_on_into_the_next_list_and_the_right_pane_follows(tmp_path):
         await pilot.pause()
         await pilot.press("down")
         await pilot.pause()
+        seen["drafts"] = (app.main.list is today.drafts, app.focused is today.drafts.query_one(DataTable))
+        seen["mode"] = str(app.main.query_one(StatusLine).render())
+        await pilot.press("j")  # past the one Draft, over the empty Paused list, into Tasks
+        await pilot.pause()
         seen["tasks"] = (app.main.list is today.tasks, type(app.main.query_one("#thread").children[0]),
                          app.focused is today.tasks.query_one(DataTable))
-        await pilot.press("j")
-        await pilot.pause()
-        seen["drafts"] = app.main.list is today.drafts
-        seen["mode"] = str(app.main.query_one(StatusLine).render())
         await pilot.press("k")
         await pilot.pause()
-        seen["back"] = app.main.list is today.tasks
+        seen["back"] = app.main.list is today.drafts
         await pilot.press("tab")
         await pilot.pause()
-        seen["tab"] = app.main.list is today.drafts
+        seen["tab"] = app.main.list is today.tasks
         await pilot.press("tab")
         await pilot.pause()
         seen["wrap"] = app.main.list is today.threads
 
     run(Console(path), [scenario])
-    assert seen["tasks"] == (True, TaskPane, True)
+    assert seen["drafts"] == (True, True)  # Drafts and Paused stack above Tasks (Jeremy, 2026-11-12)
     assert "TODAY › DRAFTS" in seen["mode"] and "new draft" in seen["mode"]
-    assert seen["drafts"] and seen["back"] and seen["tab"] and seen["wrap"]
+    assert seen["tasks"] == (True, TaskPane, True)
+    assert seen["back"] and seen["tab"] and seen["wrap"]
 
 
 def test_a_task_done_leaves_and_the_cursor_moves_on_to_drafts(tmp_path):

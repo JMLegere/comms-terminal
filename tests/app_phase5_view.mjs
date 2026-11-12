@@ -39,13 +39,14 @@ if (kase === "join") { // D95: o toasts the link; Ctrl+click opens it
   const today = make(Today, { data: null, cases: {}, at: 0 });
   answers["today.page"] = { threads: [], tasks: [{ id: "k1", kind: "email", person: "Ana", group: "overdue", day: 1 }],
     drafts: [{ id: "d-reply", thread_id: "t-reply", subject: "Re: Introduction" }], paused: [], unattended: [] };
-  today.load(cx); await settle();                         // arrives on the Task
+  today.load(cx); await settle();                         // arrives on the Reply Draft (Drafts stack above Tasks)
+  today.move(1, cx);                                      // then selects the Task
   answers["task.pane"] = { draft: { id: "d-task", thread_id: null } };
   const task = make(Task, { pane: null, context: [] });
   task.loadContext = () => {};
   task.load(cx, true); await settle();                    // task.show: its New Thread Draft takes the pane
   out.shown = [state.draft, state.detail];
-  today.move(1, cx);                                      // then the Reply Draft row below it
+  today.move(-1, cx);                                     // then the Reply Draft row above it
   out.selected = [state.draft, state.detail, state.task ?? null];
   task.load(cx); await settle();                          // a change arrives: the Task view reloads
   out.after = [state.draft, state.detail];

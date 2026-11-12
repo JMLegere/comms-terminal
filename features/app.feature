@@ -285,7 +285,7 @@ Feature: App
   Scenario: A key on Today acts on its row's own list
     Given Today in the App with a Thread, a Task, a Draft and a Paused Enrollment
     When Jeremy presses x and r on each row and tab from the Thread
-    Then x ignores the Thread, skips the Task and deletes the Draft, r resumes the Paused Enrollment, and tab moves to the Task
+    Then x ignores the Thread, skips the Task and deletes the Draft, r resumes the Paused Enrollment, and tab moves to the Draft
 
   @AS-CONF-13 @FR-CONF-10
   Scenario: Today's Unattended rows name their Stages, and All clear says what comes next

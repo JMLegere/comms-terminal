@@ -6127,13 +6127,14 @@ class PausedPage(TablePage):
 
 
 class TodayPage(Page):
-    """Today (GLOSSARY; .agents/prd/2026-10-17-today-view.md): Todo Threads, Due Tasks (an email Task with its Draft
-    until sent, Jeremy 2026-11-04), the Drafts list (a Thread whose Reply Draft is ready shows through that Draft), and Unattended Organizations, stacked in that order; a list with nothing in it hides. The list holding the cursor fills the
+    """Today (GLOSSARY; .agents/prd/2026-10-17-today-view.md): Todo Threads, the Drafts list (a Thread whose Reply Draft
+    is ready shows through that Draft), Paused Enrollments, Due Tasks (an email Task with its Draft until sent, Jeremy
+    2026-11-04), Issues and Unattended Organizations, stacked in that order (Drafts and Paused above Tasks, Jeremy 2026-11-12); a list with nothing in it hides. The list holding the cursor fills the
     right pane; ↓/↑ run on from one list into the next, and tab jumps to the next list."""
     TITLE = f"{ICON['today']} today"
     RAIL = "today"
     BINDINGS = [Binding("tab", "next_list", show=False)]
-    PANES = ("todaythreads", "todaytasks", "todayissues", "todaydrafts", "todaypaused", "todayorgs")
+    PANES = ("todaythreads", "todaydrafts", "todaypaused", "todaytasks", "todayissues", "todayorgs")
 
     def __init__(self):
         super().__init__()
@@ -6150,7 +6151,7 @@ class TodayPage(Page):
 
     @property
     def lists(self):
-        return [self.threads, self.tasks, self.issues, self.drafts, self.paused, self.orgs]
+        return [self.threads, self.drafts, self.paused, self.tasks, self.issues, self.orgs]
 
     @property
     def active_list(self):
