@@ -53,7 +53,7 @@ Jeremy works in the console; agents read and prepare work through the CLI. On Wo
 | A Connection's channel rules | `comms-terminal channel-rule list\|add\|delete …` |
 | Drafts, then the Connections a new Draft can use | `comms-terminal drafts` |
 | One Draft | `comms-terminal draft ID` |
-| Change a Draft | `comms-terminal draft ID --revision N --body -` (also `--to`, `--cc`, `--subject`, `--needs-edit`) |
+| Change a Draft | `comms-terminal draft ID --revision N --body -` (also `--to`, `--cc`, `--bcc` (email New Thread Drafts only), `--subject`, `--needs-edit`) |
 | Attach a file to a Draft, or take one off | `comms-terminal draft ID --attach NAME < file`; `--detach NAME` |
 | Delete a Draft | `comms-terminal draft ID --delete` |
 | Skip a Task, or start a new Thread for it | `comms-terminal task skip\|new-thread TASK_ID` |

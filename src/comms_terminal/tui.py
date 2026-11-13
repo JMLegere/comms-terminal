@@ -2698,12 +2698,13 @@ def draft_text(values, connection_label, history, raw=None, ref=None, staged=())
     lines = [f"# {kind}: {values['subject'] or 'no subject'}", ""]
     if ref:
         lines.append(f"- Draft: {ref[0]} · revision {ref[1]} · change it with "
-                     f"`comms-terminal draft {ref[0]} --revision {ref[1]} --body -` (also --to, --cc, --subject)")
+                     f"`comms-terminal draft {ref[0]} --revision {ref[1]} --body -` (also --to, --cc, --bcc, --subject)")
     lines += [f"- Reply to: Thread {values['thread_id']} (its reply box sends it)"] if values.get("thread_id") else []
     lines += ["- Needs edit: it cannot send until its text is changed"] if values.get("needs_edit") else []
     lines += [f"- Connection: {connection_label}",
               f"- From: {values['sender'] or 'not selected'}", f"- To: {values['to'] or 'not selected'}"]
     lines += [f"- Cc: {values['cc']}"] if values["cc"] else []
+    lines += [f"- Bcc: {values['bcc']}"] if values.get("bcc") else []
     lines += ["", "## Body", "", values["body"] or "(empty)"]
     lines += [""] + [attachment_line(a) for a in staged] if staged else []
     if history:
@@ -2734,7 +2735,7 @@ def copy_for_agent(app, text: str, what: str):
 
 # --- unsent drafts: independent envelopes, never recorded Threads ------------
 
-DRAFT_FIELDS = ("connection_id", "kind", "sender", "to", "cc", "subject", "body")
+DRAFT_FIELDS = ("connection_id", "kind", "sender", "to", "cc", "bcc", "subject", "body")
 SENDING_UNAVAILABLE = "Sending unavailable · drafts only."
 FILE_SERVER = ("127.0.0.1", 8789)  # the console's SSH forward to the service's file server (remote.FILES_FORWARD)
 DRAFT_HINT = "ctrl+enter send · ctrl+s save · ctrl+o attach · esc close"
@@ -2766,6 +2767,7 @@ class DraftEditor(Vertical):
                 yield Static("Conn.", classes="flabel")
                 yield DraftConnection(classes="fvalue draftconnection")
             for name, label, placeholder in (("to", "To", "exact destination"), ("cc", "Cc", "optional"),
+                                             ("bcc", "Bcc", "optional · not shown to recipients"),
                                              ("subject", "Subject", "required")):
                 with Horizontal(classes=f"field {name}"):
                     yield Static(label, classes="flabel")
@@ -2844,7 +2846,7 @@ class DraftView(Composer, Horizontal):
             field.refresh_suggestion()
 
     def values(self):
-        if len(self.query(".toinput, .ccinput, .subjectinput")) != 3 or not self.query(TextArea):
+        if len(self.query(".toinput, .ccinput, .bccinput, .subjectinput")) != 4 or not self.query(TextArea):
             return {k: self.draft[k] for k in DRAFT_FIELDS}
         body = self.query_one(TextArea).text
         if body.replace("\r\n", "\n").replace("\r", "\n") == self.draft["body"].replace("\r\n", "\n").replace("\r", "\n"):
@@ -2853,8 +2855,14 @@ class DraftView(Composer, Horizontal):
                     sender=self.from_address,
                     to=self.query_one(".toinput", Input).value,
                     cc=self.query_one(".ccinput", Input).value if FORMATS[self.kind].cc_subject else "",
+                    bcc=self.query_one(".bccinput", Input).value if self.has_bcc else "",
                     subject=self.query_one(".subjectinput", Input).value if FORMATS[self.kind].cc_subject else None,
                     body=body)
+
+    @property
+    def has_bcc(self):
+        """Only an email New Thread Draft has Bcc (inbox.NO_BCC)."""
+        return FORMATS[self.kind].cc_subject and not self.draft.get("thread_id")
 
     @property
     def dirty(self):
@@ -2875,6 +2883,7 @@ class DraftView(Composer, Horizontal):
         self.query_one(DraftConnection).update(escape(label))
         for row in self.query(".field.cc, .field.subject"):
             row.display = FORMATS[self.kind].cc_subject
+        self.query_one(".field.bcc").display = self.has_bcc
         self.query_one(".toinput", Input).placeholder = "channel or DM · tab completes" if self.kind == "slack" else "exact destination"
         state = "Unsaved" if self.dirty else "Saved"
         title = (values["subject"] or FORMATS[self.kind].new_title).replace("\r", "↵").replace("\n", "↵")
@@ -2883,6 +2892,8 @@ class DraftView(Composer, Horizontal):
             envelope = ["To " + (self.recipient_label(values) or "not selected")]
             if values["cc"]:
                 envelope.append("Cc " + values["cc"])
+            if values["bcc"]:
+                envelope.append("Bcc " + values["bcc"])
             head += "\n[#928374]" + escape("\n".join(envelope)) + "[/]"
         self.query_one(".thead").update(head + "\n")
         locked = bool(self.draft.get("sending_at"))
@@ -2944,7 +2955,7 @@ class DraftView(Composer, Horizontal):
         if not self.dirty and draft["revision"] > self.draft["revision"]:
             self.draft = dict(draft)
             self.connection_id, self.kind, self.from_address = draft["connection_id"], draft["kind"], draft["sender"]
-            for name in ("to", "cc", "subject"):
+            for name in ("to", "cc", "bcc", "subject"):
                 self.query_one(f".{name}input", Input).value = draft[name] or ""
             self.query_one(TextArea).text = draft["body"]
             for field in self.query(AddressInput):
@@ -3002,7 +3013,7 @@ class DraftView(Composer, Horizontal):
             connection = connections.get(choice)
             kind = PLATFORMS[connection["platform"]].format if connection else "email"
             values = self.values()
-            if not FORMATS[kind].cc_subject and (values["cc"] or values["subject"]):
+            if not FORMATS[kind].cc_subject and (values["cc"] or values["bcc"] or values["subject"]):
                 name = FORMATS[kind].label
                 self.app.push_screen(Pick(f"Switch to {name}", [("clear", f"Clear Cc and subject · use {name}"),
                                                                ("cancel", "Keep email")],
@@ -3021,6 +3032,7 @@ class DraftView(Composer, Horizontal):
         self.load_conversations()
         if not FORMATS[self.kind].cc_subject:
             self.query_one(".ccinput", Input).value = ""
+            self.query_one(".bccinput", Input).value = ""
             self.query_one(".subjectinput", Input).value = ""
         for field in self.query(AddressInput):
             field.refresh_suggestion()
@@ -3086,7 +3098,7 @@ class DraftView(Composer, Horizontal):
         v, connection = self.values(), self.connection()
         lines = [("Connection", connection_label(connection) if connection else ""),
                  ("From", self.sender_label(v, connection)), ("To", v["to"])] + (
-                [("Cc", v["cc"]), ("Subject", v["subject"])] if FORMATS[self.kind].cc_subject else [])
+                [("Cc", v["cc"]), ("Bcc", v["bcc"]), ("Subject", v["subject"])] if FORMATS[self.kind].cc_subject else [])
         body = "\n".join(f"[#928374]{k:<11}[/]{escape(val)}" for k, val in lines if val)
         options, later = send_menu(self.draft)
         self.app.push_screen(Pick("Send", options, body),

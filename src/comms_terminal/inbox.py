@@ -27,9 +27,10 @@ from typing import Protocol, Sequence
 from . import clock, commands, files, platforms
 from .writers import writer
 
-SCHEMA_VERSION = 45
+SCHEMA_VERSION = 46
 WAIT = timedelta(days=4)  # Waiting for them ends after this with no reply: back to Todo to follow up (#116)
 EMAIL_CONFIRMATION_PENDING = "Email confirmation pending; wait for its sent receipt before replying."
+NO_BCC = "Only an email New Thread Draft has Bcc; a Reply Draft, SMS or Slack Draft has none."
 MIGRATIONS = {  # version -> statement that upgrades an existing database to it
     2: "ALTER TABLE cases ADD COLUMN description TEXT NOT NULL DEFAULT ''",
     3: "ALTER TABLE threads ADD COLUMN follow_up_at TEXT;"
@@ -924,6 +925,10 @@ INSERT INTO modules (id, enabled) VALUES ('issues', 1);"""
 MIGRATIONS[45] = """ALTER TABLE issues ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0 CHECK (pinned IN (0, 1));
 INSERT INTO urgency (name, value) VALUES ('feasibility', 5);"""
 
+# Bcc on an email New Thread Draft (decision #147): its recipients get the message without being named to the others.
+MIGRATIONS[46] = """ALTER TABLE composition_drafts ADD COLUMN bcc TEXT NOT NULL DEFAULT ''
+  CHECK (bcc = '' OR (kind = 'email' AND thread_id IS NULL));"""
+
 
 class SendUnknown(SendFailed):
     """The provider may or may not have sent the message (timeout, lost response, crash before recording)."""
@@ -1062,8 +1067,9 @@ class Sender(Protocol):
         have gone out."""
 
     def start(self, to: list[str], cc: list[str], subject: str | None, body: str, key: str,
-              files: Sequence[Staged] = ()) -> str:
-        """Send a new message (no Thread); return its native_id. `key` is unique per send attempt.
+              files: Sequence[Staged] = (), bcc: Sequence[str] = ()) -> str:
+        """Send a new message (no Thread); return its native_id. `key` is unique per send attempt. `bcc` (email
+        only, passed only when there is one) receive it unnamed in its headers.
         Raise SendFailed when the provider refused it, SendUnknown when it may have gone out."""
 
     # Slack's Sender also has conversation(channel) -> (Channel kind, name), which send_draft asks for a Slack Draft.
@@ -1219,10 +1225,14 @@ def save_draft(db, values: dict, *, draft_id: int | None = None,
     `thread_id` makes a new Draft that Thread's reply Draft (save_reply_draft) and `task_id` an email Task's
     Draft (sequences); an edit keeps both. An edit applies when it read the stored revision or was made later than
     the stored save: the latest save wins, from the console or an agent (ADR 0012). An earlier edit over a newer
-    revision raises DraftConflict."""
-    if not isinstance(values, dict) or set(values) != {
+    revision raises DraftConflict. `bcc` is optional: an email New Thread Draft's Bcc, kept as stored when left out
+    (the App and older Consoles send none)."""
+    if not isinstance(values, dict) or set(values) - {"bcc"} != {
             "connection_id", "kind", "sender", "to", "cc", "subject", "body"}:
-        raise ValueError("draft values must contain exactly connection_id, kind, sender, to, cc, subject, body")
+        raise ValueError("draft values must contain exactly connection_id, kind, sender, to, cc, subject, body"
+                         " (and bcc, optionally)")
+    if type(values.get("bcc", "")) is not str:
+        raise ValueError("draft bcc must be a string")
     if type(values["kind"]) is not str or values["kind"] not in ("email", "sms", "slack"):
         raise ValueError("draft kind must be email, sms, or slack")
     if any(type(values[k]) is not str for k in ("sender", "to", "cc", "body")):
@@ -1246,21 +1256,28 @@ def save_draft(db, values: dict, *, draft_id: int | None = None,
                 raise ValueError("draft Connection must support its message format")
         at = clock.iso((now or clock.now()))
         envelope = tuple(values[k] for k in ("connection_id", "kind", "sender", "to", "cc", "subject", "body"))
+        old = None if draft_id is None else db.execute("SELECT * FROM composition_drafts WHERE id = ?",
+                                                       (draft_id,)).fetchone()
+        reply = thread_id is not None if old is None else old["thread_id"] is not None
+        bcc = values.get("bcc")  # None: keep the stored Bcc
+        if bcc and (values["kind"] != "email" or reply):
+            raise ValueError(NO_BCC)
+        if values["kind"] != "email" or reply:
+            bcc = ""
         if draft_id is None:
             draft_id = db.execute(
-                'INSERT INTO composition_drafts (connection_id, kind, sender, "to", cc, subject, body,'
-                " revision, created_at, updated_at, thread_id, task_id) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?) RETURNING id",
-                (*envelope, at, at, thread_id, task_id)).fetchone()[0]
+                'INSERT INTO composition_drafts (connection_id, kind, sender, "to", cc, subject, body, bcc,'
+                " revision, created_at, updated_at, thread_id, task_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)"
+                " RETURNING id", (*envelope, bcc or "", at, at, thread_id, task_id)).fetchone()[0]
             commands.label(f"New Draft: {_draft_words(values)}")
             commands.inverse("inbox.delete_draft", draft_id)
         else:
-            old = db.execute("SELECT * FROM composition_drafts WHERE id = ?", (draft_id,)).fetchone()
             saved = db.execute(
                 'UPDATE composition_drafts SET connection_id = ?, kind = ?, sender = ?, "to" = ?,'
-                " cc = ?, subject = ?, body = ?, revision = revision + 1, updated_at = ?,"
+                " cc = ?, subject = ?, body = ?, bcc = coalesce(?, bcc), revision = revision + 1, updated_at = ?,"
                 " needs_edit = CASE WHEN subject IS ? AND body = ? THEN needs_edit ELSE 0 END"  # a changed text clears it
                 " WHERE id = ? AND (revision = ? OR updated_at < ?)",
-                (*envelope, at, values["subject"], values["body"], draft_id, expected_revision, at)).rowcount
+                (*envelope, bcc, at, values["subject"], values["body"], draft_id, expected_revision, at)).rowcount
             if not saved:
                 get_draft(db, draft_id)  # a missing row is distinct from a stale writer
                 raise DraftConflict("Draft changed after this edit was made; reload before saving.")
@@ -1671,6 +1688,7 @@ def _new_send(db, d, files, sender, started, at):
     checkpoint = _send_checkpoint(db, connection["id"]) if gmail else None
     sms = d["kind"] == "sms"
     to, cc = platforms.destinations(d["to"], d["kind"]), platforms.destinations(d["cc"], d["kind"])
+    bcc = platforms.destinations(d["bcc"], "email") if d["kind"] == "email" else []  # never recorded below
     changes = {}
 
     def record(native_id, now):
@@ -1716,7 +1734,8 @@ def _new_send(db, d, files, sender, started, at):
         sequences.task_sent(db, d, thread_id, clock.now())  # an email Task's Draft: the Task is done
         return thread_id
 
-    call = lambda: sender.start(to, cc, d["subject"], d["body"], f"draft-{draft_id}-{revision}-{at}", files=files)  # noqa: E731
+    call = lambda: sender.start(to, cc, d["subject"], d["body"], f"draft-{draft_id}-{revision}-{at}", files=files,  # noqa: E731
+                                **({"bcc": bcc} if bcc else {}))
     return call, record, settle
 
 

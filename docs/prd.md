@@ -1057,6 +1057,11 @@ All entries are dated 2026-10-10; exact times are unproven unless noted. Full de
   - Source: Jeremy (2026-11-04), approved follow-up to #145, with the four principles to record.
   - Status: Approved (2026-11-04). Built on branch `jeremy/scheduled-email-tasks`.
 
+- **147**
+  - Request / decision: Bcc on an email New Thread Draft. A weekly round-status note goes To Jeremy with about 20 investors as Bcc. The Draft stores its Bcc (schema 46); the CLI takes `--bcc` on `draft new` and `draft ID`; the Console's Draft view edits it under Cc and shows it in the send confirmation; Resend (Gmail) and Fastmail deliver to it without a Bcc header, and the recorded message names only To and Cc. A Reply Draft, SMS or Slack Draft refuses Bcc: the reply contract (socket, `inbox.reply`, both senders) still has none (#92). A save that leaves Bcc out keeps the stored one, so the App and older Consoles cannot clear it unseen.
+  - Source: Jeremy's request, relayed by the agent building it (2026-11-13).
+  - Status: Built on branch `feat/draft-bcc`; awaiting Jeremy's review. The App's Composer does not show Bcc yet.
+
 ## 8. Work log
 
 - **2026-10-10T18:20:22+00:00**

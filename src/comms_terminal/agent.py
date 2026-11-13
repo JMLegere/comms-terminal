@@ -161,12 +161,12 @@ def add_parsers(sub):
     x = ks.add_parser("new-thread", help="a reply Task whose target was skipped starts a new Thread instead")
     x.add_argument("id")
     sub.add_parser("drafts", help="list Drafts, then the Connections a new Draft can use")
-    d = sub.add_parser("draft", help="one Draft as Markdown; with --to/--cc/--subject/--body, change it first (never sends)")
+    d = sub.add_parser("draft", help="one Draft as Markdown; with --to/--cc/--bcc/--subject/--body, change it first (never sends)")
     d.add_argument("id", help="a Draft id, or `new` (needs --connection for a new Thread, or --thread for a reply)")
     d.add_argument("--revision", type=int, help="the revision you read; required to change an existing Draft")
     d.add_argument("--connection", help="new Draft: the Connection id it sends from")
     d.add_argument("--thread", help="new Draft: the Thread it replies to; its reply box sends it")
-    for field in ("to", "cc", "subject"):
+    for field in ("to", "cc", "bcc", "subject"):
         d.add_argument(f"--{field}")
     d.add_argument("--body", help="the body, or - to read it from stdin")
     d.add_argument("--needs-edit", action="store_true",
@@ -442,7 +442,7 @@ def _run(a, db):
         elif a.delete or a.attach or a.detach:
             print(draft_files(db, a), end="")
         else:
-            changes = {k: getattr(a, k) for k in ("to", "cc", "subject", "body") if getattr(a, k) is not None}
+            changes = {k: getattr(a, k) for k in ("to", "cc", "bcc", "subject", "body") if getattr(a, k) is not None}
             if changes.get("body") == "-":
                 changes["body"] = sys.stdin.read()
             print(draft(db, a.id, changes, a.revision, a.connection, getattr(a, "thread", None),
@@ -603,12 +603,15 @@ def draft(db, ref, changes, revision, connection_id, thread_id=None, needs_edit=
         if old := inbox.reply_draft(db, thread_id):
             raise ValueError(f"Thread {thread_id} already has reply Draft {old['id']}: change it with "
                              f"`comms-terminal draft {old['id']} --revision {old['revision']}`")
-        d = inbox.save_reply_draft(db, thread_id, changes.pop("body", ""))
-        if d is None:
-            raise ValueError("a reply Draft needs --body")
-        if changes:
-            d = inbox.save_draft(db, {k: d[k] for k in DRAFT_FIELDS} | changes, draft_id=d["id"],
-                                 expected_revision=d["revision"])
+        with db:  # one transaction: a refused change (a Bcc) leaves no reply Draft behind
+            if not db.in_transaction:
+                db.execute("BEGIN IMMEDIATE")
+            d = inbox.save_reply_draft(db, thread_id, changes.pop("body", ""))
+            if d is None:
+                raise ValueError("a reply Draft needs --body")
+            if changes:
+                d = inbox.save_draft(db, {k: d[k] for k in DRAFT_FIELDS} | changes, draft_id=d["id"],
+                                     expected_revision=d["revision"])
     elif ref == "new":
         c = next((c for c in inbox.connections(db) if c["id"] == connection_id), None)
         if c is None:

@@ -60,7 +60,7 @@ So an email Task with a Draft is listed in Today's tasks pane and on the Tasks p
 - **Cases like Linear issues (#91)**: title, then Activity: "Case created", each Thread added or removed and by what (you, undone), and each description edit, oldest first, with one card per Thread woven into that timeline right after the line that last added it (a Thread with no such line sits by when it started), mirroring how Linear shows a synced Slack thread. A Thread's messages stay inside its card. Every Thread shows its messages, whatever its Status; `enter` folds one to a line. Each card ends with "Leave a reply… (r)". Properties on the right: Status counts, People, Organizations, Channels. `↑`/`↓` or `j`/`k` select a card (a darker border); Thread keys act on it.
 - **Composer always visible (#99)**: under the conversation, the reply box is its own bordered region (Gestalt: common region), set apart from the properties column (bg2 with a divider). Closed, it shows the saved draft or "Leave a reply…"; click it, or press `r` / `a`, to write. In a Case card it is a footer row under a divider, like Linear's reply row, instead of a box inside a box.
 - **Case description (#98)**: a "Description" heading like "Activity", with its box always shown: the text, or placeholder guidance when empty. Click or `d` edits in place; `ctrl+enter` saves (undoable with `z`), `esc` cancels.
-- **Reply composer (#92)**, following Plain's email reply: From (the mailbox), To, Cc (editable), Subject (`Re: …`), then the message. `r` replies to all (FR-3b), `R` replies to the sender only, and the Reply / Reply all switch in the composer refills To and Cc. Slack shows the destination read-only ("To  Slack DM · in thread"); Plain's Slack replies have no options either. Bcc waits for a change to the reply contract (socket, `inbox.reply`, both senders).
+- **Reply composer (#92)**, following Plain's email reply: From (the mailbox), To, Cc (editable), Subject (`Re: …`), then the message. `r` replies to all (FR-3b), `R` replies to the sender only, and the Reply / Reply all switch in the composer refills To and Cc. Slack shows the destination read-only ("To  Slack DM · in thread"); Plain's Slack replies have no options either. Bcc waits for a change to the reply contract (socket, `inbox.reply`, both senders); an email New Thread Draft has its own Bcc field under Cc (#147).
 
 **Revision 2026-10-12 (decisions #76–#80)**: herdr-style bordered panels, Plain-style rail sections, preview pane, mouse, and Nerd Font icons.
 
@@ -278,7 +278,7 @@ Rendered with Textual's test driver (`run_test`, SVG screenshots) and once in a 
 1. Queue with all seven glyphs present, narrow (80 columns) and wide (160 columns).
 2. Empty Todo view.
 3. Thread with a long email (scrolling), an edited message, and a deleted message.
-4. Reply box open: email with To/Cc, Slack without.
+4. Reply box open: email with To/Cc, Slack without. An email New Thread Draft with To, Cc, Bcc and Subject (Bcc in the send confirmation); an SMS or Slack one without Cc, Bcc or Subject.
 5. Send failure: box stays open with the error.
 6. Health BROKEN in the sidebar.
 7. Person record with a blocked Identity.

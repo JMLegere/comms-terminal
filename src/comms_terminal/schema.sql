@@ -244,6 +244,8 @@ CREATE TABLE composition_drafts (
   send_at TEXT,  -- send later: when the service sends it
   send_error TEXT,  -- why a scheduled send did not go out
   needs_edit INTEGER NOT NULL DEFAULT 0 CHECK (needs_edit IN (0, 1)),  -- unsendable until its text changes
+  bcc TEXT NOT NULL DEFAULT ''
+    CHECK (bcc = '' OR (kind = 'email' AND thread_id IS NULL)),  -- an email New Thread Draft's Bcc (decision #147)
   CHECK ((kind = 'email' AND subject IS NOT NULL)
          OR (kind IN ('sms', 'slack') AND subject IS NULL AND cc = ''))
 ) STRICT;

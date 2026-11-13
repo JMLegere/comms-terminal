@@ -190,13 +190,15 @@ class FastmailSender:
             e = {}
         return native_id(e["messageId"]) if e.get("messageId") else f"<fastmail-{sent.get('emailId')}@inbox>"
 
-    def start(self, to, cc, subject, body, key, files=()) -> str:
+    def start(self, to, cc, subject, body, key, files=(), bcc=()) -> str:
         """A new email via send_email with no reply mode; the Sent poll then sees it as already stored."""
         if files:
             raise inbox.SendFailed("Fastmail can't send Attachments")
         args = {"to": [{"email": a} for a in to], "subject": subject, "body": body, "format": "text"}
         if cc:
             args["cc"] = [{"email": a} for a in cc]
+        if bcc:  # ponytail: cc's shape; not yet checked against Fastmail's live send_email schema
+            args["bcc"] = [{"email": a} for a in bcc]
         try:
             sent = self.client.tool("send_email", **args)
         except McpError as err:  # a 5xx may come after Fastmail sent it

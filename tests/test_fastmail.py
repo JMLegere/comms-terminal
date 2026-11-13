@@ -126,6 +126,13 @@ def test_reply_goes_through_send_email_and_its_copy_is_not_stored_twice():
     assert fastmail.sync(db, fm, conn, NOW - timedelta(days=1), {ME}) == []  # the Sent copy is the stored reply
 
 
+def test_a_new_email_goes_to_its_bcc_through_send_email():
+    fm = FakeFastmail([])
+    fastmail.FastmailSender(fm).start([ME], [], "Round status", "Update.", "k", bcc=["ana@acme.com", "bo@newco.io"])
+    assert fm.sent == [{"to": [{"email": ME}], "subject": "Round status", "body": "Update.", "format": "text",
+                        "bcc": [{"email": "ana@acme.com"}, {"email": "bo@newco.io"}]}]
+
+
 def test_reply_socket_routes_a_fastmail_thread_to_its_sender():
     db, conn = setup()
     fm = FakeFastmail([mail("M1", "T1", "Inbox", "ana@acme.com", "Pricing", "Hi", 30)])

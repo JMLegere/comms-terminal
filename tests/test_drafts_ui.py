@@ -89,7 +89,7 @@ def test_drafts_entry_creation_native_focus_and_status_navigation(tmp_path, colu
         await pilot.pause()
         view = app.main.draft_view
         assert view is not None and len(inbox.list_drafts(app.db)) == 1
-        assert view.values() == dict(connection_id=None, kind="email", sender="", to="", cc="", subject="", body="")
+        assert view.values() == dict(connection_id=None, kind="email", sender="", to="", cc="", bcc="", subject="", body="")
         assert not app.main.query(ReplyBox) and app.main.thread_view is None
         assert not hasattr(view, "thread_id")
         assert view.query_one(TextArea).size.height == 8
@@ -153,8 +153,8 @@ def test_full_envelope_save_restart_and_explicit_format_switch(tmp_path):
         await choose(app, pilot, "1")
         assert view.values()["sender"] == "jeremy@agentmaple.com"
         values = dict(connection_id="1", kind="email", sender="jeremy@agentmaple.com", to="  ANA@acme.com  ",
-                      cc=" ops@acme.com ", subject="  Exact subject  ", body="\n Exact words\nwith trailing space \n")
-        for name in ("to", "cc", "subject"):
+                      cc=" ops@acme.com ", bcc=" bo@fund.vc, cy@fund.vc ", subject="  Exact subject  ", body="\n Exact words\nwith trailing space \n")
+        for name in ("to", "cc", "bcc", "subject"):
             view.query_one(f".{name}input", Input).value = values[name]
         view.query_one(TextArea).text = values["body"]
         view.query_one(TextArea).focus()
@@ -187,9 +187,10 @@ def test_full_envelope_save_restart_and_explicit_format_switch(tmp_path):
         await pilot.pause()
         await choose(app, pilot, "3")
         await choose(app, pilot, "clear")
-        assert view.kind == "sms" and view.values()["subject"] is None and view.values()["cc"] == ""
+        assert view.kind == "sms" and view.values()["subject"] is None and view.values()["cc"] == view.values()["bcc"] == ""
         assert view.values()["sender"] == "+12025550100"  # the Connection's own number
         assert not view.query_one(".field.subject").display and not view.query_one(".field.cc").display
+        assert not view.query_one(".field.bcc").display
         view.query_one(".toinput", Input).value = "+12025550124"
         view.query_one(TextArea).focus()
         await pilot.pause()
@@ -197,6 +198,7 @@ def test_full_envelope_save_restart_and_explicit_format_switch(tmp_path):
         await pilot.pause()
         row = inbox.get_draft(app.db, view.draft_id)
         assert row["kind"] == "sms" and row["connection_id"] == "3" and row["subject"] is None and row["cc"] == ""
+        assert row["bcc"] == ""
 
     run(Console(path), [resume])
 

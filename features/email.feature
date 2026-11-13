@@ -18,6 +18,14 @@ Feature: Email
     Then the outbound mail provider receives a message from "jeremy@agentmaple.com" to "prospect@newco.io" with CC "ops@newco.io"
     And the message has In-Reply-To "<a1@newco.io>"
 
+  @AS-3 @FR-3b
+  Scenario: The Email Sender delivers a New Thread Draft to its Bcc recipients without naming them
+    Given an email New Thread Draft to "jeremy@agentmaple.com" with Bcc "ana@acme.com, bo@newco.io" and Subject "Round status"
+    When that Draft is sent through the Email Sender
+    Then the outbound mail provider receives a message to "jeremy@agentmaple.com" with Bcc "ana@acme.com, bo@newco.io"
+    And the message's headers name neither Bcc recipient
+    And the recorded message names neither Bcc recipient
+
   @AS-11 @FR-3a
   Scenario Outline: Email Parse returns nothing for each Plain auto-reply header
     When Email Parse reads a message with header "<name>: <value>"

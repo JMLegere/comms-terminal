@@ -20,7 +20,7 @@ A Draft that belongs to one Thread, at most one per Thread, and sends as a reply
 _Avoid_: Reply box text, Response draft
 
 **New Thread Draft**:
-A Draft that belongs to no Thread: an email to new recipients, or an SMS or Slack message to a Channel. It is written in the Composer. Sending an email one starts a new Thread; an SMS or Slack one joins its Channel's Thread by the ordinary Thread rules.
+A Draft that belongs to no Thread: an email to new recipients, or an SMS or Slack message to a Channel. It is written in the Composer. Sending an email one starts a new Thread; an SMS or Slack one joins its Channel's Thread by the ordinary Thread rules. An email one may also have Bcc recipients, who receive it without being named to anyone else; the message recorded in its Thread names only To and Cc. No other Draft has Bcc.
 _Avoid_: Compose (as the name of this kind), Outbound draft, Standalone draft
 
 **Composer**:
