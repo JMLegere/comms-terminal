@@ -130,6 +130,39 @@ def provider_received(ctx, frm, to, cc):
     assert (payload["from"], payload["to"], payload["cc"]) == (frm, [to], [cc])
 
 
+@given(parsers.parse('an email New Thread Draft to "{to}" with Bcc "{bcc}" and Subject "{subject}"'))
+def bcc_draft(ctx, to, bcc, subject):
+    ctx.draft = inbox.save_draft(ctx.db, dict(connection_id=EMAIL, kind="email", sender=MAILBOX, to=to, cc="",
+                                              bcc=bcc, subject=subject, body="This week's round status."))
+    ctx.bcc = [a.strip() for a in bcc.split(",")]
+
+
+@when("that Draft is sent through the Email Sender")
+def send_bcc_draft(ctx):
+    ctx.provider = Recorder((200, {"id": "00000000-0000-4000-8000-000000000124"}))
+    sender = email.EmailSender("re_test", MAILBOX, post=ctx.provider)
+    ctx.thread = inbox.send_draft(ctx.db, ctx.draft["id"], ctx.draft["revision"], sender)
+
+
+@then(parsers.parse('the outbound mail provider receives a message to "{to}" with Bcc "{bcc}"'))
+def provider_received_bcc(ctx, to, bcc):
+    payload = ctx.provider.calls[-1][2]
+    assert (payload["to"], payload["cc"], payload["bcc"]) == ([to], [], [a.strip() for a in bcc.split(",")])
+
+
+@then("the message's headers name neither Bcc recipient")
+def no_bcc_header(ctx):
+    payload = ctx.provider.calls[-1][2]
+    shown = json.dumps({k: v for k, v in payload.items() if k != "bcc"})
+    assert not any(a in shown for a in ctx.bcc)
+
+
+@then("the recorded message names neither Bcc recipient")
+def no_bcc_recorded(ctx):
+    rows = ctx.db.execute("SELECT content, data FROM activities WHERE thread_id = ?", (ctx.thread.id,)).fetchall()
+    assert rows and not any(a in r["content"] + r["data"] for r in rows for a in ctx.bcc)
+
+
 @then(parsers.parse('the message has In-Reply-To "{mid}"'))
 def in_reply_to(ctx, mid):
     assert ctx.provider.calls[-1][2]["headers"]["In-Reply-To"] == mid

@@ -239,11 +239,12 @@ class EmailSender:
         except (KeyError, TypeError, ValueError) as e:
             raise inbox.SendUnknown("email accepted without a usable receipt ID; outcome unknown") from e
 
-    def start(self, to, cc, subject, body, key, files=()) -> str:
-        """A new email; retain its provider receipt until the signed sent event supplies its SMTP identity."""
+    def start(self, to, cc, subject, body, key, files=(), bcc=()) -> str:
+        """A new email; retain its provider receipt until the signed sent event supplies its SMTP identity.
+        Resend delivers to `bcc` and writes no Bcc header."""
         headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
         payload = {"from": self.from_address, "to": to, "cc": cc, "subject": subject, "text": body,
-                   **_attachments(files)}
+                   **({"bcc": list(bcc)} if bcc else {}), **_attachments(files)}
         try:
             status, r = self.post("https://api.resend.com/emails", headers | {"Idempotency-Key": key}, payload)
         except (urllib.error.URLError, OSError, ValueError) as e:

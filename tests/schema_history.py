@@ -41,6 +41,7 @@ def _integer_keys_sql() -> str:
 
 
 UNDO = {
+    46: "ALTER TABLE composition_drafts DROP COLUMN bcc;",
     45: "DELETE FROM urgency WHERE name = 'feasibility'; ALTER TABLE issues DROP COLUMN pinned;",
     44: """DELETE FROM modules WHERE id = 'issues';
 CREATE TABLE modules_old (  -- each Module's setting for this Service; no row means off (ADR 0017)

@@ -1,7 +1,10 @@
 """Public Draft storage and captured-history steps; synthetic local records only."""
 
+import contextlib
+import io
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from unittest import mock
 
 import pytest
 from pytest_bdd import given, parsers, then, when
@@ -185,3 +188,69 @@ def outgoing_actor(composition):
 def detached(composition):
     assert composition.db.execute("SELECT person_id FROM identities WHERE id = ?",
                                   (composition.identity_id,)).fetchone()[0] is None
+
+
+# --- Bcc: an agent's CLI calls (agent.run), printed or refused ---------------------------------------
+
+def agent_cli(composition, *argv, stdin=""):
+    from test_cli_parity import run
+    out = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(out), mock.patch("sys.stdin", io.StringIO(stdin)):
+            run(composition.db, *argv)
+    except SystemExit as e:
+        composition.error = str(e.code)
+    composition.printed = out.getvalue()
+    composition.draft = next(iter(inbox.list_drafts(composition.db)), None)
+
+
+@when(parsers.parse('an agent starts a New Thread Draft on Connection "{cid}" to "{to}" with Bcc "{bcc}"'))
+def agent_new_draft(composition, cid, to, bcc):
+    subject = ("--subject", "Round status") if cid == "1" else ()  # Connection 1 is email, 2 is SMS
+    agent_cli(composition, "draft", "new", "--connection", cid, "--to", to, "--bcc", bcc, *subject,
+              "--body", "-", stdin="This week's round status.")
+
+
+@when(parsers.parse("an agent sets that Draft's Bcc to \"{bcc}\" at its Draft revision"))
+def agent_sets_bcc(composition, bcc):
+    agent_cli(composition, "draft", composition.draft["id"], "--revision", str(composition.draft["revision"]),
+              "--bcc", bcc)
+
+
+@when("Save Draft is called without a Bcc at its Draft revision")
+def save_without_bcc(composition):
+    d = composition.draft
+    composition.draft = inbox.save_draft(
+        composition.db, {k: d[k] for k in FIELDS.values()} | {"body": d["body"] + " Edited."},
+        draft_id=d["id"], expected_revision=d["revision"])
+
+
+@then(parsers.parse('Get Draft reads To "{to}", no Cc, and Bcc "{bcc}"'))
+def reads_recipients(composition, to, bcc):
+    d = inbox.get_draft(composition.db, composition.draft["id"])
+    assert (d["to"], d["cc"], d["bcc"]) == (to, "", bcc)
+
+
+@then(parsers.parse('the Draft Markdown shows "{line}"'))
+def markdown_shows(composition, line):
+    assert line in composition.printed.splitlines()
+
+
+@given(parsers.parse('a captured incoming email Thread from "{value}"'))
+def captured_email(composition, value):
+    captured(composition, "email", value, incoming=True)
+
+
+@when(parsers.parse('an agent starts a Reply Draft on that Thread with Bcc "{bcc}"'))
+def agent_reply_bcc(composition, bcc):
+    agent_cli(composition, "draft", "new", "--thread", composition.thread.id, "--bcc", bcc, "--body", "Thanks.")
+
+
+@then(parsers.parse('the agent is refused with "{words}"'))
+def refused(composition, words):
+    assert composition.error and words in composition.error
+
+
+@then("no Draft was saved")
+def no_draft(composition):
+    assert inbox.list_drafts(composition.db) == []

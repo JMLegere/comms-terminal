@@ -3,11 +3,13 @@ Feature: Composition
   Save Draft (inbox.save_draft), Get Draft (inbox.get_draft), and List Drafts (inbox.list_drafts)
   persist and resume the complete edited fields. The latest save wins (ADR 0012): an edit made after the stored save applies over a newer revision, and Draft Conflict (inbox.DraftConflict) rejects one made before it, from the console, the CLI or an agent.
   Connection maps to connection_id, Message format to kind, Sender to sender, To to to,
-  Cc to cc, Subject to subject, and Body to body. "none" means no Connection or no SMS Subject;
+  Cc to cc, Bcc to bcc, Subject to subject, and Body to body. "none" means no Connection or no SMS Subject;
   every other field remains the exact edited string.
   Recipient History (inbox.recipient_threads) reads canonical Captured history by Identity Kind and Value,
   whether or not a Person is linked. Captured history makes no claim about external messages.
   Ingest (inbox.ingest) and Remove Identity (inbox.remove_identity) arrange captured records.
+  An agent works through the CLI (`comms-terminal draft`, agent.run). Bcc is an email New Thread Draft's own:
+  a save that leaves it out keeps the stored Bcc (the App and older Consoles send no Bcc).
 
   @AS-22 @FR-18 @FR-20 @NFR-10 @NFR-12 @I-7 @I-12
   Scenario Outline: Edited partial Draft resumes after closing and reopening
@@ -84,3 +86,25 @@ Feature: Composition
       | kind  | value         |
       | email | ana@acme.test |
       | phone | +15550001002  |
+
+  @AS-22 @FR-20
+  Scenario: An email New Thread Draft keeps its Bcc apart from To and Cc
+    When an agent starts a New Thread Draft on Connection "1" to "me@example.test" with Bcc "ana@acme.test, bo@newco.io"
+    And an agent sets that Draft's Bcc to "ana@acme.test, bo@newco.io, cy@fund.vc" at its Draft revision
+    Then Get Draft reads To "me@example.test", no Cc, and Bcc "ana@acme.test, bo@newco.io, cy@fund.vc"
+    And the Draft Markdown shows "- Bcc: ana@acme.test, bo@newco.io, cy@fund.vc"
+    When Save Draft is called without a Bcc at its Draft revision
+    Then Get Draft reads To "me@example.test", no Cc, and Bcc "ana@acme.test, bo@newco.io, cy@fund.vc"
+
+  @AS-22 @FR-20
+  Scenario: An SMS Draft has no Bcc
+    When an agent starts a New Thread Draft on Connection "2" to "+15550001002" with Bcc "ana@acme.test"
+    Then the agent is refused with "Only an email New Thread Draft has Bcc"
+    And no Draft was saved
+
+  @AS-22 @FR-20
+  Scenario: A Reply Draft has no Bcc
+    Given a captured incoming email Thread from "ana@acme.test"
+    When an agent starts a Reply Draft on that Thread with Bcc "bo@newco.io"
+    Then the agent is refused with "Only an email New Thread Draft has Bcc"
+    And no Draft was saved
