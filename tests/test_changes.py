@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from schema_history import downgrade
 from test_console import seed_demo  # noqa: F401 - test_console puts scripts/ on the path
 
-from comms_terminal import clock, inbox, remote
+from comms_terminal import clock, files, inbox, remote
 
 
 def demo(tmp_path):
@@ -88,6 +88,19 @@ def test_a_new_message_brings_its_raw_name(tmp_path):
     _, body = sync(path, cursor=at, schema=inbox.SCHEMA_VERSION)
 
     assert body["raw"] == ["abc123.eml"]
+
+
+def test_a_staged_file_brings_its_link_capability(tmp_path):
+    """The laptop links a Draft's staged file as it links a received Attachment, so /sync signs both (FR-A5)."""
+    path, db, _ = demo(tmp_path)
+    at = remote.cursor(db)
+    sha = files.store_file(db, b"quote")
+    tid = db.execute("SELECT id FROM threads LIMIT 1").fetchone()[0]
+    inbox.stage(db, sha=sha, name="quote.pdf", type="application/pdf", size=5, thread_id=tid)
+    cap = files.file_cap(files.files_secret(db), sha)
+
+    assert sync(path, cursor=at, schema=inbox.SCHEMA_VERSION)[1]["caps"] == {sha: cap}
+    assert sync(path)[1]["caps"][sha] == cap  # the whole snapshot too
 
 
 def test_old_clients_old_cursors_and_other_schemas_get_the_snapshot(tmp_path):
