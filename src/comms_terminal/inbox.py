@@ -2524,10 +2524,14 @@ def stage(db, *, sha: str, name: str, type: str, size: int,
     return staged
 
 
-def staged(db, *, draft_id: int | None = None, thread_id: int | None = None) -> list[dict]:
+def staged(db, *, draft_id: int | None = None, thread_id: int | None = None,
+           lan: tuple[str, int] | None = None) -> list[dict]:
+    """A Draft's staged files; with `lan` = (host, port), each also has `url`, its LAN file link as a received
+    Attachment's (FR-A5), or "" when the laptop copy holds no capability for it yet."""
     owner = _owner(db, draft_id, thread_id)
-    return [dict(r) for r in db.execute(
+    rows = [dict(r) for r in db.execute(
         "SELECT * FROM staged_attachments WHERE draft_id = ? ORDER BY id", (owner,))] if owner else []
+    return [r | {"url": files.file_url(db, r["sha"], r["name"], *lan)} for r in rows] if lan else rows
 
 
 def staged_files(db, *, draft_id: int | None = None, thread_id: int | None = None) -> list[Staged]:

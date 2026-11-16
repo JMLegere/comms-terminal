@@ -1539,8 +1539,9 @@ class PickFile(ModalScreen):
 
 
 class StagedList(OptionList):
-    """A reply's or Draft's staged files (FR-A8, FR-A12): delete removes the highlighted one. Uploads from Mani
-    arrive through the service, so it re-reads them every 2 s while it has an owner."""
+    """A reply's or Draft's staged files (FR-A8, FR-A12): each links to its stored copy as a received Attachment's
+    chip does (FR-A5); delete removes the highlighted one. Uploads from Mani arrive through the service, so it
+    re-reads them every 2 s while it has an owner."""
     BINDINGS = [Binding("delete", "unstage", "remove file")]
 
     def __init__(self, owner=None):
@@ -1561,10 +1562,12 @@ class StagedList(OptionList):
         self.refresh_staged()
 
     def refresh_staged(self):
-        rows = inbox.staged(self.app.db, **{f"{self.owner[0]}_id": self.owner[1]}) if self.owner else []
+        rows = inbox.staged(self.app.db, **{f"{self.owner[0]}_id": self.owner[1]},
+                            lan=self.app.files) if self.owner else []
         if [str(r["id"]) for r in rows] != [self.get_option_at_index(i).id for i in range(self.option_count)]:
             keep = self.highlighted
-            self.set_options([Option(f"{ICON['attachment']} {render.chip(r['name'], r['type'], r['size'])}",
+            chip = lambda r: f"{ICON['attachment']} {render.chip(r['name'], r['type'], r['size'])}"  # noqa: E731
+            self.set_options([Option(f"[link='{render.target(r['url'])}']{chip(r)}[/link]" if r.get("url") else chip(r),
                                      id=str(r["id"])) for r in rows])
             if rows and keep is not None:
                 self.highlighted = min(keep, len(rows) - 1)

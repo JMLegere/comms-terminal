@@ -11,3 +11,5 @@ def test_stored_chip_reveals_in_files_and_others_open_their_link():
     out = json.loads(r.stdout)
     assert out["revealed"] == [{"url": "http://127.0.0.1:8789/f/ab12.sig/deck.pdf", "name": "deck.pdf"}]
     assert out["opened"] == ["https://mail.google.com/mail/#search/x", "https://mail.google.com/mail/#search/y"]
+    assert out["staged"] == {"revealed": [{"url": "http://127.0.0.1:8789/f/cd34.sig/quote.pdf", "name": "quote.pdf"}],
+                             "opened": []}

@@ -68,6 +68,33 @@ def test_chips_link_stored_files_and_pending_ones_say_not_copied_and_images_show
     assert seen["images"] == 1
 
 
+def test_a_staged_file_links_to_its_stored_copy_as_a_received_chip_does(tmp_path):
+    """Jeremy, 2026-11-16: a file on a reply opens from its chip the way a received Attachment's does (FR-A5)."""
+    path, ids = seeded(tmp_path)
+    db = inbox.connect(path)
+    sha = files.store_file(db, b"%PDF-1.7 quote")
+    inbox.stage(db, sha=sha, name="quote.pdf", type="application/pdf", size=14, thread_id=ids["ana"])
+    assert "url" not in inbox.staged(db, thread_id=ids["ana"])[0]
+    url = inbox.staged(db, thread_id=ids["ana"], lan=("192.168.0.107", 8789))[0]["url"]
+    assert url == files.file_url(db, sha, "quote.pdf", "192.168.0.107", 8789)
+    app, seen = Console(path, files=("192.168.0.107", 8789)), {}
+
+    async def go(app, pilot):
+        app.main.open_thread(ids["ana"])
+        await pilot.pause()
+        await pilot.press("r")
+        await pilot.pause()
+        staged = app.main.thread_view.query_one(StagedList)
+        seen["prompt"] = str(staged.get_option_at_index(0).prompt)
+        staged.focus()
+        await pilot.press("delete")
+        await pilot.pause()
+
+    run(app, [go])
+    assert seen["prompt"] == f"[link='{url}']\U000f03e2 quote.pdf · PDF · 14 B[/link]"
+    assert inbox.staged(db, thread_id=ids["ana"]) == []
+
+
 def with_inline_image(tmp_path, stored):
     """A new newest message from Ana, kept raw: text, a pasted screenshot (cid), more text."""
     path, ids = seeded(tmp_path)

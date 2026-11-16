@@ -11,7 +11,7 @@
 // view's own directory is the most a relative import may reach.
 import { div, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, TextareaState, Textarea } from "gpui-base";
-import { call, shared, setShared, run, open, focusMain, toast } from "comms";
+import { call, shared, setShared, run, reveal, focusMain, toast } from "comms";
 
 const FIELDS = ["connection_id", "kind", "sender", "to", "cc", "subject", "body"];
 const pad = (n) => String(n).padStart(2, "0");
@@ -426,7 +426,7 @@ export class Composer {
       .when(Boolean(this.staged?.length), (el) => el.child(h_flex().flex_wrap().gap(6).items_center().text_size(12)
         .child(div().text_color(muted).child("Files"))
         .children(this.staged.map((a, i) => h_flex().id(`file-${i}`).gap(4).px(8).py(2).rounded(6).border(1).border_color(t.border)
-          .text_color(a.url ? t.accent : muted).when(Boolean(a.url), (e) => e.cursor_pointer().on_click(() => open(a.url)))
+          .text_color(a.url ? t.accent : muted).when(Boolean(a.url), (e) => e.cursor_pointer().on_click(() => reveal(a.url, a.name ?? "attachment")))
           .child(svg("icons/file-text.svg").size(12)).child(div().child(a.name ?? "file"))))))
       .when(Boolean(shown), (el) => el.child(div().text_size(12).text_color(bad ? t.red ?? t.danger : muted).child(shown)))
       .child(div().text_size(11.5).text_color(this.saveError || locked ? t.red ?? t.danger : muted).child(hint));

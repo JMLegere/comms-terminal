@@ -433,13 +433,13 @@ def handle_sync(db_path: str, changes: Changes, body: bytes, wait: float = 25) -
             kept = [(c["tbl"], c["row"]) for c in rows if c["row"] is not None]
             names = sorted({f"{raw}.eml" for tbl, r in kept if tbl == "activities"
                             and (raw := json.loads(r["data"]).get("raw"))})
-            caps = {r["sha"]: files.file_cap(secret, r["sha"]) for tbl, r in kept if tbl == "attachments" and r["sha"]}
+            caps = {r["sha"]: files.file_cap(secret, r["sha"]) for tbl, r in kept if tbl in ("attachments", "staged_attachments") and r["sha"]}
             return 200, {"since": token, "cursor": at, "changes": rows, "raw": names, "caps": caps,
                          "build": build()} | done
         raw = files.raw_dir(db)
         names = sorted(p.name for p in raw.iterdir()) if raw is not None and raw.is_dir() else []
         caps = {r[0]: files.file_cap(secret, r[0])
-                for r in db.execute("SELECT DISTINCT sha FROM attachments WHERE sha IS NOT NULL")}
+                for r in db.execute("SELECT sha FROM attachments WHERE sha IS NOT NULL UNION SELECT sha FROM staged_attachments")}
     finally:
         db.close()
     data = snapshot_bytes(db_path)

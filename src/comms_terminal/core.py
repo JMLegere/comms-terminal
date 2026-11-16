@@ -173,7 +173,7 @@ def _thread(core, db, thread_id):
             body = render.from_slack(m["content"]) if slack else render.from_text(m["content"])
             m["shown"], m["trimmed"] = render.plain(body.text), render.plain(body.trimmed)
     return {"view": view, "senders": inbox.thread_senders(db, thread_id),
-            "reply_draft": inbox.reply_draft(db, thread_id), "staged": inbox.staged(db, thread_id=thread_id),
+            "reply_draft": inbox.reply_draft(db, thread_id), "staged": inbox.staged(db, thread_id=thread_id, lan=FILES),
             "cases": inbox.cases(db),
             "drafts": [d for m in inbox.snapshot(db, thread_id)["_members"]
                        if (d := inbox.reply_draft(db, m)) and (d.get("body") or "").strip()]}
@@ -384,7 +384,7 @@ def _draft(core, db, draft_id):
             else "Captured local history"
     except Exception:
         history, note = [], "Captured history unavailable · lookup failed."
-    return {"draft": d, "staged": inbox.staged(db, draft_id=draft_id),
+    return {"draft": d, "staged": inbox.staged(db, draft_id=draft_id, lan=FILES),
             "connection": connection_label(c) if c else ("Connection unavailable" if d["connection_id"] is not None
                                                          else "Choose Connection"),
             "sender": conn_name(c) if d["kind"] == "slack" and c else d["sender"],
