@@ -2,6 +2,7 @@ Feature: Pipeline
   The Revenue Pipeline holds Organizations; the Fundraising and Talent Pipelines hold People (ADR 0016). Set Stage
   (pipeline.set_stage) and Set Value (pipeline.set_value) append to the Pipeline log; the Pipeline math
   (pipeline.math) lays each one out under its Stage, and a Person's card names their Organizations (Memberships).
+  Set Target (pipeline.set_target) gives a Pipeline the outcome its math works backwards from.
 
   @FR-PL @FR-OA
   Scenario: A Person who works for a fund sits in the Fundraising Pipeline under their own name
@@ -9,6 +10,16 @@ Feature: Pipeline
     When Jeremy sets the Fundraising Stage of "laila@nbif.ca" to "Soft commit" and the Value to "100k"
     Then the Fundraising Pipeline shows "Laïla Thériault" at "Soft commit" with Value 100000 and Organizations "nbif.ca"
     And the Organization "nbif.ca" holds no Fundraising Stage
+
+  @FR-PL
+  Scenario: A Soft commit counts toward the Fundraising Target
+    Given a Person "Laïla Thériault" with address "laila@nbif.ca"
+    And a Person "Brendan" with address "brendan@example.com"
+    When Jeremy sets the Fundraising Stage of "laila@nbif.ca" to "Soft commit" and the Value to "100k"
+    And Jeremy sets the Fundraising Stage of "brendan@example.com" to "Closed" and the Value to "10k"
+    And Jeremy sets the Fundraising Target to "300k" by "2027-01-31"
+    Then the Fundraising Pipeline counts CAD 110000 from 2 People toward the Target
+    And the Fundraising Pipeline must reach "Soft commit" by "2027-01-31"
 
   @FR-PL
   Scenario: The Revenue Pipeline still holds Organizations

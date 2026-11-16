@@ -31,15 +31,17 @@ PEOPLE = (FUNDRAISING, TALENT)  # Pipelines that hold People (ADR 0016); Revenue
 NOUN = {REVENUE: "Organizations", FUNDRAISING: "People", TALENT: "People"}
 NAMES = {REVENUE: "Revenue", FUNDRAISING: "Fundraising", TALENT: "Talent"}
 OPEN = {REVENUE: ("Awareness", "Education", "Prioritization", "Selection", "Commit", "Onboarding"),
-        FUNDRAISING: ("Research", "Outreach", "Meeting", "Diligence", "Soft commit"),
+        FUNDRAISING: ("Research", "Outreach", "Meeting", "Diligence"),
         TALENT: ("Explore", "Role fit", "Offer", "Start")}
-PAYING = {REVENUE: ("Impact", "Expansion"), FUNDRAISING: ("Closed",), TALENT: ("Joined",)}
+# The Stages that count toward the Target; the math's chain ends at the first. A Soft commit counts toward the
+# Fundraising Target (Jeremy, 2026-11-16), so its pace, projection and coverage run to Soft commit, not Closed.
+PAYING = {REVENUE: ("Impact", "Expansion"), FUNDRAISING: ("Soft commit", "Closed"), TALENT: ("Joined",)}
 ENDING = {REVENUE: ("Lost", "Churned"), FUNDRAISING: ("Passed",), TALENT: ("Lost",)}
 STAGES = {p: OPEN[p] + PAYING[p] + ENDING[p] for p in PIPELINES}
 # Rows after the Stage table (design § Pipeline); Impact and Expansion carry retention and expansion
 END_ROWS = {REVENUE: (("Impact", ("Impact",)), ("Expansion", ("Expansion",)), ("Lost", ("Lost",)),
                       ("Churned", ("Churned",))),
-            FUNDRAISING: (("Closed", ("Closed",)), ("Passed", ("Passed",))),
+            FUNDRAISING: (("Soft commit", ("Soft commit",)), ("Closed", ("Closed",)), ("Passed", ("Passed",))),
             TALENT: (("Joined", ("Joined",)), ("Lost", ("Lost",)))}
 WINDOW = timedelta(days=90)  # the rates in use: the last 90 days
 BENCH_WINDOW = timedelta(days=730)  # each rate's Benchmark: the same rate over the last 2 years

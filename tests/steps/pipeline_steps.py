@@ -48,3 +48,22 @@ def org_none(ctx, domain):
 def shows_org(ctx, domain, stage):
     at, o = _cards(ctx, pipeline.REVENUE)[pipeline.find_org(ctx.db, domain)["name"]]
     assert (at, o["person"], o["domain"]) == (stage, False, domain)
+
+
+@when(parsers.parse('Jeremy sets the Fundraising Target to "{amount}" by "{due}"'))
+def set_fundraising_target(ctx, amount, due):
+    pipeline.set_target(ctx.db, pipeline.FUNDRAISING, amount, due)
+
+
+@then(parsers.parse('the Fundraising Pipeline counts CAD {amount:d} from {count:d} People toward the Target'))
+def fundraising_counted(ctx, amount, count):
+    s = pipeline.math(ctx.db, pipeline.FUNDRAISING)["summary"]
+    assert (s["paying"], s["paying_count"]) == (amount, count)
+    assert s["projected"] >= amount
+
+
+@then(parsers.parse('the Fundraising Pipeline must reach "{stage}" by "{due}"'))
+def fundraising_reach(ctx, stage, due):
+    m = pipeline.math(ctx.db, pipeline.FUNDRAISING)
+    assert m["paying_stage"] == stage
+    assert f"- Must reach {stage} by {due} (" in pipeline.markdown(m)
