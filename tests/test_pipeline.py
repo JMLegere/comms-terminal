@@ -337,3 +337,33 @@ def test_merging_people_keeps_their_pipeline_place(db):
     pl.set_stage(db, drop, pl.FUNDRAISING, "Diligence")
     inbox.merge_persons(db, keep, drop)
     assert pl.current(db, person_id=keep)[pl.FUNDRAISING]["stage"] == "Diligence"
+
+
+def test_fundraising_counts_from_soft_commit(db):
+    """Soft commit and Closed count toward the Fundraising Target (Jeremy, 2026-11-16): the chain ends at Soft
+    commit, so Closed counts as having reached it, and Revenue still ends at Impact."""
+    F = pl.FUNDRAISING
+    with db:
+        nbif, brendan, ana, bo = (db.execute("INSERT INTO persons (display_name, created_at) VALUES (?, 'x')"
+                                             " RETURNING id", (n,)).fetchone()[0]
+                                  for n in ("Laïla", "Brendan", "Ana", "Bo"))
+    for p, steps, value in ((nbif, ((60, "Diligence"), (30, "Soft commit")), "100k"),
+                            (brendan, ((80, "Research"), (10, "Closed")), "10k"),
+                            (ana, ((50, "Diligence"),), "50k"), (bo, ((40, "Meeting"), (20, "Passed")), None)):
+        for days_ago, stage in steps:
+            pl.set_stage(db, p, F, stage, at=NOW - days_ago * DAY)
+        if value:
+            pl.set_value(db, p, F, value, at=NOW - DAY)
+    pl.set_target(db, F, "300k", "2027-01-31")
+    m = pl.math(db, F)
+    s, rows = m["summary"], {r["stage"]: r for r in m["stages"]}
+    assert m["paying_stage"] == "Soft commit"
+    assert list(rows) == ["Research", "Outreach", "Meeting", "Diligence"]
+    assert [r["stage"] for r in m["ending"]] == ["Soft commit", "Closed", "Passed"]
+    assert (s["paying"], s["paying_count"]) == (110_000, 2)
+    assert rows["Diligence"]["rate"] == pytest.approx(2 / 3)  # Laïla and Brendan reached Soft commit, Ana not yet
+    assert s["weighted"] == pytest.approx(50_000 * 2 / 3)
+    assert s["projected"] == pytest.approx(110_000 + 50_000 * 2 / 3)
+    assert "- Must reach Soft commit by 2027-01-31" in pl.markdown(m)
+    assert "| →Soft commit |" in pl.markdown(m)
+    assert pl.math(db, R)["paying_stage"] == "Impact"

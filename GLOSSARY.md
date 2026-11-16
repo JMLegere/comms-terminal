@@ -271,7 +271,7 @@ The cheque an investor has committed or is expected to commit, whether from thei
 _Avoid_: Ticket, Check size
 
 **Target**:
-The outcome a Pipeline works backwards from, with a date: revenue over the trailing twelve months for Revenue, a round size for Fundraising.
+The outcome a Pipeline works backwards from, with a date: revenue over the trailing twelve months for Revenue, a round size for Fundraising. A Fundraising cheque counts toward it from Soft commit, so Closed cheques count too and the math's pace runs to Soft commit.
 _Avoid_: Goal (when meaning this number), Quota
 
 **Conversion to Impact**:
