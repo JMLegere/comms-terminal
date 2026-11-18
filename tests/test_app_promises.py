@@ -30,6 +30,8 @@ def test_enter_opens_the_promises_thread(out):
 
 def test_today_lists_promises_first_and_shows_one_in_the_side_pane(out):
     assert out["todayKinds"] == ["promises", "threads"]
+    assert out["todayHeader"] == ["at_risk", "a"]  # a section header above its Promises, as Threads' Status headers
+    assert out["due"] == ["-2h", "2d"]
     assert out["todaySide"] == {"kind": "promise", "id": "a"} and out["todayDetail"] == "promise"
 
 

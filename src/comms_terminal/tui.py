@@ -6148,12 +6148,11 @@ class PausedPage(TablePage):
         self.app.main.open(lambda: PersonPage(e["person_id"]))
 
 
-PROMISE_SECTION = {"overdue": ("Overdue", "red"), "at_risk": ("At risk", "red"), "today": ("Today", "yellow"),
-                   "this_week": ("This week", "fg0"), "later": ("Later", "grey1"), "tentative": ("Tentative", "grey1")}
-PROMISE_ICON = {"overdue": "warn", "at_risk": "time", "today": "today", "this_week": "calendar", "later": "calendar",
-                "tentative": "tentative"}
-CHANGE_ICON = {"recorded": "add", "firmed": "done", "changed": "edited", "linked": "link", "fulfilled": "done",
-               "cancelled": "remove"}
+PROMISE_SECTION = {"overdue": ("Overdue", "red", "warn"), "at_risk": ("At risk", "orange", "time"),
+                   "today": ("Today", "yellow", "today"), "this_week": ("This week", "blue", "calendar"),
+                   "later": ("Later", "grey1", "calendar"), "tentative": ("Tentative", "grey1", "tentative")}
+VIA_ICON = {"email": "email", "slack": "slack", "sms": "sms", "call": "call", "meeting": "meeting", "words": "person",
+            "customer_request": "issues", "tana": "tana", "activity": "message"}
 
 
 def minutes_text(m: int) -> str:
@@ -6161,72 +6160,94 @@ def minutes_text(m: int) -> str:
     return f"{sign}{m // 1440}d" if m >= 2880 else f"{sign}{m // 60}h{m % 60:02d}" if m >= 60 else f"{sign}{m}m"
 
 
+def due_in(p: dict, now: datetime) -> str:
+    """Time to a Promise's due time, as a Thread row shows its age: 6h, 2d; late ones count up, -20h."""
+    m = int((datetime.fromisoformat(p["due_at"]) - now).total_seconds() // 60)
+    a = abs(m)
+    text = f"{a // 1440}d" if a >= 2880 else f"{a // 60}h" if a >= 60 else f"{a}m"
+    return f"-{text}" if m < 0 else text
+
+
 def promise_markup(p: dict) -> str:
-    """One Promise in the right pane: who, when, Slack, links and its history with each Origin. Read-only: only an
-    agent changes Promises (ADR 0024)."""
-    grey, red = "#928374", PALETTE["red"]
+    """One Promise in the right pane, as a Thread shows: its title, its section and due time, who it is owed to,
+    then its history like messages, each with how its Origin came in. Read-only (ADR 0024)."""
+    grey = "#928374"
+    now = clock.now()
+    key = promises.section(p, now)
+    name, color, icon = PROMISE_SECTION[key]
+    hue = PALETTE.get(color, grey)
     due = datetime.fromisoformat(p["due_at"]).astimezone(sequences.LOCAL).strftime("%a %d %b %H:%M")
-    name, _ = PROMISE_SECTION[promises.section(p, clock.now())]
-    key = promises.section(p, clock.now())
-    people = "people" if len(p["people"]) > 1 else "person"
-    lines = [f"{ICON['promise']} [b]{escape(p['what'])}[/]", "",
-             f"[{grey}]{ICON[people]} Owed to[/]  {escape(', '.join(x['display_name'] for x in p['people']))}",
-             f"[{grey}]{ICON['calendar']} Due[/]  {due}" + (f" [{grey}](inferred)[/]" if p["due_inferred"] else ""),
-             f"[{grey}]{ICON['time']} Work[/]  {minutes_text(p['work_minutes'])} · [{grey}]{ICON['travel']} Travel[/]  "
-             f"{minutes_text(p['travel_minutes'])} · [{grey}]{ICON['slack_time']} Slack[/]  {minutes_text(p['slack'])}",
-             (f"[{red}]{ICON[PROMISE_ICON[key]]} {name}[/]" if p["risk"] else f"[{grey}]{ICON[PROMISE_ICON[key]]} {name}[/]")
-             + (f" · {ICON['edited']} Draft ready" if p["draft_ready"] else "")]
+    lines = [f"[b]{escape(p['what'])}[/]",
+             f"[{hue}]{ICON[icon]} {name}[/]  [{grey}]due {due}{' (inferred)' if p['due_inferred'] else ''}[/]",
+             "",
+             f"[{grey}]Owed to[/]  [b]{escape(', '.join(x['display_name'] for x in p['people']))}[/]",
+             f"[{grey}]Work[/]  {minutes_text(p['work_minutes'])}   [{grey}]Travel[/]  {minutes_text(p['travel_minutes'])}"
+             f"   [{grey}]Slack[/]  [{hue if p['risk'] else PALETTE['fg0']}]{minutes_text(p['slack'])}[/]"]
+    if p["draft_ready"]:
+        lines.append(f"[{PALETTE['yellow']}]{ICON['edited']} Draft ready[/]")
     for link in p["links"]:
         label = escape(link["label"])
         if link["kind"] == "url":
             label = f"[link='{render.target(link['target'])}']{label}[/link]"
         elif link["kind"] == "thread":
             label = f"[@click=app.open_thread({link['target']!r})][underline]{label}[/][/]"
-        glyph = ICON.get({"url": "link", "draft": "edited", "issue": "issues", "enrollment": "sequence",
-                          "tana": "tana"}.get(link["kind"], link["kind"]), ICON["link"])
-        lines.append(f"[{grey}]{glyph} {link['kind'].title()}[/]  {label}")
-    lines += ["", f"[{grey}]{ICON['time']} History[/]"]
+        lines.append(f"[{grey}]{link['kind'].title()}[/]  {label}")
+    lines += ["", f"[{grey}]History[/]"]
     for h in p["history"]:
         at = datetime.fromisoformat(h["at"]).astimezone(sequences.LOCAL).strftime("%d %b %H:%M")
-        lines.append(f"[{grey}]{at}[/]  {ICON.get(CHANGE_ICON.get(h['change'], 'edited'), '')} {h['change']}")
-        lines.append(f"  [{grey}]{escape(h['origin'])}[/]")
+        lines.append(f"[{grey}]{ICON.get(VIA_ICON.get(h['origin_via'], 'message'), '')}[/] {escape(h['origin'])}")
+        lines.append(f"    [{grey}]{h['change']} · {at}[/]")
     lines += ["", f"[{grey}]Read-only: tell an agent to change a Promise (ADR 0024) · enter opens its Thread[/]"]
     return "\n".join(lines)
 
 
 class PromisesPage(TablePage):
-    """Promises (FR-PR-8): what People expect Jeremy to do, by section (Overdue, At risk, Today, This week, Later,
-    Tentative), soonest first. Read-only (ADR 0024); enter opens the Promise's Thread. Today shows the same rows
-    (FR-PR-9)."""
+    """Promises (FR-PR-8), laid out as the Threads list: a header per section (Overdue, At risk, Today, This week,
+    Later, Tentative) with its glyph and count, then its Promises, each with the section's glyph, who it is owed to,
+    what, and the time to its due time. Read-only (ADR 0024); enter opens the Promise's Thread. Today shows the same
+    rows (FR-PR-9)."""
     TITLE = f"{ICON['promise']} promises"
     RAIL = "promises"
     KIND = "promise"
     SIDE = f"{ICON['promise']} promise"
-    COLUMNS = ("", "Due", "Owed to · Promise")
+    COLUMNS = ("", "", "", "")
     EMPTY = "No Promises owed."
 
     def rows(self):
-        v = promises.view(self.app.db, clock.now())
+        now = clock.now()
+        v = promises.view(self.app.db, now)
         self.captured = v["captured"]
         out = []
         for key in promises.SECTIONS:
-            name, color = PROMISE_SECTION[key]
+            items = v["sections"][key]
+            if not items:
+                continue
+            name, color, icon = PROMISE_SECTION[key]
             hue = PALETTE.get(color, "#928374")
-            for p in v["sections"][key]:
-                at = datetime.fromisoformat(p["due_at"]).astimezone(sequences.LOCAL)
-                due = name.lower() if key in ("overdue", "at_risk") else at.strftime("%a %d %H:%M")
+            out.append(({"header": key}, (f"[{hue}]{ICON[icon]}[/]", f"[b {hue}]{name}[/]", "",
+                                          f"[#928374]{len(items)}[/]")))
+            for p in items:
                 who = ", ".join(x["display_name"] for x in p["people"])
-                line = f"{who} · {p['what']}"
-                line = line if len(line) <= 29 else line[:28] + "…"
-                out.append((p, (f"[{hue}]{ICON[PROMISE_ICON[key]]}[/]", f"[{hue}]{due}[/]",
-                                (f"[{'#928374' if key == 'tentative' else hue if key in ('overdue', 'at_risk') else PALETTE['fg0']}]"
-                                 f"{escape(line)}[/]") + (f" [#928374]{ICON['edited']}[/]" if p["draft_ready"] else ""))))
+                who = who if len(who) <= 13 else who[:12] + "…"
+                what = p["what"] if len(p["what"]) <= 15 else p["what"][:14] + "…"
+                dim = key == "tentative"
+                out.append((p, (f"  [{hue}]{ICON[icon]}[/]", f"[b {'#928374' if dim else PALETTE['fg1']}]{escape(who)}[/]",
+                                f"[{'#928374' if dim else PALETTE['fg0']}]{escape(what)}[/]"
+                                + (f" [{PALETTE['yellow']}]{ICON['edited']}[/]" if p["draft_ready"] else ""),
+                                f"[{hue if p['risk'] else '#928374'}]{due_in(p, now)}[/]")))
         return out
+
+    def selectable_rows(self):
+        return [i for i, (item, _) in enumerate(getattr(self, "items", [])) if not item.get("header")]
 
     def refresh_data(self):
         if not self.query(DataTable) or not self.on_screen:
             return
         super().refresh_data()
+        rows = self.selectable_rows()
+        table = self.query_one(DataTable)
+        if rows and table.cursor_row not in rows:
+            table.move_cursor(row=rows[0])
         if self.host is None and self.query("#below"):
             at = getattr(self, "captured", None)
             when_text = (datetime.fromisoformat(at["at"]).astimezone(sequences.LOCAL).strftime("%a %d %b %H:%M")
@@ -6236,6 +6257,25 @@ class PromisesPage(TablePage):
             self.host.list_changed(self)
         if self.active:
             self.show_selected()
+
+    def selected(self):
+        item = super().selected()
+        return None if item is None or item.get("header") else item
+
+    def _step(self, step: int):
+        """↓/↑ skip the section headers, as the Threads list skips its status headers."""
+        rows, table = self.selectable_rows(), self.query_one(DataTable)
+        later = [r for r in rows if (r > table.cursor_row if step > 0 else r < table.cursor_row)]
+        if later:
+            table.move_cursor(row=later[0] if step > 0 else later[-1])
+        elif self.host is not None:
+            self.host.run_on(self, step)
+
+    def action_down(self):
+        self._step(1)
+
+    def action_up(self):
+        self._step(-1)
 
     def show_selected(self):
         p = self.selected()
@@ -6247,6 +6287,13 @@ class PromisesPage(TablePage):
 
     def on_data_table_row_highlighted(self, event):
         event.stop()
+        rows, row = self.selectable_rows(), event.cursor_row
+        if rows and row not in rows:  # arrows or a click on a section header: on to the nearest Promise that way
+            step = 1 if row >= getattr(self, "_last_row", -1) else -1
+            ahead = [r for r in rows if (r > row if step > 0 else r < row)] or rows
+            self.query_one(DataTable).move_cursor(row=ahead[0] if step > 0 else ahead[-1])
+            return
+        self._last_row = row
         if self.active:
             self.show_selected()
 
@@ -6326,7 +6373,7 @@ class TodayPage(Page):
         and move the cursor on when the list in use has emptied."""
         n = self.count(page)
         if page is self.promises:  # owed Promises first (FR-PR-9)
-            late = sum(1 for p, _ in page.items if p and p["risk"])
+            late = sum(1 for p, _ in page.items if p and p.get("risk"))
             title = pill(f"{ICON['promise']} promises · {n}", "blue") + (f" [b #c14a4a]{late} at risk or overdue[/]" if late else "")
         elif page is self.threads:
             title = pill(f"{ICON['TODO']} threads · {n}", "blue")

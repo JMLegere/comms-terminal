@@ -83,8 +83,6 @@ ICON = {
     "warn": "\U000f002a",           # md-alert_outline
     "issues": "\U000f0756",         # md-format_list_checks: Issues (ADR 0019)
     "promise": "\U000f1218",       # md-handshake: a Promise (ADR 0024)
-    "slack_time": "\U000f029a",    # md-gauge: a Promise's Slack (not the Slack Platform)
-    "travel": "\U000f010b",        # md-car: travel before a Promise or Meeting
     "tentative": "\U000f0625",     # md-help_circle_outline: a Tentative promise
     "captured": "\U000f04e6",      # md-sync: where Promise capture is up to
     "pin": "\U000f0403",            # md-pin: a Pinned Issue (ADR 0023)

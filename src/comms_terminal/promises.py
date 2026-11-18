@@ -305,8 +305,8 @@ def promise(db, promise_id: str, now: datetime | None = None) -> dict:
         f"SELECT 1 FROM composition_drafts WHERE thread_id IN ({','.join('?' * len(threads)) or 'NULL'})"
         f" OR id IN ({','.join('?' * len(drafts)) or 'NULL'}) LIMIT 1", (*threads, *drafts)).fetchone())
     return dict(row) | {"people": [dict(p) for p in people], "links": [dict(l) | {"label": _link_label(db, l)} for l in links],
-                        "history": [dict(h) | {"detail": json.loads(h["detail"]), "origin": origin_label(db, h)}
-                                    for h in history],
+                        "history": [dict(h) | {"detail": json.loads(h["detail"]), "origin": origin_label(db, h),
+                                               "origin_via": origin_via(db, h)} for h in history],
                         "slack": slack(row, now), "risk": risk(row, now), "draft_ready": ready}
 
 
@@ -330,6 +330,23 @@ def origin_label(db, h) -> str:
             day = datetime.fromisoformat(a["occurred_at"]).astimezone(_local()).strftime("%d %b")
             return f"{a['display_name'] or 'Jeremy'} in “{a['title']}”, {day}"
     return f"{h['origin_kind'].replace('_', ' ')} {h['origin_ref']}"
+
+
+VIA = {"gmail": "email", "fastmail": "email", "slack": "slack", "quo": "sms", "gcal": "meeting"}
+
+
+def origin_via(db, h) -> str:
+    """How an Origin reached Jeremy, as a Thread's messages show it: email, slack, sms, call, meeting, words,
+    customer_request or tana."""
+    if h["origin_kind"] != "activity":
+        return h["origin_kind"]
+    a = db.execute("SELECT c.platform, a.data FROM activities a JOIN threads t ON t.id = a.thread_id"
+                   " JOIN channels ch ON ch.id = t.channel_id JOIN connections c ON c.id = ch.connection_id"
+                   " WHERE a.id = ?", (h["origin_ref"],)).fetchone()
+    if a is None:
+        return "activity"
+    sync = (json.loads(a["data"] or "{}") or {}).get("synchronous")
+    return sync if sync in ("call", "meeting") else VIA.get(a["platform"], "email")
 
 
 def section(row, now: datetime) -> str:

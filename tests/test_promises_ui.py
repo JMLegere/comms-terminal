@@ -39,14 +39,14 @@ def test_the_promises_page_lists_by_section_and_shows_history(tmp_path):
         await pilot.pause(0.1)
         page = app.main.current
         seen["page"] = type(page)
-        seen["rows"] = [(p["what"], promises.section(p, MONDAY)) for p, _ in page.items]
+        seen["rows"] = [(p["what"], promises.section(p, MONDAY)) if "what" in p else p["header"] for p, _ in page.items]
         page.show_selected()
         await pilot.pause(0.05)
         seen["side"] = str(app.main.query_one("#thread").render()) if app.main.query("#thread") else ""
 
     run(Console(path), [open_page])
     assert seen["page"] is PromisesPage
-    assert seen["rows"] == [("Send the deck", "at_risk"), ("Send the term sheet", "later")]
+    assert seen["rows"] == ["at_risk", ("Send the deck", "at_risk"), "later", ("Send the term sheet", "later")]
 
 
 def test_today_lists_promises_first(tmp_path, monkeypatch):

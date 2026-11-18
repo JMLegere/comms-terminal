@@ -105,6 +105,26 @@ function openThread(id) {
   }).catch((e) => toast(String(e), "error"));
 }
 
+// Promise sections (as views/promises): glyph, colour token, label.
+const PROMISE = { overdue: ["\u{f002a}", "red", "Overdue"], at_risk: ["\u{f0150}", "orange", "At risk"],
+  today: ["\u{f05a8}", "yellow", "Today"], this_week: ["\u{f0b67}", "blue", "This week"], later: ["\u{f0b67}", "muted", "Later"],
+  tentative: ["\u{f0625}", "muted", "Tentative"] };
+
+/** Today's Promises as the Threads pane lays out its Status groups: a header per section, then its Promises. */
+export function promiseItems(rows) {
+  return Object.keys(PROMISE).flatMap((key) => {
+    const group = rows.filter((r) => r.section === key);
+    return group.length ? [{ promiseHeader: { key, count: group.length } }, ...group.map((r) => ({ row: r, pick: true, depth: 1 }))] : [];
+  });
+}
+
+/** Time to a Promise's due time, as a Thread row shows its age; late ones count up, -20h. */
+const dueIn = (iso) => {
+  const m = Math.floor((Date.parse(iso) - Date.now()) / 60000), a = Math.abs(m);
+  const text = a >= 2880 ? `${Math.floor(a / 1440)}d` : a >= 60 ? `${Math.floor(a / 60)}h` : `${a}m`;
+  return m < 0 ? `-${text}` : text;
+};
+
 /** Every pane's items in order; `pick` marks the rows the cursor may rest on (Task group headers are not). */
 export function paneItems(data, cases) {
   const d = data ?? {};
@@ -115,7 +135,8 @@ export function paneItems(data, cases) {
     if (r.group !== group) out.tasks.push({ groupHeader: (group = r.group).toUpperCase() });
     out.tasks.push({ row: r, pick: true });
   }
-  for (const k of ["promises", "issues", "drafts", "paused", "unattended"]) out[k] = (d[k] ?? []).map((r) => ({ row: r, pick: true }));
+  out.promises = promiseItems(d.promises ?? []);
+  for (const k of ["issues", "drafts", "paused", "unattended"]) out[k] = (d[k] ?? []).map((r) => ({ row: r, pick: true }));
   const rank = (r) => r.send_error ? "0" : r.send_at ? `2${r.send_at}` : "1"; // the Drafts order (drafts/main.js)
   out.drafts.sort((a, b) => (rank(a.row) < rank(b.row) ? -1 : rank(a.row) > rank(b.row) ? 1 : 0));
   for (const k of PANES) out[k].forEach((it, i) => { it.pane = k; it.key = keyOf(k, it, i); });
@@ -360,6 +381,12 @@ export default class Today extends View {
         .border_l(3).border_color(it.key === sel ? t.accent : t.background)
         .when(it.key === sel && focusHere, (e) => e.bg(t.selected))
         .when(it.key === sel && !focusHere, (e) => e.border_l(1));
+      if (it.promiseHeader) {
+        const [g, c, label] = PROMISE[it.promiseHeader.key];
+        return el.child(div().w(16).flex_none().text_color(t[c]).child(g))
+          .child(div().flex_1().font_semibold().text_color(t[c]).child(label))
+          .child(div().flex_none().text_color(t.muted).child(String(it.promiseHeader.count)));
+      }
       if (it.groupHeader) return el.child(div().w(16)).child(div().font_semibold().text_color(t.muted).child(it.groupHeader));
       if (it.statusHeader) {
         const h = it.statusHeader;
@@ -408,15 +435,14 @@ export default class Today extends View {
             .child(div().flex_1().min_w(0).truncate().text_color(t.foreground).child(r.title ?? ""))
             .child(div().flex_none().text_color(t.muted).child(`${r.pinned ? `${I.pin} ` : ""}${r.state_name ?? ""}`));
         case "promises": {
-          const risky = Boolean(r.risk);
-          const d = new Date(r.due_at);
-          return el.child(div().w(16).flex_none().text_color(risky ? t.red : t.muted)
-              .child(r.risk === "overdue" ? I.warn : r.risk === "at_risk" ? I.time : I.promise))
-            .child(name((r.people ?? []).map((x) => x.display_name).join(", ")))
-            .child(div().flex_1().min_w(0).truncate().text_color(r.state === "TENTATIVE" ? t.muted : t.foreground).child(r.what ?? ""))
+          const [g, c] = PROMISE[r.section] ?? PROMISE.later;
+          const dim = r.section === "tentative";
+          return el.child(div().w(16).flex_none().text_color(t[c]).child(g))
+            .child(div().flex_none().max_w(160).truncate().font_semibold().text_color(dim ? t.muted : t.strong ?? t.foreground)
+              .child((r.people ?? []).map((x) => x.display_name).join(", ")))
             .when(Boolean(r.draft_ready), (e) => e.child(div().flex_none().text_color(t.yellow).child(I.edited)))
-            .child(div().flex_none().text_color(risky ? t.red : t.muted)
-              .child(r.risk === "overdue" ? "overdue" : r.risk === "at_risk" ? "at risk" : `${DAYS[d.getDay()]} ${pad(d.getHours())}:${pad(d.getMinutes())}`));
+            .child(div().flex_1().min_w(0).truncate().text_color(dim ? t.muted : t.foreground).child(r.what ?? ""))
+            .child(div().flex_none().text_color(r.risk ? t[c] : t.muted).child(dueIn(r.due_at)));
         }
         case "paused":
           return el.child(div().w(16).flex_none().text_color(t.yellow).child(I.sequence)).child(name(r.person))

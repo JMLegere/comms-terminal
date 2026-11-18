@@ -29,9 +29,11 @@ out.opened = { thread: state.thread, ran: ran.slice(-2) };
 // Today: the promises pane comes first, and its row shows the Promise in the side pane.
 const Today = await load("today");
 const today = Object.create(Today.prototype);
-today.data = { promises: [promise("a", { risk: "at_risk" })], threads: [{ id: "thread-1", who: "Ana", title: "Hello", detail: "NEW_REPLY" }] };
+today.data = { promises: [promise("a", { risk: "at_risk", section: "at_risk" })], threads: [{ id: "thread-1", who: "Ana", title: "Hello", detail: "NEW_REPLY" }] };
 state.page = "today";
 out.todayKinds = [...new Set(today.rows().filter((x) => x.r).map((x) => x.kind))];
+out.todayHeader = Today.ns.promiseItems(today.data.promises).map((x) => x.promiseHeader?.key ?? x.row.id);
+out.due = [Promises.ns.dueIn("2026-11-18T10:00:00Z", Date.parse("2026-11-18T12:00:00Z")), Promises.ns.dueIn("2026-11-20T12:00:00Z", Date.parse("2026-11-18T12:00:00Z"))];
 today.at = today.rows().findIndex((x) => x.kind === "promises" && x.r);
 today.select(cx);
 out.todaySide = state.side;
