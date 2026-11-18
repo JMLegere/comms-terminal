@@ -70,7 +70,9 @@ def test_only_meetings_with_outside_people_or_in_person_are_read(db):
               event("tana:event:solo", 3, people="")| {"people": ME + " (organizer)"},
               {"eventUri": "tana:event:pitch", "title": "Pitch", "people": ME + " (organizer)", "location": "UNB",
                "time": event("x", 5)["time"]},
-              event("tana:event:gone", 3, attendance="Cancelled"), event("tana:event:past", -3)]
+              event("tana:event:gone", 3, attendance="Cancelled"), event("tana:event:past", -3),
+              event("tana:event:no", 3) | {"people": f"x@acme.com (organizer); attendees(2): {ME} (required) [declined],"
+                                                     " anna@acme.com (required) [accepted]"}]
     prep.refresh(db, Tana(events), NOW)
     assert [r["event_uri"] for r in prep.rows(db, NOW)] == ["tana:event:a", "tana:event:pitch"]
 

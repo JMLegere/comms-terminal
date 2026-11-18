@@ -43,6 +43,16 @@ def _times(text: str) -> tuple[datetime, datetime] | None:
     return start, end
 
 
+def _mine(db) -> set[str]:
+    return {m.lower() for (m,) in db.execute("SELECT self_id FROM connections") if m and "@" in m}
+
+
+def declined(event: dict, mine: set[str]) -> bool:
+    """Jeremy declined it: Tana shows that only in the people text, as "<address> (required) [declined]"."""
+    people = (event.get("people") or "").lower()
+    return any(re.search(re.escape(a) + r"\s*(\([^)]*\))?\s*\[declined\]", people) for a in mine)
+
+
 def is_meeting(event: dict, own: set[str]) -> bool:
     """Someone outside Agent Maple is invited, or it is in person with nobody else invited."""
     domains = {inbox._org(d.lower()) for d in DOMAIN.findall(event.get("people") or "")}
@@ -89,7 +99,7 @@ def _prep(client, event_uri: str) -> dict | None:
     return parse(doc) | {"brief": _linker(client, doc["id"])(doc["id"])}
 
 
-def read(client, own: set[str], now: datetime) -> list[dict]:
+def read(client, own: set[str], now: datetime, mine: set[str] = frozenset()) -> list[dict]:
     """The Meetings starting in the next DAYS days, with their Prep, as `preps` rows."""
     local = now.astimezone(promises._local())  # Tana wants an IANA name, not an offset
     events = client.tool("listEvents", startDate=local.date().isoformat(),
@@ -98,7 +108,7 @@ def read(client, own: set[str], now: datetime) -> list[dict]:
     out = []
     for e in events:
         when = _times(e.get("time", ""))
-        if e.get("attendance") or when is None or when[0] <= now or not is_meeting(e, own):
+        if e.get("attendance") or when is None or when[0] <= now or not is_meeting(e, own) or declined(e, mine):
             continue
         f = _prep(client, e["eventUri"]) or {}
         out.append({"event_uri": e["eventUri"], "title": e.get("title") or "Meeting",
@@ -118,7 +128,7 @@ def refresh(db, client, now: datetime | None = None) -> bool:
     the error (every Prep then counts as not prepared) and re-raised for the log. True when rows changed."""
     now = now or clock.now()
     try:
-        new = read(client, _own(db), now)
+        new = read(client, _own(db), now, _mine(db))
     except Exception as e:
         _status(db, now, (str(e) or type(e).__name__)[:300])
         raise
