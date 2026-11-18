@@ -431,7 +431,7 @@ def promises_list(db, a) -> str:
         if rows:
             out.append(f"## {SECTION_NAMES[key]}\n" + "".join(promise_line(p) for p in rows))
     mark = v["captured"]
-    out.append(f"Captured up to {_when(mark['at']) if mark else 'nothing yet'}\n")
+    out.append(f"Captured up to {_when(mark['occurred_at'] or mark['at']) if mark else 'nothing yet'}\n")
     return "\n".join(out)
 
 
@@ -490,7 +490,8 @@ def capture_cmd(db, a) -> str:
         promises.advance_capture(db, a.activity_id, now=clock.now())
     if a.capture_cmd in ("mark", "advance"):
         mark = promises.capture_mark(db)
-        return (f"Captured up to Activity {mark['activity_id']} at {_when(mark['at'])}\n" if mark
+        return (f"Captured up to Activity {mark['activity_id']} of {_when(mark['occurred_at'] or mark['at'])}"
+                f" (moved {_when(mark['at'])})\n" if mark
                 else "Nothing captured yet\n")
     rows = promises.pending(db, a.limit)
     if a.json:

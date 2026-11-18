@@ -139,6 +139,6 @@ export default class Promises extends View {
       })))
       .child(h_flex().h(26).flex_none().px(12).gap(6).items_center().text_size(11.5).text_color(t.dim)
         .child(svg("icons/refresh-cw.svg").size(11).text_color(t.dim))
-        .child(`Captured up to ${captured ? when(captured.at) : "nothing yet"} · read-only`));
+        .child(`Captured up to ${captured ? when(captured.occurred_at ?? captured.at) : "nothing yet"} · read-only`));
   }
 }

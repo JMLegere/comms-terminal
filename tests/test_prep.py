@@ -129,7 +129,7 @@ def test_prep_shows_beside_promises_marked_as_prep(db):
     v = promises.view(db, NOW)
     [a] = v["sections"]["at_risk"]
     assert a["kind"] == "prep" and a["what"] == "Acme review" and a["people"][0]["display_name"] == "Prep"
-    assert v["count"] == 1  # the Prepped Meeting is listed but asks nothing of Jeremy
+    assert v["count"] == 2  # every row the list shows, the Prepped Meeting too
     shown = tui.prep_markup(a, NOW)
     assert "Not prepared" in shown and "Leave by" in shown and "11:30" in shown
 

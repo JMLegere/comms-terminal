@@ -785,7 +785,7 @@ class Rail(OptionList):
         except Exception:  # a failed Draft read must not take the rail down; the Drafts list says why
             waiting = ""
         try:
-            owed = db.execute("SELECT count(*) FROM promises WHERE state IN ('OPEN', 'TENTATIVE')").fetchone()[0]
+            owed = promises.view(db)["count"]  # the rows the Promises list shows, Prep included
         except Exception:  # a laptop copy from before migration 47
             owed = ""
         if isinstance(waiting, int) and isinstance(owed, int):
@@ -6277,7 +6277,7 @@ class PromisesPage(TablePage):
             table.move_cursor(row=rows[0])
         if self.host is None and self.query("#below"):
             at = getattr(self, "captured", None)
-            when_text = (datetime.fromisoformat(at["at"]).astimezone(sequences.LOCAL).strftime("%a %d %b %H:%M")
+            when_text = (datetime.fromisoformat(at["occurred_at"] or at["at"]).astimezone(sequences.LOCAL).strftime("%a %d %b %H:%M")
                          if at else "nothing yet")
             self.query_one("#below", Static).update(f"[#928374]{ICON['captured']} Captured up to {when_text}[/]")
         if self.host is not None:
@@ -6400,7 +6400,7 @@ class TodayPage(Page):
         and move the cursor on when the list in use has emptied."""
         n = self.count(page)
         if page is self.promises:  # owed Promises first (FR-PR-9)
-            late = sum(1 for p, _ in page.items if p and p.get("risk"))
+            late = sum(1 for p, _ in page.items if p and p.get("risk") and p.get("state") != "TENTATIVE")
             title = pill(f"{ICON['promise']} promises · {n}", "blue") + (f" [b #c14a4a]{late} at risk or overdue[/]" if late else "")
         elif page is self.threads:
             title = pill(f"{ICON['TODO']} threads · {n}", "blue")

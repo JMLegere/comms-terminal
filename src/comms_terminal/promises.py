@@ -246,7 +246,9 @@ def link(db, promise_id: str, kind: str, target: str, origin: dict, *, now: date
 
 
 def capture_mark(db) -> dict | None:
-    row = db.execute("SELECT * FROM promise_capture WHERE id = 1").fetchone()
+    """Where capture is: the Activity (`activity_id`, its `occurred_at`) and when the mark moved (`at`)."""
+    row = db.execute("SELECT c.*, a.occurred_at FROM promise_capture c LEFT JOIN activities a ON a.id = c.activity_id"
+                     " WHERE c.id = 1").fetchone()
     return dict(row) if row else None
 
 
@@ -377,9 +379,7 @@ def view(db, now: datetime | None = None) -> dict:
         out[m["section"]].append(prep_row(m))
     for rows in out.values():
         rows.sort(key=lambda r: r["due_at"])
-    return {"sections": out, "captured": capture_mark(db),
-            "count": sum(1 for k, v in out.items() if k != "tentative" for r in v
-                         if r["kind"] == "promise" or not r["prepared"])}
+    return {"sections": out, "captured": capture_mark(db), "count": sum(len(v) for v in out.values())}
 
 
 def prep_row(m: dict) -> dict:

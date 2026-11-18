@@ -97,7 +97,8 @@ def _shell(core, db):
         days = (start.date() - now.date()).days
         events["next"] = {"title": short(nxt), "when": f"{start:%H:%M}" if days == 0 else f"tomorrow {start:%H:%M}"
                           if days == 1 else f"{start:%a %H:%M}" if days < 7 else f"{start:%b %-d %H:%M}"}
-    owed = db.execute("SELECT count(*) FROM promises WHERE state IN ('OPEN', 'TENTATIVE')").fetchone()[0]
+    from . import promises
+    owed = promises.view(db)["count"]  # the rows the Promises list shows, Prep included
     return {"today": sum(len(t[k]) for k in ("threads", "tasks", "drafts", "paused", "unattended")) + owed,
             "promises": owed,
             "drafts": db.execute("SELECT count(*) FROM composition_drafts").fetchone()[0],

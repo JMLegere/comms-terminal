@@ -354,7 +354,7 @@ export default class Today extends View {
     const pill = (text, color) => div().flex_none().px(6).rounded(4).bg(color).text_color(t.background).font_semibold().child(text);
     const title = {
       promises: [pill(`${I.promise} promises · ${counts.promises}`, t.blue), ...(() => { // owed first (FR-PR-9)
-        const late = (this.data?.promises ?? []).filter((x) => x.risk).length;
+        const late = (this.data?.promises ?? []).filter((x) => x.risk && x.state !== "TENTATIVE").length;
         return late ? [div().font_semibold().text_color(t.red).child(`${late} at risk or overdue`)] : [];
       })()],
       threads: [pill(`${I.TODO} threads · ${counts.threads}`, t.blue)],

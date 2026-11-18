@@ -131,5 +131,7 @@ def test_capture_pending_lists_who_wrote_each(db, capsys):
     assert [line.split("\t")[3] for line in out] == ["Anna Ciprick", "Jeremy"]
     cli(db, "capture", "advance", mine(db)["ref"])
     assert "Captured up to Activity" in capsys.readouterr().out
+    # where capture is: the Activity's own time, not when the mark moved (read live as "caught up")
+    assert datetime.fromisoformat(promises.capture_mark(db)["occurred_at"]) == NOW - timedelta(hours=1)
     cli(db, "capture", "pending")
     assert capsys.readouterr().out == "Nothing after the mark.\n"
