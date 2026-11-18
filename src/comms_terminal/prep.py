@@ -1,7 +1,8 @@
 """Prep (ADR 0025; FR-PR-16, FR-PR-17): what Jeremy needs ready before a Meeting, owned in Tana and read back here.
 
-The capture agent writes Prep on the Meeting's Tana calendar event, as the event type "Prep" with the fields
-Brief, Prep minutes, Travel minutes and Prepped. The Service reads the next 7 days of Meetings from Tana every
+The capture agent writes Prep as a Tana doc titled "Prep · <Meeting>" pinned to the Meeting's Tana calendar event
+(Jeremy, 2026-11-18: existing Tana tooling, no new type). The doc is the brief; it holds the lines
+"Prep minutes: N" and "Travel minutes: N" and a "Prepped" checkbox Jeremy ticks. The Service reads the next 7 days of Meetings from Tana every
 5 minutes (`refresh`) into the `preps` table, so Prep moves and disappears with its Meeting. A Meeting is one with
 someone outside Agent Maple, or an in-person event (a location and nobody else invited).
 
@@ -17,8 +18,10 @@ from datetime import datetime, timedelta
 
 from . import clock, inbox, promises
 
-TYPE = "Prep"
-FIELDS = {"brief": "Brief", "prep_minutes": "Prep minutes", "travel_minutes": "Travel minutes", "prepped": "Prepped"}
+TITLE = "Prep"  # a pinned doc whose title starts with this is the Meeting's Prep
+PREP_MINUTES = re.compile(r"Prep minutes:\s*(\d+)", re.I)
+TRAVEL_MINUTES = re.compile(r"Travel minutes:\s*(\d+)", re.I)
+PREPPED = re.compile(r"\[([xX ])\]\s*\**Prepped", re.I)
 DAYS = 7
 EVERY = 300  # seconds between reads
 TIME = re.compile(r"(\d{4}-\d\d-\d\dT\d\d:\d\d[+-]\d\d:\d\d)->(\d\d:\d\d[+-]\d\d:\d\d|\d{4}-\d\d-\d\dT\S+)")
@@ -47,27 +50,34 @@ def is_meeting(event: dict, own: set[str]) -> bool:
                                    and bool(event.get("location")))
 
 
-def _fields(event: dict) -> dict:
-    """The Prep fields of a read event, by our key; absent when the event is not of type Prep."""
-    if ((event.get("meetingType") or {}).get("name") or "") != TYPE:
-        return {}
-    raw = event.get("fields") or {}
-    if isinstance(raw, list):
-        raw = {f.get("name"): f.get("value") for f in raw if isinstance(f, dict)}
-    by_name = {v: k for k, v in FIELDS.items()}
-    return {by_name[n]: v for n, v in raw.items() if n in by_name}
+def _pins(event: dict) -> list[str]:
+    """The text docs pinned to (or belonging to) a read event."""
+    uris = [(p if isinstance(p, str) else (p or {}).get("uri", "")) for p in event.get("pinnedItems") or []]
+    uris += [d.get("uri", "") for d in event.get("relatedDocs") or [] if isinstance(d, dict)]
+    return list(dict.fromkeys(u for u in uris if u.startswith("tana:text:")))
 
 
-def _minutes(value) -> int | None:
-    try:
-        return max(0, int(float(value[0] if isinstance(value, list) else value)))
-    except (TypeError, ValueError, IndexError):
+def parse(doc: dict) -> dict:
+    """A Prep doc's minutes and Prepped tick; None where a line is missing."""
+    text = doc.get("content") or ""
+    text = text if isinstance(text, str) else str(text)
+    prep, travel, ticked = PREP_MINUTES.search(text), TRAVEL_MINUTES.search(text), PREPPED.search(text)
+    return {"prep_minutes": int(prep.group(1)) if prep else None,
+            "travel_minutes": int(travel.group(1)) if travel else None,
+            "prepped": int(bool(ticked and ticked.group(1).lower() == "x"))}
+
+
+def _prep(client, event_uri: str) -> dict | None:
+    """The Meeting's Prep doc, read and parsed, with a web link as its Brief; None without one."""
+    pins = _pins(client.tool("readEvent", eventUri=event_uri))
+    if not pins:
         return None
-
-
-def _yes(value) -> bool:
-    value = value[0] if isinstance(value, list) and value else value
-    return value is True or str(value).strip().lower() in ("true", "yes", "1", "checked")
+    docs = client.tool("readItems", ids=pins[:10]).get("items", [])
+    doc = next((d for d in docs if (d.get("title") or "").strip().startswith(TITLE)), None)
+    if doc is None:
+        return None
+    from .tana import _linker
+    return parse(doc) | {"brief": _linker(client, doc["id"])(doc["id"])}
 
 
 def read(client, own: set[str], now: datetime) -> list[dict]:
@@ -81,14 +91,12 @@ def read(client, own: set[str], now: datetime) -> list[dict]:
         when = _times(e.get("time", ""))
         if e.get("attendance") or when is None or when[0] <= now or not is_meeting(e, own):
             continue
-        f = _fields(client.tool("readEvent", eventUri=e["eventUri"]))
-        brief = f.get("brief")
+        f = _prep(client, e["eventUri"]) or {}
         out.append({"event_uri": e["eventUri"], "title": e.get("title") or "Meeting",
                     "start_at": promises._iso(when[0]), "end_at": promises._iso(when[1]),
-                    "location": e.get("location"), "has_prep": int(bool(f)),
-                    "brief": (brief[0] if isinstance(brief, list) and brief else brief) or None,
-                    "prep_minutes": _minutes(f.get("prep_minutes")),
-                    "travel_minutes": _minutes(f.get("travel_minutes")), "prepped": int(_yes(f.get("prepped")))})
+                    "location": e.get("location"), "has_prep": int(bool(f)), "brief": f.get("brief"),
+                    "prep_minutes": f.get("prep_minutes"), "travel_minutes": f.get("travel_minutes"),
+                    "prepped": f.get("prepped", 0)})
     return out
 
 

@@ -18,6 +18,8 @@ def event(uri, start, title="Acme review", people="anna@acme.com (required)", **
 
 
 class Tana:
+    """A fake Tana: `fields` maps an event to its Prep doc's lines (Prep minutes, Travel minutes, Prepped)."""
+
     def __init__(self, events, fields=None, down=False):
         self.events, self.fields, self.down = events, fields or {}, down
 
@@ -27,8 +29,21 @@ class Tana:
         if name == "listEvents":
             assert args["timezone"] == "America/Halifax"  # Tana refuses an offset ("Forbidden ICU TimeZone")
             return {"events": self.events}
-        f = self.fields.get(args["eventUri"])
-        return {"meetingType": {"name": "Prep"}, "fields": f} if f else {}
+        if name == "readEvent":
+            uri = args["eventUri"]
+            return {"pinnedItems": ["tana:text:other", f"tana:text:prep-{uri}"] if uri in self.fields else []}
+        if name == "readItems":
+            return {"items": [{"id": "tana:text:other", "title": "Deck", "content": "Prep minutes: 999"}]
+                    + [{"id": i, "title": f"Prep · {i}", "content": self.doc(self.fields[i.removeprefix("tana:text:prep-")])}
+                       for i in args["ids"] if i.startswith("tana:text:prep-")]}
+        if name == "getShareLink":
+            return {"links": [{"url": "https://home.tana.inc/o/w/l/x"}]}
+        raise AssertionError(name)
+
+    @staticmethod
+    def doc(f):
+        return (f"Who they are…\n\n- Prep minutes: {f['Prep minutes']}\n- Travel minutes: {f['Travel minutes']}\n"
+                f"- [{'x' if f['Prepped'] else ' '}] Prepped")
 
 
 @pytest.fixture
@@ -43,7 +58,7 @@ def db():
     d.close()
 
 
-PREP = {"Brief": "https://tana.inc/brief", "Prep minutes": 60, "Travel minutes": 30, "Prepped": False}
+PREP = {"Prep minutes": 60, "Travel minutes": 30, "Prepped": False}
 
 
 def test_only_meetings_with_outside_people_or_in_person_are_read(db):
@@ -59,7 +74,7 @@ def test_only_meetings_with_outside_people_or_in_person_are_read(db):
 def test_prep_fields_drive_slack_time_and_risk(db):
     prep.refresh(db, Tana([event("tana:event:a", 2)], {"tana:event:a": PREP}), NOW)
     [m] = prep.rows(db, NOW)
-    assert m["brief"] == PREP["Brief"] and m["prep_minutes"] == 60 and m["travel_minutes"] == 30
+    assert m["brief"].startswith("https://home.tana.inc/o/w/l/") and m["prep_minutes"] == 60 and m["travel_minutes"] == 30
     assert m["prepared"] is False and m["slack_time"] == 30 and m["risk"] == "at_risk"
     assert m["leave_at"] == promises._iso(NOW + timedelta(hours=1, minutes=30))
     prep.refresh(db, Tana([event("tana:event:a", 2)], {"tana:event:a": PREP | {"Prepped": True}}), NOW)
