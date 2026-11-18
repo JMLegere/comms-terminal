@@ -105,6 +105,10 @@ function openThread(id) {
   }).catch((e) => toast(String(e), "error"));
 }
 
+// A Promise row's status, its bullet (as views/promises STATUS): glyph, colour token, name.
+const STATUS = { overdue: ["\u{f002a}", "red", "Overdue"], at_risk: ["\u{f0150}", "orange", "At risk"],
+  on_track: ["\u{f0766}", "green", "On track"], prepared: ["\u{f05e1}", "green", "Prepped"],
+  tentative: ["\u{f0625}", "muted", "Tentative"] };
 // Promise sections (as views/promises): glyph, colour token, label.
 const PROMISE = { overdue: ["\u{f002a}", "red", "Overdue"], at_risk: ["\u{f0150}", "orange", "At risk"],
   today: ["\u{f05a8}", "yellow", "Today"], this_week: ["\u{f0b67}", "blue", "This week"], later: ["\u{f0b67}", "muted", "Later"],
@@ -435,7 +439,7 @@ export default class Today extends View {
             .child(div().flex_1().min_w(0).truncate().text_color(t.foreground).child(r.title ?? ""))
             .child(div().flex_none().text_color(t.muted).child(`${r.pinned ? `${I.pin} ` : ""}${r.state_name ?? ""}`));
         case "promises": {
-          const [g, c] = PROMISE[r.section] ?? PROMISE.later;
+          const [g, c] = STATUS[r.status] ?? STATUS.on_track;  // the bullet is the row's status
           const dim = r.section === "tentative";
           return el.child(div().w(16).flex_none().text_color(t[c]).child(g))
             .child(div().flex_none().max_w(160).truncate().font_semibold().text_color(dim ? t.muted : t.strong ?? t.foreground)

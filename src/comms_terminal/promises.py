@@ -356,6 +356,19 @@ def origin_via(db, h) -> str:
     return sync if sync in ("call", "meeting") else VIA.get(a["platform"], "email")
 
 
+STATUSES = ("overdue", "at_risk", "on_track", "prepared", "tentative")
+
+
+def status(row) -> str:
+    """A row's status, the bullet every list shows: Tentative, Overdue, At risk, Prepped (a Meeting's Prep that
+    Jeremy ticked), else On track."""
+    if row["state"] == "TENTATIVE":
+        return "tentative"
+    if row.get("risk"):
+        return row["risk"]
+    return "prepared" if row.get("kind") == "prep" and row.get("prepared") else "on_track"
+
+
 def section(row, now: datetime) -> str:
     if row["state"] == "TENTATIVE":
         return "tentative"
@@ -379,6 +392,8 @@ def view(db, now: datetime | None = None) -> dict:
         out[m["section"]].append(prep_row(m))
     for rows in out.values():
         rows.sort(key=lambda r: r["due_at"])
+        for r in rows:
+            r["status"] = status(r)
     return {"sections": out, "captured": capture_mark(db), "count": sum(len(v) for v in out.values())}
 
 

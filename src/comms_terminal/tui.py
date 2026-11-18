@@ -6151,6 +6151,9 @@ class PausedPage(TablePage):
 PROMISE_SECTION = {"overdue": ("Overdue", "red", "warn"), "at_risk": ("At risk", "orange", "time"),
                    "today": ("Today", "yellow", "today"), "this_week": ("This week", "blue", "calendar"),
                    "later": ("Later", "grey1", "calendar"), "tentative": ("Tentative", "grey1", "tentative")}
+PROMISE_STATUS = {"overdue": ("Overdue", "red", "warn"), "at_risk": ("At risk", "orange", "time"),
+                  "on_track": ("On track", "green", "TODO"), "prepared": ("Prepped", "green", "DONE"),
+                  "tentative": ("Tentative", "grey1", "tentative")}
 VIA_ICON = {"email": "email", "slack": "slack", "sms": "sms", "call": "call", "meeting": "meeting", "words": "person",
             "customer_request": "issues", "tana": "tana", "activity": "message"}
 
@@ -6176,8 +6179,7 @@ def promise_markup(p: dict) -> str:
     now = clock.now()
     if p.get("kind") == "prep":
         return prep_markup(p, now)
-    key = promises.section(p, now)
-    name, color, icon = PROMISE_SECTION[key]
+    name, color, icon = PROMISE_STATUS[promises.status(p)]
     hue = PALETTE.get(color, grey)
     due = datetime.fromisoformat(p["due_at"]).astimezone(sequences.LOCAL).strftime("%a %d %b %H:%M")
     lines = [f"[b]{escape(p['what'])}[/]",
@@ -6207,14 +6209,14 @@ def promise_markup(p: dict) -> str:
 def prep_markup(p: dict, now: datetime) -> str:
     """A Meeting's Prep (ADR 0025): read from Tana, read-only here."""
     grey = "#928374"
-    name, color, icon = PROMISE_SECTION[promises.section(p, now)]
+    name, color, icon = PROMISE_STATUS[promises.status(p)]
     hue = PALETTE.get(color, grey)
     at = lambda v, f="%a %d %b %H:%M": datetime.fromisoformat(v).astimezone(sequences.LOCAL).strftime(f)  # noqa: E731
     state = ("Tana unreadable: counted as not prepared" if p["unread"] else "Prepped" if p["prepared"]
              else "Not prepared" if p["has_prep"] else "No Prep yet")
     lines = [f"[b]{escape(p['what'])}[/]",
              f"[{hue}]{ICON[icon]} {name}[/]  [{grey}]{at(p['due_at'])}–{at(p['end_at'], '%H:%M')}[/]", "",
-             f"[{grey}]{ICON['meeting']} Prep[/]  [b {PALETTE['green'] if p['prepared'] else hue}]{state}[/]",
+             f"[{grey}]{ICON['meeting']} Prep[/]  [b {PALETTE['green'] if p['prepared'] else hue if p['risk'] else PALETTE['yellow']}]{state}[/]",
              f"[{grey}]Prep[/]  {minutes_text(p['work_minutes'])}   [{grey}]Travel[/]  {minutes_text(p['travel_minutes'])}"
              f"   [{grey}]Leave by[/]  {at(p['leave_at'], '%H:%M')}"
              f"   [{grey}]Slack-time[/]  [{hue if p['risk'] else PALETTE['fg0']}]{minutes_text(p['slack_time'])}[/]"]
@@ -6258,7 +6260,8 @@ class PromisesPage(TablePage):
                 who = who if len(who) <= 13 else who[:12] + "…"
                 what = p["what"] if len(p["what"]) <= 15 else p["what"][:14] + "…"
                 dim = key == "tentative"
-                out.append((p, (f"  [{hue}]{ICON[icon]}[/]", f"[b {'#928374' if dim else PALETTE['fg1']}]{escape(who)}[/]",
+                _, scolor, sicon = PROMISE_STATUS[promises.status(p)]
+                out.append((p, (f"  [{PALETTE.get(scolor, '#928374')}]{ICON[sicon]}[/]", f"[b {'#928374' if dim else PALETTE['fg1']}]{escape(who)}[/]",
                                 f"[{'#928374' if dim else PALETTE['fg0']}]{escape(what)}[/]"
                                 + (f" [{PALETTE['yellow']}]{ICON['edited']}[/]" if p["draft_ready"] else ""),
                                 f"[{hue if p['risk'] else '#928374'}]{due_in(p, now)}[/]")))

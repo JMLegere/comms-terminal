@@ -10,6 +10,10 @@ import { call, nextEvent, nextCommand, theme, shared, setShared, run, focusMain,
 export const SECTIONS = [["overdue", "Overdue", "red", "\u{f002a}"], ["at_risk", "At risk", "orange", "\u{f0150}"],
   ["today", "Today", "yellow", "\u{f05a8}"], ["this_week", "This week", "blue", "\u{f0b67}"],
   ["later", "Later", "muted", "\u{f0b67}"], ["tentative", "Tentative", "muted", "\u{f0625}"]];
+// Each row's status, its bullet (the Console's PROMISE_STATUS): glyph, colour token, name.
+export const STATUS = { overdue: ["\u{f002a}", "red", "Overdue"], at_risk: ["\u{f0150}", "orange", "At risk"],
+  on_track: ["\u{f0766}", "green", "On track"], prepared: ["\u{f05e1}", "green", "Prepped"],
+  tentative: ["\u{f0625}", "muted", "Tentative"] };
 /** Time to a Promise's due time, as a Thread row shows its age: 6h, 2d; late ones count up, -20h. */
 export const dueIn = (iso, now = Date.now()) => {
   const m = Math.floor((Date.parse(iso) - now) / 60000), a = Math.abs(m);
@@ -28,7 +32,10 @@ export function promiseRows(view) {
     const items = view?.sections?.[key] ?? [];
     if (!items.length) continue;
     out.push({ header: label, color, glyph, count: items.length });
-    for (const p of items) out.push({ p, color, glyph, key });
+    for (const p of items) {
+      const [g, c] = STATUS[p.status] ?? STATUS.on_track;
+      out.push({ p, color: c, glyph: g, key });
+    }
   }
   return out;
 }

@@ -135,3 +135,15 @@ def test_capture_pending_lists_who_wrote_each(db, capsys):
     assert datetime.fromisoformat(promises.capture_mark(db)["occurred_at"]) == NOW - timedelta(hours=1)
     cli(db, "capture", "pending")
     assert capsys.readouterr().out == "Nothing after the mark.\n"
+
+
+@pytest.mark.parametrize("row, expected", [
+    ({"state": "TENTATIVE", "risk": "overdue"}, "tentative"),  # not owed yet, so never late
+    ({"state": "OPEN", "risk": "overdue"}, "overdue"),
+    ({"state": "OPEN", "risk": "at_risk"}, "at_risk"),
+    ({"state": "OPEN", "risk": None}, "on_track"),
+    ({"state": "OPEN", "risk": None, "kind": "prep", "prepared": True}, "prepared"),
+    ({"state": "OPEN", "risk": None, "kind": "prep", "prepared": False}, "on_track"),
+])
+def test_each_row_has_one_status_its_bullet(row, expected):
+    assert promises.status(row) == expected
