@@ -132,3 +132,10 @@ def test_prep_shows_beside_promises_marked_as_prep(db):
     assert v["count"] == 1  # the Prepped Meeting is listed but asks nothing of Jeremy
     shown = tui.prep_markup(a, NOW)
     assert "Not prepared" in shown and "Leave by" in shown and "11:30" in shown
+
+
+def test_one_meeting_on_two_calendars_shows_once(db):
+    prep.refresh(db, Tana([event("tana:event:a", 2, title="JHSC Startup Showcase "),
+                           event("tana:event:b", 2, title="JHSC Startup Showcase (5-min pitch) + lunch"),
+                           event("tana:event:c", 2, title="Other call")], {"tana:event:a": PREP}), NOW)
+    assert [(r["event_uri"], r["has_prep"]) for r in prep.rows(db, NOW)] == [("tana:event:a", 1), ("tana:event:c", 0)]

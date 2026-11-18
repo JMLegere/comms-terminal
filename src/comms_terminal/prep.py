@@ -116,7 +116,21 @@ def read(client, own: set[str], now: datetime, mine: set[str] = frozenset()) -> 
                     "location": e.get("location"), "has_prep": int(bool(f)), "brief": f.get("brief"),
                     "prep_minutes": f.get("prep_minutes"), "travel_minutes": f.get("travel_minutes"),
                     "prepped": f.get("prepped", 0)})
-    return out
+    return merged(out)
+
+
+def merged(rows: list[dict]) -> list[dict]:
+    """One row per Meeting: the same Meeting on two calendars starts at the same time and one title begins with
+    the other ("JHSC Startup Showcase" and "JHSC Startup Showcase (5-min pitch) + lunch"). Keep the one with Prep,
+    else the longer title."""
+    def same(a, b):
+        x, y = a["title"].strip().casefold(), b["title"].strip().casefold()
+        return a["start_at"] == b["start_at"] and (x.startswith(y) or y.startswith(x))
+    kept: list[dict] = []
+    for r in sorted(rows, key=lambda r: (-r["has_prep"], -len(r["title"]))):
+        if not any(same(r, k) for k in kept):
+            kept.append(r)
+    return sorted(kept, key=lambda r: (r["start_at"], r["event_uri"]))
 
 
 COLUMNS = ("event_uri", "title", "start_at", "end_at", "location", "has_prep", "brief", "prep_minutes",
