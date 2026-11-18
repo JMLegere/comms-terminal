@@ -408,7 +408,7 @@ def _when(iso: str) -> str:
 
 def _hours(minutes: int) -> str:
     sign, m = ("-" if minutes < 0 else ""), abs(minutes)
-    return f"{sign}{m // 60}h{m % 60:02d}" if m >= 60 else f"{sign}{m}m"
+    return f"{sign}{m // 1440}d" if m >= 2880 else f"{sign}{m // 60}h{m % 60:02d}" if m >= 60 else f"{sign}{m}m"
 
 
 def promise_line(p: dict) -> str:

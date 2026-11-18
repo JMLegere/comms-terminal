@@ -20,8 +20,8 @@ def out():
 def test_the_page_lists_sections_in_order_and_shows_the_first_promise(out):
     assert out["rows"] == ["Overdue", "a", "This week", "b", "Tentative", "c"]
     assert out["selected"] == "a" and out["side"] == {"kind": "promise", "id": "a"} and out["ranAfterLoad"] == ["side.show"]
-    assert out["foot"].startswith("Captured up to ") and "read-only" in out["foot"]
-    assert out["slack"] == ["-30m", "1h30", "45m"]
+    assert out["foot"].startswith("Captured up to ") and out["foot"].endswith("read-only")
+    assert out["slack"] == ["-30m", "1h30", "45m", "48d"]
 
 
 def test_enter_opens_the_promises_thread(out):

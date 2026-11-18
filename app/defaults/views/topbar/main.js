@@ -8,7 +8,7 @@ import { call, nextEvent, theme, shared, run } from "comms";
 
 const PAGES = { today: "Today", calendar: "Calendar", drafts: "Drafts", tasks: "Tasks", sequences: "Sequences",
   people: "People", organizations: "Organizations", channels: "Channels", connection: "Connection" };
-const PANES = { task: "Tasks", draft: "Drafts", paused: "Paused", unattended: "Unattended" };
+const PANES = { promise: "Promises", issue: "Issues", task: "Tasks", draft: "Drafts", paused: "Paused", unattended: "Unattended" };
 const TOP = { person: "Person", organization: "Organization", connection: "Connection", event: "Event", case: "Case" };
 const FOLD = 70; // ponytail: characters before the middle levels fold; a measured width if the bar ever reports one
 

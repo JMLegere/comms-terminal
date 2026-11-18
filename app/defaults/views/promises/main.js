@@ -11,7 +11,7 @@ const SECTIONS = [["overdue", "Overdue", "red"], ["at_risk", "At risk", "red"], 
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const pad = (n) => String(n).padStart(2, "0");
 const when = (iso) => { const d = new Date(iso); return `${DAYS[d.getDay()]} ${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
-export const slackText = (m) => { const a = Math.abs(m), s = m < 0 ? "-" : ""; return a >= 60 ? `${s}${Math.floor(a / 60)}h${pad(a % 60)}` : `${s}${a}m`; };
+export const slackText = (m) => { const a = Math.abs(m), s = m < 0 ? "-" : ""; return a >= 2880 ? `${s}${Math.floor(a / 1440)}d` : a >= 60 ? `${s}${Math.floor(a / 60)}h${pad(a % 60)}` : `${s}${a}m`; };
 
 /** The page's rows in order: a header per section that has Promises, then its Promises. */
 export function promiseRows(view) {
@@ -99,7 +99,7 @@ export default class Promises extends View {
       .child(h_flex().h(30).flex_none().px(12).gap(8).items_center().border_b(1).border_color(t.border).text_size(12)
         .child(div().text_color(t.accent).child("\u{f1218}"))
         .child(div().font_medium().text_color(t.foreground).child("Promises"))
-        .child(div().text_color(t.muted).child(String(this.view?.count ?? ""))))
+        .child(div().text_color(t.muted).child(String(promiseRows(this.view).filter((r) => r.p).length || ""))))
       .when(Boolean(this.error), (el) => el.child(div().p(12).text_size(12).text_color(t.danger).child(this.error ?? "")))
       .when(Boolean(this.view) && !promiseRows(this.view).length, (el) => el.child(div().p(12).text_color(t.muted).child("No Promises owed.")))
       .child(v_flex().id("promises").flex_1().min_h(0).overflow_y_scroll().px(6).py(6).children(promiseRows(this.view).map((r, n) => {
@@ -113,14 +113,14 @@ export default class Promises extends View {
           .when(p.id === selected && focusHere, (el) => el.bg(t.selected))
           .when(p.id === selected && !focusHere, (el) => el.border_l(1))
           .on_click((_e, cx) => { setShared("focus", "list"); focusMain(); this.select(p); cx.notify(); })
-          .child(div().w(150).flex_none().truncate().font_semibold().text_color(t.foreground)
+          .child(div().w(108).flex_none().truncate().font_semibold().text_color(t.foreground)
             .child((p.people ?? []).map((x) => x.display_name).join(", ")))
           .child(div().flex_1().min_w(0).truncate().text_color(p.state === "TENTATIVE" ? t.muted : t.foreground).child(p.what))
           .when(Boolean(p.draft_ready), (el) => el.child(div().flex_none().text_color(t.yellow).child("\u{f0cb6}")))
-          .child(div().w(96).flex_none().text_color(t.muted).child(when(p.due_at)))
-          .child(div().w(52).flex_none().text_color(p.risk ? t.red : t.muted).child(slackText(p.slack)));
+          .child(div().w(108).flex_none().truncate().text_color(t.muted).child(when(p.due_at)))
+          .child(div().w(48).flex_none().text_color(p.risk ? t.red : t.muted).child(slackText(p.slack)));
       })))
       .child(div().h(26).flex_none().px(12).text_size(11.5).text_color(t.dim)
-        .child(`Captured up to ${captured ? when(captured.at) : "nothing yet"} · read-only: tell an agent to change a Promise`));
+        .child(`Captured up to ${captured ? when(captured.at) : "nothing yet"} · read-only`));
   }
 }

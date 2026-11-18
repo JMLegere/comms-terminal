@@ -6154,7 +6154,7 @@ PROMISE_SECTION = {"overdue": ("Overdue", "red"), "at_risk": ("At risk", "red"),
 
 def minutes_text(m: int) -> str:
     sign, m = ("-" if m < 0 else ""), abs(m)
-    return f"{sign}{m // 60}h{m % 60:02d}" if m >= 60 else f"{sign}{m}m"
+    return f"{sign}{m // 1440}d" if m >= 2880 else f"{sign}{m // 60}h{m % 60:02d}" if m >= 60 else f"{sign}{m}m"
 
 
 def promise_markup(p: dict) -> str:
@@ -6180,7 +6180,8 @@ def promise_markup(p: dict) -> str:
     lines += ["", f"[{grey}]History[/]"]
     for h in p["history"]:
         at = datetime.fromisoformat(h["at"]).astimezone(sequences.LOCAL).strftime("%d %b %H:%M")
-        lines.append(f"[{grey}]{at}[/]  {h['change']} · [{grey}]{escape(h['origin'])}[/]")
+        lines.append(f"[{grey}]{at}[/]  {h['change']}")
+        lines.append(f"  [{grey}]{escape(h['origin'])}[/]")
     lines += ["", f"[{grey}]Read-only: tell an agent to change a Promise (ADR 0024) · enter opens its Thread[/]"]
     return "\n".join(lines)
 
