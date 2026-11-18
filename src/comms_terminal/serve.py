@@ -1036,7 +1036,7 @@ def probe_loop(db_path: str, shared: dict, stop: threading.Event, every: float =
             return
 
 
-def prep_loop(db_path: str, client, stop: threading.Event, every: float = prep.EVERY) -> None:
+def prep_loop(db_path: str, context, stop: threading.Event, every: float = prep.EVERY) -> None:
     """Read the coming Meetings' Prep from Tana every 5 minutes (ADR 0025). A failed read is kept, so every Prep
     counts as not prepared until a read succeeds."""
     import logging
@@ -1044,7 +1044,7 @@ def prep_loop(db_path: str, client, stop: threading.Event, every: float = prep.E
         db = inbox.connect(db_path)
         try:
             with commands.service(db, commands.said("Prep")):
-                prep.refresh(db, client)
+                prep.refresh(db, context.client)
         except Exception as e:  # noqa: BLE001 - one failed read must not stop the loop
             logging.getLogger("comms_terminal.prep").info("prep read failed: %s", e)
         finally:
@@ -1110,7 +1110,7 @@ def run(db_path: str, socket_path: str, host: str, port: int, files_host: str | 
                                     daemon=True))
     threads.append(threading.Thread(target=probe_loop, args=(db_path, senders.shared, stop), daemon=True))
     if contexts["tana"] is not None:  # Prep lives in Tana (ADR 0025)
-        threads.append(threading.Thread(target=prep_loop, args=(db_path, contexts["tana"].client, stop), daemon=True))
+        threads.append(threading.Thread(target=prep_loop, args=(db_path, contexts["tana"], stop), daemon=True))
     if feed := credential(calendar.CREDENTIAL):
         threads.append(threading.Thread(target=calendar_loop, args=(db_path, feed.decode(), stop), daemon=True))
     if fm is not None:
