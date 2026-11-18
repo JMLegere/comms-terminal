@@ -158,7 +158,7 @@ def last_late(owed):
 
 @then(parsers.parse('it links url "{url}"'))
 def links(owed, url):
-    assert {"kind": "url", "target": url} in _only(owed)["links"]
+    assert {"kind": "url", "target": url} in [{"kind": l["kind"], "target": l["target"]} for l in _only(owed)["links"]]
 
 
 @then(parsers.parse('it is refused with "{words}"'))
