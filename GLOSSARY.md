@@ -116,6 +116,56 @@ _Avoid_: Spam, Blacklisted, Screened out, Ignored (for senders)
 Working the Todo queue.
 _Avoid_: Inbox zero, Processing
 
+## Promises
+
+**Promise**:
+Something a specific Person expects Jeremy to do, by a stated or implied time, that needs an action by him, such as "send the traction update", a reply owed, or a next step he agreed to own. A Warm Sequence starts on the date of the Promise that opens it. Only an agent records and changes Promises; Jeremy reads them and corrects them by telling an agent. A Person's promise to Jeremy is not a Promise; it is the Thread's Waiting for them.
+_Avoid_: Agreed next step, Expectation, Commitment, Obligation, Ball
+
+**Implied promise**:
+A Promise nobody said aloud, such as a reply owed to an unanswered ask, or one whose time the agent inferred.
+_Avoid_: Suggested promise
+
+**Tentative promise**:
+A Promise the agent is not yet sure is owed. Later evidence makes it owed or drops it; Jeremy never has to confirm it.
+_Avoid_: Draft (a Draft is an unsent message), Suggested promise
+
+**Slack** (Promise):
+The time left before a Promise's time, less the work and travel it still needs. For Prep, the time left before the leave-by time, less the prep still needed.
+_Avoid_: Buffer, Float, Margin
+
+**At risk**:
+A Promise, or a Meeting's Prep, whose Slack is smaller than the work it still needs. It is worked out, never set by hand.
+_Avoid_: Overdue (for one still in time), Red
+
+**Overdue** (Promise):
+A Promise past its time and not yet kept. It stays owed until it is Fulfilled or Cancelled.
+_Avoid_: Unfulfilled, Broken, Late (as a state)
+
+**Fulfilled**:
+A Promise that was kept, with the Origin that shows how and when; one kept after its time is Fulfilled late.
+_Avoid_: Done, Completed, Kept
+
+**Cancelled** (Promise):
+A Promise no longer owed because the Person knows: they withdrew the ask, or Jeremy told them he won't do it. A Promise is never cancelled silently; until the Person has been told, it stays owed. A Tentative promise that later evidence shows was never owed is also Cancelled, with that evidence as its Origin.
+_Avoid_: Released, Dismissed, Dropped
+
+**Origin**:
+The message, Phone call, Call transcript, Meeting note, Customer request, or Jeremy's own recorded words that a Promise, or a change to it, came from. Every Promise and every change has one.
+_Avoid_: Source (the word for where messages come in), Evidence
+
+**Promise link**:
+A reference from a Promise to anything that gives it context: a Thread, Case, Issue, Draft, Tana node, or outside address. A Promise can have any number; a link never changes the Promise's state.
+_Avoid_: Relation, Dependency
+
+**Customer request**:
+A customer's ask recorded on an Issue or Project in Linear. It is an Origin for a Promise only when Jeremy committed to it and it needs his action.
+_Avoid_: Feature request, Customer need
+
+**Prep**:
+The work and time a Meeting with someone outside needs before it starts, including travel and a brief. It belongs to its Meeting and moves or disappears with it; it is done when the brief exists and Jeremy has marked himself prepared. It shows alongside Promises but is not one.
+_Avoid_: Meeting prep task, Buffer, Prep promise
+
 ## People
 
 **Person**:
@@ -240,10 +290,6 @@ _Avoid_: Engaged, Hot
 **Close-out**:
 The last touch to a Cold or silent Person: an easy way to say "not now", with a dated reopening trigger.
 _Avoid_: Breakup email, Final nudge, Last chance
-
-**Agreed next step**:
-A next step with a date and an owner that both sides accepted. A Warm Sequence starts on its date.
-_Avoid_: Follow-up, Next action, Nudge
 
 ## Pipeline
 
