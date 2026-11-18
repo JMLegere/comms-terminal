@@ -19,4 +19,4 @@ Decision:
 
 ## Consequences
 
-- At risk is measured by Slack (time left less work and travel still needed), per Promise, chosen 2026-11-18 over hours-to-due, shared capacity planning, and buffer burn. It ignores other work competing for the same hours, so a crowded day can still surprise.
+- At risk is measured by Slack-time (time left less work and travel still needed), per Promise, chosen 2026-11-18 over hours-to-due, shared capacity planning, and buffer burn. It ignores other work competing for the same hours, so a crowded day can still surprise.

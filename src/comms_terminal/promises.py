@@ -1,6 +1,6 @@
 """Promises (ADR 0024, 0027; .agents/prd/2026-11-18-promises.md): what specific People expect Jeremy to do by a
 time. Only an agent changes them, through the CLI, and every change cites an Origin (FR-PR-3, FR-PR-4): an
-Activity, a Customer request, a Tana node, or Jeremy's own recorded words. Slack, At risk and Overdue are worked
+Activity, a Customer request, a Tana node, or Jeremy's own recorded words. Slack-time, At risk and Overdue are worked
 out from the time, the work and the travel (FR-PR-7), never stored.
 
 A Promise is Tentative, Open, Fulfilled or Cancelled. Cancelled needs an Origin showing the Person knows, or, for a
@@ -10,7 +10,7 @@ that Enrollment's start (FR-PR-14).
 The "captured up to" mark (FR-PR-10) is the last Activity whose Promise changes the capture agent has written; it
 only moves forward, in Activity insertion order, so a late Call transcript (an EDIT Activity) is still read.
 
-Interface: record, firm, change, fulfil, cancel, link, advance_capture (writers); find, promise, view, slack,
+Interface: record, firm, change, fulfil, cancel, link, advance_capture (writers); find, promise, view, slack_time,
 capture_mark, pending (readers).
 """
 
@@ -274,23 +274,23 @@ def pending(db, limit: int = 50) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def slack(row, now: datetime) -> int:
+def slack_time(row, now: datetime) -> int:
     """Minutes left before its time, less its work and travel (FR-PR-7); negative when it can no longer fit."""
     left = (datetime.fromisoformat(row["due_at"]) - now).total_seconds() // 60
     return int(left) - row["work_minutes"] - row["travel_minutes"]
 
 
 def risk(row, now: datetime) -> str | None:
-    """'overdue' past its time, 'at_risk' when Slack is less than its work and travel (FR-PR-7), else None."""
+    """'overdue' past its time, 'at_risk' when Slack-time is less than its work and travel (FR-PR-7), else None."""
     if row["state"] not in OPEN_STATES:
         return None
     if datetime.fromisoformat(row["due_at"]) <= now:
         return "overdue"
-    return "at_risk" if slack(row, now) < row["work_minutes"] + row["travel_minutes"] else None
+    return "at_risk" if slack_time(row, now) < row["work_minutes"] + row["travel_minutes"] else None
 
 
 def promise(db, promise_id: str, now: datetime | None = None) -> dict:
-    """One Promise with its People, links, Slack, risk, whether a Draft is ready, and its history."""
+    """One Promise with its People, links, Slack-time, risk, whether a Draft is ready, and its history."""
     now = now or clock.now()
     row = find(db, promise_id)
     people = db.execute("SELECT p.id, p.display_name FROM promise_people pp JOIN persons p ON p.id = pp.person_id"
@@ -307,7 +307,7 @@ def promise(db, promise_id: str, now: datetime | None = None) -> dict:
     return dict(row) | {"people": [dict(p) for p in people], "links": [dict(l) | {"label": _link_label(db, l)} for l in links],
                         "history": [dict(h) | {"detail": json.loads(h["detail"]), "origin": origin_label(db, h),
                                                "origin_via": origin_via(db, h)} for h in history],
-                        "slack": slack(row, now), "risk": risk(row, now), "draft_ready": ready}
+                        "slack_time": slack_time(row, now), "risk": risk(row, now), "draft_ready": ready}
 
 
 def _link_label(db, link) -> str:

@@ -6182,7 +6182,7 @@ def promise_markup(p: dict) -> str:
              "",
              f"[{grey}]Owed to[/]  [b]{escape(', '.join(x['display_name'] for x in p['people']))}[/]",
              f"[{grey}]Work[/]  {minutes_text(p['work_minutes'])}   [{grey}]Travel[/]  {minutes_text(p['travel_minutes'])}"
-             f"   [{grey}]Slack[/]  [{hue if p['risk'] else PALETTE['fg0']}]{minutes_text(p['slack'])}[/]"]
+             f"   [{grey}]Slack-time[/]  [{hue if p['risk'] else PALETTE['fg0']}]{minutes_text(p['slack_time'])}[/]"]
     if p["draft_ready"]:
         lines.append(f"[{PALETTE['yellow']}]{ICON['edited']} Draft ready[/]")
     for link in p["links"]:

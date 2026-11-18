@@ -12,7 +12,7 @@ answers["thread.view"] = { view: { thread: { f: { status: "TODO", status_detail:
 
 const Promises = await load("promises");
 out.rows = Promises.ns.promiseRows(answers["promises.page"]).map((r) => r.header ?? r.p.id);
-out.slack = [Promises.ns.slackText(-30), Promises.ns.slackText(90), Promises.ns.slackText(45), Promises.ns.slackText(69289)];
+out.slackTime = [Promises.ns.slackTimeText(-30), Promises.ns.slackTimeText(90), Promises.ns.slackTimeText(45), Promises.ns.slackTimeText(69289)];
 state.page = "promises";
 const page = Object.create(Promises.prototype);
 page.load(cx);

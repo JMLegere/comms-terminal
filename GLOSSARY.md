@@ -130,12 +130,12 @@ _Avoid_: Suggested promise
 A Promise the agent is not yet sure is owed. Later evidence makes it owed or drops it; Jeremy never has to confirm it.
 _Avoid_: Draft (a Draft is an unsent message), Suggested promise
 
-**Slack** (Promise):
+**Slack-time**:
 The time left before a Promise's time, less the work and travel it still needs. For Prep, the time left before the leave-by time, less the prep still needed.
-_Avoid_: Buffer, Float, Margin
+_Avoid_: Slack (that is the Platform), Buffer, Float, Margin
 
 **At risk**:
-A Promise, or a Meeting's Prep, whose Slack is smaller than the work it still needs. It is worked out, never set by hand.
+A Promise, or a Meeting's Prep, whose Slack-time is smaller than the work it still needs. It is worked out, never set by hand.
 _Avoid_: Overdue (for one still in time), Red
 
 **Overdue** (Promise):

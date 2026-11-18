@@ -52,7 +52,7 @@ Feature: Promises
     And it links url "https://example.com/deck"
 
   @AS-PR-7 @FR-PR-2 @FR-PR-7 @FR-PR-8
-  Scenario: The View puts owed Promises in sections by Slack
+  Scenario: The View puts owed Promises in sections by Slack-time
     Given the agent Recorded "Send the deck" owed to "Anna Ciprick" due "2026-11-16 14:00" needing 180 minutes of work
     And the agent Recorded "Call back" owed to "Anna Ciprick" due "2026-11-13"
     And the agent Recorded "Send the term sheet" owed to "Anna Ciprick" due "2026-11-30"

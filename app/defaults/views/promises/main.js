@@ -19,7 +19,7 @@ export const dueIn = (iso, now = Date.now()) => {
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const pad = (n) => String(n).padStart(2, "0");
 const when = (iso) => { const d = new Date(iso); return `${DAYS[d.getDay()]} ${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
-export const slackText = (m) => { const a = Math.abs(m), s = m < 0 ? "-" : ""; return a >= 2880 ? `${s}${Math.floor(a / 1440)}d` : a >= 60 ? `${s}${Math.floor(a / 60)}h${pad(a % 60)}` : `${s}${a}m`; };
+export const slackTimeText = (m) => { const a = Math.abs(m), s = m < 0 ? "-" : ""; return a >= 2880 ? `${s}${Math.floor(a / 1440)}d` : a >= 60 ? `${s}${Math.floor(a / 60)}h${pad(a % 60)}` : `${s}${a}m`; };
 
 /** The page's rows in order: a header per section that has Promises, then its Promises. */
 export function promiseRows(view) {

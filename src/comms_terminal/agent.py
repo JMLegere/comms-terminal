@@ -413,7 +413,7 @@ def _hours(minutes: int) -> str:
 
 def promise_line(p: dict) -> str:
     who = ", ".join(x["display_name"] for x in p["people"])
-    return (f"{p['id']}\t{_when(p['due_at'])}{'*' if p['due_inferred'] else ''}\tslack {_hours(p['slack'])}"
+    return (f"{p['id']}\t{_when(p['due_at'])}{'*' if p['due_inferred'] else ''}\tslack-time {_hours(p['slack_time'])}"
             f"\t{who}\t{p['what']}" + ("\tDraft ready" if p["draft_ready"] else "") + "\n")
 
 
@@ -433,7 +433,7 @@ def promises_list(db, a) -> str:
 def promise_markdown(p: dict) -> str:
     lines = [f"# Promise · {p['what']}", "",
              f"- {p['state'].title()} · due {_when(p['due_at'])}{' (inferred)' if p['due_inferred'] else ''}"
-             f" · work {_hours(p['work_minutes'])} · travel {_hours(p['travel_minutes'])} · slack {_hours(p['slack'])}"
+             f" · work {_hours(p['work_minutes'])} · travel {_hours(p['travel_minutes'])} · slack-time {_hours(p['slack_time'])}"
              + (f" · {SECTION_NAMES[p['risk']]}" if p["risk"] else "") + (" · Draft ready" if p["draft_ready"] else ""),
              "- Owed to: " + ", ".join(x["display_name"] for x in p["people"])]
     lines += [f"- Link: {l['kind']} {l['label']}" + (f" ({l['target']})" if l["label"] != l["target"] else "")

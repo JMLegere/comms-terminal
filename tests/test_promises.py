@@ -41,15 +41,15 @@ def row(due, work=0, travel=0, state="OPEN"):
 
 
 @pytest.mark.parametrize("hours, work, travel, expected", [
-    (4, 120, 0, None),          # Slack 120 = work 120: not less, so not At risk
-    (4, 121, 0, "at_risk"),     # Slack 119 < 121
+    (4, 120, 0, None),          # Slack-time 120 = work 120: not less, so not At risk
+    (4, 121, 0, "at_risk"),     # Slack-time 119 < 121
     (4, 60, 61, "at_risk"),     # travel counts like work
-    (1, 120, 0, "at_risk"),     # cannot fit at all: Slack is negative
+    (1, 120, 0, "at_risk"),     # cannot fit at all: Slack-time is negative
     (0, 0, 0, "overdue"),       # at its time and not kept
     (-24, 0, 0, "overdue"),
     (72, 0, 0, None),
 ])
-def test_at_risk_is_slack_below_the_work_still_needed(hours, work, travel, expected):
+def test_at_risk_is_slack_time_below_the_work_still_needed(hours, work, travel, expected):
     assert promises.risk(row(NOW + timedelta(hours=hours), work, travel), NOW) == expected
 
 
@@ -58,8 +58,8 @@ def test_closed_promises_have_no_risk():
         assert promises.risk(row(NOW - timedelta(days=1), state=state), NOW) is None
 
 
-def test_slack_is_minutes_left_less_work_and_travel():
-    assert promises.slack(row(NOW + timedelta(hours=3), 30, 15), NOW) == 135
+def test_slack_time_is_minutes_left_less_work_and_travel():
+    assert promises.slack_time(row(NOW + timedelta(hours=3), 30, 15), NOW) == 135
 
 
 def test_a_day_alone_is_due_at_17_jeremys_time():
