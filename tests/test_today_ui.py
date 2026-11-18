@@ -52,8 +52,9 @@ def test_console_opens_on_today_with_three_lists_and_the_rail_count(tmp_path):
 
     run(Console(path), [scenario])
     assert seen["page"] is TodayPage
-    assert seen["counts"] == [6, 1, 0, 1, 0, 0] and seen["shown"] == [True, True, False, True, False, False]  # no Paused, Issues or Unattended
-    assert "threads · 6" in seen["titles"][0] and "drafts · 1" in seen["titles"][1] and "tasks · 1" in seen["titles"][3]
+    assert seen["counts"] == [0, 6, 1, 0, 1, 0, 0]  # no Promises, Paused, Issues or Unattended
+    assert seen["shown"] == [False, True, True, False, True, False, False]
+    assert "threads · 6" in seen["titles"][1] and "drafts · 1" in seen["titles"][2] and "tasks · 1" in seen["titles"][4]
     assert seen["rail"][0] == "today" and "  8[/]" in seen["rail"][1]
     assert isinstance(seen["list"], ThreadsPage) and seen["right"] is ThreadView
 
@@ -128,7 +129,7 @@ def test_an_empty_today_says_all_clear_and_what_comes_next(tmp_path):
 
     run(Console(path), [scenario])
     assert seen["clear"][0] is True and "All clear" in seen["clear"][1] and "Next wake" in seen["clear"][1]
-    assert seen["shown"] == [False, False, False, False, False, False]
+    assert seen["shown"] == [False] * 7
 
 
 @pytest.mark.parametrize("kind", ["call", "linkedin"])
@@ -267,7 +268,7 @@ def test_a_thread_with_a_saved_reply_draft_shows_a_pencil_before_its_title(tmp_p
     seen = {}
 
     async def scenario(app, pilot):
-        threads = app.main.current.lists[0]
+        threads = app.main.current.threads
         table = threads.query_one(DataTable)
         ids = [r["id"] for r in threads.rows]
         seen["titles"] = {tid: str(table.get_row_at(ids.index(tid))[2]) for tid in (drafted, plain)}

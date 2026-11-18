@@ -74,7 +74,8 @@
                 "event": null,
                 "case": null,
                 "issues": "issues",
-                "actions": "actions"
+                "actions": "actions",
+                "promises": "promises"
               }
             },
             {
@@ -112,7 +113,9 @@
                 "actions:thread": "thread",
                 "actions:task": "task",
                 "actions:person": "person",
-                "today:issue": "issue"
+                "today:issue": "issue",
+                "today:promise": "side",
+                "promises": "side"
               }
             }
           ]

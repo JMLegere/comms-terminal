@@ -1881,6 +1881,335 @@
    }
   },
   {
+   "name": "command.promises.advance_capture",
+   "summary": "The promises.advance_capture writer (write).",
+   "params": [
+    {
+     "name": "activity_id",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": true,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.promises.cancel",
+   "summary": "The promises.cancel writer (write).",
+   "params": [
+    {
+     "name": "promise_id",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": true,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.promises.change",
+   "summary": "The promises.change writer (write).",
+   "params": [
+    {
+     "name": "promise_id",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "what",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "due_at",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "inferred",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "work_minutes",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "travel_minutes",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "people",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": true,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.promises.firm",
+   "summary": "The promises.firm writer (write).",
+   "params": [
+    {
+     "name": "promise_id",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": true,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.promises.fulfil",
+   "summary": "The promises.fulfil writer (write).",
+   "params": [
+    {
+     "name": "promise_id",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "at",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": true,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.promises.link",
+   "summary": "The promises.link writer (write).",
+   "params": [
+    {
+     "name": "promise_id",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "kind",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "target",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": true,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "command.promises.record",
+   "summary": "The promises.record writer (write).",
+   "params": [
+    {
+     "name": "what",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "people",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "due_at",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "inferred",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "work_minutes",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "travel_minutes",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "tentative",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": true,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
    "name": "command.sequences.add_step",
    "summary": "The sequences.add_step writer (create).",
    "params": [
@@ -3766,6 +4095,27 @@
    }
   },
   {
+   "name": "promises.page",
+   "summary": "The Promises page (FR-PR-8): owed Promises in sections Overdue, At risk, Today, This week, Later and Tentative, each with its People, links, `slack` minutes, `risk` and `draft_ready`; `captured` is where Promise capture is up to, or null. Read-only: only an agent changes Promises (ADR 0024).",
+   "params": [
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
    "name": "rail.summary",
    "summary": "Counts and lists the rail shows: Status views, Cases, People, Today, Connections, Sequences, due Tasks.",
    "params": [
@@ -4471,7 +4821,7 @@
   },
   {
    "name": "today.page",
-   "summary": "Today: Todo Threads, due Tasks (an email Task with its Draft until sent) and the Drafts list, each item once (each Draft with `recipient`, as drafts.list), Paused Enrollments (each with `finishing`, the label of the reason it finishes as, or null) and Unattended Organizations; and the Issues Today lists (FR-PL-12: planned or due today or earlier, each with `overdue`) with `issues_capacity`: today's capacity, `used` by the Issues that are not Overdue, and `overdue` hours (FR-PL-13).",
+   "summary": "Today: Todo Threads, due Tasks (an email Task with its Draft until sent) and the Drafts list, each item once (each Draft with `recipient`, as drafts.list), Paused Enrollments (each with `finishing`, the label of the reason it finishes as, or null) and Unattended Organizations; and the Issues Today lists (FR-PL-12: planned or due today or earlier, each with `overdue`) with `issues_capacity`: today's capacity, `used` by the Issues that are not Overdue, and `overdue` hours (FR-PL-13); and every owed Promise as `promises`, each with its `section` (FR-PR-9).",
    "params": [
     {
      "name": "origin",

@@ -77,6 +77,7 @@ const DEFAULTS: &[(&str, &str, bool)] = &[
     ("views/toasts/main.js", include_str!("../defaults/views/toasts/main.js"), true),
     ("views/settings/main.js", include_str!("../defaults/views/settings/main.js"), true),
     ("views/issues/main.js", include_str!("../defaults/views/issues/main.js"), true),
+    ("views/promises/main.js", include_str!("../defaults/views/promises/main.js"), true),
     ("views/issue/main.js", include_str!("../defaults/views/issue/main.js"), true),
     ("views/actions/main.js", include_str!("../defaults/views/actions/main.js"), true),
     ("layouts/main.json", include_str!("../defaults/layouts/main.json"), false),

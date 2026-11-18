@@ -97,7 +97,9 @@ def _shell(core, db):
         days = (start.date() - now.date()).days
         events["next"] = {"title": short(nxt), "when": f"{start:%H:%M}" if days == 0 else f"tomorrow {start:%H:%M}"
                           if days == 1 else f"{start:%a %H:%M}" if days < 7 else f"{start:%b %-d %H:%M}"}
-    return {"today": sum(len(t[k]) for k in ("threads", "tasks", "drafts", "paused", "unattended")),
+    owed = db.execute("SELECT count(*) FROM promises WHERE state IN ('OPEN', 'TENTATIVE')").fetchone()[0]
+    return {"today": sum(len(t[k]) for k in ("threads", "tasks", "drafts", "paused", "unattended")) + owed,
+            "promises": owed,
             "drafts": db.execute("SELECT count(*) FROM composition_drafts").fetchone()[0],
             "organizations": db.execute("SELECT count(*) FROM organizations").fetchone()[0],
             "issues": db.execute("SELECT count(*) FROM issues WHERE completed_at IS NULL AND canceled_at IS NULL"
@@ -143,7 +145,8 @@ def _today(core, db):
     (each Draft with `recipient`, as drafts.list),
     Paused Enrollments (each with `finishing`, the label of the reason it finishes as, or null) and Unattended
     Organizations; and the Issues Today lists (FR-PL-12: planned or due today or earlier, each with `overdue`) with
-    `issues_capacity`: today's capacity, `used` by the Issues that are not Overdue, and `overdue` hours (FR-PL-13)."""
+    `issues_capacity`: today's capacity, `used` by the Issues that are not Overdue, and `overdue` hours (FR-PL-13);
+    and every owed Promise as `promises`, each with its `section` (FR-PR-9)."""
     from . import issues
     t = dict(_shared(core, "today", inbox.today, db))
     day = issues.view(db, {"grouping": "none", "completed": "none"}, today_list=True)
@@ -151,7 +154,24 @@ def _today(core, db):
     t["issues_capacity"] = issues.today_load(db)
     t["drafts"] = [d | {"recipient": inbox.recipient_names(db, d["to"] or "", d["kind"])} for d in t["drafts"]]
     t["paused"] = [e | {"finishing": sequences.REASON_LABEL[e["reason"]] if e["reason"] else None} for e in t["paused"]]
+    t["promises"] = _promise_rows(db)
     return t
+
+
+def _promise_rows(db) -> list[dict]:
+    """Every owed Promise, Tentative ones last, each with its `section` (FR-PR-9)."""
+    from . import promises
+    v = promises.view(db)
+    return [p | {"section": key} for key in promises.SECTIONS for p in v["sections"][key]]
+
+
+@query("promises.page")
+def _promises_page(core, db):
+    """The Promises page (FR-PR-8): owed Promises in sections Overdue, At risk, Today, This week, Later and
+    Tentative, each with its People, links, `slack` minutes, `risk` and `draft_ready`; `captured` is where Promise
+    capture is up to, or null. Read-only: only an agent changes Promises (ADR 0024)."""
+    from . import promises
+    return promises.view(db)
 
 
 @query("threads.queue", view="string")
@@ -407,12 +427,16 @@ def _draft_problem(core, db, values):
 @query("today.side", kind="string", id="string")
 def _today_side(core, db, kind, id):
     """The right pane for a Today Paused row (kind "paused", a Person id) or Unattended row ("unattended", an
-    Organization id; "unattended_person", a Person id), as the Console fills it: lines of [text, colour or null,
-    bold] segments."""
+    Organization id; "unattended_person", a Person id), or a Promise ("promise", a Promise id; FR-PR-8), as the
+    Console fills it: lines of [text, colour or null, bold] segments."""
     from rich.console import Console
     from rich.text import Text
 
     from .tui import pipeline_section, sequence_section
+    if kind == "promise":
+        from . import promises
+        from .tui import promise_markup
+        return segments(promise_markup(promises.promise(db, id)))
     if kind == "paused":
         p = db.execute("SELECT display_name FROM persons WHERE id = ?", (id,)).fetchone()
         markup = f"[b]{p[0] if p else ''}[/]\n\n" + sequence_section(db, id, keys=False) \

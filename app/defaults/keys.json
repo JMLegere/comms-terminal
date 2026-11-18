@@ -287,6 +287,13 @@
     "tab": "overlay.tab",
     "shift-tab": "overlay.tab"
   },
+  "page:promises": {
+    "j": "promises.next",
+    "k": "promises.prev",
+    "down": "promises.next",
+    "up": "promises.prev",
+    "enter": "promises.enter"
+  },
   "page:issues": {
     "j": "issues.next",
     "k": "issues.prev",

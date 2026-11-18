@@ -41,7 +41,7 @@ from textual.widgets import DataTable, DirectoryTree, Input, OptionList, Static,
 from textual.widgets.option_list import Option
 from textual.worker import WorkerCancelled, get_current_worker
 
-from . import actions, calendar as cal, clock, commands, files, gcal, inbox, issues, pipeline, render, sequences
+from . import actions, calendar as cal, clock, commands, files, gcal, inbox, issues, pipeline, promises, render, sequences
 from .health import problem
 from .icons import ICON
 from .platforms import FORMATS, PLATFORMS, kind_of
@@ -130,7 +130,7 @@ Page { height: 1fr; }
 .todaypane DataTable { height: auto; max-height: 30vh; }
 #todaythreads DataTable { max-height: 50vh; }
 .todaypane.fill, .todaypane.fill Page { height: 1fr; }
-#todaythreads.fill DataTable, #todaytasks.fill DataTable, #todayissues.fill DataTable, #todaydrafts.fill DataTable, #todaypaused.fill DataTable, #todayorgs.fill DataTable {
+#todaypromises.fill DataTable, #todaythreads.fill DataTable, #todaytasks.fill DataTable, #todayissues.fill DataTable, #todaydrafts.fill DataTable, #todaypaused.fill DataTable, #todayorgs.fill DataTable {
     height: 1fr; max-height: 100%; }
 .todaypane #legend, .todaypane #below { display: none; }
 .todaypane #table { margin-top: 0; }
@@ -784,6 +784,12 @@ class Rail(OptionList):
                        + len(today["unattended"]))
         except Exception:  # a failed Draft read must not take the rail down; the Drafts list says why
             waiting = ""
+        try:
+            owed = db.execute("SELECT count(*) FROM promises WHERE state IN ('OPEN', 'TENTATIVE')").fetchone()[0]
+        except Exception:  # a laptop copy from before migration 47
+            owed = ""
+        if isinstance(waiting, int) and isinstance(owed, int):
+            waiting += owed  # Today lists every owed Promise (FR-PR-9)
         opts = [item("today", "today", "Today", waiting), item("calendar", "calendar", "Calendar"), gap,
                 header("threads", "threads")]
         for i, name in enumerate(VIEW_NAMES):
@@ -804,7 +810,8 @@ class Rail(OptionList):
         opts += [gap, header("issues", "work")] + ([item("issues", "issues", "Issues", open_issues or "")]
                                                     if "issues" in on else []) + [
                  item("actions", "actions", "Action Queue",
-                      f"{upcoming} · {in_flight}" if in_flight else (upcoming or ""))]
+                      f"{upcoming} · {in_flight}" if in_flight else (upcoming or "")),
+                 item("promises", "promise", "Promises", owed or "")]
         if "sequences" in on:
             due = len(sequences.tasks_due(db))
             opts += [gap, header("sequence", "playbook"), item("tasks", "tasks", "Tasks", due or ""),
@@ -6141,6 +6148,99 @@ class PausedPage(TablePage):
         self.app.main.open(lambda: PersonPage(e["person_id"]))
 
 
+PROMISE_SECTION = {"overdue": ("Overdue", "red"), "at_risk": ("At risk", "red"), "today": ("Today", "yellow"),
+                   "this_week": ("This week", "fg0"), "later": ("Later", "grey1"), "tentative": ("Tentative", "grey1")}
+
+
+def minutes_text(m: int) -> str:
+    sign, m = ("-" if m < 0 else ""), abs(m)
+    return f"{sign}{m // 60}h{m % 60:02d}" if m >= 60 else f"{sign}{m}m"
+
+
+def promise_markup(p: dict) -> str:
+    """One Promise in the right pane: who, when, Slack, links and its history with each Origin. Read-only: only an
+    agent changes Promises (ADR 0024)."""
+    grey, red = "#928374", PALETTE["red"]
+    due = datetime.fromisoformat(p["due_at"]).astimezone(sequences.LOCAL).strftime("%a %d %b %H:%M")
+    name, _ = PROMISE_SECTION[promises.section(p, clock.now())]
+    lines = [f"[b]{escape(p['what'])}[/]", "",
+             f"[{grey}]Owed to[/]  {escape(', '.join(x['display_name'] for x in p['people']))}",
+             f"[{grey}]Due[/]  {due}" + (f" [{grey}](inferred)[/]" if p["due_inferred"] else ""),
+             f"[{grey}]Work[/]  {minutes_text(p['work_minutes'])} · [{grey}]Travel[/]  {minutes_text(p['travel_minutes'])}"
+             f" · [{grey}]Slack[/]  {minutes_text(p['slack'])}",
+             (f"[{red}]{name}[/]" if p["risk"] else f"[{grey}]{name}[/]")
+             + (f" · {ICON['edited']} Draft ready" if p["draft_ready"] else "")]
+    for link in p["links"]:
+        target = escape(link["target"])
+        lines.append(f"[{grey}]{link['kind'].title()}[/]  "
+                     + (f"[link='{render.target(link['target'])}']{target}[/link]" if link["kind"] == "url" else target))
+    lines += ["", f"[{grey}]History[/]"]
+    for h in p["history"]:
+        at = datetime.fromisoformat(h["at"]).astimezone(sequences.LOCAL).strftime("%d %b %H:%M")
+        origin = f'"{escape(h["words"])}"' if h["origin_kind"] == "words" else f"{h['origin_kind']} {escape(h['origin_ref'])}"
+        lines.append(f"[{grey}]{at}[/]  {h['change']} · [{grey}]{origin}[/]")
+    lines += ["", f"[{grey}]Read-only: tell an agent to change a Promise (ADR 0024) · enter opens its Thread[/]"]
+    return "\n".join(lines)
+
+
+class PromisesPage(TablePage):
+    """Promises (FR-PR-8): what People expect Jeremy to do, by section (Overdue, At risk, Today, This week, Later,
+    Tentative), soonest first. Read-only (ADR 0024); enter opens the Promise's Thread. Today shows the same rows
+    (FR-PR-9)."""
+    TITLE = f"{ICON['promise']} promises"
+    RAIL = "promises"
+    KIND = "promise"
+    SIDE = f"{ICON['promise']} promise"
+    COLUMNS = ("", "When", "Owed to", "Promise", "Slack")
+    EMPTY = "No Promises owed."
+
+    def rows(self):
+        v = promises.view(self.app.db, clock.now())
+        self.captured = v["captured"]
+        out = []
+        for key in promises.SECTIONS:
+            name, color = PROMISE_SECTION[key]
+            hue = PALETTE.get(color, "#928374")
+            for p in v["sections"][key]:
+                due = datetime.fromisoformat(p["due_at"]).astimezone(sequences.LOCAL).strftime("%a %d %b %H:%M")
+                out.append((p, (f"[{hue}]{ICON['promise']}[/]", f"[{hue}]{name}[/] [#928374]{due}[/]",
+                                f"[b]{escape(', '.join(x['display_name'] for x in p['people']))}[/]",
+                                escape(p["what"]) + (f" [#928374]{ICON['edited']}[/]" if p["draft_ready"] else ""),
+                                f"[{hue}]{minutes_text(p['slack'])}[/]")))
+        return out
+
+    def refresh_data(self):
+        if not self.query(DataTable) or not self.on_screen:
+            return
+        super().refresh_data()
+        if self.host is None and self.query("#below"):
+            at = getattr(self, "captured", None)
+            when_text = (datetime.fromisoformat(at["at"]).astimezone(sequences.LOCAL).strftime("%a %d %b %H:%M")
+                         if at else "nothing yet")
+            self.query_one("#below", Static).update(f"[#928374]Captured up to {when_text}[/]")
+        if self.host is not None:
+            self.host.list_changed(self)
+        if self.active:
+            self.show_selected()
+
+    def show_selected(self):
+        p = self.selected()
+        if p is None:
+            return
+        self.app.main.showing = f"promise:{p['id']}"
+        self.app.main.show_side(promise_markup(p))
+
+    def on_data_table_row_highlighted(self, event):
+        event.stop()
+        if self.active:
+            self.show_selected()
+
+    def open(self, p):
+        thread = next((l["target"] for l in p["links"] if l["kind"] == "thread"), None)
+        if thread:
+            self.app.main.open_thread(thread)
+
+
 class TodayPage(Page):
     """Today (GLOSSARY; .agents/prd/2026-10-17-today-view.md): Todo Threads, the Drafts list (a Thread whose Reply Draft
     is ready shows through that Draft), Paused Enrollments, Due Tasks (an email Task with its Draft until sent, Jeremy
@@ -6149,7 +6249,7 @@ class TodayPage(Page):
     TITLE = f"{ICON['today']} today"
     RAIL = "today"
     BINDINGS = [Binding("tab", "next_list", show=False)]
-    PANES = ("todaythreads", "todaydrafts", "todaypaused", "todaytasks", "todayissues", "todayorgs")
+    PANES = ("todaypromises", "todaythreads", "todaydrafts", "todaypaused", "todaytasks", "todayissues", "todayorgs")
 
     def __init__(self):
         super().__init__()
@@ -6160,13 +6260,14 @@ class TodayPage(Page):
         self.issues = IssuesPage(today=True)
         self.drafts = DraftsPage()
         self.paused, self.orgs = PausedPage(), UnattendedPage()
+        self.promises = PromisesPage()
         for page in self.lists:
             page.host = self
         self.current_list = threads
 
     @property
     def lists(self):
-        return [self.threads, self.drafts, self.paused, self.tasks, self.issues, self.orgs]
+        return [self.promises, self.threads, self.drafts, self.paused, self.tasks, self.issues, self.orgs]
 
     @property
     def active_list(self):
@@ -6209,7 +6310,10 @@ class TodayPage(Page):
         """A list rebuilt (FR-T3–T9): retitle it, hide it when empty, show All clear when every list is empty,
         and move the cursor on when the list in use has emptied."""
         n = self.count(page)
-        if page is self.threads:
+        if page is self.promises:  # owed Promises first (FR-PR-9)
+            late = sum(1 for p, _ in page.items if p and p["risk"])
+            title = pill(f"{ICON['promise']} promises · {n}", "blue") + (f" [b #c14a4a]{late} at risk or overdue[/]" if late else "")
+        elif page is self.threads:
             title = pill(f"{ICON['TODO']} threads · {n}", "blue")
         elif page is self.tasks:
             late = sum(1 for t in page.items if t and t["group"] == "overdue")
@@ -7204,7 +7308,7 @@ class SettingsPage(TablePage):
 
 SECTIONS = {"today": TodayPage, "threads": ThreadsPage, "people": PeoplePage, "organizations": OrganizationsPage,
             "cases": CasesPage, "channels": ChannelsPage, "tasks": TasksPage, "sequences": SequencesPage,
-            "calendar": CalendarPage, "issues": IssuesPage, "actions": ActionQueuePage}
+            "calendar": CalendarPage, "issues": IssuesPage, "actions": ActionQueuePage, "promises": PromisesPage}
 
 
 class MainScreen(Screen):
