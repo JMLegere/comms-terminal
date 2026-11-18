@@ -29,12 +29,13 @@ import uuid
 from datetime import date, datetime
 from pathlib import Path
 
-from . import clock, commands, files, inbox, issues, pipeline, sequences, writers
+from . import clock, commands, files, inbox, issues, pipeline, promises, sequences, writers
 
 LOG = logging.getLogger("comms_terminal.remote")
 
 CALLS = writers.WRITERS  # name -> how the console runs it (writers.KINDS); each writer declares its own
 MODULES = {"inbox": inbox, "sequences": sequences, "pipeline": pipeline, "files": files, "issues": issues,
+           "promises": promises,
            "commands": commands}
 
 

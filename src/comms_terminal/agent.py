@@ -7,9 +7,9 @@ a Task; Jeremy does that from the console (CONSOLE_ONLY)."""
 import json
 import mimetypes
 import sys
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
-from . import calendar, clock, commands, files, inbox, issues, pipeline, sequence_md, sequences
+from . import calendar, clock, commands, files, inbox, issues, pipeline, promises, sequence_md, sequences
 from .platforms import PLATFORMS
 from .remote import ReplyError, socket_context
 from .tui import (CONTEXT_SOURCES, DRAFT_FIELDS, connection_label, draft_history, draft_text, parse_time,
@@ -46,6 +46,13 @@ COMMANDS = {
     "issues.set_urgency": "urgency set",
     "issues.update": "issue ID --title/--description/--status/--priority/--estimate/--due",
     "pipeline.set_stage": "pipeline stage",
+    "promises.advance_capture": "capture advance",
+    "promises.cancel": "promise ID --cancel",
+    "promises.change": "promise ID --what/--due/--work/--travel/--to",
+    "promises.firm": "promise ID --firm",
+    "promises.fulfil": "promise ID --fulfil",
+    "promises.link": "promise new/ID --link",
+    "promises.record": "promise new",
     "pipeline.set_value": "pipeline value",
     "sequences.add_step": "step add",
     "sequences.archive_sequence": "sequence archive",
@@ -291,6 +298,35 @@ def add_parsers(sub):
     pin = t.add_mutually_exclusive_group()
     pin.add_argument("--pin", action="store_true", help="Plan Issues leaves it alone (local only)")
     pin.add_argument("--unpin", action="store_true", help="Plan Issues may move it again")
+    sub.add_parser("promises", help="owed Promises by section (ADR 0024): Overdue, At risk, Today, This week,"
+                                    " Later, Tentative; --json for the whole view").add_argument("--json", action="store_true")
+    t = sub.add_parser("promise", help="one Promise with its history; `promise new` records one; flags change it."
+                                       " Every change needs --origin (ADR 0024)")
+    t.add_argument("id", help="a Promise id, or new")
+    t.add_argument("--origin", help="activity:ID, customer_request:ID, tana:ID, or words:TEXT (Jeremy's own words)")
+    t.add_argument("--what", help="what is owed")
+    t.add_argument("--to", action="append", help="a Person owed (id, email, phone or exact name); repeat for more;"
+                                                 " on an existing Promise it replaces the People")
+    t.add_argument("--due", help="YYYY-MM-DD (17:00 Jeremy's time), YYYY-MM-DD HH:MM, or ISO with an offset")
+    t.add_argument("--inferred", action="store_true", help="the time was inferred, not stated")
+    t.add_argument("--work", type=int, help="minutes of work still needed")
+    t.add_argument("--travel", type=int, help="minutes of travel it needs")
+    t.add_argument("--tentative", action="store_true", help="new: not yet sure it is owed")
+    t.add_argument("--link", action="append", help="KIND:TARGET context (thread, case, issue, draft, enrollment,"
+                                                   " tana, url); an enrollment starts on the Promise's day")
+    st = t.add_mutually_exclusive_group()
+    st.add_argument("--firm", action="store_true", help="a Tentative promise is owed after all")
+    st.add_argument("--fulfil", action="store_true", help="it was kept (--at when, else now)")
+    st.add_argument("--cancel", action="store_true", help="no longer owed: the Person knows, or it never was")
+    t.add_argument("--at", help="--fulfil: when it was kept")
+    c = sub.add_parser("capture", help='Promise capture: the "captured up to" mark, the Activities after it, advance it')
+    cs = c.add_subparsers(dest="capture_cmd", required=True)
+    cs.add_parser("mark", help="where capture is up to")
+    x = cs.add_parser("pending", help="Activities after the mark, oldest first, with who wrote each")
+    x.add_argument("--limit", type=int, default=50)
+    x.add_argument("--json", action="store_true")
+    cs.add_parser("advance", help="move the mark to this Activity once its Promise changes are written"
+                  ).add_argument("activity_id")
     u = sub.add_parser("urgency", help="the urgency coefficients (Taskwarrior-style), or set one")
     us = u.add_subparsers(dest="urgency_cmd", required=True)
     us.add_parser("list", help="every coefficient and its value")
@@ -362,6 +398,101 @@ def issue_cmd(db, a) -> str:
     return issue_markdown(next(i for i in issues.issues(db) if i["id"] == row["id"]))
 
 
+SECTION_NAMES = {"overdue": "Overdue", "at_risk": "At risk", "today": "Today", "this_week": "This week",
+                 "later": "Later", "tentative": "Tentative"}
+
+
+def _when(iso: str) -> str:
+    return datetime.fromisoformat(iso).astimezone(sequences.LOCAL).strftime("%a %b %-d %H:%M")
+
+
+def _hours(minutes: int) -> str:
+    sign, m = ("-" if minutes < 0 else ""), abs(minutes)
+    return f"{sign}{m // 60}h{m % 60:02d}" if m >= 60 else f"{sign}{m}m"
+
+
+def promise_line(p: dict) -> str:
+    who = ", ".join(x["display_name"] for x in p["people"])
+    return (f"{p['id']}\t{_when(p['due_at'])}{'*' if p['due_inferred'] else ''}\tslack {_hours(p['slack'])}"
+            f"\t{who}\t{p['what']}" + ("\tDraft ready" if p["draft_ready"] else "") + "\n")
+
+
+def promises_list(db, a) -> str:
+    v = promises.view(db, clock.now())
+    if a.json:
+        return json.dumps(v, default=str, indent=1) + "\n"
+    out = []
+    for key, rows in v["sections"].items():
+        if rows:
+            out.append(f"## {SECTION_NAMES[key]}\n" + "".join(promise_line(p) for p in rows))
+    mark = v["captured"]
+    out.append(f"Captured up to {_when(mark['at']) if mark else 'nothing yet'}\n")
+    return "\n".join(out)
+
+
+def promise_markdown(p: dict) -> str:
+    lines = [f"# Promise · {p['what']}", "",
+             f"- {p['state'].title()} · due {_when(p['due_at'])}{' (inferred)' if p['due_inferred'] else ''}"
+             f" · work {_hours(p['work_minutes'])} · travel {_hours(p['travel_minutes'])} · slack {_hours(p['slack'])}"
+             + (f" · {SECTION_NAMES[p['risk']]}" if p["risk"] else "") + (" · Draft ready" if p["draft_ready"] else ""),
+             "- Owed to: " + ", ".join(x["display_name"] for x in p["people"])]
+    lines += [f"- Link: {l['kind']} {l['target']}" for l in p["links"]]
+    lines += ["", "## History"]
+    for h in p["history"]:
+        origin = f"words: \"{h['words']}\"" if h["origin_kind"] == "words" else f"{h['origin_kind']} {h['origin_ref']}"
+        lines.append(f"- {_when(h['at'])} {h['change']} · {origin}")
+    return "\n".join(lines) + "\n"
+
+
+def promise_cmd(db, a) -> str:
+    now = clock.now()
+    changes = any(x is not None for x in (a.what, a.to, a.due, a.work, a.travel)) or a.inferred
+    acting = a.id == "new" or changes or a.link or a.firm or a.fulfil or a.cancel
+    if not acting:
+        return promise_markdown(promises.promise(db, a.id, now))
+    if not a.origin:
+        raise promises.Refused("every change to a Promise needs --origin (ADR 0024)")
+    origin = promises.origin_from(a.origin)
+    people = [find_person(db, x) for x in a.to] if a.to else None
+    due = promises.due_from(a.due) if a.due else None
+    if a.id == "new":
+        if not (a.what and people and due):
+            raise promises.Refused("promise new needs --what, --to and --due")
+        pid = promises.record(db, a.what, people, due, origin, inferred=a.inferred, work_minutes=a.work or 0,
+                              travel_minutes=a.travel or 0, tentative=a.tentative, now=now)
+    else:
+        pid = promises.find(db, a.id)["id"]
+        if changes:
+            promises.change(db, pid, origin, what=a.what, due_at=due, inferred=True if a.inferred else None,
+                            work_minutes=a.work, travel_minutes=a.travel, people=people, now=now)
+        if a.firm:
+            promises.firm(db, pid, origin, now=now)
+    for item in a.link or []:
+        kind, sep, target = item.partition(":")
+        if not sep:
+            raise promises.Refused("--link is KIND:TARGET")
+        promises.link(db, pid, kind, target, origin, now=now)
+    if a.fulfil:
+        promises.fulfil(db, pid, origin, at=promises.due_from(a.at) if a.at else None, now=now)
+    elif a.cancel:
+        promises.cancel(db, pid, origin, now=now)
+    return promise_markdown(promises.promise(db, pid, now))
+
+
+def capture_cmd(db, a) -> str:
+    if a.capture_cmd == "advance":
+        promises.advance_capture(db, a.activity_id, now=clock.now())
+    if a.capture_cmd in ("mark", "advance"):
+        mark = promises.capture_mark(db)
+        return (f"Captured up to Activity {mark['activity_id']} at {_when(mark['at'])}\n" if mark
+                else "Nothing captured yet\n")
+    rows = promises.pending(db, a.limit)
+    if a.json:
+        return json.dumps(rows, default=str, indent=1) + "\n"
+    return "".join(f"{r['id']}\t{r['kind']}\t{r['occurred_at'][:16]}\t{r['author'] or 'Jeremy'}\t{r['title']}\n"
+                   for r in rows) or "Nothing after the mark.\n"
+
+
 def run(a, db):
     with commands.source("cli"):  # every change an agent makes is a CLI Command (ADR 0021)
         _run(a, db)
@@ -423,6 +554,12 @@ def _run(a, db):
                           f"{i['planned_day'] or '-'}\t{i['title']}")
         elif a.cmd == "issue":
             print(issue_cmd(db, a), end="")
+        elif a.cmd == "promises":
+            print(promises_list(db, a), end="")
+        elif a.cmd == "promise":
+            print(promise_cmd(db, a), end="")
+        elif a.cmd == "capture":
+            print(capture_cmd(db, a), end="")
         elif a.cmd == "actions":
             from . import actions
             for r in actions.queue(db):

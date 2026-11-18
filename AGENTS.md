@@ -69,6 +69,8 @@ Jeremy works in the console; agents read and prepare work through the CLI. On Wo
 | Issues (ADR 0019) | `comms-terminal issues`; `issue ID` (Markdown); `issue ID --status … --priority … --estimate N --due DATE --title … --description -`; `issue ID --plan DATE\|today\|tomorrow\|none`; `issue ID --pin\|--unpin`; `issues plan` (Plan Issues, ADR 0023); `issue new --team KEY --title …` |
 | Urgency coefficients | `comms-terminal urgency list`, `urgency set NAME VALUE` |
 | The Action Queue (ADR 0020) | `comms-terminal actions` |
+| Promises (ADR 0024) | `comms-terminal promises [--json]`; `promise ID` (Markdown with history); `promise new --what … --to PERSON --due WHEN [--inferred] [--work MIN] [--travel MIN] [--tentative] [--link KIND:TARGET] --origin ORIGIN`; `promise ID --firm\|--fulfil [--at]\|--cancel\|--due\|--what\|--work\|--travel\|--to\|--link … --origin ORIGIN` |
+| Promise capture | `comms-terminal capture mark`, `capture pending [--limit N] [--json]`, `capture advance ACTIVITY_ID` |
 
 `comms-terminal <command> --help` lists every flag. Jeremy can also press `y` on a Thread or Draft to copy the same Markdown for you.
 
@@ -81,6 +83,7 @@ The CLI matches the console. Every function that changes the database (`@writer`
 - **Jeremy may have the Draft open.** Your later save replaces what he typed before it, and his next save replaces yours. Tell him before you change a Draft he is working, and after any edit name each changed Draft.
 - **Name things by title.** In anything Jeremy reads, name Threads, Drafts and Tasks by subject and who they are with; an ID may follow in parentheses.
 - **Issue changes go to Linear.** `issue … --status/--priority/…` and `issue new` write to Linear through the Action Queue; Jeremy's Linear rules apply (an approved change set; Issues with other people stay read-only to agents). `--plan`, `--pin` and `issues plan` stay in Comms Terminal: Plan Issues gives every open Issue that is not Pinned a Planned day, writes nothing to Linear, and agents may run it.
+- **Promises are written only by agents, with an Origin (ADR 0024).** Every `promise` change needs `--origin activity:ID`, `customer_request:ID`, `tana:ID` or `words:TEXT` (Jeremy's own words). Promise changes and `capture advance` are the one standing exception to the next rule: agents make them without asking each time. Cancel a Promise only once the Person knows, or when a Tentative promise was never owed. The Console and the App refuse Promise changes.
 - **Live writes need Jeremy's go.** Enrolling, finishing or removing Enrollments, applying or deleting Sequences, setting Stages, Values or Targets, skipping Tasks, deleting Drafts, merging or blocking People all change the live database. Get his explicit go for that change, run `sequence apply --dry-run` first, and read the result back afterwards.
 - **No opt-out lines.** Never add a "reply stop" or other opt-out line to a Draft or a Step brief. Keep the Agent Maple Inc. signature and mailing address.
 - **Slack Drafts** take `--to "#channel <C0123>"`; the ID must sit inside `<…>`.

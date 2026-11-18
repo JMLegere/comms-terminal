@@ -41,6 +41,8 @@ def _integer_keys_sql() -> str:
 
 
 UNDO = {
+    47: """DROP TABLE promise_capture; DROP TABLE promise_changes; DROP TABLE promise_links;
+DROP TABLE promise_people; DROP TABLE promises;""",
     46: "ALTER TABLE composition_drafts DROP COLUMN bcc;",
     45: "DELETE FROM urgency WHERE name = 'feasibility'; ALTER TABLE issues DROP COLUMN pinned;",
     44: """DELETE FROM modules WHERE id = 'issues';

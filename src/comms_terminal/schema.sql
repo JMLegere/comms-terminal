@@ -529,3 +529,58 @@ CREATE TABLE service_settings (  -- this Service's own settings, the same in eve
   name  TEXT PRIMARY KEY NOT NULL,
   value TEXT NOT NULL
 ) STRICT;
+
+-- Promises (ADR 0024, 0027): what People expect Jeremy to do by a time
+CREATE TABLE promises (  -- what a Person expects Jeremy to do by a time; only an agent writes them (ADR 0024); promises.py
+  id             TEXT PRIMARY KEY NOT NULL DEFAULT (new_id()),
+  what           TEXT NOT NULL CHECK (length(what) > 0),
+  due_at         TEXT NOT NULL,              -- its time, UTC ISO
+  due_inferred   INTEGER NOT NULL DEFAULT 0 CHECK (due_inferred IN (0, 1)),  -- the agent inferred the time
+  work_minutes   INTEGER NOT NULL DEFAULT 0 CHECK (work_minutes >= 0),
+  travel_minutes INTEGER NOT NULL DEFAULT 0 CHECK (travel_minutes >= 0),
+  state          TEXT NOT NULL CHECK (state IN ('TENTATIVE', 'OPEN', 'FULFILLED', 'CANCELLED')),
+  created_at     TEXT NOT NULL,
+  closed_at      TEXT,                       -- when it became Fulfilled or Cancelled (Fulfilled: when it was kept)
+  CHECK ((state IN ('FULFILLED', 'CANCELLED')) = (closed_at IS NOT NULL))
+) STRICT;
+CREATE INDEX promises_open ON promises (state, due_at);
+CREATE TABLE promise_people (  -- the People a Promise is owed to
+  promise_id TEXT NOT NULL REFERENCES promises (id),
+  person_id  TEXT NOT NULL REFERENCES persons (id),
+  PRIMARY KEY (promise_id, person_id)
+) STRICT;
+CREATE INDEX promise_people_person ON promise_people (person_id);
+CREATE TABLE promise_links (  -- context a Promise points at; links never change its state (ADR 0027)
+  promise_id TEXT NOT NULL REFERENCES promises (id),
+  kind       TEXT NOT NULL CHECK (kind IN ('thread', 'case', 'issue', 'draft', 'enrollment', 'tana', 'url')),
+  target     TEXT NOT NULL,
+  PRIMARY KEY (promise_id, kind, target)
+) STRICT;
+CREATE INDEX promise_links_target ON promise_links (kind, target);
+CREATE TABLE promise_changes (  -- every change to a Promise with its Origin, append-only (ADR 0024)
+  id          TEXT PRIMARY KEY NOT NULL DEFAULT (new_id()),
+  promise_id  TEXT NOT NULL REFERENCES promises (id),
+  at          TEXT NOT NULL,
+  change      TEXT NOT NULL,                -- recorded, firmed, changed, linked, fulfilled, cancelled
+  detail      TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(detail)),
+  origin_kind TEXT NOT NULL CHECK (origin_kind IN ('activity', 'customer_request', 'tana', 'words')),
+  origin_ref  TEXT,                         -- an Activity id, a Customer request or Tana node id or address
+  words       TEXT,                         -- Jeremy's own words when origin_kind is 'words'
+  CHECK ((origin_kind = 'words') = (words IS NOT NULL AND length(words) > 0)),
+  CHECK (origin_kind = 'words' OR (origin_ref IS NOT NULL AND length(origin_ref) > 0))
+) STRICT;
+CREATE INDEX promise_changes_promise ON promise_changes (promise_id, at);
+CREATE TRIGGER promise_changes_no_delete BEFORE DELETE ON promise_changes
+BEGIN
+  SELECT RAISE(ABORT, 'Promise changes are append-only');
+END;
+CREATE TRIGGER promise_changes_no_update BEFORE UPDATE ON promise_changes
+BEGIN
+  SELECT RAISE(ABORT, 'Promise changes are append-only');
+END;
+CREATE TABLE promise_capture (  -- "captured up to": the last Activity whose Promise changes are written (FR-PR-10)
+  id             INTEGER PRIMARY KEY CHECK (id = 1),
+  activity_rowid INTEGER NOT NULL,
+  activity_id    TEXT NOT NULL,
+  at             TEXT NOT NULL
+) STRICT;
