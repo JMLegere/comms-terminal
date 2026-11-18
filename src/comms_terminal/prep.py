@@ -6,6 +6,8 @@ The capture agent writes Prep as a Tana doc titled "Prep · <Meeting>" pinned to
 5 minutes (`refresh`) into the `preps` table, so Prep moves and disappears with its Meeting. A Meeting is one with
 someone outside Agent Maple, or an in-person event (a location and nobody else invited).
 
+A Meeting stays listed until it ends, then it is done (Jeremy, 2026-11-18); while under way it is On track.
+
 Fail safe: a Meeting without Prep, or any Prep while the last read failed, counts as not prepared. At risk works
 as for a Promise (promises.risk): the Meeting's start is its time, Prep minutes its work (none once Prepped), and
 Travel minutes its travel.
@@ -108,7 +110,7 @@ def read(client, own: set[str], now: datetime, mine: set[str] = frozenset()) -> 
     out = []
     for e in events:
         when = _times(e.get("time", ""))
-        if e.get("attendance") or when is None or when[0] <= now or not is_meeting(e, own) or declined(e, mine):
+        if e.get("attendance") or when is None or when[1] <= now or not is_meeting(e, own) or declined(e, mine):
             continue
         f = _prep(client, e["eventUri"]) or {}
         out.append({"event_uri": e["eventUri"], "title": e.get("title") or "Meeting",
@@ -179,14 +181,15 @@ def rows(db, now: datetime | None = None) -> list[dict]:
     now = now or clock.now()
     failed = read_error(db)
     out = []
-    for r in db.execute("SELECT * FROM preps WHERE start_at > ? ORDER BY start_at", (promises._iso(now),)):
+    for r in db.execute("SELECT * FROM preps WHERE end_at > ? ORDER BY start_at", (promises._iso(now),)):
         r = dict(r)
         prepared = bool(r["has_prep"] and r["prepped"] and not failed)
         work = 0 if prepared else (r["prep_minutes"] or 0)
         row = {"due_at": r["start_at"], "work_minutes": work, "travel_minutes": r["travel_minutes"] or 0,
                "state": "OPEN"}
+        started = datetime.fromisoformat(r["start_at"]) <= now  # under way: kept, never late; gone once it ends
         out.append(r | {"prepared": prepared, "unread": bool(failed), "slack_time": promises.slack_time(row, now),
-                        "risk": promises.risk(row, now), "section": promises.section(row, now),
+                        "risk": None if started else promises.risk(row, now), "section": "today" if started else promises.section(row, now),
                         "leave_at": promises._iso(datetime.fromisoformat(r["start_at"])
                                                   - timedelta(minutes=r["travel_minutes"] or 0))})
     return out

@@ -139,3 +139,11 @@ def test_one_meeting_on_two_calendars_shows_once(db):
                            event("tana:event:b", 2, title="JHSC Startup Showcase (5-min pitch) + lunch"),
                            event("tana:event:c", 2, title="Other call")], {"tana:event:a": PREP}), NOW)
     assert [(r["event_uri"], r["has_prep"]) for r in prep.rows(db, NOW)] == [("tana:event:a", 1), ("tana:event:c", 0)]
+
+
+def test_a_meeting_stays_until_it_ends_then_is_done(db):
+    prep.refresh(db, Tana([event("tana:event:a", 2)], {"tana:event:a": PREP}), NOW)
+    under_way = NOW + timedelta(hours=2, minutes=30)
+    [m] = prep.rows(db, under_way)
+    assert m["risk"] is None and m["section"] == "today" and promises.status(m | {"state": "OPEN"}) == "on_track"
+    assert prep.rows(db, NOW + timedelta(hours=3)) == []
