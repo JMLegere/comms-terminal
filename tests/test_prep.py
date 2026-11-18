@@ -25,6 +25,7 @@ class Tana:
         if self.down:
             raise OSError("Tana unreachable")
         if name == "listEvents":
+            assert args["timezone"] == "America/Halifax"  # Tana refuses an offset ("Forbidden ICU TimeZone")
             return {"events": self.events}
         f = self.fields.get(args["eventUri"])
         return {"meetingType": {"name": "Prep"}, "fields": f} if f else {}

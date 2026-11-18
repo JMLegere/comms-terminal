@@ -72,10 +72,10 @@ def _yes(value) -> bool:
 
 def read(client, own: set[str], now: datetime) -> list[dict]:
     """The Meetings starting in the next DAYS days, with their Prep, as `preps` rows."""
-    local = clock.local(now)
+    local = now.astimezone(promises._local())  # Tana wants an IANA name, not an offset
     events = client.tool("listEvents", startDate=local.date().isoformat(),
                          endDate=(local.date() + timedelta(days=DAYS)).isoformat(), maxResults=100,
-                         timezone=str(local.tzinfo)).get("events", [])
+                         timezone=str(promises._local())).get("events", [])
     out = []
     for e in events:
         when = _times(e.get("time", ""))
