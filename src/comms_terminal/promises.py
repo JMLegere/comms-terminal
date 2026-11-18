@@ -356,17 +356,15 @@ def origin_via(db, h) -> str:
     return sync if sync in ("call", "meeting") else VIA.get(a["platform"], "email")
 
 
-STATUSES = ("overdue", "at_risk", "on_track", "prepared", "tentative")
+STATUSES = ("overdue", "at_risk", "on_track", "tentative")
 
 
 def status(row) -> str:
-    """A row's status, the bullet every list shows: Tentative, Overdue, At risk, Prepped (a Meeting's Prep that
-    Jeremy ticked), else On track."""
+    """A row's status, the bullet every list shows: Tentative, Overdue, At risk, else On track. A Prepped Meeting
+    is On track too (Jeremy, 2026-11-18); its tick only stops its Prep minutes counting toward At risk."""
     if row["state"] == "TENTATIVE":
         return "tentative"
-    if row.get("risk"):
-        return row["risk"]
-    return "prepared" if row.get("kind") == "prep" and row.get("prepared") else "on_track"
+    return row.get("risk") or "on_track"
 
 
 def section(row, now: datetime) -> str:

@@ -6152,7 +6152,7 @@ PROMISE_SECTION = {"overdue": ("Overdue", "red", "warn"), "at_risk": ("At risk",
                    "today": ("Today", "yellow", "today"), "this_week": ("This week", "blue", "calendar"),
                    "later": ("Later", "grey1", "calendar"), "tentative": ("Tentative", "grey1", "tentative")}
 PROMISE_STATUS = {"overdue": ("Overdue", "red", "warn"), "at_risk": ("At risk", "orange", "time"),
-                  "on_track": ("On track", "green", "TODO"), "prepared": ("Prepped", "green", "DONE"),
+                  "on_track": ("On track", "green", "TODO"),
                   "tentative": ("Tentative", "grey1", "tentative")}
 VIA_ICON = {"email": "email", "slack": "slack", "sms": "sms", "call": "call", "meeting": "meeting", "words": "person",
             "customer_request": "issues", "tana": "tana", "activity": "message"}

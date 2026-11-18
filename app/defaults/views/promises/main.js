@@ -12,7 +12,7 @@ export const SECTIONS = [["overdue", "Overdue", "red", "\u{f002a}"], ["at_risk",
   ["later", "Later", "muted", "\u{f0b67}"], ["tentative", "Tentative", "muted", "\u{f0625}"]];
 // Each row's status, its bullet (the Console's PROMISE_STATUS): glyph, colour token, name.
 export const STATUS = { overdue: ["\u{f002a}", "red", "Overdue"], at_risk: ["\u{f0150}", "orange", "At risk"],
-  on_track: ["\u{f0766}", "green", "On track"], prepared: ["\u{f05e1}", "green", "Prepped"],
+  on_track: ["\u{f0766}", "green", "On track"],
   tentative: ["\u{f0625}", "muted", "Tentative"] };
 /** Time to a Promise's due time, as a Thread row shows its age: 6h, 2d; late ones count up, -20h. */
 export const dueIn = (iso, now = Date.now()) => {

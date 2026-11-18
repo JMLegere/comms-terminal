@@ -142,7 +142,7 @@ def test_capture_pending_lists_who_wrote_each(db, capsys):
     ({"state": "OPEN", "risk": "overdue"}, "overdue"),
     ({"state": "OPEN", "risk": "at_risk"}, "at_risk"),
     ({"state": "OPEN", "risk": None}, "on_track"),
-    ({"state": "OPEN", "risk": None, "kind": "prep", "prepared": True}, "prepared"),
+    ({"state": "OPEN", "risk": None, "kind": "prep", "prepared": True}, "on_track"),  # Prepped is On track
     ({"state": "OPEN", "risk": None, "kind": "prep", "prepared": False}, "on_track"),
 ])
 def test_each_row_has_one_status_its_bullet(row, expected):
