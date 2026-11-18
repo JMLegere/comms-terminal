@@ -6150,6 +6150,10 @@ class PausedPage(TablePage):
 
 PROMISE_SECTION = {"overdue": ("Overdue", "red"), "at_risk": ("At risk", "red"), "today": ("Today", "yellow"),
                    "this_week": ("This week", "fg0"), "later": ("Later", "grey1"), "tentative": ("Tentative", "grey1")}
+PROMISE_ICON = {"overdue": "warn", "at_risk": "time", "today": "today", "this_week": "calendar", "later": "calendar",
+                "tentative": "tentative"}
+CHANGE_ICON = {"recorded": "add", "firmed": "done", "changed": "edited", "linked": "link", "fulfilled": "done",
+               "cancelled": "remove"}
 
 
 def minutes_text(m: int) -> str:
@@ -6163,12 +6167,14 @@ def promise_markup(p: dict) -> str:
     grey, red = "#928374", PALETTE["red"]
     due = datetime.fromisoformat(p["due_at"]).astimezone(sequences.LOCAL).strftime("%a %d %b %H:%M")
     name, _ = PROMISE_SECTION[promises.section(p, clock.now())]
-    lines = [f"[b]{escape(p['what'])}[/]", "",
-             f"[{grey}]Owed to[/]  {escape(', '.join(x['display_name'] for x in p['people']))}",
-             f"[{grey}]Due[/]  {due}" + (f" [{grey}](inferred)[/]" if p["due_inferred"] else ""),
-             f"[{grey}]Work[/]  {minutes_text(p['work_minutes'])} · [{grey}]Travel[/]  {minutes_text(p['travel_minutes'])}"
-             f" · [{grey}]Slack[/]  {minutes_text(p['slack'])}",
-             (f"[{red}]{name}[/]" if p["risk"] else f"[{grey}]{name}[/]")
+    key = promises.section(p, clock.now())
+    people = "people" if len(p["people"]) > 1 else "person"
+    lines = [f"{ICON['promise']} [b]{escape(p['what'])}[/]", "",
+             f"[{grey}]{ICON[people]} Owed to[/]  {escape(', '.join(x['display_name'] for x in p['people']))}",
+             f"[{grey}]{ICON['calendar']} Due[/]  {due}" + (f" [{grey}](inferred)[/]" if p["due_inferred"] else ""),
+             f"[{grey}]{ICON['time']} Work[/]  {minutes_text(p['work_minutes'])} · [{grey}]{ICON['travel']} Travel[/]  "
+             f"{minutes_text(p['travel_minutes'])} · [{grey}]{ICON['slack_time']} Slack[/]  {minutes_text(p['slack'])}",
+             (f"[{red}]{ICON[PROMISE_ICON[key]]} {name}[/]" if p["risk"] else f"[{grey}]{ICON[PROMISE_ICON[key]]} {name}[/]")
              + (f" · {ICON['edited']} Draft ready" if p["draft_ready"] else "")]
     for link in p["links"]:
         label = escape(link["label"])
@@ -6176,11 +6182,13 @@ def promise_markup(p: dict) -> str:
             label = f"[link='{render.target(link['target'])}']{label}[/link]"
         elif link["kind"] == "thread":
             label = f"[@click=app.open_thread({link['target']!r})][underline]{label}[/][/]"
-        lines.append(f"[{grey}]{link['kind'].title()}[/]  {label}")
-    lines += ["", f"[{grey}]History[/]"]
+        glyph = ICON.get({"url": "link", "draft": "edited", "issue": "issues", "enrollment": "sequence",
+                          "tana": "tana"}.get(link["kind"], link["kind"]), ICON["link"])
+        lines.append(f"[{grey}]{glyph} {link['kind'].title()}[/]  {label}")
+    lines += ["", f"[{grey}]{ICON['time']} History[/]"]
     for h in p["history"]:
         at = datetime.fromisoformat(h["at"]).astimezone(sequences.LOCAL).strftime("%d %b %H:%M")
-        lines.append(f"[{grey}]{at}[/]  {h['change']}")
+        lines.append(f"[{grey}]{at}[/]  {ICON.get(CHANGE_ICON.get(h['change'], 'edited'), '')} {h['change']}")
         lines.append(f"  [{grey}]{escape(h['origin'])}[/]")
     lines += ["", f"[{grey}]Read-only: tell an agent to change a Promise (ADR 0024) · enter opens its Thread[/]"]
     return "\n".join(lines)
@@ -6210,7 +6218,7 @@ class PromisesPage(TablePage):
                 who = ", ".join(x["display_name"] for x in p["people"])
                 line = f"{who} · {p['what']}"
                 line = line if len(line) <= 29 else line[:28] + "…"
-                out.append((p, (f"[{hue}]{ICON['promise']}[/]", f"[{hue}]{due}[/]",
+                out.append((p, (f"[{hue}]{ICON[PROMISE_ICON[key]]}[/]", f"[{hue}]{due}[/]",
                                 (f"[{'#928374' if key == 'tentative' else hue if key in ('overdue', 'at_risk') else PALETTE['fg0']}]"
                                  f"{escape(line)}[/]") + (f" [#928374]{ICON['edited']}[/]" if p["draft_ready"] else ""))))
         return out
@@ -6223,7 +6231,7 @@ class PromisesPage(TablePage):
             at = getattr(self, "captured", None)
             when_text = (datetime.fromisoformat(at["at"]).astimezone(sequences.LOCAL).strftime("%a %d %b %H:%M")
                          if at else "nothing yet")
-            self.query_one("#below", Static).update(f"[#928374]Captured up to {when_text}[/]")
+            self.query_one("#below", Static).update(f"[#928374]{ICON['captured']} Captured up to {when_text}[/]")
         if self.host is not None:
             self.host.list_changed(self)
         if self.active:

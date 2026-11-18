@@ -2,12 +2,13 @@
 // Later, Tentative), soonest first, as the Console's PromisesPage. Read-only: only an agent changes a Promise. j/k move
 // and the Promise (its People, time, Slack, links and history) fills the right pane through the "side" view; Enter
 // opens its Thread when it links one. The foot says where Promise capture is up to.
-import { View, div } from "gpui-kit";
+import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { call, nextEvent, nextCommand, theme, shared, setShared, run, focusMain, toast } from "comms";
 
-const SECTIONS = [["overdue", "Overdue", "red"], ["at_risk", "At risk", "red"], ["today", "Today", "yellow"],
-  ["this_week", "This week", "foreground"], ["later", "Later", "muted"], ["tentative", "Tentative", "muted"]];
+const SECTIONS = [["overdue", "Overdue", "red", "triangle-alert"], ["at_risk", "At risk", "red", "timer"],
+  ["today", "Today", "yellow", "sun"], ["this_week", "This week", "foreground", "calendar"],
+  ["later", "Later", "muted", "calendar-days"], ["tentative", "Tentative", "muted", "circle-help"]];
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const pad = (n) => String(n).padStart(2, "0");
 const when = (iso) => { const d = new Date(iso); return `${DAYS[d.getDay()]} ${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
@@ -16,11 +17,11 @@ export const slackText = (m) => { const a = Math.abs(m), s = m < 0 ? "-" : ""; r
 /** The page's rows in order: a header per section that has Promises, then its Promises. */
 export function promiseRows(view) {
   const out = [];
-  for (const [key, label, color] of SECTIONS) {
+  for (const [key, label, color, icon] of SECTIONS) {
     const items = view?.sections?.[key] ?? [];
     if (!items.length) continue;
-    out.push({ header: label, color, count: items.length });
-    for (const p of items) out.push({ p, color });
+    out.push({ header: label, color, icon, count: items.length });
+    for (const p of items) out.push({ p, color, icon });
   }
   return out;
 }
@@ -97,13 +98,14 @@ export default class Promises extends View {
     const captured = this.view?.captured;
     return v_flex().size_full().min_h(0).bg(t.background).text_size(13)
       .child(h_flex().h(30).flex_none().px(12).gap(8).items_center().border_b(1).border_color(t.border).text_size(12)
-        .child(div().text_color(t.accent).child("\u{f1218}"))
+        .child(svg("icons/handshake.svg").size(14).text_color(t.accent))
         .child(div().font_medium().text_color(t.foreground).child("Promises"))
         .child(div().text_color(t.muted).child(String(promiseRows(this.view).filter((r) => r.p).length || ""))))
       .when(Boolean(this.error), (el) => el.child(div().p(12).text_size(12).text_color(t.danger).child(this.error ?? "")))
       .when(Boolean(this.view) && !promiseRows(this.view).length, (el) => el.child(div().p(12).text_color(t.muted).child("No Promises owed.")))
       .child(v_flex().id("promises").flex_1().min_h(0).overflow_y_scroll().px(6).py(6).children(promiseRows(this.view).map((r, n) => {
         if (r.header) return h_flex().id(`h-${n}`).h(26).px(8).gap(8).items_center().text_size(11.5)
+          .child(svg(`icons/${r.icon}.svg`).size(12).text_color(t[r.color] ?? t.muted))
           .child(div().font_semibold().text_color(t[r.color] ?? t.muted).child(r.header))
           .child(div().text_color(t.dim).child(String(r.count)));
         const p = r.p;
@@ -113,14 +115,19 @@ export default class Promises extends View {
           .when(p.id === selected && focusHere, (el) => el.bg(t.selected))
           .when(p.id === selected && !focusHere, (el) => el.border_l(1))
           .on_click((_e, cx) => { setShared("focus", "list"); focusMain(); this.select(p); cx.notify(); })
-          .child(div().w(108).flex_none().truncate().font_semibold().text_color(t.foreground)
+          .child(svg(`icons/${(p.people ?? []).length > 1 ? "users" : "user"}.svg`).size(12).flex_none().text_color(t.muted))
+          .child(div().w(96).flex_none().truncate().font_semibold().text_color(t.foreground)
             .child((p.people ?? []).map((x) => x.display_name).join(", ")))
           .child(div().flex_1().min_w(0).truncate().text_color(p.state === "TENTATIVE" ? t.muted : t.foreground).child(p.what))
-          .when(Boolean(p.draft_ready), (el) => el.child(div().flex_none().text_color(t.yellow).child("\u{f0cb6}")))
+          .when((p.links ?? []).some((l) => l.kind === "thread"), (el) => el.child(svg("icons/message-square.svg").size(12).flex_none().text_color(t.muted)))
+          .when(Boolean(p.draft_ready), (el) => el.child(svg("icons/square-pen.svg").size(12).flex_none().text_color(t.yellow)))
           .child(div().w(108).flex_none().truncate().text_color(t.muted).child(when(p.due_at)))
-          .child(div().w(48).flex_none().text_color(p.risk ? t.red : t.muted).child(slackText(p.slack)));
+          .child(h_flex().w(56).flex_none().gap(3).items_center()
+            .child(svg("icons/hourglass.svg").size(11).text_color(p.risk ? t.red : t.dim))
+            .child(div().text_color(p.risk ? t.red : t.muted).child(slackText(p.slack))));
       })))
-      .child(div().h(26).flex_none().px(12).text_size(11.5).text_color(t.dim)
+      .child(h_flex().h(26).flex_none().px(12).gap(6).items_center().text_size(11.5).text_color(t.dim)
+        .child(svg("icons/refresh-cw.svg").size(11).text_color(t.dim))
         .child(`Captured up to ${captured ? when(captured.at) : "nothing yet"} · read-only`));
   }
 }

@@ -410,7 +410,8 @@ export default class Today extends View {
         case "promises": {
           const risky = Boolean(r.risk);
           const d = new Date(r.due_at);
-          return el.child(div().w(16).flex_none().text_color(risky ? t.red : t.muted).child(I.promise))
+          return el.child(div().w(16).flex_none().text_color(risky ? t.red : t.muted)
+              .child(r.risk === "overdue" ? I.warn : r.risk === "at_risk" ? I.time : I.promise))
             .child(name((r.people ?? []).map((x) => x.display_name).join(", ")))
             .child(div().flex_1().min_w(0).truncate().text_color(r.state === "TENTATIVE" ? t.muted : t.foreground).child(r.what ?? ""))
             .when(Boolean(r.draft_ready), (e) => e.child(div().flex_none().text_color(t.yellow).child(I.edited)))

@@ -315,7 +315,7 @@ export default class Nav extends View {
       { header: "work" },
       { id: "issues", icon: "list-checks", label: "Issues", count: h.issues || "", module: "issues" },
       { id: "actions", icon: "clock", label: "Action Queue", count: badge(h.actions) },
-      { id: "promises", icon: "circle-check", label: "Promises", count: h.promises || "" },
+      { id: "promises", icon: "handshake", label: "Promises", count: h.promises || "" },
       { header: "playbook", module: "sequences" },
       { id: "tasks", icon: "list-checks", label: "Tasks", count: due || "", module: "sequences" },
       { id: "sequences", icon: "workflow", label: "Sequences", module: "sequences",
