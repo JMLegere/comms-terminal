@@ -371,9 +371,28 @@ def view(db, now: datetime | None = None) -> dict:
     out = {s: [] for s in SECTIONS}
     for (pid,) in db.execute("SELECT id FROM promises WHERE state IN ('TENTATIVE', 'OPEN') ORDER BY due_at, id"):
         p = promise(db, pid, now)
-        out[section(p, now)].append(p)
+        out[section(p, now)].append(p | {"kind": "promise"})
+    from . import prep  # prep reads promises: imported here, not at the top
+    for m in prep.rows(db, now):  # Prep beside Promises, marked as Prep (FR-PR-17)
+        out[m["section"]].append(prep_row(m))
+    for rows in out.values():
+        rows.sort(key=lambda r: r["due_at"])
     return {"sections": out, "captured": capture_mark(db),
-            "count": sum(len(v) for k, v in out.items() if k != "tentative")}
+            "count": sum(1 for k, v in out.items() if k != "tentative" for r in v
+                         if r["kind"] == "promise" or not r["prepared"])}
+
+
+def prep_row(m: dict) -> dict:
+    """A Meeting's Prep shaped as a Promise row, so every list shows it the same way: "Prep" stands where the
+    People owed stand, the Meeting's title is what, its start is the time. `kind` tells them apart."""
+    # ponytail: "Prep" as a People name keeps every list unchanged; give lists a `who` field if it confuses agents
+    return {"kind": "prep", "id": m["event_uri"], "what": m["title"], "due_at": m["start_at"], "due_inferred": 0,
+            "work_minutes": 0 if m["prepared"] else (m["prep_minutes"] or 0),
+            "travel_minutes": m["travel_minutes"] or 0, "state": "OPEN", "people": [{"id": None, "display_name": "Prep"}],
+            "links": [{"kind": "tana", "target": m["brief"], "label": "Brief"}] if m["brief"] else [],
+            "history": [], "draft_ready": False, "slack_time": m["slack_time"], "risk": m["risk"],
+            "prepared": m["prepared"], "has_prep": bool(m["has_prep"]), "unread": m["unread"],
+            "location": m["location"], "leave_at": m["leave_at"], "end_at": m["end_at"]}
 
 
 ALERT_MOBILE = "alert_mobile"  # service_settings: where the At-risk SMS goes; absent = no SMS
@@ -409,7 +428,7 @@ def alert_text(p: dict, now: datetime) -> str:
 
 def alert(db, send, now: datetime | None = None) -> int:
     """The wake pass (FR-PR-18): one SMS to Jeremy's mobile per Open Promise, the first time it is At risk or
-    Overdue. The alert is recorded before the send, so a lost send is never repeated (at most once).
+    Overdue, and per Meeting whose Prep is At risk. The alert is recorded before the send, so a lost send is never repeated (at most once).
     `send(to, text)` is the Quo sender; None or no mobile set means no SMS."""
     to = alert_mobile(db)
     if to is None or send is None:
@@ -422,9 +441,30 @@ def alert(db, send, now: datetime | None = None) -> int:
             continue
         with db:
             db.execute("INSERT INTO promise_alerts (kind, item_id, sent_at) VALUES ('promise', ?, ?)", (pid, _iso(now)))
-        try:
-            send(to, alert_text(p, now))
-            n += 1
-        except Exception as e:  # noqa: BLE001 - at most once: a failed SMS is logged, not retried
-            logging.getLogger("comms_terminal.promises").info("At-risk SMS for %s failed: %s", pid, e)
+        n += _send(send, to, alert_text(p, now), pid)
+    from . import prep  # prep reads promises: imported here, not at the top
+    sent = {r[0] for r in db.execute("SELECT item_id FROM promise_alerts WHERE kind = 'prep'")}
+    for m in prep.rows(db, now):
+        if m["risk"] is None or m["event_uri"] in sent:
+            continue
+        with db:
+            db.execute("INSERT INTO promise_alerts (kind, item_id, sent_at) VALUES ('prep', ?, ?)",
+                       (m["event_uri"], _iso(now)))
+        n += _send(send, to, prep_alert_text(m), m["event_uri"])
     return n
+
+
+def _send(send, to: str, text: str, item: str) -> int:
+    try:
+        send(to, text)
+        return 1
+    except Exception as e:  # noqa: BLE001 - at most once: a failed SMS is logged, not retried
+        logging.getLogger("comms_terminal.promises").info("At-risk SMS for %s failed: %s", item, e)
+        return 0
+
+
+def prep_alert_text(m: dict) -> str:
+    start = datetime.fromisoformat(m["start_at"]).astimezone(_local()).strftime("%a %d %b %H:%M")
+    need = "not prepared" if not m["prepared"] else "leave soon"
+    leave = datetime.fromisoformat(m["leave_at"]).astimezone(_local()).strftime("%H:%M")
+    return f"Prep at risk ({need}): {m['title']} at {start}, leave by {leave}. {m['brief'] or 'No Brief yet'}"

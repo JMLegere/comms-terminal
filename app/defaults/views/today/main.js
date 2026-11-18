@@ -439,7 +439,7 @@ export default class Today extends View {
           const dim = r.section === "tentative";
           return el.child(div().w(16).flex_none().text_color(t[c]).child(g))
             .child(div().flex_none().max_w(160).truncate().font_semibold().text_color(dim ? t.muted : t.strong ?? t.foreground)
-              .child((r.people ?? []).map((x) => x.display_name).join(", ")))
+              .child((r.kind === "prep" ? "\u{f0ed8} " : "") + (r.people ?? []).map((x) => x.display_name).join(", ")))
             .when(Boolean(r.draft_ready), (e) => e.child(div().flex_none().text_color(t.yellow).child(I.edited)))
             .child(div().flex_1().min_w(0).truncate().text_color(dim ? t.muted : t.foreground).child(r.what ?? ""))
             .child(div().flex_none().text_color(r.risk ? t[c] : t.muted).child(dueIn(r.due_at)));

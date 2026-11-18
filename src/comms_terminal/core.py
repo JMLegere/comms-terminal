@@ -436,6 +436,9 @@ def _today_side(core, db, kind, id):
     if kind == "promise":
         from . import promises
         from .tui import promise_markup
+        if id.startswith("tana:event:"):  # a Meeting's Prep, listed beside Promises (FR-PR-17)
+            row = next((r for rows in promises.view(db)["sections"].values() for r in rows if r["id"] == id), None)
+            return segments(promise_markup(row) if row else "[#928374]That Meeting is no longer coming up.[/]")
         return segments(promise_markup(promises.promise(db, id)))
     if kind == "paused":
         p = db.execute("SELECT display_name FROM persons WHERE id = ?", (id,)).fetchone()

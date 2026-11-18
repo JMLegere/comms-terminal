@@ -34,6 +34,12 @@ export function promiseRows(view) {
 }
 
 /** Its Thread in its Status view, as a person page's thread link opens one. */
+/** Who a row is owed to; a Meeting's Prep (kind "prep") shows a calendar glyph and "Prep" (FR-PR-17). */
+export function who(p) {
+  const names = (p.people ?? []).map((x) => x.display_name).join(", ");
+  return p.kind === "prep" ? `\u{f0ed8} ${names}` : names;
+}
+
 function openThread(id) {
   call("thread.view", { thread_id: id }).then((a) => {
     const v = a.view.thread.f ?? a.view.thread;
@@ -126,7 +132,7 @@ export default class Promises extends View {
           .on_click((_e, cx) => { setShared("focus", "list"); focusMain(); this.select(p); cx.notify(); })
           .child(div().w(16).flex_none().text_color(hue).child(r.glyph))
           .child(div().flex_none().max_w(150).truncate().font_semibold().text_color(dim ? t.muted : t.strong ?? t.foreground)
-            .child((p.people ?? []).map((x) => x.display_name).join(", ")))
+            .child(who(p)))
           .when(Boolean(p.draft_ready), (el) => el.child(div().flex_none().text_color(t.yellow).child("\u{f0cb6}")))
           .child(div().flex_1().min_w(0).truncate().text_color(dim ? t.muted : t.foreground).child(p.what))
           .child(div().flex_none().text_color(p.risk ? hue : t.muted).child(dueIn(p.due_at)));

@@ -24,7 +24,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from . import (actions, attio, calendar, clock, commands, email, fastmail, files, gcal, inbox, issues, linear, mcp,
-               meetings, platforms, promises, quo, slack, tana)
+               meetings, platforms, prep, promises, quo, slack, tana)
 
 
 def credential(name: str) -> bytes | None:
@@ -1036,6 +1036,23 @@ def probe_loop(db_path: str, shared: dict, stop: threading.Event, every: float =
             return
 
 
+def prep_loop(db_path: str, client, stop: threading.Event, every: float = prep.EVERY) -> None:
+    """Read the coming Meetings' Prep from Tana every 5 minutes (ADR 0025). A failed read is kept, so every Prep
+    counts as not prepared until a read succeeds."""
+    import logging
+    while True:
+        db = inbox.connect(db_path)
+        try:
+            with commands.service(db, commands.said("Prep")):
+                prep.refresh(db, client)
+        except Exception as e:  # noqa: BLE001 - one failed read must not stop the loop
+            logging.getLogger("comms_terminal.prep").info("prep read failed: %s", e)
+        finally:
+            db.close()
+        if stop.wait(every):
+            return
+
+
 def calendar_loop(db_path: str, url: str, stop: threading.Event, every: float = 30) -> None:
     """Read the Event provider every 30 seconds (ADR 0005). Writes happen only on a change or a failure run, so a
     quiet calendar sends the laptop console nothing."""
@@ -1092,6 +1109,8 @@ def run(db_path: str, socket_path: str, host: str, port: int, files_host: str | 
                                                       files.getters(credential("slack-user-token")), senders, writer),
                                     daemon=True))
     threads.append(threading.Thread(target=probe_loop, args=(db_path, senders.shared, stop), daemon=True))
+    if contexts["tana"] is not None:  # Prep lives in Tana (ADR 0025)
+        threads.append(threading.Thread(target=prep_loop, args=(db_path, contexts["tana"].client, stop), daemon=True))
     if feed := credential(calendar.CREDENTIAL):
         threads.append(threading.Thread(target=calendar_loop, args=(db_path, feed.decode(), stop), daemon=True))
     if fm is not None:

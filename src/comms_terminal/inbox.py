@@ -986,6 +986,23 @@ CREATE TABLE promise_alerts (  -- the one SMS per item when it first goes At ris
   item_id  TEXT NOT NULL,
   sent_at  TEXT NOT NULL,
   PRIMARY KEY (kind, item_id)
+) STRICT;
+CREATE TABLE preps (  -- the coming Meetings and their Prep, as last read from Tana (ADR 0025); prep.py
+  event_uri      TEXT PRIMARY KEY NOT NULL,  -- the Tana calendar event
+  title          TEXT NOT NULL,
+  start_at       TEXT NOT NULL,
+  end_at         TEXT NOT NULL,
+  location       TEXT,
+  has_prep       INTEGER NOT NULL CHECK (has_prep IN (0, 1)),   -- the event is of type Prep
+  brief          TEXT,
+  prep_minutes   INTEGER,
+  travel_minutes INTEGER,
+  prepped        INTEGER NOT NULL CHECK (prepped IN (0, 1))
+) STRICT;
+CREATE TABLE prep_read (  -- the last read's outcome; an error means every Prep counts as not prepared
+  id     INTEGER PRIMARY KEY CHECK (id = 1),
+  at     TEXT NOT NULL,
+  error  TEXT
 ) STRICT;"""  # Promises (ADR 0024, 0027)
 
 

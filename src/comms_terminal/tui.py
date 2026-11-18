@@ -6170,9 +6170,12 @@ def due_in(p: dict, now: datetime) -> str:
 
 def promise_markup(p: dict) -> str:
     """One Promise in the right pane, as a Thread shows: its title, its section and due time, who it is owed to,
-    then its history like messages, each with how its Origin came in. Read-only (ADR 0024)."""
+    then its history like messages, each with how its Origin came in. Read-only (ADR 0024). A Meeting's Prep
+    (`kind` "prep") shows its start, leave-by time, Prep and Brief instead."""
     grey = "#928374"
     now = clock.now()
+    if p.get("kind") == "prep":
+        return prep_markup(p, now)
     key = promises.section(p, now)
     name, color, icon = PROMISE_SECTION[key]
     hue = PALETTE.get(color, grey)
@@ -6198,6 +6201,29 @@ def promise_markup(p: dict) -> str:
         lines.append(f"[{grey}]{ICON.get(VIA_ICON.get(h['origin_via'], 'message'), '')}[/] {escape(h['origin'])}")
         lines.append(f"    [{grey}]{h['change']} · {at}[/]")
     lines += ["", f"[{grey}]Read-only: tell an agent to change a Promise (ADR 0024) · enter opens its Thread[/]"]
+    return "\n".join(lines)
+
+
+def prep_markup(p: dict, now: datetime) -> str:
+    """A Meeting's Prep (ADR 0025): read from Tana, read-only here."""
+    grey = "#928374"
+    name, color, icon = PROMISE_SECTION[promises.section(p, now)]
+    hue = PALETTE.get(color, grey)
+    at = lambda v, f="%a %d %b %H:%M": datetime.fromisoformat(v).astimezone(sequences.LOCAL).strftime(f)  # noqa: E731
+    state = ("Tana unreadable: counted as not prepared" if p["unread"] else "Prepped" if p["prepared"]
+             else "Not prepared" if p["has_prep"] else "No Prep yet")
+    lines = [f"[b]{escape(p['what'])}[/]",
+             f"[{hue}]{ICON[icon]} {name}[/]  [{grey}]{at(p['due_at'])}–{at(p['end_at'], '%H:%M')}[/]", "",
+             f"[{grey}]{ICON['meeting']} Prep[/]  [b {PALETTE['green'] if p['prepared'] else hue}]{state}[/]",
+             f"[{grey}]Prep[/]  {minutes_text(p['work_minutes'])}   [{grey}]Travel[/]  {minutes_text(p['travel_minutes'])}"
+             f"   [{grey}]Leave by[/]  {at(p['leave_at'], '%H:%M')}"
+             f"   [{grey}]Slack-time[/]  [{hue if p['risk'] else PALETTE['fg0']}]{minutes_text(p['slack_time'])}[/]"]
+    if p["location"]:
+        lines.append(f"[{grey}]Where[/]  {escape(p['location'])}")
+    for link in p["links"]:
+        lines.append(f"[{grey}]Brief[/]  [link='{render.target(link['target'])}']{escape(link['target'])}[/link]"
+                     if link["target"].startswith("http") else f"[{grey}]Brief[/]  {escape(link['target'])}")
+    lines += ["", f"[{grey}]Read-only: Prep lives on the Meeting in Tana (ADR 0025)[/]"]
     return "\n".join(lines)
 
 
@@ -6228,6 +6254,7 @@ class PromisesPage(TablePage):
                                           f"[#928374]{len(items)}[/]")))
             for p in items:
                 who = ", ".join(x["display_name"] for x in p["people"])
+                who = f"{ICON['meeting']} {who}" if p.get("kind") == "prep" else who
                 who = who if len(who) <= 13 else who[:12] + "…"
                 what = p["what"] if len(p["what"]) <= 15 else p["what"][:14] + "…"
                 dim = key == "tentative"

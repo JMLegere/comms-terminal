@@ -1,6 +1,6 @@
 # Tana owns Prep; Comms Terminal reads it back and fails safe
 
-Status: accepted (2026-11-18), not yet built. Discovery: `.agents/discovery/2026-11-12-today-orient-fanout.md (2026-11-18 reopening)`.
+Status: accepted (2026-11-18); read-back built (`prep.py`): the Tana event type Prep with fields Brief, Prep minutes, Travel minutes and Prepped, read every 5 minutes into `preps`. Discovery: `.agents/discovery/2026-11-12-today-orient-fanout.md (2026-11-18 reopening)`.
 
 Jeremy holds himself to being punctual and prepared for every Meeting with someone outside. On 2026-11-18 he was under-prepared because he had not allowed for the drive. Meeting briefs and summaries already live in Tana (`tana-meeting-synthesis`), and Comms Terminal already reads Tana Meetings as context.
 
