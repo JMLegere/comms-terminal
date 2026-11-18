@@ -6177,8 +6177,7 @@ def promise_markup(p: dict) -> str:
     lines += ["", f"[{grey}]History[/]"]
     for h in p["history"]:
         at = datetime.fromisoformat(h["at"]).astimezone(sequences.LOCAL).strftime("%d %b %H:%M")
-        origin = f'"{escape(h["words"])}"' if h["origin_kind"] == "words" else f"{h['origin_kind']} {escape(h['origin_ref'])}"
-        lines.append(f"[{grey}]{at}[/]  {h['change']} · [{grey}]{origin}[/]")
+        lines.append(f"[{grey}]{at}[/]  {h['change']} · [{grey}]{escape(h['origin'])}[/]")
     lines += ["", f"[{grey}]Read-only: tell an agent to change a Promise (ADR 0024) · enter opens its Thread[/]"]
     return "\n".join(lines)
 
@@ -6191,7 +6190,7 @@ class PromisesPage(TablePage):
     RAIL = "promises"
     KIND = "promise"
     SIDE = f"{ICON['promise']} promise"
-    COLUMNS = ("", "When", "Owed to", "Promise", "Slack")
+    COLUMNS = ("", "Due", "Owed to · Promise")
     EMPTY = "No Promises owed."
 
     def rows(self):
@@ -6202,11 +6201,14 @@ class PromisesPage(TablePage):
             name, color = PROMISE_SECTION[key]
             hue = PALETTE.get(color, "#928374")
             for p in v["sections"][key]:
-                due = datetime.fromisoformat(p["due_at"]).astimezone(sequences.LOCAL).strftime("%a %d %b %H:%M")
-                out.append((p, (f"[{hue}]{ICON['promise']}[/]", f"[{hue}]{name}[/] [#928374]{due}[/]",
-                                f"[b]{escape(', '.join(x['display_name'] for x in p['people']))}[/]",
-                                escape(p["what"]) + (f" [#928374]{ICON['edited']}[/]" if p["draft_ready"] else ""),
-                                f"[{hue}]{minutes_text(p['slack'])}[/]")))
+                at = datetime.fromisoformat(p["due_at"]).astimezone(sequences.LOCAL)
+                due = name.lower() if key in ("overdue", "at_risk") else at.strftime("%a %d %H:%M")
+                who = ", ".join(x["display_name"] for x in p["people"])
+                line = f"{who} · {p['what']}"
+                line = line if len(line) <= 29 else line[:28] + "…"
+                out.append((p, (f"[{hue}]{ICON['promise']}[/]", f"[{hue}]{due}[/]",
+                                (f"[{'#928374' if key == 'tentative' else hue if key in ('overdue', 'at_risk') else PALETTE['fg0']}]"
+                                 f"{escape(line)}[/]") + (f" [#928374]{ICON['edited']}[/]" if p["draft_ready"] else ""))))
         return out
 
     def refresh_data(self):
@@ -6229,6 +6231,7 @@ class PromisesPage(TablePage):
             return
         self.app.main.showing = f"promise:{p['id']}"
         self.app.main.show_side(promise_markup(p))
+        self.app.main.query_one("#thread").border_title = pill(self.SIDE, "green")
 
     def on_data_table_row_highlighted(self, event):
         event.stop()

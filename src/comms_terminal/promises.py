@@ -305,8 +305,23 @@ def promise(db, promise_id: str, now: datetime | None = None) -> dict:
         f"SELECT 1 FROM composition_drafts WHERE thread_id IN ({','.join('?' * len(threads)) or 'NULL'})"
         f" OR id IN ({','.join('?' * len(drafts)) or 'NULL'}) LIMIT 1", (*threads, *drafts)).fetchone())
     return dict(row) | {"people": [dict(p) for p in people], "links": [dict(l) for l in links],
-                        "history": [dict(h) | {"detail": json.loads(h["detail"])} for h in history],
+                        "history": [dict(h) | {"detail": json.loads(h["detail"]), "origin": origin_label(db, h)}
+                                    for h in history],
                         "slack": slack(row, now), "risk": risk(row, now), "draft_ready": ready}
+
+
+def origin_label(db, h) -> str:
+    """An Origin as Jeremy reads it: who wrote what, in which Thread; his own words quoted."""
+    if h["origin_kind"] == "words":
+        return f'Jeremy: "{h["words"]}"'
+    if h["origin_kind"] == "activity":
+        a = db.execute("SELECT a.occurred_at, t.title, p.display_name FROM activities a JOIN threads t ON t.id = a.thread_id"
+                       " LEFT JOIN identities i ON i.id = a.identity_id LEFT JOIN persons p ON p.id = i.person_id"
+                       " WHERE a.id = ?", (h["origin_ref"],)).fetchone()
+        if a:
+            day = datetime.fromisoformat(a["occurred_at"]).astimezone(_local()).strftime("%d %b")
+            return f"{a['display_name'] or 'Jeremy'} in “{a['title']}”, {day}"
+    return f"{h['origin_kind'].replace('_', ' ')} {h['origin_ref']}"
 
 
 def section(row, now: datetime) -> str:

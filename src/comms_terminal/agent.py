@@ -439,8 +439,8 @@ def promise_markdown(p: dict) -> str:
     lines += [f"- Link: {l['kind']} {l['target']}" for l in p["links"]]
     lines += ["", "## History"]
     for h in p["history"]:
-        origin = f"words: \"{h['words']}\"" if h["origin_kind"] == "words" else f"{h['origin_kind']} {h['origin_ref']}"
-        lines.append(f"- {_when(h['at'])} {h['change']} · {origin}")
+        ref = f" ({h['origin_ref']})" if h["origin_kind"] != "words" else ""
+        lines.append(f"- {_when(h['at'])} {h['change']} · {h['origin']}{ref}")
     return "\n".join(lines) + "\n"
 
 
