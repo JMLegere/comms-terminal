@@ -5,9 +5,10 @@ moment the console stamped on it."""
 import ast
 import inspect
 
-from comms_terminal import actions, commands, files, inbox, issues, pipeline, sequences, writers
+from comms_terminal import actions, commands, files, inbox, issues, pipeline, promises, sequences, writers
 
 MODULES = {"inbox": inbox, "sequences": sequences, "pipeline": pipeline, "files": files, "issues": issues,
+           "promises": promises,
            "actions": actions, "commands": commands}
 
 

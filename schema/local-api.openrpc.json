@@ -4842,7 +4842,7 @@
   },
   {
    "name": "today.side",
-   "summary": "The right pane for a Today Paused row (kind \"paused\", a Person id) or Unattended row (\"unattended\", an Organization id; \"unattended_person\", a Person id), as the Console fills it: lines of [text, colour or null, bold] segments.",
+   "summary": "The right pane for a Today Paused row (kind \"paused\", a Person id) or Unattended row (\"unattended\", an Organization id; \"unattended_person\", a Person id), or a Promise (\"promise\", a Promise id; FR-PR-8), as the Console fills it: lines of [text, colour or null, bold] segments.",
    "params": [
     {
      "name": "kind",
