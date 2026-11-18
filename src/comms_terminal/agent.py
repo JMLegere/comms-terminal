@@ -436,7 +436,8 @@ def promise_markdown(p: dict) -> str:
              f" · work {_hours(p['work_minutes'])} · travel {_hours(p['travel_minutes'])} · slack {_hours(p['slack'])}"
              + (f" · {SECTION_NAMES[p['risk']]}" if p["risk"] else "") + (" · Draft ready" if p["draft_ready"] else ""),
              "- Owed to: " + ", ".join(x["display_name"] for x in p["people"])]
-    lines += [f"- Link: {l['kind']} {l['target']}" for l in p["links"]]
+    lines += [f"- Link: {l['kind']} {l['label']}" + (f" ({l['target']})" if l["label"] != l["target"] else "")
+              for l in p["links"]]
     lines += ["", "## History"]
     for h in p["history"]:
         ref = f" ({h['origin_ref']})" if h["origin_kind"] != "words" else ""

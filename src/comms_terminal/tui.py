@@ -6171,9 +6171,12 @@ def promise_markup(p: dict) -> str:
              (f"[{red}]{name}[/]" if p["risk"] else f"[{grey}]{name}[/]")
              + (f" · {ICON['edited']} Draft ready" if p["draft_ready"] else "")]
     for link in p["links"]:
-        target = escape(link["target"])
-        lines.append(f"[{grey}]{link['kind'].title()}[/]  "
-                     + (f"[link='{render.target(link['target'])}']{target}[/link]" if link["kind"] == "url" else target))
+        label = escape(link["label"])
+        if link["kind"] == "url":
+            label = f"[link='{render.target(link['target'])}']{label}[/link]"
+        elif link["kind"] == "thread":
+            label = f"[@click=app.open_thread({link['target']!r})][underline]{label}[/][/]"
+        lines.append(f"[{grey}]{link['kind'].title()}[/]  {label}")
     lines += ["", f"[{grey}]History[/]"]
     for h in p["history"]:
         at = datetime.fromisoformat(h["at"]).astimezone(sequences.LOCAL).strftime("%d %b %H:%M")

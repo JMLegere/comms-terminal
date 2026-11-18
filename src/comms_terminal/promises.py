@@ -304,10 +304,18 @@ def promise(db, promise_id: str, now: datetime | None = None) -> dict:
     ready = bool(db.execute(
         f"SELECT 1 FROM composition_drafts WHERE thread_id IN ({','.join('?' * len(threads)) or 'NULL'})"
         f" OR id IN ({','.join('?' * len(drafts)) or 'NULL'}) LIMIT 1", (*threads, *drafts)).fetchone())
-    return dict(row) | {"people": [dict(p) for p in people], "links": [dict(l) for l in links],
+    return dict(row) | {"people": [dict(p) for p in people], "links": [dict(l) | {"label": _link_label(db, l)} for l in links],
                         "history": [dict(h) | {"detail": json.loads(h["detail"]), "origin": origin_label(db, h)}
                                     for h in history],
                         "slack": slack(row, now), "risk": risk(row, now), "draft_ready": ready}
+
+
+def _link_label(db, link) -> str:
+    """What a link points at, as Jeremy reads it: a Thread's or Case's title, a Draft's subject; else the target."""
+    sql = {"thread": "SELECT title FROM threads WHERE id = ?", "case": "SELECT title FROM cases WHERE id = ?",
+           "draft": "SELECT coalesce(subject, body) FROM composition_drafts WHERE id = ?"}.get(link["kind"])
+    found = db.execute(sql, (link["target"],)).fetchone() if sql else None
+    return (found[0] or link["target"]) if found else link["target"]
 
 
 def origin_label(db, h) -> str:
