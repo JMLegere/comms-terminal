@@ -57,10 +57,19 @@ def _pins(event: dict) -> list[str]:
     return list(dict.fromkeys(u for u in uris if u.startswith("tana:text:")))
 
 
+def _lines(blocks) -> list[str]:
+    """editableBlocks ([id, text, children?] nested) as their text lines; the checkbox state lives only here."""
+    out = []
+    for b in blocks or []:
+        if isinstance(b, list) and len(b) >= 2:
+            out.append(str(b[1]))
+            out += _lines(b[2] if len(b) > 2 else [])
+    return out
+
+
 def parse(doc: dict) -> dict:
     """A Prep doc's minutes and Prepped tick; None where a line is missing."""
-    text = doc.get("content") or ""
-    text = text if isinstance(text, str) else str(text)
+    text = "\n".join(_lines(doc.get("editableBlocks"))) or str(doc.get("content") or "")
     prep, travel, ticked = PREP_MINUTES.search(text), TRAVEL_MINUTES.search(text), PREPPED.search(text)
     return {"prep_minutes": int(prep.group(1)) if prep else None,
             "travel_minutes": int(travel.group(1)) if travel else None,
@@ -72,7 +81,7 @@ def _prep(client, event_uri: str) -> dict | None:
     pins = _pins(client.tool("readEvent", eventUri=event_uri))
     if not pins:
         return None
-    docs = client.tool("readItems", ids=pins[:10]).get("items", [])
+    docs = client.tool("readItems", ids=pins[:10], forEditing=True).get("items", [])  # keeps "- [x] Prepped"
     doc = next((d for d in docs if (d.get("title") or "").strip().startswith(TITLE)), None)
     if doc is None:
         return None

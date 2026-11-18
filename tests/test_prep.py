@@ -33,8 +33,9 @@ class Tana:
             uri = args["eventUri"]
             return {"pinnedItems": ["tana:text:other", f"tana:text:prep-{uri}"] if uri in self.fields else []}
         if name == "readItems":
-            return {"items": [{"id": "tana:text:other", "title": "Deck", "content": "Prep minutes: 999"}]
-                    + [{"id": i, "title": f"Prep · {i}", "content": self.doc(self.fields[i.removeprefix("tana:text:prep-")])}
+            assert args.get("forEditing") is True  # plain content drops the checkbox state
+            return {"items": [{"id": "tana:text:other", "title": "Deck", "editableBlocks": [["p1", "Prep minutes: 999"]]}]
+                    + [{"id": i, "title": f"Prep · {i}", "editableBlocks": self.doc(self.fields[i.removeprefix("tana:text:prep-")])}
                        for i in args["ids"] if i.startswith("tana:text:prep-")]}
         if name == "getShareLink":
             return {"links": [{"url": "https://home.tana.inc/o/w/l/x"}]}
@@ -42,8 +43,11 @@ class Tana:
 
     @staticmethod
     def doc(f):
-        return (f"Who they are…\n\n- Prep minutes: {f['Prep minutes']}\n- Travel minutes: {f['Travel minutes']}\n"
-                f"- [{'x' if f['Prepped'] else ' '}] Prepped")
+        """As Tana returns it with forEditing (seen live 2026-11-18): nested [id, text, children] blocks."""
+        return [["p0", "Who they are…"], ["bulletList/b", "", [
+            ["l1", "", [["p1", f"- Prep minutes: {f['Prep minutes']}"]]],
+            ["l2", "", [["p2", f"- Travel minutes: {f['Travel minutes']}"]]],
+            ["l3", "", [["p3", f"- [{'x' if f['Prepped'] else ' '}] Prepped"]]]]]]
 
 
 @pytest.fixture
