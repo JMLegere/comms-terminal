@@ -2210,6 +2210,38 @@
    }
   },
   {
+   "name": "command.promises.set_alert_mobile",
+   "summary": "The promises.set_alert_mobile writer (write).",
+   "params": [
+    {
+     "name": "number",
+     "required": true,
+     "schema": {}
+    },
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": true,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
    "name": "command.sequences.add_step",
    "summary": "The sequences.add_step writer (create).",
    "params": [

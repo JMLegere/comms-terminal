@@ -27,7 +27,7 @@ NOT_UNDOABLE = {
     # Promises change only by an agent with an Origin; a correction is a new change (ADR 0024):
     "promises.record": "ADR 0024", "promises.firm": "ADR 0024", "promises.change": "ADR 0024",
     "promises.fulfil": "ADR 0024", "promises.cancel": "ADR 0024", "promises.link": "ADR 0024",
-    "promises.advance_capture": "ADR 0024",
+    "promises.advance_capture": "ADR 0024", "promises.set_alert_mobile": "set it again",
     "sequences.complete_task": "D-3",
     "sequences.replace_sequence": "apply its earlier Markdown again",
     "sequences.task_new_thread": "deleting its Draft would skip the Task",

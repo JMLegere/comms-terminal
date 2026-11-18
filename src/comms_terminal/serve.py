@@ -24,7 +24,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from . import (actions, attio, calendar, clock, commands, email, fastmail, files, gcal, inbox, issues, linear, mcp,
-               meetings, platforms, quo, slack, tana)
+               meetings, platforms, promises, quo, slack, tana)
 
 
 def credential(name: str) -> bytes | None:
@@ -955,6 +955,7 @@ def wake_loop(db_path: str, stop: threading.Event, every: float = 60, kick: thre
                 meetings.held(db, now)  # an ended Meeting occurrence puts its Thread in Todo (FR-OA-13)
                 if senders is not None:
                     send_due(db, senders, now)
+                    promises.alert(db, alert_sender(db, senders), now)  # the one At-risk SMS (ADR 0026)
                 inbox.reconcile_resend_receipts(db)
                 actions.run(db, action_clients() | ({"gcal": writer} if writer is not None else {}), now,
                             senders=senders)  # every Action that reaches a Platform (ADR 0020, 0022)
@@ -969,6 +970,13 @@ def wake_loop(db_path: str, stop: threading.Event, every: float = 60, kick: thre
             logging.getLogger("comms_terminal.wake").info("wake pass failed: %s", e)
         finally:
             db.close()
+
+
+def alert_sender(db, senders: Senders):
+    """send(to, text) through the Quo Connection's sender, or None without one: the At-risk SMS (FR-PR-18)."""
+    c = next((c for c in inbox.connections(db) if c["platform"] == "quo"), None)
+    sender = senders.get(c) if c is not None else None
+    return None if sender is None else lambda to, text: sender.start([to], [], None, text, None)
 
 
 def probe_all(db, shared: dict, cred=credential) -> None:

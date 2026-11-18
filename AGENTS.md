@@ -71,6 +71,7 @@ Jeremy works in the console; agents read and prepare work through the CLI. On Wo
 | The Action Queue (ADR 0020) | `comms-terminal actions` |
 | Promises (ADR 0024) | `comms-terminal promises [--json]`; `promise ID` (Markdown with history); `promise new --what … --to PERSON --due WHEN [--inferred] [--work MIN] [--travel MIN] [--tentative] [--link KIND:TARGET] --origin ORIGIN`; `promise ID --firm\|--fulfil [--at]\|--cancel\|--due\|--what\|--work\|--travel\|--to\|--link … --origin ORIGIN` |
 | Promise capture | `comms-terminal capture mark`, `capture pending [--limit N] [--json]`, `capture advance ACTIVITY_ID` |
+| At-risk SMS | `comms-terminal alerts` shows it; `alerts --mobile +1…` turns it on (Jeremy's own mobile only, ADR 0026); `alerts --off` |
 
 `comms-terminal <command> --help` lists every flag. Jeremy can also press `y` on a Thread or Draft to copy the same Markdown for you.
 

@@ -1,6 +1,6 @@
 # One SMS when a Promise or Prep goes At risk (narrow exception to "Pull only")
 
-Status: accepted (2026-11-18), not yet built. Narrows PRD NFR-3. Discovery: `.agents/discovery/2026-11-12-today-orient-fanout.md (2026-11-18 reopening)`.
+Status: accepted (2026-11-18); built for Promises (`promises.alert`), off until `comms-terminal alerts --mobile` is set. Narrows PRD NFR-3. Discovery: `.agents/discovery/2026-11-12-today-orient-fanout.md (2026-11-18 reopening)`.
 
 NFR-3 says Comms Terminal is pull only, with no notifications. Jeremy's last dropped ball was found by remembering late; a list he has to look at cannot catch that.
 

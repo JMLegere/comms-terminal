@@ -10,11 +10,16 @@ that Enrollment's start (FR-PR-14).
 The "captured up to" mark (FR-PR-10) is the last Activity whose Promise changes the capture agent has written; it
 only moves forward, in Activity insertion order, so a late Call transcript (an EDIT Activity) is still read.
 
-Interface: record, firm, change, fulfil, cancel, link, advance_capture (writers); find, promise, view, slack_time,
-capture_mark, pending (readers).
+When an Open Promise first goes At risk or Overdue, the Service sends Jeremy one SMS (FR-PR-18, ADR 0026), and only
+once Jeremy's own mobile is set.
+
+Interface: record, firm, change, fulfil, cancel, link, advance_capture, set_alert_mobile (writers); find, promise,
+view, slack_time, capture_mark, pending, alert_mobile (readers); alert (the Service's wake pass).
 """
 
 import json
+import logging
+import re
 from datetime import date, datetime, time, timedelta, timezone
 
 from . import clock, commands
@@ -369,3 +374,57 @@ def view(db, now: datetime | None = None) -> dict:
         out[section(p, now)].append(p)
     return {"sections": out, "captured": capture_mark(db),
             "count": sum(len(v) for k, v in out.items() if k != "tentative")}
+
+
+ALERT_MOBILE = "alert_mobile"  # service_settings: where the At-risk SMS goes; absent = no SMS
+
+
+def alert_mobile(db) -> str | None:
+    row = db.execute("SELECT value FROM service_settings WHERE name = ?", (ALERT_MOBILE,)).fetchone()
+    return row[0] if row else None
+
+
+@writer("write")
+def set_alert_mobile(db, number: str | None, *, now: datetime | None = None) -> None:
+    """Jeremy's own mobile for the At-risk SMS (ADR 0026), or None to stop them. Only ever his own number."""
+    if number is None:
+        db.execute("DELETE FROM service_settings WHERE name = ?", (ALERT_MOBILE,))
+        commands.label("At-risk SMS off")
+    else:
+        if not re.fullmatch(r"\+[1-9]\d{7,14}", number):
+            raise Refused("a mobile number is written +15065550100")
+        db.execute("INSERT INTO service_settings (name, value) VALUES (?, ?)"
+                   " ON CONFLICT (name) DO UPDATE SET value = excluded.value", (ALERT_MOBILE, number))
+        commands.label("At-risk SMS on")
+    commands.not_undoable("set it again with comms-terminal alerts")
+
+
+def alert_text(p: dict, now: datetime) -> str:
+    """One line: what, for whom, by when, and how to open it."""
+    due = datetime.fromisoformat(p["due_at"]).astimezone(_local()).strftime("%a %d %b %H:%M")
+    who = ", ".join(x["display_name"] for x in p["people"]) or "someone"
+    head = "Overdue" if p["risk"] == "overdue" else f"At risk ({p['slack_time']} min Slack-time)"
+    return f"{head}: {p['what']} for {who}, due {due}. comms-terminal promise {p['id']}"
+
+
+def alert(db, send, now: datetime | None = None) -> int:
+    """The wake pass (FR-PR-18): one SMS to Jeremy's mobile per Open Promise, the first time it is At risk or
+    Overdue. The alert is recorded before the send, so a lost send is never repeated (at most once).
+    `send(to, text)` is the Quo sender; None or no mobile set means no SMS."""
+    to = alert_mobile(db)
+    if to is None or send is None:
+        return 0
+    now, n = now or clock.now(), 0
+    for (pid,) in db.execute("SELECT id FROM promises WHERE state = 'OPEN' AND id NOT IN"
+                             " (SELECT item_id FROM promise_alerts WHERE kind = 'promise') ORDER BY due_at").fetchall():
+        p = promise(db, pid, now)
+        if p["risk"] is None:
+            continue
+        with db:
+            db.execute("INSERT INTO promise_alerts (kind, item_id, sent_at) VALUES ('promise', ?, ?)", (pid, _iso(now)))
+        try:
+            send(to, alert_text(p, now))
+            n += 1
+        except Exception as e:  # noqa: BLE001 - at most once: a failed SMS is logged, not retried
+            logging.getLogger("comms_terminal.promises").info("At-risk SMS for %s failed: %s", pid, e)
+    return n

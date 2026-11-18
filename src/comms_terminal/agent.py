@@ -53,6 +53,7 @@ COMMANDS = {
     "promises.fulfil": "promise ID --fulfil",
     "promises.link": "promise new/ID --link",
     "promises.record": "promise new",
+    "promises.set_alert_mobile": "alerts --mobile/--off",
     "pipeline.set_value": "pipeline value",
     "sequences.add_step": "step add",
     "sequences.archive_sequence": "sequence archive",
@@ -327,6 +328,10 @@ def add_parsers(sub):
     x.add_argument("--json", action="store_true")
     cs.add_parser("advance", help="move the mark to this Activity once its Promise changes are written"
                   ).add_argument("activity_id")
+    al = sub.add_parser("alerts", help="the one At-risk SMS per Promise (ADR 0026): where it goes, or set it")
+    alg = al.add_mutually_exclusive_group()
+    alg.add_argument("--mobile", help="Jeremy's own mobile, +15065550100; turns the SMS on")
+    alg.add_argument("--off", action="store_true", help="no SMS")
     u = sub.add_parser("urgency", help="the urgency coefficients (Taskwarrior-style), or set one")
     us = u.add_subparsers(dest="urgency_cmd", required=True)
     us.add_parser("list", help="every coefficient and its value")
@@ -494,6 +499,14 @@ def capture_cmd(db, a) -> str:
                    for r in rows) or "Nothing after the mark.\n"
 
 
+def alerts_cmd(db, a) -> str:
+    if a.mobile or a.off:
+        promises.set_alert_mobile(db, None if a.off else a.mobile)
+    to = promises.alert_mobile(db)
+    sent = db.execute("SELECT count(*) FROM promise_alerts").fetchone()[0]
+    return (f"At-risk SMS on, to {to}" if to else "At-risk SMS off") + f"; {sent} sent so far\n"
+
+
 def run(a, db):
     with commands.source("cli"):  # every change an agent makes is a CLI Command (ADR 0021)
         _run(a, db)
@@ -561,6 +574,8 @@ def _run(a, db):
             print(promise_cmd(db, a), end="")
         elif a.cmd == "capture":
             print(capture_cmd(db, a), end="")
+        elif a.cmd == "alerts":
+            print(alerts_cmd(db, a), end="")
         elif a.cmd == "actions":
             from . import actions
             for r in actions.queue(db):

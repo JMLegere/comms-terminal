@@ -584,3 +584,9 @@ CREATE TABLE promise_capture (  -- "captured up to": the last Activity whose Pro
   activity_id    TEXT NOT NULL,
   at             TEXT NOT NULL
 ) STRICT;
+CREATE TABLE promise_alerts (  -- the one SMS per item when it first goes At risk (FR-PR-18, ADR 0026); never again
+  kind     TEXT NOT NULL CHECK (kind IN ('promise', 'prep')),
+  item_id  TEXT NOT NULL,
+  sent_at  TEXT NOT NULL,
+  PRIMARY KEY (kind, item_id)
+) STRICT;
