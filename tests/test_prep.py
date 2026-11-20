@@ -81,10 +81,10 @@ def test_prep_fields_drive_slack_time_and_risk(db):
     prep.refresh(db, Tana([event("tana:event:a", 2)], {"tana:event:a": PREP}), NOW)
     [m] = prep.rows(db, NOW)
     assert m["brief"].startswith("https://home.tana.inc/o/w/l/") and m["prep_minutes"] == 60 and m["travel_minutes"] == 30
-    assert m["prepared"] is False and m["slack_time"] == 30 and m["risk"] == "at_risk"
+    assert m["prepared"] is False and m["slack_time"] == 30 and m["risk"] == "urgent"
     assert m["leave_at"] == promises._iso(NOW + timedelta(hours=1, minutes=30))
     prep.refresh(db, Tana([event("tana:event:a", 2)], {"tana:event:a": PREP | {"Prepped": True}}), NOW)
-    assert prep.rows(db, NOW)[0]["prepared"] is True and prep.rows(db, NOW)[0]["risk"] is None
+    assert prep.rows(db, NOW)[0]["prepared"] is True and prep.rows(db, NOW)[0]["risk"] == "at_risk"  # travel left: 2h < 12 x 30m
 
 
 def test_a_moved_meeting_moves_its_prep_and_a_cancelled_one_drops_it(db):
@@ -112,14 +112,14 @@ def test_an_unchanged_read_writes_nothing(db):
     assert prep.refresh(db, tana, NOW) is False
 
 
-def test_an_at_risk_prep_alerts_once(db):
+def test_an_urgent_prep_alerts_once(db):
     with commands.source("cli"):
         promises.set_alert_mobile(db, "+15065550100")
     prep.refresh(db, Tana([event("tana:event:a", 2)], {"tana:event:a": PREP}), NOW)
     sent = []
     send = lambda to, text: sent.append(text)  # noqa: E731
     assert promises.alert(db, send, NOW) == 1 and promises.alert(db, send, NOW) == 0
-    assert sent[0].startswith("Prep at risk (not prepared): Acme review") and "leave by 11:30" in sent[0]
+    assert sent[0].startswith("Prep urgent (not prepared): Acme review") and "leave by 11:30" in sent[0]
 
 
 def test_prep_shows_beside_promises_marked_as_prep(db):
@@ -127,7 +127,7 @@ def test_prep_shows_beside_promises_marked_as_prep(db):
     prep.refresh(db, Tana([event("tana:event:a", 2), event("tana:event:b", 30, title="Beta demo")],
                           {"tana:event:a": PREP, "tana:event:b": PREP | {"Prepped": True}}), NOW)
     v = promises.view(db, NOW)
-    [a] = v["sections"]["at_risk"]
+    [a] = v["sections"]["urgent"]
     assert a["kind"] == "prep" and a["what"] == "Acme review" and a["people"][0]["display_name"] == "Prep"
     assert v["count"] == 2  # every row the list shows, the Prepped Meeting too
     shown = tui.prep_markup(a, NOW)

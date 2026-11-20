@@ -139,8 +139,12 @@ The work a kept Promise actually took, recorded by the agent on Fulfil when the 
 _Avoid_: Time spent, Duration
 
 **At risk**:
-A Promise, or a Meeting's Prep, whose Slack-time is smaller than the work it still needs. It is worked out, never set by hand.
+A Promise, or a Meeting's Prep, whose time left is under 12 times the work and travel it still needs: a 2-hour task is At risk 24 hours before its time. It is worked out, never set by hand.
 _Avoid_: Overdue (for one still in time), Red
+
+**Urgent**:
+A Promise, or a Meeting's Prep, whose time left is under twice the work and travel it still needs: a 2-hour task is Urgent 4 hours before its time. Going Urgent sends Jeremy the one SMS. It is worked out, never set by hand.
+_Avoid_: Critical, Red
 
 **Overdue** (Promise):
 A Promise past its time and not yet kept. It stays owed until it is Fulfilled or Cancelled.

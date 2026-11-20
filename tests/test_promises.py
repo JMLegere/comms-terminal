@@ -41,15 +41,17 @@ def row(due, work=0, travel=0, state="OPEN"):
 
 
 @pytest.mark.parametrize("hours, work, travel, expected", [
-    (4, 120, 0, None),          # Slack-time 120 = work 120: not less, so not At risk
-    (4, 121, 0, "at_risk"),     # Slack-time 119 < 121
-    (4, 60, 61, "at_risk"),     # travel counts like work
-    (1, 120, 0, "at_risk"),     # cannot fit at all: Slack-time is negative
+    (24, 120, 0, None),         # 24 hours left = 12 x 2 hours: not less, so not At risk
+    (23, 120, 0, "at_risk"),    # 23 hours left < 24
+    (4, 120, 0, "at_risk"),     # 4 hours left = 2 x 2 hours: not less, so not Urgent
+    (3, 120, 0, "urgent"),      # 3 hours left < 4
+    (3, 60, 61, "urgent"),      # travel counts like work
+    (1, 120, 0, "urgent"),      # cannot fit at all: Slack-time is negative
     (0, 0, 0, "overdue"),       # at its time and not kept
     (-24, 0, 0, "overdue"),
     (72, 0, 0, None),
 ])
-def test_at_risk_is_slack_time_below_the_work_still_needed(hours, work, travel, expected):
+def test_urgent_under_2x_and_at_risk_under_12x_the_work_still_needed(hours, work, travel, expected):
     assert promises.risk(row(NOW + timedelta(hours=hours), work, travel), NOW) == expected
 
 
@@ -143,6 +145,7 @@ def test_capture_pending_lists_who_wrote_each(db, capsys):
 @pytest.mark.parametrize("row, expected", [
     ({"state": "TENTATIVE", "risk": "overdue"}, "tentative"),  # not owed yet, so never late
     ({"state": "OPEN", "risk": "overdue"}, "overdue"),
+    ({"state": "OPEN", "risk": "urgent"}, "urgent"),
     ({"state": "OPEN", "risk": "at_risk"}, "at_risk"),
     ({"state": "OPEN", "risk": None}, "on_track"),
     ({"state": "OPEN", "risk": None, "kind": "prep", "prepared": True}, "on_track"),  # Prepped is On track

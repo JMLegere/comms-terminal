@@ -8,7 +8,7 @@ someone outside Agent Maple, or an in-person event (a location and nobody else i
 
 A Meeting stays listed until it ends, then it is done (Jeremy, 2026-11-18); while under way it is On track.
 
-Fail safe: a Meeting without Prep, or any Prep while the last read failed, counts as not prepared. At risk works
+Fail safe: a Meeting without Prep, or any Prep while the last read failed, counts as not prepared. Urgent and At risk work
 as for a Promise (promises.risk): the Meeting's start is its time, Prep minutes its work (none once Prepped), and
 Travel minutes its travel.
 

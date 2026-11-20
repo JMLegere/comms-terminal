@@ -299,7 +299,7 @@ def add_parsers(sub):
     pin = t.add_mutually_exclusive_group()
     pin.add_argument("--pin", action="store_true", help="Plan Issues leaves it alone (local only)")
     pin.add_argument("--unpin", action="store_true", help="Plan Issues may move it again")
-    t = sub.add_parser("promises", help="owed Promises by section (ADR 0024): Overdue, At risk, Today, This week,"
+    t = sub.add_parser("promises", help="owed Promises by section (ADR 0024): Overdue, Urgent, At risk, Today, This week,"
                                         " Later, Tentative; --json for the whole view")
     t.add_argument("--json", action="store_true")
     t.add_argument("--kept", type=int, metavar="N", help="instead, the last N Fulfilled Promises with work, travel"
@@ -407,7 +407,7 @@ def issue_cmd(db, a) -> str:
     return issue_markdown(next(i for i in issues.issues(db) if i["id"] == row["id"]))
 
 
-SECTION_NAMES = {"overdue": "Overdue", "at_risk": "At risk", "today": "Today", "this_week": "This week",
+SECTION_NAMES = {"overdue": "Overdue", "urgent": "Urgent", "at_risk": "At risk", "today": "Today", "this_week": "This week",
                  "later": "Later", "tentative": "Tentative"}
 
 

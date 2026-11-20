@@ -6148,10 +6148,12 @@ class PausedPage(TablePage):
         self.app.main.open(lambda: PersonPage(e["person_id"]))
 
 
-PROMISE_SECTION = {"overdue": ("Overdue", "red", "warn"), "at_risk": ("At risk", "orange", "time"),
+PROMISE_SECTION = {"overdue": ("Overdue", "red", "warn"), "urgent": ("Urgent", "orange", "time"),
+                   "at_risk": ("At risk", "yellow", "time"),
                    "today": ("Today", "yellow", "today"), "this_week": ("This week", "blue", "calendar"),
                    "later": ("Later", "grey1", "calendar"), "tentative": ("Tentative", "grey1", "tentative")}
-PROMISE_STATUS = {"overdue": ("Overdue", "red", "warn"), "at_risk": ("At risk", "orange", "time"),
+PROMISE_STATUS = {"overdue": ("Overdue", "red", "warn"), "urgent": ("Urgent", "orange", "time"),
+                  "at_risk": ("At risk", "yellow", "time"),
                   "on_track": ("On track", "green", "TODO"),
                   "tentative": ("Tentative", "grey1", "tentative")}
 VIA_ICON = {"email": "email", "slack": "slack", "sms": "sms", "call": "call", "meeting": "meeting", "words": "person",
@@ -6230,7 +6232,7 @@ def prep_markup(p: dict, now: datetime) -> str:
 
 
 class PromisesPage(TablePage):
-    """Promises (FR-PR-8), laid out as the Threads list: a header per section (Overdue, At risk, Today, This week,
+    """Promises (FR-PR-8), laid out as the Threads list: a header per section (Overdue, Urgent, At risk, Today, This week,
     Later, Tentative) with its glyph and count, then its Promises, each with the section's glyph, who it is owed to,
     what, and the time to its due time. Read-only (ADR 0024); enter opens the Promise's Thread. Today shows the same
     rows (FR-PR-9)."""

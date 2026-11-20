@@ -168,7 +168,7 @@ def _promise_rows(db) -> list[dict]:
 
 @query("promises.page")
 def _promises_page(core, db):
-    """The Promises page (FR-PR-8): owed Promises in sections Overdue, At risk, Today, This week, Later and
+    """The Promises page (FR-PR-8): owed Promises in sections Overdue, Urgent, At risk, Today, This week, Later and
     Tentative, each with its People, links, `slack_time` minutes (Slack-time), `risk` and `draft_ready`; `captured` is where Promise
     capture is up to, or null. Read-only: only an agent changes Promises (ADR 0024)."""
     from . import promises

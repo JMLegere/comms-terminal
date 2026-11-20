@@ -1,4 +1,4 @@
-"""The At-risk SMS (FR-PR-18, ADR 0026): once per Promise, only to Jeremy's own mobile, only when set."""
+"""The Urgent SMS (FR-PR-18, ADR 0026): once per Promise, only to Jeremy's own mobile, only when set."""
 
 from datetime import timedelta
 
@@ -24,14 +24,15 @@ def test_nothing_is_sent_until_the_mobile_is_set(db):
 
 def test_one_sms_per_promise_to_jeremy_only(db):
     promises.set_alert_mobile(db, MOBILE)
-    owed(db, "Send the deck", 1, work=120)            # At risk
+    owed(db, "Send the deck", 1, work=120)            # Urgent
+    owed(db, "Write the memo", 20, work=120)          # At risk: no SMS
     owed(db, "Book the venue", 72)                    # on track
     owed(db, "Maybe a demo", 1, work=120, tentative=True)  # Tentative: not owed yet
     sent = []
     send = lambda to, text: sent.append((to, text))  # noqa: E731
     assert promises.alert(db, send, NOW) == 1
     assert sent[0][0] == MOBILE
-    assert sent[0][1].startswith("At risk (") and "Send the deck for Anna Ciprick" in sent[0][1]
+    assert sent[0][1].startswith("Urgent (") and "Send the deck for Anna Ciprick" in sent[0][1]
     assert promises.alert(db, send, NOW + timedelta(hours=2)) == 0  # now Overdue: still never again
     assert len(sent) == 1
 

@@ -54,9 +54,11 @@ Feature: Promises
   @AS-PR-7 @FR-PR-2 @FR-PR-7 @FR-PR-8
   Scenario: The View puts owed Promises in sections by Slack-time
     Given the agent Recorded "Send the deck" owed to "Anna Ciprick" due "2026-11-16 14:00" needing 180 minutes of work
+    And the agent Recorded "Write the memo" owed to "Anna Ciprick" due "2026-11-17 10:00" needing 180 minutes of work
     And the agent Recorded "Call back" owed to "Anna Ciprick" due "2026-11-13"
     And the agent Recorded "Send the term sheet" owed to "Anna Ciprick" due "2026-11-30"
-    Then the View lists "Send the deck" under "at_risk"
+    Then the View lists "Send the deck" under "urgent"
+    And the View lists "Write the memo" under "at_risk"
     And the View lists "Call back" under "overdue"
     And the View lists "Send the term sheet" under "later"
 

@@ -1,4 +1,4 @@
-// Promises (FR-PR-8; ADR 0024): what People expect Jeremy to do, by section (Overdue, At risk, Today, This week,
+// Promises (FR-PR-8; ADR 0024): what People expect Jeremy to do, by section (Overdue, Urgent, At risk, Today, This week,
 // Later, Tentative), soonest first, as the Console's PromisesPage. Read-only: only an agent changes a Promise. j/k move
 // and the Promise (its People, time, Slack, links and history) fills the right pane through the "side" view; Enter
 // opens its Thread when it links one. The foot says where Promise capture is up to.
@@ -7,11 +7,13 @@ import { v_flex, h_flex } from "gpui-base";
 import { call, nextEvent, nextCommand, theme, shared, setShared, run, focusMain, toast } from "comms";
 
 // Each section's glyph and colour, as threads/main.js gives each Status detail its own (the Console's PROMISE_SECTION).
-export const SECTIONS = [["overdue", "Overdue", "red", "\u{f002a}"], ["at_risk", "At risk", "orange", "\u{f0150}"],
+export const SECTIONS = [["overdue", "Overdue", "red", "\u{f002a}"], ["urgent", "Urgent", "orange", "\u{f0150}"],
+  ["at_risk", "At risk", "yellow", "\u{f0150}"],
   ["today", "Today", "yellow", "\u{f05a8}"], ["this_week", "This week", "blue", "\u{f0b67}"],
   ["later", "Later", "muted", "\u{f0b67}"], ["tentative", "Tentative", "muted", "\u{f0625}"]];
 // Each row's status, its bullet (the Console's PROMISE_STATUS): glyph, colour token, name.
-export const STATUS = { overdue: ["\u{f002a}", "red", "Overdue"], at_risk: ["\u{f0150}", "orange", "At risk"],
+export const STATUS = { overdue: ["\u{f002a}", "red", "Overdue"], urgent: ["\u{f0150}", "orange", "Urgent"],
+  at_risk: ["\u{f0150}", "yellow", "At risk"],
   on_track: ["\u{f0766}", "green", "On track"],
   tentative: ["\u{f0625}", "muted", "Tentative"] };
 /** Time to a Promise's due time, as a Thread row shows its age: 6h, 2d; late ones count up, -20h. */

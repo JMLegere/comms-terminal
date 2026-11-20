@@ -106,11 +106,13 @@ function openThread(id) {
 }
 
 // A Promise row's status, its bullet (as views/promises STATUS): glyph, colour token, name.
-const STATUS = { overdue: ["\u{f002a}", "red", "Overdue"], at_risk: ["\u{f0150}", "orange", "At risk"],
+const STATUS = { overdue: ["\u{f002a}", "red", "Overdue"], urgent: ["\u{f0150}", "orange", "Urgent"],
+  at_risk: ["\u{f0150}", "yellow", "At risk"],
   on_track: ["\u{f0766}", "green", "On track"],
   tentative: ["\u{f0625}", "muted", "Tentative"] };
 // Promise sections (as views/promises): glyph, colour token, label.
-const PROMISE = { overdue: ["\u{f002a}", "red", "Overdue"], at_risk: ["\u{f0150}", "orange", "At risk"],
+const PROMISE = { overdue: ["\u{f002a}", "red", "Overdue"], urgent: ["\u{f0150}", "orange", "Urgent"],
+  at_risk: ["\u{f0150}", "yellow", "At risk"],
   today: ["\u{f05a8}", "yellow", "Today"], this_week: ["\u{f0b67}", "blue", "This week"], later: ["\u{f0b67}", "muted", "Later"],
   tentative: ["\u{f0625}", "muted", "Tentative"] };
 

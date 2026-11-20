@@ -46,7 +46,7 @@ def test_the_promises_page_lists_by_section_and_shows_history(tmp_path):
 
     run(Console(path), [open_page])
     assert seen["page"] is PromisesPage
-    assert seen["rows"] == ["at_risk", ("Send the deck", "at_risk"), "later", ("Send the term sheet", "later")]
+    assert seen["rows"] == ["urgent", ("Send the deck", "urgent"), "later", ("Send the term sheet", "later")]
 
 
 def test_today_lists_promises_first(tmp_path, monkeypatch):

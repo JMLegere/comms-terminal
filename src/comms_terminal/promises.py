@@ -1,6 +1,6 @@
 """Promises (ADR 0024, 0027; .agents/prd/2026-11-18-promises.md): what specific People expect Jeremy to do by a
 time. Only an agent changes them, through the CLI, and every change cites an Origin (FR-PR-3, FR-PR-4): an
-Activity, a Customer request, a Tana node, or Jeremy's own recorded words. Slack-time, At risk and Overdue are worked
+Activity, a Customer request, a Tana node, or Jeremy's own recorded words. Slack-time, Urgent, At risk and Overdue are worked
 out from the time, the work and the travel (FR-PR-7), never stored.
 
 A Promise is Tentative, Open, Fulfilled or Cancelled. Cancelled needs an Origin showing the Person knows, or, for a
@@ -10,7 +10,7 @@ that Enrollment's start (FR-PR-14).
 The "captured up to" mark (FR-PR-10) is the last Activity whose Promise changes the capture agent has written; it
 only moves forward, in Activity insertion order, so a late Call transcript (an EDIT Activity) is still read.
 
-When an Open Promise first goes At risk or Overdue, the Service sends Jeremy one SMS (FR-PR-18, ADR 0026), and only
+When an Open Promise first goes Urgent or Overdue, the Service sends Jeremy one SMS (FR-PR-18, ADR 0026), and only
 once Jeremy's own mobile is set.
 
 Interface: record, firm, change, fulfil, cancel, link, advance_capture, set_alert_mobile (writers); find, promise,
@@ -31,7 +31,7 @@ ORIGINS = ("activity", "customer_request", "tana", "words")
 LINKS = ("thread", "case", "issue", "draft", "enrollment", "tana", "url")
 DUE_TIME = time(17)  # a Promise given only a day is due at 17:00 Jeremy's time
 NO_UNDO = "Promises change only by an agent with an Origin (ADR 0024); record a new change instead"
-SECTIONS = ("overdue", "at_risk", "today", "this_week", "later", "tentative")
+SECTIONS = ("overdue", "urgent", "at_risk", "today", "this_week", "later", "tentative")
 
 
 class Refused(ValueError):
@@ -292,13 +292,18 @@ def slack_time(row, now: datetime) -> int:
     return int(left) - row["work_minutes"] - row["travel_minutes"]
 
 
+URGENT_TIMES, AT_RISK_TIMES = 2, 12  # time left under 2x / 12x the work and travel (FR-PR-7; Jeremy, 2026-11-20)
+
+
 def risk(row, now: datetime) -> str | None:
-    """'overdue' past its time, 'at_risk' when Slack-time is less than its work and travel (FR-PR-7), else None."""
+    """'overdue' past its time; 'urgent' when the time left is under twice its work and travel, 'at_risk' under
+    twelve times (a 2-hour task: Urgent 4 hours before, At risk 24 hours before) (FR-PR-7); else None."""
     if row["state"] not in OPEN_STATES:
         return None
     if datetime.fromisoformat(row["due_at"]) <= now:
         return "overdue"
-    return "at_risk" if slack_time(row, now) < row["work_minutes"] + row["travel_minutes"] else None
+    left, need = slack_time(row, now) + row["work_minutes"] + row["travel_minutes"], row["work_minutes"] + row["travel_minutes"]
+    return "urgent" if left < URGENT_TIMES * need else "at_risk" if left < AT_RISK_TIMES * need else None
 
 
 def kept(db, limit: int = 100) -> list[dict]:
@@ -369,11 +374,11 @@ def origin_via(db, h) -> str:
     return sync if sync in ("call", "meeting") else VIA.get(a["platform"], "email")
 
 
-STATUSES = ("overdue", "at_risk", "on_track", "tentative")
+STATUSES = ("overdue", "urgent", "at_risk", "on_track", "tentative")
 
 
 def status(row) -> str:
-    """A row's status, the bullet every list shows: Tentative, Overdue, At risk, else On track. A Prepped Meeting
+    """A row's status, the bullet every list shows: Tentative, Overdue, Urgent, At risk, else On track. A Prepped Meeting
     is On track too (Jeremy, 2026-11-18); its tick only stops its Prep minutes counting toward At risk."""
     if row["state"] == "TENTATIVE":
         return "tentative"
@@ -448,13 +453,16 @@ def alert_text(p: dict, now: datetime) -> str:
     """One line: what, for whom, by when, and how to open it."""
     due = datetime.fromisoformat(p["due_at"]).astimezone(_local()).strftime("%a %d %b %H:%M")
     who = ", ".join(x["display_name"] for x in p["people"]) or "someone"
-    head = "Overdue" if p["risk"] == "overdue" else f"At risk ({p['slack_time']} min Slack-time)"
+    head = "Overdue" if p["risk"] == "overdue" else f"Urgent ({p['slack_time']} min Slack-time)"
     return f"{head}: {p['what']} for {who}, due {due}. comms-terminal promise {p['id']}"
 
 
+ALERT_RISKS = ("urgent", "overdue")  # what texts Jeremy (FR-PR-18); At risk shows in the lists only
+
+
 def alert(db, send, now: datetime | None = None) -> int:
-    """The wake pass (FR-PR-18): one SMS to Jeremy's mobile per Open Promise, the first time it is At risk or
-    Overdue, and per Meeting whose Prep is At risk. The alert is recorded before the send, so a lost send is never repeated (at most once).
+    """The wake pass (FR-PR-18): one SMS to Jeremy's mobile per Open Promise, the first time it is Urgent or
+    Overdue, and per Meeting whose Prep is Urgent. At risk alone sends nothing. The alert is recorded before the send, so a lost send is never repeated (at most once).
     `send(to, text)` is the Quo sender; None or no mobile set means no SMS."""
     to = alert_mobile(db)
     if to is None or send is None:
@@ -463,7 +471,7 @@ def alert(db, send, now: datetime | None = None) -> int:
     for (pid,) in db.execute("SELECT id FROM promises WHERE state = 'OPEN' AND id NOT IN"
                              " (SELECT item_id FROM promise_alerts WHERE kind = 'promise') ORDER BY due_at").fetchall():
         p = promise(db, pid, now)
-        if p["risk"] is None:
+        if p["risk"] not in ALERT_RISKS:
             continue
         with db:
             db.execute("INSERT INTO promise_alerts (kind, item_id, sent_at) VALUES ('promise', ?, ?)", (pid, _iso(now)))
@@ -471,7 +479,7 @@ def alert(db, send, now: datetime | None = None) -> int:
     from . import prep  # prep reads promises: imported here, not at the top
     sent = {r[0] for r in db.execute("SELECT item_id FROM promise_alerts WHERE kind = 'prep'")}
     for m in prep.rows(db, now):
-        if m["risk"] is None or m["event_uri"] in sent:
+        if m["risk"] not in ALERT_RISKS or m["event_uri"] in sent:
             continue
         with db:
             db.execute("INSERT INTO promise_alerts (kind, item_id, sent_at) VALUES ('prep', ?, ?)",
@@ -493,4 +501,4 @@ def prep_alert_text(m: dict) -> str:
     start = datetime.fromisoformat(m["start_at"]).astimezone(_local()).strftime("%a %d %b %H:%M")
     need = "not prepared" if not m["prepared"] else "leave soon"
     leave = datetime.fromisoformat(m["leave_at"]).astimezone(_local()).strftime("%H:%M")
-    return f"Prep at risk ({need}): {m['title']} at {start}, leave by {leave}. {m['brief'] or 'No Brief yet'}"
+    return f"Prep urgent ({need}): {m['title']} at {start}, leave by {leave}. {m['brief'] or 'No Brief yet'}"
