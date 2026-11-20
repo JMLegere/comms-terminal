@@ -116,8 +116,11 @@ def test_the_cli_records_lists_and_fulfils(db, capsys):
     listed = capsys.readouterr().out
     assert "## This week" in listed and "Captured up to nothing yet" in listed
     pid = db.execute("SELECT id FROM promises").fetchone()[0]
-    cli(db, "promise", pid, "--fulfil", "--origin", origin)
-    assert "Fulfilled" in capsys.readouterr().out
+    cli(db, "promise", pid, "--fulfil", "--actual", "45", "--origin", origin)
+    shown = capsys.readouterr().out
+    assert "Fulfilled" in shown and "actual 45m" in shown
+    cli(db, "promises", "--kept", "6")
+    assert "Send the traction update" in (out := capsys.readouterr().out) and "work 30m" in out and "actual 45m" in out
 
 
 def test_the_cli_refuses_a_change_without_an_origin(db):

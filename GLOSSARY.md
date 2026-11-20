@@ -134,6 +134,10 @@ _Avoid_: Draft (a Draft is an unsent message), Suggested promise
 The time left before a Promise's time, less the work and travel it still needs. For Prep, the time left before the leave-by time, less the prep still needed.
 _Avoid_: Slack (that is the Platform), Buffer, Float, Margin
 
+**Actual minutes**:
+The work a kept Promise actually took, recorded by the agent on Fulfil when the evidence shows it. The agent estimates a new Promise's work from up to 6 similar kept Promises.
+_Avoid_: Time spent, Duration
+
 **At risk**:
 A Promise, or a Meeting's Prep, whose Slack-time is smaller than the work it still needs. It is worked out, never set by hand.
 _Avoid_: Overdue (for one still in time), Red

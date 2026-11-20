@@ -50,7 +50,7 @@ COMMANDS = {
     "promises.cancel": "promise ID --cancel",
     "promises.change": "promise ID --what/--due/--work/--travel/--to",
     "promises.firm": "promise ID --firm",
-    "promises.fulfil": "promise ID --fulfil",
+    "promises.fulfil": "promise ID --fulfil [--actual MIN]",
     "promises.link": "promise new/ID --link",
     "promises.record": "promise new",
     "promises.set_alert_mobile": "alerts --mobile/--off",
@@ -299,8 +299,11 @@ def add_parsers(sub):
     pin = t.add_mutually_exclusive_group()
     pin.add_argument("--pin", action="store_true", help="Plan Issues leaves it alone (local only)")
     pin.add_argument("--unpin", action="store_true", help="Plan Issues may move it again")
-    sub.add_parser("promises", help="owed Promises by section (ADR 0024): Overdue, At risk, Today, This week,"
-                                    " Later, Tentative; --json for the whole view").add_argument("--json", action="store_true")
+    t = sub.add_parser("promises", help="owed Promises by section (ADR 0024): Overdue, At risk, Today, This week,"
+                                        " Later, Tentative; --json for the whole view")
+    t.add_argument("--json", action="store_true")
+    t.add_argument("--kept", type=int, metavar="N", help="instead, the last N Fulfilled Promises with work, travel"
+                                                         " and actual minutes, to estimate a new one from (FR-PR-21)")
     t = sub.add_parser("promise", help="one Promise with its history; `promise new` records one; flags change it."
                                        " Every change needs --origin (ADR 0024)")
     t.add_argument("id", help="a Promise id, or new")
@@ -320,6 +323,7 @@ def add_parsers(sub):
     st.add_argument("--fulfil", action="store_true", help="it was kept (--at when, else now)")
     st.add_argument("--cancel", action="store_true", help="no longer owed: the Person knows, or it never was")
     t.add_argument("--at", help="--fulfil: when it was kept")
+    t.add_argument("--actual", type=int, help="--fulfil: minutes of work it actually took, when the evidence shows it")
     c = sub.add_parser("capture", help='Promise capture: the "captured up to" mark, the Activities after it, advance it')
     cs = c.add_subparsers(dest="capture_cmd", required=True)
     cs.add_parser("mark", help="where capture is up to")
@@ -423,6 +427,14 @@ def promise_line(p: dict) -> str:
 
 
 def promises_list(db, a) -> str:
+    if a.kept is not None:
+        rows = promises.kept(db, a.kept)
+        if a.json:
+            return json.dumps(rows, indent=1) + "\n"
+        return "".join(f"- {r['what']} · kept {_when(r['closed_at'])} · work {_hours(r['work_minutes'])}"
+                       f" · travel {_hours(r['travel_minutes'])} · actual "
+                       f"{'unknown' if r['actual_minutes'] is None else _hours(r['actual_minutes'])} ({r['id']})\n"
+                       for r in rows) or "No kept Promises yet.\n"
     v = promises.view(db, clock.now())
     if a.json:
         return json.dumps(v, default=str, indent=1) + "\n"
@@ -439,6 +451,7 @@ def promise_markdown(p: dict) -> str:
     lines = [f"# Promise · {p['what']}", "",
              f"- {p['state'].title()} · due {_when(p['due_at'])}{' (inferred)' if p['due_inferred'] else ''}"
              f" · work {_hours(p['work_minutes'])} · travel {_hours(p['travel_minutes'])} · slack-time {_hours(p['slack_time'])}"
+             + (f" · actual {_hours(p['actual_minutes'])}" if p.get("actual_minutes") is not None else "")
              + (f" · {SECTION_NAMES[p['risk']]}" if p["risk"] else "") + (" · Draft ready" if p["draft_ready"] else ""),
              "- Owed to: " + ", ".join(x["display_name"] for x in p["people"])]
     lines += [f"- Link: {l['kind']} {l['label']}" + (f" ({l['target']})" if l["label"] != l["target"] else "")
@@ -479,7 +492,7 @@ def promise_cmd(db, a) -> str:
             raise promises.Refused("--link is KIND:TARGET")
         promises.link(db, pid, kind, target, origin, now=now)
     if a.fulfil:
-        promises.fulfil(db, pid, origin, at=promises.due_from(a.at) if a.at else None, now=now)
+        promises.fulfil(db, pid, origin, at=promises.due_from(a.at) if a.at else None, actual_minutes=a.actual, now=now)
     elif a.cancel:
         promises.cancel(db, pid, origin, now=now)
     return promise_markdown(promises.promise(db, pid, now))

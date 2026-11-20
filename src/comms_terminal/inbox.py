@@ -27,7 +27,7 @@ from typing import Protocol, Sequence
 from . import clock, commands, files, platforms
 from .writers import writer
 
-SCHEMA_VERSION = 47
+SCHEMA_VERSION = 48
 WAIT = timedelta(days=4)  # Waiting for them ends after this with no reply: back to Todo to follow up (#116)
 EMAIL_CONFIRMATION_PENDING = "Email confirmation pending; wait for its sent receipt before replying."
 NO_BCC = "Only an email New Thread Draft has Bcc; a Reply Draft, SMS or Slack Draft has none."
@@ -1003,7 +1003,9 @@ CREATE TABLE prep_read (  -- the last read's outcome; an error means every Prep 
   id     INTEGER PRIMARY KEY CHECK (id = 1),
   at     TEXT NOT NULL,
   error  TEXT
-) STRICT;"""  # Promises (ADR 0024, 0027)
+) STRICT;"""
+# How long a kept Promise actually took (FR-PR-21), so the capture agent's next estimate learns from it.
+MIGRATIONS[48] = "ALTER TABLE promises ADD COLUMN actual_minutes INTEGER CHECK (actual_minutes >= 0);"  # Promises (ADR 0024, 0027)
 
 
 class SendUnknown(SendFailed):

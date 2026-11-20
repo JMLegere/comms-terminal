@@ -541,6 +541,7 @@ CREATE TABLE promises (  -- what a Person expects Jeremy to do by a time; only a
   state          TEXT NOT NULL CHECK (state IN ('TENTATIVE', 'OPEN', 'FULFILLED', 'CANCELLED')),
   created_at     TEXT NOT NULL,
   closed_at      TEXT,                       -- when it became Fulfilled or Cancelled (Fulfilled: when it was kept)
+  actual_minutes INTEGER CHECK (actual_minutes >= 0),  -- work it actually took, filled on Fulfil when known (FR-PR-21)
   CHECK ((state IN ('FULFILLED', 'CANCELLED')) = (closed_at IS NOT NULL))
 ) STRICT;
 CREATE INDEX promises_open ON promises (state, due_at);

@@ -76,3 +76,9 @@ Feature: Promises
     Then her Enrollment's Due Task comes due "2026-11-24"
     When the agent Changes the time of "Book the kickoff call" to "2026-11-26"
     Then her Enrollment's Due Task comes due "2026-11-26"
+
+  @AS-PR-10 @FR-PR-21
+  Scenario: A kept Promise records how long it actually took, for the next estimate
+    Given the agent Recorded "Send the traction update" owed to "Anna Ciprick" due "2026-11-20" needing 30 minutes of work
+    When the agent Fulfils "Send the traction update" citing that message, taking 45 minutes
+    Then the Kept list shows "Send the traction update" with work 30 and actual 45

@@ -14,7 +14,7 @@ When an Open Promise first goes At risk or Overdue, the Service sends Jeremy one
 once Jeremy's own mobile is set.
 
 Interface: record, firm, change, fulfil, cancel, link, advance_capture, set_alert_mobile (writers); find, promise,
-view, slack_time, capture_mark, pending, alert_mobile (readers); alert (the Service's wake pass).
+view, kept, slack_time, capture_mark, pending, alert_mobile (readers); alert (the Service's wake pass).
 """
 
 import json
@@ -205,14 +205,19 @@ def change(db, promise_id: str, origin: dict, *, what: str | None = None, due_at
 
 
 @writer("write")
-def fulfil(db, promise_id: str, origin: dict, *, at: datetime | None = None, now: datetime | None = None) -> None:
-    """The Promise was kept, as its Origin shows; late when after its time."""
+def fulfil(db, promise_id: str, origin: dict, *, at: datetime | None = None, actual_minutes: int | None = None,
+           now: datetime | None = None) -> None:
+    """The Promise was kept, as its Origin shows; late when after its time. actual_minutes is the work it took,
+    when the evidence shows it (FR-PR-21)."""
     now = now or clock.now()
     o = _origin(db, origin)
     row = _open(db, promise_id)
+    if actual_minutes is not None and actual_minutes < 0:
+        raise Refused("actual is minutes, 0 or more")
     kept = _iso(at or now)
-    db.execute("UPDATE promises SET state = 'FULFILLED', closed_at = ? WHERE id = ?", (kept, promise_id))
-    _log(db, promise_id, "fulfilled", o, now, at=kept, late=kept > row["due_at"])
+    db.execute("UPDATE promises SET state = 'FULFILLED', closed_at = ?, actual_minutes = ? WHERE id = ?",
+               (kept, actual_minutes, promise_id))
+    _log(db, promise_id, "fulfilled", o, now, at=kept, late=kept > row["due_at"], actual_minutes=actual_minutes)
     _label(row, "fulfilled")
 
 
@@ -294,6 +299,14 @@ def risk(row, now: datetime) -> str | None:
     if datetime.fromisoformat(row["due_at"]) <= now:
         return "overdue"
     return "at_risk" if slack_time(row, now) < row["work_minutes"] + row["travel_minutes"] else None
+
+
+def kept(db, limit: int = 100) -> list[dict]:
+    """Fulfilled Promises, newest first, with their estimated work and travel and the work they actually took:
+    what the capture agent estimates a new Promise from (FR-PR-21)."""
+    return [dict(r) for r in db.execute(
+        "SELECT id, what, due_at, closed_at, work_minutes, travel_minutes, actual_minutes FROM promises"
+        " WHERE state = 'FULFILLED' ORDER BY closed_at DESC LIMIT ?", (limit,))]
 
 
 def promise(db, promise_id: str, now: datetime | None = None) -> dict:

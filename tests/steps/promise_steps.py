@@ -108,6 +108,17 @@ def fulfils(owed, what):
     promises.fulfil(owed.db, _promise(owed, what), _message(owed), now=owed.now)
 
 
+@when(parsers.parse('the agent Fulfils "{what}" citing that message, taking {actual:d} minutes'))
+def fulfils_taking(owed, what, actual):
+    promises.fulfil(owed.db, _promise(owed, what), _message(owed), actual_minutes=actual, now=owed.now)
+
+
+@then(parsers.parse('the Kept list shows "{what}" with work {work:d} and actual {actual:d}'))
+def kept_shows(owed, what, work, actual):
+    [k] = promises.kept(owed.db)
+    assert (k["what"], k["work_minutes"], k["actual_minutes"]) == (what, work, actual)
+
+
 @when(parsers.parse('the agent Cancels "{what}" in Jeremy\'s words "{words}"'))
 def cancels(owed, what, words):
     promises.cancel(owed.db, _promise(owed, what), {"kind": "words", "words": words}, now=owed.now)
