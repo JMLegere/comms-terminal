@@ -10,7 +10,7 @@ that Enrollment's start (FR-PR-14).
 The "captured up to" mark (FR-PR-10) is the last Activity whose Promise changes the capture agent has written; it
 only moves forward, in Activity insertion order, so a late Call transcript (an EDIT Activity) is still read.
 
-When an Open Promise first goes Urgent or Overdue, the Service sends Jeremy one SMS (FR-PR-18, ADR 0026), and only
+When an Open Promise first goes At risk, and again when it first goes Urgent or Overdue, the Service sends Jeremy one SMS (FR-PR-18, ADR 0026), and only
 once Jeremy's own mobile is set.
 
 Interface: record, firm, change, fulfil, cancel, link, advance_capture, set_alert_mobile (writers); find, promise,
@@ -449,42 +449,51 @@ def set_alert_mobile(db, number: str | None, *, now: datetime | None = None) -> 
     commands.not_undoable("set it again with comms-terminal alerts")
 
 
+RISK_NAMES = {"overdue": "Overdue", "urgent": "Urgent", "at_risk": "At risk"}
+
+
 def alert_text(p: dict, now: datetime) -> str:
     """One line: what, for whom, by when, and how to open it."""
     due = datetime.fromisoformat(p["due_at"]).astimezone(_local()).strftime("%a %d %b %H:%M")
     who = ", ".join(x["display_name"] for x in p["people"]) or "someone"
-    head = "Overdue" if p["risk"] == "overdue" else f"Urgent ({p['slack_time']} min Slack-time)"
+    head = "Overdue" if p["risk"] == "overdue" else f"{RISK_NAMES[p['risk']]} ({p['slack_time']} min Slack-time)"
     return f"{head}: {p['what']} for {who}, due {due}. comms-terminal promise {p['id']}"
 
 
-ALERT_RISKS = ("urgent", "overdue")  # what texts Jeremy (FR-PR-18); At risk shows in the lists only
+ALERT_LEVEL = {"at_risk": "at_risk", "urgent": "urgent", "overdue": "urgent"}  # one SMS per level (FR-PR-18)
 
 
 def alert(db, send, now: datetime | None = None) -> int:
-    """The wake pass (FR-PR-18): one SMS to Jeremy's mobile per Open Promise, the first time it is Urgent or
-    Overdue, and per Meeting whose Prep is Urgent. At risk alone sends nothing. The alert is recorded before the send, so a lost send is never repeated (at most once).
+    """The wake pass (FR-PR-18): one SMS to Jeremy's mobile per Open Promise and per Meeting's Prep the first time
+    it is At risk, and one more the first time it is Urgent or Overdue (Jeremy, 2026-11-20). The alert is recorded before the send, so a lost send is never repeated (at most once).
     `send(to, text)` is the Quo sender; None or no mobile set means no SMS."""
     to = alert_mobile(db)
     if to is None or send is None:
         return 0
     now, n = now or clock.now(), 0
-    for (pid,) in db.execute("SELECT id FROM promises WHERE state = 'OPEN' AND id NOT IN"
-                             " (SELECT item_id FROM promise_alerts WHERE kind = 'promise') ORDER BY due_at").fetchall():
+    sent: dict[tuple, set] = {}
+    for kind, item, level in db.execute("SELECT kind, item_id, level FROM promise_alerts"):
+        sent.setdefault((kind, item), set()).add(level)
+
+    def due(kind: str, item: str, risk: str | None) -> bool:
+        """Records and says yes to a level not yet texted, nor any above it (Urgent covers Overdue)."""
+        level = ALERT_LEVEL.get(risk)
+        done = sent.get((kind, item), set())
+        if level is None or level in done or (level == "at_risk" and "urgent" in done):
+            return False
+        with db:
+            db.execute("INSERT INTO promise_alerts (kind, item_id, level, sent_at) VALUES (?, ?, ?, ?)",
+                       (kind, item, level, _iso(now)))
+        return True
+
+    for (pid,) in db.execute("SELECT id FROM promises WHERE state = 'OPEN' ORDER BY due_at").fetchall():
         p = promise(db, pid, now)
-        if p["risk"] not in ALERT_RISKS:
-            continue
-        with db:
-            db.execute("INSERT INTO promise_alerts (kind, item_id, sent_at) VALUES ('promise', ?, ?)", (pid, _iso(now)))
-        n += _send(send, to, alert_text(p, now), pid)
+        if due("promise", pid, p["risk"]):
+            n += _send(send, to, alert_text(p, now), pid)
     from . import prep  # prep reads promises: imported here, not at the top
-    sent = {r[0] for r in db.execute("SELECT item_id FROM promise_alerts WHERE kind = 'prep'")}
     for m in prep.rows(db, now):
-        if m["risk"] not in ALERT_RISKS or m["event_uri"] in sent:
-            continue
-        with db:
-            db.execute("INSERT INTO promise_alerts (kind, item_id, sent_at) VALUES ('prep', ?, ?)",
-                       (m["event_uri"], _iso(now)))
-        n += _send(send, to, prep_alert_text(m), m["event_uri"])
+        if due("prep", m["event_uri"], m["risk"]):
+            n += _send(send, to, prep_alert_text(m), m["event_uri"])
     return n
 
 
@@ -501,4 +510,4 @@ def prep_alert_text(m: dict) -> str:
     start = datetime.fromisoformat(m["start_at"]).astimezone(_local()).strftime("%a %d %b %H:%M")
     need = "not prepared" if not m["prepared"] else "leave soon"
     leave = datetime.fromisoformat(m["leave_at"]).astimezone(_local()).strftime("%H:%M")
-    return f"Prep urgent ({need}): {m['title']} at {start}, leave by {leave}. {m['brief'] or 'No Brief yet'}"
+    return f"Prep {RISK_NAMES[m['risk']].lower()} ({need}): {m['title']} at {start}, leave by {leave}. {m['brief'] or 'No Brief yet'}"

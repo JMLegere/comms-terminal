@@ -1,4 +1,4 @@
-"""The Urgent SMS (FR-PR-18, ADR 0026): once per Promise, only to Jeremy's own mobile, only when set."""
+"""The Promise SMS (FR-PR-18, ADR 0026): once per Promise, only to Jeremy's own mobile, only when set."""
 
 from datetime import timedelta
 
@@ -25,7 +25,6 @@ def test_nothing_is_sent_until_the_mobile_is_set(db):
 def test_one_sms_per_promise_to_jeremy_only(db):
     promises.set_alert_mobile(db, MOBILE)
     owed(db, "Send the deck", 1, work=120)            # Urgent
-    owed(db, "Write the memo", 20, work=120)          # At risk: no SMS
     owed(db, "Book the venue", 72)                    # on track
     owed(db, "Maybe a demo", 1, work=120, tentative=True)  # Tentative: not owed yet
     sent = []
@@ -88,3 +87,21 @@ def test_the_service_sends_through_the_quo_connection(db):
 
 def test_without_a_quo_connection_there_is_no_sender(db):
     assert serve.alert_sender(db, serve.Senders()) is None
+
+
+def test_one_sms_at_risk_then_one_when_urgent(db):
+    promises.set_alert_mobile(db, MOBILE)
+    owed(db, "Write the memo", 20, work=120)  # At risk: 20 hours left < 24
+    sent = []
+    send = lambda to, text: sent.append(text)  # noqa: E731
+    assert promises.alert(db, send, NOW) == 1 and sent[0].startswith("At risk (")
+    assert promises.alert(db, send, NOW + timedelta(hours=1)) == 0             # still At risk: never again
+    assert promises.alert(db, send, NOW + timedelta(hours=17)) == 1 and sent[1].startswith("Urgent (")
+    assert promises.alert(db, send, NOW + timedelta(hours=21)) == 0            # now Overdue: Urgent covers it
+
+
+def test_a_promise_already_urgent_skips_the_at_risk_sms(db):
+    promises.set_alert_mobile(db, MOBILE)
+    owed(db, "Send the deck", 1, work=120)
+    sent = []
+    assert promises.alert(db, lambda to, text: sent.append(text), NOW) == 1 and sent[0].startswith("Urgent (")

@@ -27,7 +27,7 @@ from typing import Protocol, Sequence
 from . import clock, commands, files, platforms
 from .writers import writer
 
-SCHEMA_VERSION = 48
+SCHEMA_VERSION = 49
 WAIT = timedelta(days=4)  # Waiting for them ends after this with no reply: back to Todo to follow up (#116)
 EMAIL_CONFIRMATION_PENDING = "Email confirmation pending; wait for its sent receipt before replying."
 NO_BCC = "Only an email New Thread Draft has Bcc; a Reply Draft, SMS or Slack Draft has none."
@@ -1005,7 +1005,18 @@ CREATE TABLE prep_read (  -- the last read's outcome; an error means every Prep 
   error  TEXT
 ) STRICT;"""
 # How long a kept Promise actually took (FR-PR-21), so the capture agent's next estimate learns from it.
-MIGRATIONS[48] = "ALTER TABLE promises ADD COLUMN actual_minutes INTEGER CHECK (actual_minutes >= 0);"  # Promises (ADR 0024, 0027)
+MIGRATIONS[48] = "ALTER TABLE promises ADD COLUMN actual_minutes INTEGER CHECK (actual_minutes >= 0);"
+# One SMS per level (FR-PR-18, 2026-11-20): first At risk, then first Urgent or Overdue. Earlier alerts were Urgent.
+MIGRATIONS[49] = """CREATE TABLE promise_alerts_new (  -- one SMS per item and level: first At risk, first Urgent or Overdue (FR-PR-18, ADR 0026)
+  kind     TEXT NOT NULL CHECK (kind IN ('promise', 'prep')),
+  item_id  TEXT NOT NULL,
+  level    TEXT NOT NULL CHECK (level IN ('at_risk', 'urgent')),
+  sent_at  TEXT NOT NULL,
+  PRIMARY KEY (kind, item_id, level)
+) STRICT;
+INSERT INTO promise_alerts_new (kind, item_id, level, sent_at) SELECT kind, item_id, 'urgent', sent_at FROM promise_alerts;
+DROP TABLE promise_alerts;
+ALTER TABLE promise_alerts_new RENAME TO promise_alerts;"""  # Promises (ADR 0024, 0027)
 
 
 class SendUnknown(SendFailed):

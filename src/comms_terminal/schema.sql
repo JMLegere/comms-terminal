@@ -585,11 +585,12 @@ CREATE TABLE promise_capture (  -- "captured up to": the last Activity whose Pro
   activity_id    TEXT NOT NULL,
   at             TEXT NOT NULL
 ) STRICT;
-CREATE TABLE promise_alerts (  -- the one SMS per item when it first goes At risk (FR-PR-18, ADR 0026); never again
+CREATE TABLE promise_alerts (  -- one SMS per item and level: first At risk, first Urgent or Overdue (FR-PR-18, ADR 0026)
   kind     TEXT NOT NULL CHECK (kind IN ('promise', 'prep')),
   item_id  TEXT NOT NULL,
+  level    TEXT NOT NULL CHECK (level IN ('at_risk', 'urgent')),
   sent_at  TEXT NOT NULL,
-  PRIMARY KEY (kind, item_id)
+  PRIMARY KEY (kind, item_id, level)
 ) STRICT;
 CREATE TABLE preps (  -- the coming Meetings and their Prep, as last read from Tana (ADR 0025); prep.py
   event_uri      TEXT PRIMARY KEY NOT NULL,  -- the Tana calendar event

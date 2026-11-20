@@ -19,4 +19,4 @@ Decision:
 
 ## Consequences
 
-- At risk is measured by Slack-time (time left less work and travel still needed), per Promise, chosen 2026-11-18 over hours-to-due, shared capacity planning, and buffer burn. It ignores other work competing for the same hours, so a crowded day can still surprise. On 2026-11-20 Jeremy split it in two: that threshold is now called Urgent and still sends the SMS; At risk (time left under 12× the work and travel) shows in the lists only.
+- At risk is measured by Slack-time (time left less work and travel still needed), per Promise, chosen 2026-11-18 over hours-to-due, shared capacity planning, and buffer burn. It ignores other work competing for the same hours, so a crowded day can still surprise. On 2026-11-20 Jeremy split it in two: that threshold is now called Urgent, and At risk starts at 12× the work and travel. Each item texts once on first going At risk and once more on first going Urgent or Overdue.

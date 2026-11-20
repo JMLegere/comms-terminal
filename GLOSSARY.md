@@ -143,7 +143,7 @@ A Promise, or a Meeting's Prep, whose time left is under 12 times the work and t
 _Avoid_: Overdue (for one still in time), Red
 
 **Urgent**:
-A Promise, or a Meeting's Prep, whose time left is under twice the work and travel it still needs: a 2-hour task is Urgent 4 hours before its time. Going Urgent sends Jeremy the one SMS. It is worked out, never set by hand.
+A Promise, or a Meeting's Prep, whose time left is under twice the work and travel it still needs: a 2-hour task is Urgent 4 hours before its time. Going At risk sends Jeremy one SMS, and going Urgent one more. It is worked out, never set by hand.
 _Avoid_: Critical, Red
 
 **Overdue** (Promise):

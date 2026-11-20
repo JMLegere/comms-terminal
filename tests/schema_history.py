@@ -41,6 +41,15 @@ def _integer_keys_sql() -> str:
 
 
 UNDO = {
+    49: """CREATE TABLE promise_alerts_old (  -- the one SMS per item when it first goes At risk (FR-PR-18, ADR 0026); never again
+  kind     TEXT NOT NULL CHECK (kind IN ('promise', 'prep')),
+  item_id  TEXT NOT NULL,
+  sent_at  TEXT NOT NULL,
+  PRIMARY KEY (kind, item_id)
+) STRICT;
+INSERT INTO promise_alerts_old (kind, item_id, sent_at) SELECT kind, item_id, min(sent_at) FROM promise_alerts GROUP BY kind, item_id;
+DROP TABLE promise_alerts;
+ALTER TABLE promise_alerts_old RENAME TO promise_alerts;""",
     48: "ALTER TABLE promises DROP COLUMN actual_minutes;",
     47: """DROP TABLE prep_read; DROP TABLE preps; DROP TABLE promise_alerts; DROP TABLE promise_capture; DROP TABLE promise_changes; DROP TABLE promise_links;
 DROP TABLE promise_people; DROP TABLE promises;""",
