@@ -306,7 +306,6 @@ async function traceBrief() {
   const all = [...rows.filter((r) => r.id !== "c"), { ...prep, id: b, what: "Handover" }].map((r) =>
     r.kind === "prep" ? { ...r, links: [{ kind: "tana", target: tanaLink, label: "Brief" }] } : r);
   const items = { ...today.data, promises: all };
-  today.scrolls ??= {};
   Object.assign(state, { page: "today", focus: "list", stack: [{ page: "today" }], side: null, detail: null,
     list_view: "today", detail_view: "side", status: { online: true } });
   today.data = items;
@@ -321,15 +320,15 @@ async function traceBrief() {
   const row = (id) => today.rows().find((x) => x.r?.id === id);
   const clickRow = (id) => {
     today.render();
-    virtualLists.get("today-promises").click(row(id).key, cx);
+    virtualLists.get("today-column").click(row(id).key, cx);
   };
   const openPrep = async (id = a) => { clickRow(id); await flush(); await enter(); };
   const pointerSelect = async (id) => { clickRow(id); await flush(); };
   currentSide.init({}, cx); // exercise its real status/disconnect subscription
   await pointerSelect("a");
   hovers.length = 0;
-  const list = virtualLists.get("today-promises");
-  const index = today.panes().promises.findIndex((it) => it.key === row(a).key);
+  const list = virtualLists.get("today-column");
+  const index = Array.from({ length: list.length }, (_, i) => list.keyAt(i)).indexOf(row(a).key);
   list.render({ start: index, end: index + 1 });
   for (const hover of hovers) { hover(true, cx); hover(false, cx); }
   await flush();

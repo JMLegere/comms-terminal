@@ -1,7 +1,5 @@
-// Today (GLOSSARY), as the Console's TodayPage (ADR 0014): bordered panes stacked in order, each with its pill
-// title — threads (a Threads list fixed to Todo: Status and Case headers), drafts, paused, tasks (OVERDUE / DUE TODAY /
-// LATER TODAY, with a red "N overdue"), issues and unattended; an empty pane hides and the last one shown takes the spare
-// height. ↓/↑ (j/k) run on from one pane into the next, tab jumps to the next pane, and the row under the cursor fills
+// Today (GLOSSARY): full-height panes in one scrolling list. Empty panes hide. ↓/↑ (j/k) run on from
+// one pane into the next, tab jumps to the next pane, and the row under the cursor fills
 // the right pane (shared "detail" picks its view). A key acts on the row's own kind: r replies on a Thread and
 // resumes a Paused Enrollment; x ignores a Thread, skips a Task and deletes a Draft. Thread keys reach only a Thread
 // row: any other row clears the shared Thread, so a key never reaches a Thread that is not on screen (D87).
@@ -173,12 +171,14 @@ function keyOf(pane, it, i) {
   return `${pane}-group-${i}`;
 }
 
+const columnHeight = (item) => item.heading ? 29 : item.end ? 11 : 26;
+
 export default class Today extends View {
   init(_props, cx) {
     this.data = null;
     this.cases = {};
     this.at = 0;
-    this.scrolls = Object.fromEntries(PANES.map((k) => [k, VirtualListScrollHandle.new()]));
+    this.scroll = VirtualListScrollHandle.new();
     this.load(cx);
     cx.spawn(async (cx) => {
       while (true) if ((await nextEvent()).kind === "rows" && shared("page") === "today") this.load(cx);
@@ -190,6 +190,23 @@ export default class Today extends View {
 
   panes() {
     return holdPlace(paneItems(this.data, this.cases), this.held);
+  }
+
+  // Headings and borders scroll with their rows; only the column owns a viewport.
+  column(panes = this.panes()) {
+    return PANES.flatMap((pane) => panes[pane].some((it) => it.row) ? [
+      { key: `pane-${pane}`, pane, heading: true },
+      ...panes[pane],
+      { key: `end-${pane}`, end: true },
+    ] : []);
+  }
+
+  columnOffset(key) {
+    let offset = 0;
+    for (const item of this.column()) {
+      if (item.key === key) return offset;
+      offset += columnHeight(item);
+    }
   }
 
   /** The rows the cursor visits, pane after pane. */
@@ -206,6 +223,7 @@ export default class Today extends View {
         if (this.pageRequest !== request) return;
         const here = this.rows()[this.at], moved = this.advanced();
         const keep = moved ?? here?.key;
+        const offset = here && this.columnOffset(here.key);
         const index = here ? this.panes()[here.kind].findIndex((it) => it.key === here.key) : -1;
         this.data = data;
         this.cases = Object.fromEntries((cases ?? []).map((c) => [c.id, c]));
@@ -222,7 +240,8 @@ export default class Today extends View {
           if (shared("focus") === "detail") setShared("focus", "list");
         }
         this.error = null;
-        this.select(cx, true);
+        const selected = rows[this.at]?.key;
+        this.select(cx, true, Boolean(selected && (selected !== here?.key || this.columnOffset(selected) !== offset)));
       } catch (e) {
         if (this.pageRequest !== request) return;
         this.error = String(e);
@@ -262,7 +281,7 @@ export default class Today extends View {
     cx.notify();
   }
 
-  select(cx, reload = false) {
+  select(cx, reload = false, reveal = !reload) {
     let row = this.rows()[this.at];
     if (this.held && row?.key !== this.held.item.key) { // FR-UD-9: the selection left the held row; it takes its new place
       this.held = null;
@@ -292,6 +311,10 @@ export default class Today extends View {
       }
       return;
     }
+    if (reveal) {
+      const index = this.column().findIndex((it) => it.key === row.key);
+      if (index >= 0) this.scroll?.scroll_to_item(index, "top"); // reveal clipped rows without moving visible ones
+    }
     const r = row.r;
     // A reload on the same Task leaves the pane alone: the Task may have swapped in its Draft or Thread, and the task
     // view reloads itself on rows. Showing it again put the Task over the Draft on every autosave (the flicker).
@@ -320,8 +343,6 @@ export default class Today extends View {
       setShared("side", { kind: "unattended", id: r.id });
       run("organization.show"); run("side.show");
     }
-    const items = this.panes()[row.kind];
-    this.scrolls?.[row.kind]?.scroll_to_item(Math.max(0, items.findIndex((it) => it.key === row.key)), "center");
     this.target();
   }
 
@@ -379,28 +400,28 @@ export default class Today extends View {
     const t = theme();
     const panes = this.panes();
     const counts = Object.fromEntries(PANES.map((k) => [k, panes[k].filter((it) => it.row).length]));
-    const shown = PANES.filter((k) => counts[k]);
+    const items = this.column(panes);
     const sel = this.rows()[this.at]?.key;
     const focusHere = (shared("focus") ?? "list") === "list";
     const pill = (text, color) => div().flex_none().px(6).rounded(4).bg(color).text_color(t.background).font_semibold().child(text);
     const title = {
-      promises: [pill(`${I.promise} promises · ${counts.promises}`, t.blue), ...(() => { // owed first (FR-PR-9)
+      promises: () => [pill(`${I.promise} promises · ${counts.promises}`, t.blue), ...(() => { // owed first (FR-PR-9)
         const late = (this.data?.promises ?? []).filter((x) => x.risk && x.state !== "TENTATIVE").length;
         return late ? [div().font_semibold().text_color(t.red).child(`${late} at risk or overdue`)] : [];
       })()],
-      threads: [pill(`${I.TODO} threads · ${counts.threads}`, t.blue)],
-      tasks: [pill(`${I.tasks} tasks · ${counts.tasks}`, t.blue), ...(() => {
+      threads: () => [pill(`${I.TODO} threads · ${counts.threads}`, t.blue)],
+      tasks: () => [pill(`${I.tasks} tasks · ${counts.tasks}`, t.blue), ...(() => {
         const late = (this.data?.tasks ?? []).filter((x) => x.group === "overdue").length;
         return late ? [div().font_semibold().text_color(t.red).child(`${late} overdue`)] : [];
       })()],
-      issues: [pill(`${I.issues} issues · ${counts.issues}`, t.blue), ...(() => { // today's capacity, Overdue hours apart (FR-PL-13)
+      issues: () => [pill(`${I.issues} issues · ${counts.issues}`, t.blue), ...(() => { // today's capacity, Overdue hours apart (FR-PL-13)
         const c = this.data?.issues_capacity;
         return c ? [div().text_color(c.used > c.capacity ? t.red : t.muted).child(`${c.used} of ${c.capacity} h`),
           ...(c.overdue ? [div().font_semibold().text_color(t.red).child(`${c.overdue} h overdue`)] : [])] : [];
       })()],
-      drafts: [pill(`${I.edited} drafts · ${counts.drafts}`, t.blue)],
-      paused: [pill(`${I.sequence} paused · ${counts.paused}`, t.yellow)],
-      unattended: [pill(`${I.organization} unattended · ${counts.unattended}`, t.red)],
+      drafts: () => [pill(`${I.edited} drafts · ${counts.drafts}`, t.blue)],
+      paused: () => [pill(`${I.sequence} paused · ${counts.paused}`, t.yellow)],
+      unattended: () => [pill(`${I.organization} unattended · ${counts.unattended}`, t.red)],
     };
     const glyph = (detail) => div().w(16).flex_none().text_color(t[GLYPH[detail]?.[1]] ?? t.muted).child(GLYPH[detail]?.[0] ?? "·");
     const name = (text, w = 160) => div().w(w).flex_none().truncate().font_semibold().text_color(t.strong ?? t.foreground).child(text ?? "");
@@ -485,32 +506,10 @@ export default class Today extends View {
             .child(div().flex_none().text_color(t.muted).child(r.last ? when(r.last) : "never"));
       }
     };
-    const pane = (k) => {
-      const items = panes[k];
-      // Each pane asks for all its rows; when they do not all fit, each gives up room in proportion to its size, so
-      // the window never has empty space while a pane scrolls. Three rows always show.
-      return v_flex().id(`pane-${k}`).rounded(6).border(1).border_color(t.border).bg(t.background)
-        .flex_none().flex_shrink(1).h(34 + 26 * items.length).min_h(34 + 26 * Math.min(items.length, 3))
-        .child(h_flex().h(26).flex_none().px(8).gap(8).items_center().text_size(12).children(title[k]))
-        .child(div().flex_1().min_h(0).px(2).pb(4).child(
-          v_virtual_list(`today-${k}`, items.length, 26, (i) => items[i].key, (range) => items.slice(range.start, range.end).map(line))
-            .size_full().track_scroll(this.scrolls[k])
-            .on_item_click((key, cx) => {
-              const it = items.find((x) => x.key === key);
-              if (it?.caseHeader?.id) { setShared("push", { page: "case", case: it.caseHeader.id }); return run("nav.push"); }
-              const at = this.rows().findIndex((x) => x.key === key);
-              if (at < 0) return;
-              this.at = at;
-              setShared("focus", "list"); // a click focuses the row and takes the keys from any text field
-              focusMain();
-              this.select(cx);
-              cx.notify();
-            })));
-    };
     const d = this.data ?? {};
-    const root = v_flex().size_full().min_h(0).gap(6).p(2).bg(t.background).text_size(13);
+    const root = v_flex().size_full().min_h(0).p(2).bg(t.background).text_size(13);
     if (this.error) return root.child(div().p(12).text_size(12).text_color(t.danger).child(this.error));
-    if (this.data && !shown.length) { // All clear, as the Console's #allclear
+    if (this.data && !items.length) { // All clear, as the Console's #allclear
       return root.child(v_flex().rounded(6).border(1).border_color(t.border).p(10).gap(4)
         .child(h_flex().child(pill(`${I.today} today`, t.blue)))
         .child(h_flex().gap(0).child(div().font_semibold().text_color(t.green).child(`${I.done} All clear`))
@@ -518,6 +517,27 @@ export default class Today extends View {
         .when(Boolean(d.next_wake), (e) => e.child(div().text_color(t.muted).child(`${I.SNOOZED} Next wake · ${wake(d.next_wake)}`)))
         .when(Boolean(d.next_task), (e) => e.child(div().text_color(t.muted).child(`${I.tasks} Next Task · ${wake(d.next_task)}`))));
     }
-    return root.children(shown.map(pane));
+    const frame = () => v_flex().w_full().border_l(1).border_r(1).border_color(t.border).bg(t.background);
+    const cell = (it) => {
+      if (it.heading) return frame().h(29).border_t(1).rounded_tl(6).rounded_tr(6)
+        .child(h_flex().h(26).px(8).gap(8).items_center().text_size(12).children(title[it.pane]()));
+      if (it.end) return div().h(11).child(frame().h(5).border_b(1).rounded_bl(6).rounded_br(6));
+      return frame().h(26).px(2).child(line(it));
+    };
+    return root.child(v_virtual_list("today-column", items.length,
+      items.map(columnHeight), (i) => items[i].key,
+      (range) => items.slice(range.start, range.end).map(cell))
+      .size_full().track_scroll(this.scroll)
+      .on_item_click((key, cx) => {
+        const it = items.find((x) => x.key === key);
+        if (it?.caseHeader?.id) { setShared("push", { page: "case", case: it.caseHeader.id }); return run("nav.push"); }
+        const at = this.rows().findIndex((x) => x.key === key);
+        if (at < 0) return;
+        this.at = at;
+        setShared("focus", "list"); // a click focuses the row and takes the keys from any text field
+        focusMain();
+        this.select(cx);
+        cx.notify();
+      }));
   }
 }

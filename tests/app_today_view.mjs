@@ -2,7 +2,7 @@
 // Usage: node --experimental-vm-modules app_today_view.mjs <row kind> <thread command>
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { calls, cx, load, mountedTexts, ran, settle, state } from "./app_view_kit.mjs";
+import { answers, calls, cx, load, mountedTexts, ran, settle, state, virtualLists } from "./app_view_kit.mjs";
 
 const Today = await load("today"), Thread = await load("thread");
 const today = Object.create(Today.prototype), thread = Object.create(Thread.prototype);
@@ -37,14 +37,24 @@ if (kind === "panes") {
     dispatch((state.focus === "detail" ? keys.detail[key] : null) ?? keys[`page:${state.page}`]?.[key] ?? keys.global[key]);
     while (ran.length) dispatch(ran.shift());
   };
-  const panes = () => mountedTexts(() => today.render())
-    .filter((t) => / (promises|threads|issues|drafts|tasks|paused|unattended) · \d+$/.test(t))
-    .map((t) => t.slice(t.indexOf(" ") + 1));
-  today.scrolls = {};
+  const panes = () => {
+    virtualLists.clear();
+    const labels = mountedTexts(() => today.render());
+    for (const { length, render } of virtualLists.values()) {
+      for (let i = 0; i < length; i++) labels.push(...mountedTexts(() => render({ start: i, end: i + 1 })[0]));
+    }
+    return labels
+      .filter((t) => / (promises|threads|issues|drafts|tasks|paused|unattended) · \d+$/.test(t))
+      .map((t) => t.slice(t.indexOf(" ") + 1));
+  };
+  const scrolled = [];
+  today.scroll = { scroll_to_item: (index) => scrolled.push(index) };
   today.at = 0;
   Object.assign(state, { focus: "list", list_view: "today", detail_view: "side", stack: [{ page: "today" }] });
   today.select(cx);
   const before = panes();
+  const lists = [...virtualLists.values()].map(({ length, keyAt }) =>
+    Array.from({ length }, (_, i) => keyAt(i)));
   ran.length = 0;
   press("enter");
   const during = panes(), focus = state.focus;
@@ -57,7 +67,21 @@ if (kind === "panes") {
     const row = today.rows()[today.at];
     return [row.kind, row.r?.id ?? null];
   });
-  console.log(JSON.stringify({ before, during, focus, detailRow, focusAfterBack, moves }));
+  const navigationScroll = scrolled.splice(0);
+  today.at = today.rows().findIndex(({ r }) => r?.id === "thread-1");
+  const refresh = async (data) => {
+    answers["today.page"] = data;
+    today.load(cx);
+    await settle();
+    today.render();
+    return scrolled.splice(0).map((i) => virtualLists.get("today-column").keyAt(i));
+  };
+  const unchanged = await refresh(today.data);
+  const addedAbove = await refresh({
+    ...today.data, promises: [...today.data.promises, { id: "c", what: "New Promise", section: "today" }],
+  });
+  console.log(JSON.stringify({ before, during, lists, scrolled: navigationScroll, focus, detailRow, focusAfterBack, moves,
+    unchanged, addedAbove, selection: today.rows()[today.at].key }));
   process.exit(0);
 }
 

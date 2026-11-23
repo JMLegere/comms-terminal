@@ -115,11 +115,13 @@ Feature: Promises
     Then Escape returns to the next valid Today row without obsolete Prep Detail
 
   @AS-PR-13 @FR-PR-23
-  Scenario: Focusing Detail does not change which Today lists are reachable
+  Scenario: Today panes stay expanded and scroll together while Detail stays independent
     Given Today in the App shows Promise groups, Threads and an Issue
     When Jeremy presses Enter on a Promise
-    Then the same nonempty Today panes stay in order
+    Then every row is in one scrollable Today column
+    And the same nonempty Today panes stay in order
     And after Escape, arrows and Tab still select Today rows
+    And only a refresh that moves the selected row brings it back into view
 
   @AS-PR-15 @FR-PR-24 @NFR-PR-7 @NFR-PR-8
   Scenario: Only opening Prep Detail reads its Brief

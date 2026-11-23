@@ -297,6 +297,17 @@ def app_peer_fixture():
 def app_open_peer_detail(app_peer_fixture):
     return run_view("app_today_view.mjs", app_peer_fixture)
 
+@then("every row is in one scrollable Today column")
+def app_shared_column(app_peers):
+    lists = app_peers["lists"]
+    assert len(lists) == 1, f"Today has {len(lists)} separate scrolling lists"
+    keys = lists[0]
+    expected = ["promises-a", "promises-b", "threads-thread-1", "issues-issue-1"]
+    assert [key for key in keys if key in expected] == expected
+    assert [keys[i] for i in app_peers["scrolled"]] == [
+        "promises-a", "promises-b", "threads-status-NEW_REPLY", "threads-thread-1", "issues-issue-1", "promises-a",
+    ]
+
 
 @then("the same nonempty Today panes stay in order")
 def app_panes(app_peers):
@@ -306,6 +317,13 @@ def app_panes(app_peers):
 @then("after Escape, arrows and Tab still select Today rows")
 def app_pane_move(app_peers):
     assert_today_pane_moves(app_peers)
+
+
+@then("only a refresh that moves the selected row brings it back into view")
+def app_refresh_selection(app_peers):
+    assert app_peers["unchanged"] == []
+    assert app_peers["selection"] == "threads-thread-1"
+    assert app_peers["addedAbove"] == ["threads-thread-1"]
 
 
 @given("Today in the App shows Prep with local metadata and a link in Tana", target_fixture="prep_brief")

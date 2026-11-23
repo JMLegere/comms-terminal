@@ -50,8 +50,8 @@ function element(list) {
   return el;
 }
 
-function virtualList(id, _length, _height, keyAt, render) {
-  const list = { keyAt, render };
+function virtualList(id, length, _height, keyAt, render) {
+  const list = { length, keyAt, render };
   virtualLists.set(id, list);
   return element(list);
 }
