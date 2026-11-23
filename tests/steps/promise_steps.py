@@ -105,6 +105,16 @@ def recorded_tentative(owed, what, name, due):
     _record(owed, what, name, due, _message(owed), tentative=True)
 
 
+@given(parsers.parse('Prep lists "{title}" for a Meeting on "{day}"'))
+def meeting_prep(owed, title, day):
+    start = promises.due_from(day)
+    with owed.db:
+        owed.db.execute("INSERT INTO preps (event_uri, title, start_at, end_at, has_prep, prepped)"
+                        " VALUES (?, ?, ?, ?, 1, 1)",
+                        (f"tana:event:{title.replace(' ', '_')}", title, clock.iso(start),
+                         clock.iso(start + timedelta(hours=1))))
+
+
 @when(parsers.parse('the Console Fulfils "{what}" in Jeremy\'s words "{words}"'))
 def console_fulfils(owed, what, words):
     with commands.source("console"):
@@ -196,13 +206,13 @@ def view_lists(owed, what, section):
     assert what in [p["what"] for p in promises.view(owed.db, owed.now)["sections"][section]]
 
 
-@then(parsers.parse('Today lists only the Promises "{first}" and "{second}"'))
-def today_lists_only(owed, first, second):
+@then(parsers.parse('Today lists only "{first}", "{second}" and "{third}" in its Promises pane'))
+def today_lists_only(owed, first, second, third):
     today = core._today(None, owed.db)
     summary = core._shell(None, owed.db)
-    assert [p["what"] for p in today["promises"]] == [first, second]
-    assert summary["today"] == sum(len(today[k]) for k in ("threads", "tasks", "drafts", "paused", "unattended")) + 2
-    assert summary["promises"] == 3
+    assert [p["what"] for p in today["promises"]] == [first, second, third]
+    assert summary["today"] == sum(len(today[k]) for k in ("threads", "tasks", "drafts", "paused", "unattended")) + 3
+    assert summary["promises"] == 5
 
 
 @then("nothing is pending after the mark")

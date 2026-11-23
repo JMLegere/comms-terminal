@@ -148,7 +148,7 @@ def _today(core, db):
     Paused Enrollments (each with `finishing`, the label of the reason it finishes as, or null) and Unattended
     Organizations; and the Issues Today lists (FR-PL-12: planned or due today or earlier, each with `overdue`) with
     `issues_capacity`: today's capacity, `used` by the Issues that are not Overdue, and `overdue` hours (FR-PL-13);
-    `promises` contains Prep and owed Promises not in Later, each with its `section` (FR-PR-9)."""
+    `promises` contains Prep and owed Promises, excluding the Later section, each with its `section` (FR-PR-9)."""
     from . import issues
     t = dict(_shared(core, "today", inbox.today, db))
     day = issues.view(db, {"grouping": "none", "completed": "none"}, today_list=True)

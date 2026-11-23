@@ -414,8 +414,8 @@ def view(db, now: datetime | None = None) -> dict:
 
 
 def for_today(view: dict) -> dict:
-    """Today leaves Later Promises on their own page; Prep is unchanged (FR-PR-9)."""
-    sections = view["sections"] | {"later": [p for p in view["sections"]["later"] if p["kind"] == "prep"]}
+    """Today hides the entire Later section, including Prep (FR-PR-9)."""
+    sections = view["sections"] | {"later": []}
     return view | {"sections": sections, "count": sum(map(len, sections.values()))}
 
 

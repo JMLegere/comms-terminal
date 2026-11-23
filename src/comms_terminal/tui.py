@@ -6249,8 +6249,8 @@ def prep_markup(p: dict, now: datetime, *, raw_times: tuple[int | None, int | No
 class PromisesPage(TablePage):
     """Promises (FR-PR-8), laid out as the Threads list: a header per section (Overdue, Urgent, At risk, Today, This week,
     Later, Tentative) with its glyph and count, then its Promises, each with the section's glyph, who it is owed to,
-    what, and the time to its due time. Read-only (ADR 0024); enter opens the Promise's Thread. Today leaves
-    Later Promises on the standalone page (FR-PR-9)."""
+    what, and the time to its due time. Read-only (ADR 0024); enter opens the Promise's Thread. Only the
+    standalone page shows the Later section (FR-PR-9)."""
     TITLE = f"{ICON['promise']} promises"
     RAIL = "promises"
     KIND = "promise"
