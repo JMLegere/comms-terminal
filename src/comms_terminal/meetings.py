@@ -3,9 +3,9 @@
 A Meeting is synchronous comms, recorded as an Activity on a Thread the way a Phone call is: a MESSAGE whose
 `data.meeting` says what happened. Google Calendar is a read-only Platform with one Connection; its creation
 time is go-live. Each Event UID first seen after go-live is a Channel of
-kind meeting holding one Thread, so a repeating series is one Thread. Every Meeting Activity puts the Thread in
-Todo: booked (a new Thread), held (an occurrence's end time passed), cancelled (it became a Deleted Event), and
-declined (another attendee said no). A reschedule only moves the Event on the Calendar. Jeremy's own
+kind meeting holding one Thread, so a repeating series is one Thread. Booked starts the Thread in Todo;
+Cancelled and Declined can bring it back. Held records the end of an occurrence without changing Status
+(FR-ICA-1). A reschedule only moves the Event on the Calendar. Jeremy's own
 Response (FR-13e) is a Meeting Activity from him that leaves Status as it is; answering an Event with no Thread yet
 (booked before go-live) starts its Thread. Every Event is a Meeting Thread, internal ones and Jeremy's own
 blocks with no guests included: one rule, no exceptions (decision #142).
@@ -152,7 +152,7 @@ def _booked_states(db, c, uid: str) -> dict[str, str]:
 
 def held(db, now: datetime | None = None) -> int:
     """The wake pass: each occurrence of a Meeting Thread's Event that ended since the Thread began, once, as a
-    held Meeting Activity (FR-OA-13). Jeremy's declined occurrences and Deleted Events are not held."""
+    Held Activity without changing Status (FR-ICA-1). Jeremy's declined occurrences and Deleted Events are not held."""
     c = _connection(db)
     if c is None:
         return 0

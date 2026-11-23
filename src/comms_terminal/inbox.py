@@ -1065,8 +1065,7 @@ class Incoming:
     title: str | None = None
     data: dict = field(default_factory=dict)
     channel_name: str | None = None  # a friendly name for the Channel (Slack #name, DM partner); kept current
-    synchronous: str | None = None  # "call" or "meeting": a Phone call or Meeting puts its Thread in Todo whoever
-    # started it (FR-OA-13, FR-OA-14); its details stay in data
+    synchronous: str | None = None  # "call" or "meeting"; details in data. Held never moves Status (FR-ICA-1).
     participants: tuple[Identity, ...] = ()  # others in it besides the sender (Meeting attendees), each kept as an
     # Identity so Membership and the roll-up see them (FR-OA-15)
 
@@ -3017,8 +3016,10 @@ def _ingest(db, inc: Incoming) -> Thread | None:
         db.executemany("INSERT OR IGNORE INTO email_refs (activity_id, native_id) VALUES (?, ?)",
                        [(activity_id, n) for n in sorted(_email_ids(inc.thread_ref))])
         _reconcile_email_threads(db, True, channel_id)
+    meeting_data = inc.data.get("meeting") if meeting else None
+    held = isinstance(meeting_data, dict) and meeting_data.get("what") == "held"
     t = get_thread(db, thread_id)
-    if not created or t.id != thread_id:
+    if not held and (not created or t.id != thread_id):
         if (not event.blocked or call) and (nxt := transition((t.status, t.status_detail), event)):
             _set_status(db, t.id, at, *nxt, cause="reply" if event.from_jeremy else "meeting" if meeting else "call" if call else inc.kind.lower())
     if inc.kind == "DELETE":  # FR-2a

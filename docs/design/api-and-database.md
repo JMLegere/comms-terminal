@@ -237,6 +237,8 @@ Ingestion checks arrival eligibility first. Eligible arrivals and the other writ
 
 Deletion content clearing and Sequence pause hooks still run. A Phone call (`MESSAGE` carrying `data.call`) keeps its existing eligibility and rules, including Thread creation and sticky Ignored behavior. Independent timers, Jeremy's own activity, explicit actions, and unblocked participants retain their rules. Email reconciliation can select another existing complete triage state before this guard; the guard preserves that selected state. Unblocking restores normal eligibility for future arrivals while Ignored remains sticky.
 
+**Held** (FR-ICA-1–2): A `MESSAGE` with `synchronous="meeting"` and `data.meeting.what == "held"` skips `transition` and `_set_status` on an existing Thread. The Activity, participants, deduplication, and Sequence pause hook are unchanged. All six triage fields stay unchanged and no Status Audit entry is written. The Held producer requires an existing Meeting Thread; it never starts one. Booked, Cancelled, attendee decline, and Jeremy's own Response keep their separate rules. The service runs `wake` before recording Held in the same pass; Held does not overwrite any due transition.
+
 **`ingest`**
 - New Thread from another person, sender not blocked → `TODO` / `CREATED` (FR-6a).
 - New Thread from another person, sender blocked → `DONE` / `IGNORED` (FR-7a).

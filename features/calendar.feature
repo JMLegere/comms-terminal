@@ -7,6 +7,8 @@ Feature: Calendar
   A confirmed Response adds a Meeting Activity from Jeremy (meetings.respond_recorded) and leaves Status unchanged.
   Google here is a fake that records each request; nothing reaches Google. The scenarios run against
   serve.handle_respond; the pickers (AS-IR-7, AS-IR-8) run the console itself.
+  Held (meetings.held) records ended occurrences without changing Status (FR-ICA-1–2).
+  Wake (inbox.wake) still ends due Snoozes.
 
   @AS-IR-1 @FR-13e @FR-IR-1 @FR-IR-4 @FR-IR-6 @FR-IR-7
   Scenario: Jeremy accepts an invite from its Meeting Thread
@@ -83,3 +85,35 @@ Feature: Calendar
       | Accept  | accepted  | Accepted |
       | Maybe   | tentative | Maybe    |
       | Decline | declined  | Declined |
+
+  @AS-ICA-1 @FR-ICA-1 @NFR-ICA-1
+  Scenario: Held Activity records each occurrence without reopening its Thread
+    Given a Meeting Thread booked for the weekly Event "Weekly review"
+    And Jeremy marks the Meeting Thread Done
+    When Held runs at "2026-11-05T20:01:00+00:00"
+    And Held runs at "2026-11-05T20:01:00+00:00"
+    And Held runs at "2026-11-12T20:01:00+00:00"
+    Then the Thread has Status "DONE" and Status Detail "DONE_MANUALLY_SET"
+    And the Thread has this many Held Activities: 2
+    And the Thread has no new Audit entry
+
+  @AS-ICA-2 @FR-ICA-1 @FR-ICA-2 @NFR-ICA-1
+  Scenario: Held Activity leaves the original Snooze deadline in effect
+    Given a Meeting Thread booked for the weekly Event "Weekly review"
+    And Jeremy snoozes the Meeting Thread until "2026-11-12T20:01:00+00:00"
+    When Wake runs before Held at "2026-11-05T20:01:00+00:00"
+    Then the Thread has Status "SNOOZED" and Status Detail "WAITING_FOR_DURATION"
+    And the Thread has this many Held Activities: 1
+    And the Thread has no new Audit entry
+    When Wake runs before Held at "2026-11-12T20:01:00+00:00"
+    Then the Thread has Status "TODO" and Status Detail "CREATED"
+    And the Thread has this many Held Activities: 2
+    And the Thread has exactly one new Audit entry caused by Wake
+
+  @AS-ICA-3 @FR-ICA-1 @NFR-ICA-1
+  Scenario: Held Activity remains visible in the Done Thread timeline
+    Given a Meeting Thread booked for the weekly Event "Weekly review"
+    And Jeremy marks the Meeting Thread Done
+    When Held runs at "2026-11-05T20:01:00+00:00"
+    Then Jeremy can see "Held · Weekly review" in the Done Thread timeline
+    And the Meeting Thread is absent from Todo and Today Threads

@@ -1,12 +1,12 @@
-"""Meetings on Threads (ADR 0007; .agents/prd/2026-10-24-organization-actions.md FR-OA-11..15): a Google Calendar
-Event with someone outside Agent Maple, first seen after go-live, is one Thread in Todo; each ended occurrence,
-cancellation, and outside decline is a Meeting Activity that puts it back in Todo; a reschedule changes nothing."""
+"""Meetings on Threads: a new Event starts in Todo. Held preserves triage; cancellation and outside decline
+can reopen it (ADR 0007; FR-OA-11..15, FR-ICA-1..2). A reschedule changes no Status."""
 
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from comms_terminal import calendar as cal, clock as comms_clock, inbox, meetings, pipeline as pl, platforms
+from comms_terminal import sequences as sq
 
 UTC = timezone.utc
 
@@ -92,6 +92,19 @@ def meeting_activities(db, uid):
         " ON ch.id = t.channel_id WHERE ch.native_id = ? ORDER BY a.id", (uid,))]
 
 
+def triage(db, tid):
+    return tuple(db.execute(
+        "SELECT status, status_detail, status_changed_at, snoozed_until, detail_before_snooze, follow_up_at"
+        " FROM threads WHERE id = ?", (tid,)).fetchone())
+
+
+def book(db, clock, *events):
+    meetings.connect(db)
+    clock[0] = datetime(2026, 10, 20, 14, tzinfo=UTC)
+    cal.sync(db, feed(*events), comms_clock.iso(clock[0]))
+    assert meetings.synced(db) == len(events)
+
+
 def test_meetings_book_hold_cancel_decline_and_reschedule(db, clock):
     cal.sync(db, feed(OLD), "2026-10-20T12:00:00+00:00")
     c = meetings.connect(db)  # go-live 13:00
@@ -133,16 +146,20 @@ def test_meetings_book_hold_cancel_decline_and_reschedule(db, clock):
     assert meetings.held(db, datetime(2026, 10, 22, 15, 31, tzinfo=UTC)) == 3  # the demo, Acme's 10-21, the standup
     assert meetings.held(db, datetime(2026, 10, 22, 15, 32, tzinfo=UTC)) == 0
     t = inbox.get_thread(db, demo.id)
-    assert (t.status, t.status_detail) == ("TODO", "NEW_REPLY")
-    assert inbox.thread_view(db, demo.id)["audit"][-1]["cause"] == "meeting"
+    assert (t.status, t.status_detail) == ("SNOOZED", "WAITING_FOR_DURATION")
+    assert inbox.thread_view(db, demo.id)["audit"][-1]["cause"] == "action"
+
+    # Both the pre-go-live Event and the Event Jeremy declined have now ended.
+    assert meetings.held(db, datetime(2026, 10, 24, 16, 1, tzinfo=UTC)) == 0
+    assert meeting_activities(db, "declined") == [":booked"]
+    assert thread(db, "old") is None
+
     inbox.act(db, weekly.id, inbox.Done())
     assert meetings.held(db, datetime(2026, 10, 28, 15, 31, tzinfo=UTC)) == 1  # the next week's
     assert meeting_activities(db, "weekly") == [":booked", "20261021T150000Z:held", "20261028T150000Z:held"]
-    assert inbox.get_thread(db, weekly.id).status == "TODO"
-    assert meeting_activities(db, "declined") == [":booked"]  # Jeremy declined: never held
+    assert inbox.get_thread(db, weekly.id).status == "DONE"
 
     # Declined by someone outside, and cancelled
-    inbox.act(db, weekly.id, inbox.Done())
     inbox.act(db, declined.id, inbox.Done())
     events[2] = WEEKLY.format(bob="DECLINED")
     del events[3]
@@ -231,6 +248,161 @@ def test_an_event_with_no_one_besides_jeremy_is_a_meeting_thread_too(db, clock):
     assert (t.title, t.status_detail) == ("Focus block", "CREATED")
     first = inbox.thread_view(db, t.id)["messages"][0]
     assert first["content"].startswith("Booked · Focus block") and "With:" not in first["content"]
+    inbox.act(db, t.id, inbox.Done())
+    before = triage(db, t.id)
+    audit = inbox.thread_view(db, t.id)["audit"]
     assert meetings.held(db, datetime(2026, 10, 21, 18, 1, tzinfo=UTC)) == 1
+    assert meeting_activities(db, "solo") == [":booked", "20261021T170000Z:held"]
+    assert triage(db, t.id) == before
+    assert inbox.thread_view(db, t.id)["audit"] == audit
     cal.sync(db, feed(), "2026-10-21T19:00:00+00:00")
     assert meetings.synced(db) == 1 and meeting_activities(db, "solo")[-1] == ":cancelled"
+    assert inbox.get_thread(db, t.id).status == "TODO"
+
+
+TIMER_DUE = datetime(2026, 10, 24, 15, 31, tzinfo=UTC)
+
+
+@pytest.mark.parametrize(("action", "status", "detail", "wake_detail"), [
+    (None, "TODO", "CREATED", None),
+    (inbox.Investigate(), "TODO", "IN_PROGRESS", None),
+    (inbox.Done(), "DONE", "DONE_MANUALLY_SET", None),
+    (inbox.Ignore(), "DONE", "IGNORED", None),
+    (inbox.Snooze(TIMER_DUE), "SNOOZED", "WAITING_FOR_DURATION", "IN_PROGRESS"),
+    (inbox.Wait(), "SNOOZED", "WAITING_FOR_CUSTOMER", "NEW_REPLY"),
+])
+def test_held_activity_preserves_exact_triage_and_audit(db, clock, action, status, detail, wake_detail):
+    # Two occurrences three days apart: Held arrives before the timer and again in its due Wake pass.
+    series = WEEKLY.format(bob="ACCEPTED").replace("FREQ=WEEKLY", "FREQ=DAILY;INTERVAL=3")
+    book(db, clock, series)
+    t = thread(db, "weekly")
+    if action is not None:
+        clock[0] = datetime(2026, 10, 20, 15, 31, tzinfo=UTC)
+        if isinstance(action, inbox.Snooze):
+            inbox.act(db, t.id, inbox.Investigate())
+        inbox.act(db, t.id, action)
+    before = triage(db, t.id)
+    snooze = isinstance(action, inbox.Snooze)
+    assert before == (
+        status, detail, comms_clock.iso(clock[0]), comms_clock.iso(TIMER_DUE) if snooze else None,
+        "IN_PROGRESS" if snooze else None, comms_clock.iso(TIMER_DUE) if isinstance(action, inbox.Wait) else None,
+    )
+    before_view = inbox.thread_view(db, t.id)
+
+    clock[0] = datetime(2026, 10, 21, 15, 31, tzinfo=UTC)
+    assert inbox.wake(db, clock[0]) == 0
+    assert meetings.held(db, clock[0]) == 1
+    assert meetings.held(db, clock[0]) == 0
+    assert meeting_activities(db, "weekly") == [":booked", "20261021T150000Z:held"]
+    assert [r["id"] for r in db.execute("SELECT id FROM threads")] == [t.id]
+    after_view = inbox.thread_view(db, t.id)
+    assert [p["id"] for p in after_view["people"]] == [p["id"] for p in before_view["people"]]
+    _, held = after_view["messages"]
+    assert held["who"] == "Ana Ruiz" and held["to"] == ["bob@acme.com"]
+    assert {a["email"]: a["state"] for a in held["data"]["meeting"]["attendees"]} == {
+        "jeremy@agentmaple.com": "ACCEPTED",
+        "bob@acme.com": "ACCEPTED",
+        "room-1@resource.calendar.google.com": "ACCEPTED",
+    }
+    assert triage(db, t.id) == before
+    assert after_view["audit"] == before_view["audit"]
+    assert (t.id in {r["id"] for r in inbox.queue(db, "Todo")}) == (status == "TODO")
+
+    if wake_detail is not None:
+        clock[0] = TIMER_DUE
+        assert inbox.wake(db, TIMER_DUE - timedelta(seconds=1)) == 0
+        assert inbox.wake(db, TIMER_DUE) == 1
+        assert meetings.held(db, TIMER_DUE) == 1
+        assert inbox.wake(db, TIMER_DUE) == meetings.held(db, TIMER_DUE) == 0
+        assert triage(db, t.id) == ("TODO", wake_detail, comms_clock.iso(TIMER_DUE), None, None, None)
+        audit = inbox.thread_view(db, t.id)["audit"]
+        assert audit[:-1] == before_view["audit"]
+        assert (audit[-1]["cause"], audit[-1]["occurred_at"], audit[-1]["new_detail"]) == (
+            "woke", comms_clock.iso(TIMER_DUE), wake_detail)
+        assert meeting_activities(db, "weekly")[-1] == "20261024T150000Z:held"
+
+
+def test_held_activity_skips_deleted_and_all_day_events(db, clock):
+    all_day = """UID:all-day
+SUMMARY:Holiday
+DTSTART;VALUE=DATE:20261022
+DTEND;VALUE=DATE:20261023
+ORGANIZER:mailto:jeremy@agentmaple.com"""
+    book(db, clock, DEMO, all_day)
+    cal.sync(db, feed(all_day), "2026-10-21T13:00:00+00:00")
+    assert meetings.synced(db, datetime(2026, 10, 21, 13, tzinfo=UTC)) == 1
+    assert meetings.held(db, datetime(2026, 10, 23, 14, tzinfo=UTC)) == 0
+    assert meeting_activities(db, "demo") == [":booked", ":cancelled"]
+    assert meeting_activities(db, "all-day") == [":booked"]
+
+
+def test_held_activity_updates_pipeline_history_without_todo(db, clock):
+    book(db, clock, DEMO)
+    inbox.act(db, thread(db, "demo").id, inbox.Done())
+    org = db.execute("SELECT id FROM organizations WHERE domain = 'stmec.com'").fetchone()[0]
+    pl.set_stage(db, org, pl.REVENUE, "Awareness")
+    before = pl.attention(db)[org]
+    assert (before["rollup"], before["unattended"], before["last"]) == ("Done", False, clock[0])
+
+    clock[0] = datetime(2026, 10, 22, 14, 31, tzinfo=UTC)
+    assert meetings.held(db, clock[0]) == 1
+    after = pl.attention(db)[org]
+    assert (after["rollup"], after["unattended"], after["last"]) == (
+        "Done", True, datetime(2026, 10, 22, 14, 30, tzinfo=UTC))
+
+
+def test_held_activity_still_pauses_matching_enrollment(db, clock):
+    book(db, clock, DEMO)
+    t = thread(db, "demo")
+    inbox.act(db, t.id, inbox.Done())
+    (sam,) = inbox.thread_view(db, t.id)["people"]
+    s = sq.create_sequence(db, "Follow up")
+    sq.add_step(db, s, "call")
+    sq.enroll(db, sam["id"], s)
+    assert sq.enrollments(db, sam["id"])[0]["state"] == "ACTIVE"
+
+    assert meetings.held(db, datetime(2026, 10, 22, 14, 31, tzinfo=UTC)) == 1
+    (e,) = sq.enrollments(db, sam["id"])
+    ended_at = "2026-10-22T14:30:00.000000+00:00"
+    assert (e["state"], e["pause_reason"], e["paused_at"], e["responded_at"]) == (
+        "PAUSED", "replied", ended_at, ended_at)
+    assert inbox.get_thread(db, t.id).status == "DONE"
+
+
+def test_calendar_attendee_acceptance_changes_event_but_not_activity_or_triage(db, clock):
+    unanswered = DEMO.replace("CN=Sam Lee;PARTSTAT=ACCEPTED", "CN=Sam Lee;PARTSTAT=NEEDS-ACTION")
+    book(db, clock, unanswered)
+    t = thread(db, "demo")
+    inbox.act(db, t.id, inbox.Done())
+    before = triage(db, t.id)
+    audit = inbox.thread_view(db, t.id)["audit"]
+    day = datetime(2026, 10, 22, tzinfo=UTC).date()
+
+    def attendee_state():
+        (event,) = cal.expand(db, day, day + timedelta(days=1))
+        return next(a["state"] for a in event["attendees"] if a["email"] == "sam@stmec.com")
+
+    assert attendee_state() == "NEEDS-ACTION"
+    clock[0] += timedelta(hours=1)
+    assert cal.sync(db, feed(DEMO), comms_clock.iso(clock[0]))
+    assert meetings.synced(db) == 0
+    assert attendee_state() == "ACCEPTED"
+    assert meeting_activities(db, "demo") == [":booked"]
+    assert triage(db, t.id) == before
+    assert inbox.thread_view(db, t.id)["audit"] == audit
+
+
+@pytest.mark.parametrize("data", [{}, {"meeting": None}, {"meeting": {}}], ids=["missing", "null", "no-what"])
+def test_meeting_arrival_without_held_type_still_reopens(db, clock, data):
+    book(db, clock, DEMO)
+    t = thread(db, "demo")
+    inbox.act(db, t.id, inbox.Done())
+    channel = inbox.thread_view(db, t.id)["channel"]
+
+    clock[0] += timedelta(hours=1)
+    arrived = inbox.ingest(db, inbox.Incoming(
+        channel["connection_id"], channel["native_id"], "meeting", "MESSAGE", "gcal:demo::untyped",
+        inbox.Identity("email", "sam@stmec.com"), clock[0], "Meeting update", data=data, synchronous="meeting",
+    ))
+    assert (arrived.id, arrived.status, arrived.status_detail) == (t.id, "TODO", "NEW_REPLY")
+    assert meeting_activities(db, "demo") == [":booked", ":untyped"]

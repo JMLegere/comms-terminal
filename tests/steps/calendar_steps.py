@@ -8,7 +8,7 @@ AS-IR-7 drives the real console (Textual's test driver) on a copy of the databas
 
 import json
 import urllib.parse
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from email.message import EmailMessage
 
 import pytest
@@ -336,3 +336,94 @@ def event_picker_scope(ctx, scope):
 def event_feed_state(ctx, state):
     assert ctx.event_state == {"Unanswered": "NEEDS-ACTION"}[state]
     assert state in ctx.event_body
+
+
+@given(parsers.parse('a Meeting Thread booked for the weekly Event "{title}"'))
+def booked_weekly_meeting(ctx, monkeypatch, title):
+    ctx.calendar_now = datetime.fromisoformat("2026-10-27T15:00:00+00:00")
+    monkeypatch.setattr(clock, "now", lambda: ctx.calendar_now)
+    weekly_meeting_thread(ctx, title)
+    ctx.calendar_now += timedelta(minutes=2)
+
+
+@given("Jeremy marks the Meeting Thread Done")
+def mark_meeting_done(ctx):
+    inbox.act(ctx.db, ctx.thread.id, inbox.Done())
+    ctx.before_held_audit = inbox.thread_view(ctx.db, ctx.thread.id)["audit"]
+
+
+@given(parsers.parse('Jeremy snoozes the Meeting Thread until "{iso}"'))
+def snooze_meeting(ctx, iso):
+    inbox.act(ctx.db, ctx.thread.id, inbox.Snooze(datetime.fromisoformat(iso)))
+    ctx.before_held_audit = inbox.thread_view(ctx.db, ctx.thread.id)["audit"]
+
+
+@when(parsers.parse('Held runs at "{iso}"'))
+def record_held(ctx, iso):
+    ctx.calendar_now = datetime.fromisoformat(iso)
+    meetings.held(ctx.db, ctx.calendar_now)
+
+
+@when(parsers.parse('Wake runs before Held at "{iso}"'))
+def wake_before_held(ctx, iso):
+    ctx.calendar_now = datetime.fromisoformat(iso)
+    inbox.wake(ctx.db, ctx.calendar_now)
+    meetings.held(ctx.db, ctx.calendar_now)
+
+
+@then(parsers.parse('the Thread has this many Held Activities: {count:d}'))
+def held_count(ctx, count):
+    messages = inbox.thread_view(ctx.db, ctx.thread.id)["messages"]
+    assert sum(m["data"]["meeting"]["what"] == "held" for m in messages) == count
+
+
+@then("the Thread has no new Audit entry")
+def no_new_held_audit(ctx):
+    assert inbox.thread_view(ctx.db, ctx.thread.id)["audit"] == ctx.before_held_audit
+
+
+@then("the Thread has exactly one new Audit entry caused by Wake")
+def wake_audit_only(ctx):
+    audit = inbox.thread_view(ctx.db, ctx.thread.id)["audit"]
+    assert audit[:-1] == ctx.before_held_audit
+    assert audit[-1]["cause"] == "woke"
+
+
+@then(parsers.parse('Jeremy can see "{text}" in the Done Thread timeline'))
+def render_held_timeline(ctx, tmp_path, text):
+    import asyncio
+    import contextlib
+    import sqlite3
+
+    from comms_terminal.tui import Console, TodayPage
+
+    path = str(tmp_path / "held-console.db")
+    with contextlib.closing(sqlite3.connect(path)) as copy:
+        ctx.db.backup(copy)
+
+    async def inspect():
+        async with Console(path).run_test(size=(160, 45)) as pilot:
+            main = pilot.app.main
+            tid = ctx.thread.id
+            main.go("view:0")
+            await pilot.pause()
+            todo = {r["id"] for r in main.current.rows if not r.get("header")}
+            main.go("today")
+            await pilot.pause()
+            assert isinstance(main.current, TodayPage)
+            today = {r["id"] for r in main.current.threads.rows if not r.get("header")}
+            main.open_thread(tid)
+            await pilot.pause()
+            tv = main.thread_view
+            assert tv.thread_id == tid
+            timeline = " ".join(str(w.render()) for w in tv.query(".msgs Static"))
+            return main.section, timeline, todo, today
+
+    section, timeline, ctx.todo_threads, ctx.today_threads = asyncio.run(inspect())
+    assert section == "view:2"  # Done
+    assert text in timeline
+
+
+@then("the Meeting Thread is absent from Todo and Today Threads")
+def held_not_in_todo_or_today(ctx):
+    assert ctx.thread.id not in ctx.todo_threads | ctx.today_threads

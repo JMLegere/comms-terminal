@@ -988,7 +988,7 @@ def wake_loop(db_path: str, stop: threading.Event, every: float = 60, kick: thre
             with commands.service(db, commands.said("Wake")):  # the pass is one Service Command (ADR 0021)
                 now = clock.now()
                 inbox.wake(db, now)
-                meetings.held(db, now)  # an ended Meeting occurrence puts its Thread in Todo (FR-OA-13)
+                meetings.held(db, now)  # record ended occurrences without changing Thread Status (FR-ICA-1)
                 if senders is not None:
                     send_due(db, senders, now)
                     promises.alert(db, alert_sender(db, senders), now)  # the one At-risk SMS (ADR 0026)

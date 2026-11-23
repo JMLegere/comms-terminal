@@ -4,6 +4,8 @@ Status: accepted (2026-10-24). Supersedes the 2026-10-13 decision "meetings aren
 
 Jeremy's Organization actions were scattered across Attio, Tana, Linear, and the console, and Organizations went quiet unseen (`.agents/discovery/2026-10-24-pipeline-account-actions.md`). Every GTM action ends in a message or a meeting, and "a meeting is just synchronous comms", like the Phone calls that already sit on Threads. So Google Calendar becomes a read-only Platform: an Event with an attendee outside agentmaple.com puts a Meeting Activity (where: Google Meet, Zoom, Microsoft Teams, phone, or in person) on a Thread, one Thread per Event or repeating series. A new such Thread starts in Todo like every new Thread; the Thread goes to Todo when the Meeting ends or is cancelled or declined; Tana's summary attaches like a Call transcript and never changes Status. Only Events booked after this ships become Threads, including invites Jeremy declined or has not answered. With meetings on Threads, an Organization needs no separate next-step or task object: it is Unattended when its People have no Todo or Snoozed Thread and no unfinished Enrollment.
 
+**2026-11-23 amendment ([FR-ICA-1–2](../prd.md#held-activity)):** Supersedes only the former Held transition to Todo (FR-OA-13 and decision #142). An eligible Held Activity records history without moving Status, changing timer deadlines, or adding a Status Audit entry. Timed Wake is independent. Booking scope, cancellation, attendee decline, and Jeremy's own Response rules are unchanged.
+
 ## Considered Options
 
 - **Meetings stay calendar context only** (the 2026-10-13 decision). Rejected: meeting prep and follow-up then need a second to-do object beside Threads, which is the scattered-actions problem again.

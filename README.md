@@ -106,7 +106,7 @@ The console opens on **Today** (`1`): Todo Threads grouped by Case, Due Tasks, D
 4. **Send the Reply Drafts.** Todo ends with the Threads whose Reply Draft is written, often by an agent. Read each, edit, and send it with `ctrl+enter`. Then clear the New Thread Drafts on Drafts (`6`) the same way, or delete one with `x`.
 5. **Settle Paused Enrollments.** Someone replied, so the Sequence waits for you: `r` resumes it, `f` finishes it (Goal met, Not Right Now, Lost, …).
 6. **Bring back Unattended Organizations.** Open one, then enroll a Person in a Sequence (`s` on their page) or set the Organization's Stage (`s`).
-7. **After each meeting**, its Thread returns to Todo. Write the follow-up there.
+7. **After a Meeting or Block**, find Held in its Thread's timeline. Held does not add or remove the Thread from Todo or change its deadlines. Snoozed Threads still wake when due.
 
 Hand work to an agent. Press `y` on a Thread or Draft to copy it as Markdown, or let the agent read it with `comms-terminal thread ID`. The agent writes Drafts through the CLI and never sends. Drafts it prepares appear on Today and Drafts (`6`). An open Draft with no unsaved typing shows the agent's change; if you were typing, your save is the most recent and wins. Review it, then send.
 
