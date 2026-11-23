@@ -85,7 +85,7 @@ export default class Promises extends View {
         this.view = await call("promises.page");
         this.error = null;
         const rows = promiseRows(this.view).filter((r) => r.p);
-        if (shared("page") === "promises" && !rows.some((r) => r.p.id === shared("promise"))) this.select(rows[0]?.p);
+        if (shared("page") === "promises") this.select((rows.find((r) => r.p.id === shared("promise")) ?? rows[0])?.p);
       } catch (e) {
         this.error = String(e);
       }

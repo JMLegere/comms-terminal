@@ -4132,6 +4132,71 @@
    }
   },
   {
+   "name": "prep.brief",
+   "summary": "Read the selected Meeting's pinned Brief without storing it.",
+   "x-panel": false,
+   "params": [
+    {
+     "name": "meeting_id",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {
+     "oneOf": [
+      {
+       "type": "object",
+       "required": [
+        "status",
+        "text"
+       ],
+       "additionalProperties": false,
+       "properties": {
+        "status": {
+         "const": "ready"
+        },
+        "text": {
+         "type": "string",
+         "minLength": 1
+        }
+       }
+      },
+      {
+       "type": "object",
+       "required": [
+        "status"
+       ],
+       "additionalProperties": false,
+       "properties": {
+        "status": {
+         "enum": [
+          "missing",
+          "unavailable",
+          "timeout"
+         ]
+        }
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
    "name": "promises.page",
    "summary": "The Promises page (FR-PR-8): owed Promises in sections Overdue, Urgent, At risk, Today, This week, Later and Tentative, each with its People, links, `slack_time` minutes (Slack-time), `risk` and `draft_ready`; `captured` is where Promise capture is up to, or null. Read-only: only an agent changes Promises (ADR 0024).",
    "params": [

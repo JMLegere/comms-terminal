@@ -7,8 +7,10 @@ import socket
 import stat
 import sys
 import threading
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -133,6 +135,165 @@ def test_panels_cannot_send_schedule_or_undo(laptop_core):
     no_origin = c.handle({"jsonrpc": "2.0", "id": 2, "method": "send.reply", "params": {"thread_id": "t", "text": "x"}})
     assert no_origin["error"]["code"] == -32012  # least privilege: an unnamed Origin is a Panel
     assert "result" in call(c, "cases.list", origin="panel")  # Panels still read
+
+
+def test_prep_brief_rejects_panel_and_implicit_origin(laptop_core, monkeypatch):
+    c, _, _ = laptop_core
+    monkeypatch.setattr(remote, "post", lambda *a, **k: pytest.fail("Panel reached the Service"))
+    meeting = {"meeting_id": "tana:event:site-visit"}
+    assert call(c, "prep.brief", origin="panel", **meeting)["error"]["code"] == -32012
+    no_origin = c.handle({"jsonrpc": "2.0", "id": 1, "method": "prep.brief", "params": meeting})
+    assert no_origin["error"]["code"] == -32012
+
+
+@pytest.mark.parametrize("params", [
+    {},
+    {"meeting_id": 2},
+    {"meeting_id": "tana:text:brief"},
+    {"meeting_id": "tana:event:site-visit", "brief": "https://example.test/other"},
+])
+def test_prep_brief_rejects_invalid_view_params_before_transport(laptop_core, monkeypatch, params):
+    c, _, _ = laptop_core
+    monkeypatch.setattr(remote, "post", lambda *a, **k: pytest.fail("invalid params reached the Service"))
+    assert call(c, "prep.brief", **params)["error"]["code"] == -32602
+
+
+def test_prep_brief_view_reads_fresh_without_writes_or_offline_replay(laptop_core, monkeypatch):
+    c, rem, _ = laptop_core
+    meeting = {"meeting_id": "tana:event:site-visit"}
+    asked = []
+    answers = iter([
+        {"status": "ready", "text": "First visit Brief"},
+        {"status": "missing"},
+        {"status": "ready", "text": "Brief after reconnect"},
+    ])
+
+    def post(target, path, payload, timeout, **options):
+        asked.append((path, payload))
+        return 200, next(answers)
+
+    monkeypatch.setattr(remote, "post", post)
+    before = c.call_from_thread(lambda: c.db.total_changes)
+    assert call(c, "prep.brief", **meeting)["result"] == {"status": "ready", "text": "First visit Brief"}
+    assert call(c, "prep.brief", **meeting)["result"] == {"status": "missing"}
+    rem.online = False
+    assert call(c, "prep.brief", **meeting)["result"] == {"status": "unavailable"}
+    assert asked == [("/prep/brief", meeting)] * 2
+    rem.online = True
+    rem.link.up = False
+    assert call(c, "prep.brief", **meeting)["result"] == {"status": "unavailable"}
+    assert asked == [("/prep/brief", meeting)] * 2
+    rem.link.up = True
+    assert call(c, "prep.brief", **meeting)["result"] == {"status": "ready", "text": "Brief after reconnect"}
+    assert asked == [("/prep/brief", meeting)] * 3
+    assert rem.pending.empty() and rem.unconfirmed == []
+    assert c.call_from_thread(lambda: c.db.total_changes) == before
+
+
+def test_prep_brief_does_not_block_local_api_queries(laptop_core, tmp_path, monkeypatch):
+    c, _, _ = laptop_core
+    release = threading.Event()
+
+    def post(target, path, payload, timeout, **options):
+        assert release.wait(5)
+        return 200, {"status": "missing"}
+
+    monkeypatch.setattr(remote, "post", post)
+    path = tmp_path / "core.sock"
+    server = core.serve(c, path)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        with socket.socket(socket.AF_UNIX) as conn:
+            conn.settimeout(3)
+            conn.connect(str(path))
+            with conn.makefile("rwb") as rpc:
+                for id_, method, params in [
+                    (1, "prep.brief", {"origin": "view", "meeting_id": "tana:event:site-visit"}),
+                    (2, "cases.list", {}),
+                ]:
+                    rpc.write(json.dumps({"jsonrpc": "2.0", "id": id_, "method": method, "params": params}).encode() + b"\n")
+                rpc.flush()
+                assert json.loads(rpc.readline()) == {"jsonrpc": "2.0", "id": 2, "result": []}
+                release.set()
+                assert json.loads(rpc.readline()) == {"jsonrpc": "2.0", "id": 1, "result": {"status": "missing"}}
+    finally:
+        release.set()
+        server.shutdown()
+        server.server_close()
+
+
+@contextmanager
+def prep_rpc(c, tmp_path):
+    path = tmp_path / "core.sock"
+    server = core.serve(c, path)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        with socket.socket(socket.AF_UNIX) as conn:
+            conn.settimeout(3)
+            conn.connect(str(path))
+            with conn.makefile("rwb") as rpc:
+                yield rpc
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_prep_brief_rejects_duplicate_meeting_id_on_local_socket(laptop_core, tmp_path, monkeypatch):
+    c, _, _ = laptop_core
+    looked_up = []
+
+    def post(target, path, payload, timeout, **options):
+        looked_up.append(payload)
+        return 200, {"status": "missing"}
+
+    monkeypatch.setattr(remote, "post", post)
+    with prep_rpc(c, tmp_path) as rpc:
+        rpc.write(b'{"jsonrpc":"2.0","id":1,"method":"prep.brief","params":{"origin":"view",'
+                  b'"meeting_id":"tana:event:site-visit","meeting_id":"tana:event:other"}}\n')
+        rpc.flush()
+        answer = json.loads(rpc.readline())
+        assert answer["id"] == 1 and "error" in answer and "result" not in answer
+        assert not looked_up
+        rpc.write(b'{"jsonrpc":"2.0","id":2,"method":"cases.list"}\n')
+        rpc.flush()
+        assert json.loads(rpc.readline()) == {"jsonrpc": "2.0", "id": 2, "result": []}
+
+
+@pytest.mark.parametrize("waited, status, relay_timeouts", [
+    (None, "missing", [7]), (3, "missing", [4]), (8, "timeout", []),
+], ids=["direct", "queued-partial-budget", "queued-expired"])
+def test_prep_brief_deadline_includes_queue_wait(
+    laptop_core, tmp_path, monkeypatch, waited, status, relay_timeouts,
+):
+    c, _, _ = laptop_core
+    ticks, timeouts, jobs = [100.0], [], []
+    submitted = threading.Event()
+    monkeypatch.setattr(core.time, "monotonic", lambda: ticks[0])
+
+    def submit(fn, *args, **kwargs):
+        jobs.append((fn, args, kwargs))
+        submitted.set()
+
+    def post(target, path, payload, timeout, **options):
+        timeouts.append(timeout)
+        return 200, {"status": "missing"}
+
+    monkeypatch.setattr(core, "ThreadPoolExecutor", lambda **options: SimpleNamespace(submit=submit))
+    monkeypatch.setattr(remote, "post", post)
+    if waited is None:
+        answer = call(c, "prep.brief", meeting_id="tana:event:site-visit")
+    else:
+        with prep_rpc(c, tmp_path) as rpc:
+            rpc.write(b'{"jsonrpc":"2.0","id":1,"method":"prep.brief",'
+                      b'"params":{"origin":"view","meeting_id":"tana:event:site-visit"}}\n')
+            rpc.flush()
+            assert submitted.wait(3)
+            ticks[0] += waited
+            fn, args, kwargs = jobs.pop()
+            fn(*args, **kwargs)
+            answer = json.loads(rpc.readline())
+    assert answer["result"] == {"status": status}
+    assert timeouts == relay_timeouts
 
 
 def test_errors_are_json_rpc_errors(laptop_core):
@@ -299,6 +460,57 @@ def test_drafts_answer_with_names_problems_and_the_editor_details(demo_core):
     lines = call(demo_core, "today.side", kind="paused", id=str(person[0]))["result"]
     assert lines[0] == [[person[1], None, True, None]]
     assert lines[-1][0][0] == "r resume · f finish · enter opens the Person"
+
+
+@pytest.mark.parametrize("prep_minutes, travel_minutes, failed, prep_shown, travel_shown, leave_shown", [
+    (None, None, True, "unknown", "unknown", "unknown"),
+    (0, 0, True, "0m", "0m", "12:00"),
+    (None, 7, True, "unknown", "7m", "11:53"),
+    (17, 0, False, "17m", "0m", "12:00"),
+])
+def test_app_today_prep_keeps_missing_times_distinct_from_zero(
+    demo_core, monkeypatch, prep_minutes, travel_minutes, failed, prep_shown, travel_shown, leave_shown,
+):
+    """P10: Today Detail reads raw Prep times, even after a failed refresh, without changing the old view."""
+    import re
+
+    from comms_terminal import clock
+
+    now = datetime(2026, 11, 16, 14, tzinfo=timezone.utc)
+    monkeypatch.setattr(clock, "now", lambda: now)
+    event = "tana:event:walkthrough"
+    brief = "https://example.test/walkthrough"
+    with inbox.connect(demo_core.db_path) as db:
+        db.execute(
+            "INSERT INTO preps (event_uri, title, start_at, end_at, has_prep, brief, prep_minutes, travel_minutes, prepped)"
+            " VALUES (?, 'Site walkthrough', ?, ?, 1, ?, ?, ?, 1)",
+            (event, "2026-11-16T16:00:00+00:00", "2026-11-16T17:00:00+00:00", brief, prep_minutes, travel_minutes),
+        )
+        db.execute("INSERT INTO prep_read (id, at, error) VALUES (1, ?, ?)",
+                   (now.isoformat(), "Tana unreadable" if failed else None))
+    before = demo_core.call_from_thread(lambda: demo_core.db.total_changes)
+
+    def detail(kind):
+        answer = call(demo_core, "today.side", kind=kind, id=event)
+        assert "result" in answer, answer
+        lines = answer["result"]
+        text = " ".join(" ".join(segment[0] for segment in line) for line in lines)
+        return re.sub(r"\s+", " ", text).lower(), [seg[3] for line in lines for seg in line if seg[3]]
+
+    text, links = detail("prep_today")
+    assert "site walkthrough" in text
+    assert ("not prepared" if failed else "prepped") in text, text
+    assert bool(re.search(r"last[ -](known|synced)", text)) is failed, text
+    for label, value in [("prep", prep_shown), ("travel", travel_shown), ("leave by", leave_shown)]:
+        assert re.search(rf"\b{label}:? {value}\b", text), text
+    assert links == [brief]
+
+    legacy, legacy_links = detail("promise")
+    legacy_work = (prep_minutes or 0) if failed else 0  # Prepped formerly showed remaining work, not raw Prep.
+    assert f"prep {legacy_work}m" in legacy and f"travel {travel_minutes or 0}m" in legacy
+    assert f"leave by {'11:53' if travel_minutes else '12:00'}" in legacy
+    assert not re.search(r"last[ -](known|synced)", legacy) and legacy_links == [f"'{brief}'"]
+    assert demo_core.call_from_thread(lambda: demo_core.db.total_changes) == before
 
 
 def test_an_answer_that_only_confirms_a_laptop_write_reloads_nothing(service, laptop_core):

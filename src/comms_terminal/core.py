@@ -30,7 +30,7 @@ from datetime import datetime
 from importlib import resources
 from pathlib import Path
 
-from . import actions, agent, calendar, commands, files, inbox, pipeline, remote, render, sequences, writers
+from . import actions, agent, calendar, commands, files, inbox, pipeline, prep, remote, render, sequences, writers
 
 LOG = logging.getLogger("comms_terminal.core")
 GENERATION = 1  # the Local API's protocol generation: a breaking change starts the next one (ADR 0013)
@@ -441,6 +441,15 @@ def _today_side(core, db, kind, id):
             row = next((r for rows in promises.view(db)["sections"].values() for r in rows if r["id"] == id), None)
             return segments(promise_markup(row) if row else "[#928374]That Meeting is no longer coming up.[/]")
         return segments(promise_markup(promises.promise(db, id)))
+    if kind == "prep_today":
+        from . import clock, prep, promises
+        from .tui import prep_markup
+        now = clock.now()
+        meeting = next((m for m in prep.rows(db, now) if m["event_uri"] == id), None)
+        if meeting is None:
+            return segments("[#928374]That Meeting is no longer coming up.[/]")
+        return segments(prep_markup(promises.prep_row(meeting), now,
+                                    raw_times=(meeting["prep_minutes"], meeting["travel_minutes"])))
     if kind == "paused":
         p = db.execute("SELECT display_name FROM persons WHERE id = ?", (id,)).fetchone()
         markup = f"[b]{p[0] if p else ''}[/]\n\n" + sequence_section(db, id, keys=False) \
@@ -1081,7 +1090,7 @@ class Core:
 
     # The Local API.
 
-    def handle(self, req: dict, write=None) -> dict | None:
+    def handle(self, req: dict, write=None, *, prep_deadline=None) -> dict | None:
         rid = req.get("id")
         try:
             if req.get("jsonrpc") != "2.0" or not isinstance(req.get("method"), str):
@@ -1089,7 +1098,7 @@ class Core:
             params = req.get("params") or {}
             if not isinstance(params, dict):
                 raise ApiError(-32602, "params must be an object")
-            result = self.dispatch(req["method"], dict(params), write)
+            result = self.dispatch(req["method"], dict(params), write, prep_deadline=prep_deadline)
             return None if rid is None else {"jsonrpc": "2.0", "id": rid, "result": result}
         except ApiError as e:
             error = {"code": e.code, "message": str(e)} | ({"data": e.data} if e.data is not None else {})
@@ -1105,7 +1114,7 @@ class Core:
             error = {"code": -32000, "message": f"{type(e).__name__}: {e}"}
         return None if rid is None else {"jsonrpc": "2.0", "id": rid, "error": error}
 
-    def dispatch(self, method: str, params: dict, write=None):
+    def dispatch(self, method: str, params: dict, write=None, *, prep_deadline=None):
         origin = params.pop("origin", "panel")  # least privilege: only the App's views say "view"
         if origin not in ORIGINS:
             raise ApiError(-32602, "origin must be view or panel")
@@ -1133,6 +1142,8 @@ class Core:
             missing = {p for p, (_, req) in spec.items() if req} - set(params)
             if missing or set(params) - set(spec):
                 raise ApiError(-32602, f"expected params {sorted(spec)}, got {sorted(params)}")
+            if method == "prep.brief":
+                return fn(self, **params, deadline=prep_deadline)
             return fn(self, **params)
         raise ApiError(-32601, f"no method {method}")
 
@@ -1198,6 +1209,18 @@ class Core:
 
     def slack_reactions(self, payload):
         return remote.socket_slack_reactions(self._socket())(payload)
+
+    def prep_brief(self, meeting_id, *, deadline=None):
+        if deadline is None:
+            deadline = time.monotonic() + remote.PREP_BRIEF_TIMEOUT
+        if not prep.valid_meeting_id(meeting_id):
+            raise ApiError(-32602, "expected a valid Meeting ID")
+        if time.monotonic() >= deadline:
+            return {"status": "timeout"}
+        if self.remote is not None and (not self.remote.online or not self.remote.link.ready()):
+            return {"status": "unavailable"}
+        target = self._socket()
+        return remote.socket_prep_brief(target)(meeting_id, deadline=deadline) if target else {"status": "unavailable"}
 
     def context(self, source, emails, domains):
         """A Context source's answer for these addresses, as the Console's ContextSection.fetch: `answer` is None
@@ -1274,6 +1297,8 @@ SERVICE = {  # method -> (Core method, {param: (json type, required)}, summary)
     "context.section": (Core.context_section, {"source": ("string", True), "emails": ("array", True),
                                                 "domains": ("array", True)},
                         "A Context source's section (Attio, Tana, Linear) drawn as the Console draws it, or null."),
+    "prep.brief": (Core.prep_brief, {"meeting_id": ("string", True)},
+                   "Read the selected Meeting's pinned Brief without storing it."),
     "upload": (Core.upload, {"owner_kind": ("string", True), "owner_id": ("string", True), "path": ("string", True)},
                "Stage a file from this machine on a Draft or Thread."),
 }
@@ -1349,6 +1374,13 @@ def openrpc() -> dict:
     for m in methods:
         m["params"].append(ORIGIN)
         m["result"] = {"name": "result", "schema": {}}
+        if m["name"] == "prep.brief":
+            m["result"]["schema"] = {"oneOf": [
+                {"type": "object", "required": ["status", "text"], "additionalProperties": False,
+                 "properties": {"status": {"const": "ready"}, "text": {"type": "string", "minLength": 1}}},
+                {"type": "object", "required": ["status"], "additionalProperties": False,
+                 "properties": {"status": {"enum": ["missing", "unavailable", "timeout"]}}},
+            ]}
     return {"openrpc": "1.3.2", "info": {"title": "Comms Terminal Local API", "version": f"{GENERATION}.0.0",
                                          "description": "ADR 0013. Values use remote.encode's tags ($dt, $dc, $tuple,"
                                                         " $bytes, $dict)."},
@@ -1393,19 +1425,30 @@ def serve(core: Core, path: Path) -> _Server:
                     with lock:
                         self.wfile.write(json.dumps(message).encode() + b"\n")
                         self.wfile.flush()
-                def answer_later(req):
-                    answer = core.handle(req, write)
+                def answer_later(req, prep_deadline=None):
+                    answer = core.handle(req, write, prep_deadline=prep_deadline)
                     if answer is not None:
                         write(answer)
                 for line in self.rfile:
+                    admitted = time.monotonic()
                     try:
                         req = json.loads(line)
                     except ValueError:
                         write({"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "parse error"}})
                         continue
                     if isinstance(req, dict) and req.get("method") in NETWORK:
+                        deadline = None
+                        if req["method"] == "prep.brief":
+                            deadline = admitted + remote.PREP_BRIEF_TIMEOUT
+                            try:
+                                json.loads(line, object_pairs_hook=remote.unique_json_fields)
+                            except ValueError:
+                                if req.get("id") is not None:
+                                    write({"jsonrpc": "2.0", "id": req["id"],
+                                           "error": {"code": -32602, "message": "duplicate JSON field"}})
+                                continue
                         # Answered by id when the Service replies; calls after it are not held up (NFR-APP-1).
-                        network.submit(answer_later, req)
+                        network.submit(answer_later, req, deadline)
                         continue
                     answer = core.handle(req, write) if isinstance(req, dict) else \
                         {"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "invalid request"}}

@@ -26,12 +26,16 @@ import subprocess
 import threading
 import time
 import uuid
+from contextlib import suppress
 from datetime import date, datetime
 from pathlib import Path
 
 from . import clock, commands, files, inbox, issues, pipeline, promises, sequences, writers
 
 LOG = logging.getLogger("comms_terminal.remote")
+PREP_BRIEF_TIMEOUT = 7
+MAX_PREP_BRIEF_TEXT = 64 * 1024  # UTF-8 bytes
+MAX_PREP_BRIEF_RESPONSE = 6 * MAX_PREP_BRIEF_TEXT + 1024  # JSON escaping and envelope
 
 CALLS = writers.WRITERS  # name -> how the console runs it (writers.KINDS); each writer declares its own
 MODULES = {"inbox": inbox, "sequences": sequences, "pipeline": pipeline, "files": files, "issues": issues,
@@ -76,39 +80,84 @@ class _CommandConnection(http.client.HTTPConnection):
         mine.settimeout(self.timeout)
         self.sock = mine
 
-    def reap(self):
+    def reap(self, timeout=5):
         """After the body is read (http.client closes an HTTP/1.0 connection before that, so close() must not
         wait on the relay still writing it)."""
         if self.proc is not None:
             try:
-                self.proc.wait(5)
+                self.proc.wait(timeout)
             except Exception:  # noqa: BLE001 - never leave a relay running
                 self.proc.kill()
                 self.proc.wait()
             self.proc = None
 
 
-def post(socket_path, path, payload, timeout=30) -> tuple[int, dict]:
-    """POST JSON to the service: `socket_path` is its Unix socket, or a relay command (a list) to run."""
+def _interrupt(sock):
+    with suppress(OSError):
+        sock.shutdown(socket.SHUT_RDWR)
+
+
+def unique_json_fields(pairs):
+    fields = dict(pairs)
+    if len(fields) != len(pairs):
+        raise ValueError("duplicate JSON field")
+    return fields
+
+
+def post(socket_path, path, payload, timeout=30, *, max_response_bytes=None, deadline=None) -> tuple[int, dict]:
+    """POST JSON over the Unix socket or relay command. Bounded reads share one deadline with relay cleanup."""
+    if deadline is None and max_response_bytes is not None:
+        deadline = time.monotonic() + timeout
+    if deadline is not None:
+        timeout = min(timeout, deadline - time.monotonic())
+        if timeout <= 0:
+            raise ReplyError("request deadline expired", 504)
     conn = _CommandConnection(socket_path) if isinstance(socket_path, list) else _UnixConnection(socket_path)
     conn.timeout = timeout
+    timer = None
     try:
         conn.connect()
     except OSError as e:
+        conn.close()
         raise ReplyError(f"service not reachable: {e}", 503) from e
     try:
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError()
+            # A socket timeout is per receive; interrupt even a response that trickles bytes.
+            timer = threading.Timer(remaining, _interrupt, (conn.sock,))
+            timer.daemon = True
+            timer.start()
         conn.request("POST", path, json.dumps(payload), {"Content-Type": "application/json"})
-        r = conn.getresponse()
-        raw = r.read()
+        with conn.getresponse() as r:
+            if deadline is not None and time.monotonic() >= deadline:
+                raise TimeoutError()
+            if max_response_bytes is None:
+                raw = r.read()
+            elif r.status != 200:
+                return r.status, {}
+            elif r.length is not None and r.length > max_response_bytes:
+                return 502, {}
+            else:
+                raw = r.read(max_response_bytes + 1)
+                if time.monotonic() >= deadline:
+                    raise TimeoutError()
+                if len(raw) > max_response_bytes:
+                    return 502, {}
+                if r.length:  # read(n) may silently return a short HTTP body
+                    raise http.client.IncompleteRead(b"", r.length)
     except (OSError, http.client.HTTPException) as e:  # the request may have reached the service
         raise ReplyError(f"no response from the service: {e}", 504) from e
     finally:
+        if timer is not None:
+            timer.cancel()
         conn.close()
         if isinstance(conn, _CommandConnection):
-            conn.reap()
+            conn.reap(5 if deadline is None else max(0, deadline - time.monotonic()))
     try:
-        return r.status, json.loads(raw or b"{}")
-    except ValueError:  # an error page, not JSON (an older service has no such route)
+        return r.status, json.loads(raw or b"{}", object_pairs_hook=unique_json_fields if deadline is not None else None)
+    except (ValueError, RecursionError):  # an error page, not JSON (an older service has no such route)
         return r.status, {"error": f"HTTP {r.status}"}
 
 
@@ -192,6 +241,38 @@ def socket_context(socket_path, source):
         if status != 200:
             raise ReplyError(body.get("error", f"HTTP {status}"))
         return body
+    return fetch
+
+
+def prep_brief_result(body):
+    """Only complete, bounded Brief text crosses the private wire on success. Failures carry status alone."""
+    if isinstance(body, dict):
+        status = body.get("status")
+        if status in ("missing", "unavailable", "timeout"):
+            return {"status": status}
+        if status == "ready" and set(body) == {"status", "text"}:
+            text = body["text"]
+            if isinstance(text, str) and text.strip():
+                with suppress(UnicodeError):
+                    if len(text.encode()) <= MAX_PREP_BRIEF_TEXT:
+                        return {"status": "ready", "text": text}
+    return {"status": "unavailable"}
+
+
+def socket_prep_brief(socket_path):
+    """One view-only Prep read, never queued or retried."""
+    def fetch(meeting_id, *, deadline=None):
+        timeout = PREP_BRIEF_TIMEOUT if deadline is None else deadline - time.monotonic()
+        if timeout <= 0:
+            return {"status": "timeout"}
+        try:
+            status, body = post(socket_path, "/prep/brief", {"meeting_id": meeting_id}, timeout=timeout,
+                                max_response_bytes=MAX_PREP_BRIEF_RESPONSE, deadline=deadline)
+        except ReplyError as error:
+            status, body = error.status, None
+        if status == 504:
+            return {"status": "timeout"}
+        return prep_brief_result(body if status == 200 else None)
     return fetch
 
 

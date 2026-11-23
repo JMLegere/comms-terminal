@@ -19,6 +19,7 @@ import threading
 import time
 import urllib.parse
 from collections import Counter
+from contextlib import closing
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -485,7 +486,7 @@ def _verify_resend(headers, body: bytes, key: bytes, now: datetime) -> bool:
 class _Handler(BaseHTTPRequestHandler):
     routes: dict = {}  # path -> callable(headers, body) -> (status, content_type, bytes)
 
-    def _resend_body(self) -> tuple[int, bytes]:
+    def _bounded_body(self, max_bytes: int, timeout: float) -> tuple[int, bytes]:
         lengths = self.headers.get_all("Content-Length", [])
         if self.headers.get_all("Transfer-Encoding", []):
             return 400, b""
@@ -493,10 +494,10 @@ class _Handler(BaseHTTPRequestHandler):
             return 411, b""
         if len(lengths) != 1 or not re.fullmatch(r"[0-9]+", lengths[0]):
             return 400, b""
-        if len(lengths[0]) > 10 or int(lengths[0]) > RESEND_MAX:
+        if len(lengths[0]) > 10 or int(lengths[0]) > max_bytes:
             return 413, b""
         length, body = int(lengths[0]), bytearray()
-        deadline, previous = time.monotonic() + RESEND_TIMEOUT, self.connection.gettimeout()
+        deadline, previous = time.monotonic() + timeout, self.connection.gettimeout()
         try:
             while len(body) < length:
                 left = deadline - time.monotonic()
@@ -516,15 +517,18 @@ class _Handler(BaseHTTPRequestHandler):
             self.connection.settimeout(previous)
 
     def do_POST(self):
-        if self.path != "/hooks/resend":
+        route = self.routes.get(self.path)
+        prep_read = self.path == "/prep/brief" and route is not None
+        bounded = self.path == "/hooks/resend" or prep_read
+        if not bounded:
             # Drain legacy bodies before 404: Unix clients may still be writing an unknown context request.
             body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
-        route = self.routes.get(self.path)
         if route is None:
             self.send_error(404)
             return
-        if self.path == "/hooks/resend":
-            status, body = self._resend_body()
+        if bounded:
+            limits = (4096, 1) if prep_read else (RESEND_MAX, RESEND_TIMEOUT)
+            status, body = self._bounded_body(*limits)
             if status != 200:
                 self.close_connection = True
                 ctype, out = "text/plain", b""
@@ -532,11 +536,22 @@ class _Handler(BaseHTTPRequestHandler):
                 status, ctype, out = route(self.headers, body)
         else:
             status, ctype, out = route(self.headers, body)
-        self.send_response(status)
-        self.send_header("Content-Type", ctype)
-        self.send_header("Content-Length", str(len(out)))
-        self.end_headers()
-        self.wfile.write(out)
+        previous = self.connection.gettimeout() if prep_read else None
+        try:
+            if prep_read:
+                self.connection.settimeout(1)  # a stalled Brief reader cannot hold the Service socket thread
+            self.send_response(status)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(out)))
+            self.end_headers()
+            self.wfile.write(out)
+        except OSError:
+            if not prep_read:
+                raise
+            self.close_connection = True
+        finally:
+            if prep_read:
+                self.connection.settimeout(previous)
 
     def address_string(self):  # Unix sockets have no peer address
         return "local"
@@ -555,8 +570,7 @@ class UnixHTTPServer(socketserver.ThreadingUnixStreamServer):
 
 def reply_server(db_path: str, socket_path: str, senders: Senders, contexts: dict | None = None,
                  writer: gcal.Client | None = None, kick: threading.Event | None = None) -> UnixHTTPServer:
-    """The local socket: POST /reply, POST /send-draft, POST /slack-conversations, POST /respond (through `writer`),
-    and POST /<source> for each Context source in `contexts` ({"tana": …})."""
+    """The local socket has private routes for replies, invite Responses, Context, Prep and the laptop copy."""
     # Reactions are a provider operation, not a remote /call ledger write.
     contexts = contexts or {}
     def reply(headers, body):
@@ -632,6 +646,27 @@ def reply_server(db_path: str, socket_path: str, senders: Senders, contexts: dic
             return status, "application/json", json.dumps(out).encode()
         return route
 
+    def prep_brief(body):
+        try:
+            payload = json.loads(body, object_pairs_hook=remote.unique_json_fields)
+        except (ValueError, RecursionError):
+            payload = None
+        if not isinstance(payload, dict) or set(payload) != {"meeting_id"} or not prep.valid_meeting_id(payload["meeting_id"]):
+            return 400, {"status": "unavailable"}
+        context = contexts.get("tana")
+        if context is None:
+            return 200, {"status": "unavailable"}
+        try:
+            uri = f"{Path(db_path).resolve().as_uri()}?mode=ro"
+            with closing(sqlite3.connect(uri, uri=True, timeout=0)) as db:
+                db.row_factory = sqlite3.Row
+                db.execute("PRAGMA query_only = ON")
+                return 200, remote.prep_brief_result(prep.brief(db, context.client, payload["meeting_id"]))
+        except TimeoutError:
+            return 200, {"status": "timeout"}
+        except Exception:  # never expose an underlying provider or SQLite message on this route
+            return 200, {"status": "unavailable"}
+
     if os.path.exists(socket_path):
         os.unlink(socket_path)
     old = os.umask(0o177)  # socket created 0600 (NFR-4)
@@ -639,6 +674,7 @@ def reply_server(db_path: str, socket_path: str, senders: Senders, contexts: dic
         return UnixHTTPServer(socket_path, _handler({"/reply": reply, "/send-draft": send_draft,
                                                          "/slack-conversations": slack_conversations, "/attio-people": attio_people, "/tana": context_route("tana"), "/attio": context_route("attio"), "/linear": linear_route,
                                                          "/slack-reactions": slack_reactions, "/respond": respond,
+                                                         "/prep/brief": json_route(prep_brief),
                                                          "/call": json_route(lambda b: _kicked(remote.handle_call(db_path, b), kick)),
                                                          "/sync": json_route(lambda b: remote.handle_sync(db_path, changes, b)),
                                                          "/raw": json_route(lambda b: remote.handle_raw(db_path, b))}))

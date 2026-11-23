@@ -8,12 +8,15 @@ and Meetings (the next upcoming and the last three) with their summaries and lin
 Nothing is written to Tana. Answers are cached for five minutes.
 """
 
+import json
 import threading
 import time
+import urllib.error
+from concurrent.futures import Future, InvalidStateError
 from datetime import datetime, timezone
 from urllib.parse import quote
 
-from .mcp import McpClient
+from .mcp import McpClient, McpError, _decode_reply
 
 from . import clock
 
@@ -21,10 +24,100 @@ MCP = "https://home.tana.inc/mcp"
 TOKEN = "https://login.tana.inc/oauth2/token"
 TTL = 300  # seconds an answer is reused
 PAST, UPCOMING = 3, 1
+PREP_WIRE_BYTES = 1024 * 1024  # JSON escaping and MCP framing can exceed the Brief's plain-text byte limit
 
 
 class Client(McpClient):
     mcp, token_url, name = MCP, TOKEN, "Tana"
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._prep_io = threading.Lock()
+
+    def _prep_http(self, msg, headers, remaining):
+        """Stop waiting on deadline even when DNS or a trickling HTTP response ignores inactivity timeouts."""
+        if not self._prep_io.acquire(blocking=False):
+            raise McpError("Tana Prep read already in progress")
+        reply = Future()
+
+        def fetch():
+            try:
+                response = self.http(self.mcp, json.dumps(msg).encode(), headers,
+                                     timeout=remaining(), max_bytes=PREP_WIRE_BYTES)
+                remaining()
+            except TimeoutError:
+                response = TimeoutError("Tana Prep read timed out")
+            except urllib.error.URLError as e:
+                response = (TimeoutError("Tana Prep read timed out") if isinstance(e.reason, TimeoutError)
+                            else McpError("Tana Prep read unavailable"))
+            except Exception:
+                response = McpError("Tana Prep read unavailable")
+            finally:
+                self._prep_io.release()
+            try:
+                reply.set_result(response)
+            except InvalidStateError:
+                pass  # The caller timed out and cancelled publication. Do not retain the late body.
+
+        try:
+            threading.Thread(target=fetch, daemon=True).start()
+        except RuntimeError:
+            self._prep_io.release()
+            raise McpError("Tana Prep read unavailable") from None
+        try:
+            response = reply.result(timeout=remaining())
+            remaining()
+        finally:
+            reply.cancel()
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    def read_prep_tool(self, name: str, deadline: float, **args) -> dict:
+        """One bounded read on the existing session. Never refresh, initialize, retry or change session state."""
+        expected = {"readEvent": {"eventUri"}, "readItems": {"ids"}}.get(name)
+        if expected is None or args.keys() != expected:
+            raise McpError("Unsupported Tana Prep read")
+
+        def remaining():
+            seconds = deadline - time.monotonic()
+            if seconds <= 0:
+                raise TimeoutError("Tana Prep read timed out")
+            return seconds
+
+        if not self.lock.acquire(timeout=remaining()):
+            raise TimeoutError("Tana Prep read timed out")
+        try:
+            if not self.access or clock.now() >= self.expires or self.session is None:
+                raise McpError("No current Tana session")
+            msg, headers = self._request("tools/call", {"name": name, "arguments": args})
+        finally:
+            self.lock.release()
+
+        try:
+            status, _, body = self._prep_http(msg, headers, remaining)
+            if status != 200 or len(body) > PREP_WIRE_BYTES:
+                raise McpError("Tana Prep read refused")
+            reply = _decode_reply(body)
+            if (not isinstance(reply, dict) or reply.get("jsonrpc") != "2.0" or "error" in reply
+                    or type(reply.get("id")) is not int or reply["id"] != msg["id"]):
+                raise McpError("Invalid Tana Prep reply")
+            result = reply["result"]
+            if not isinstance(result, dict) or result.get("isError", False) is not False:
+                raise McpError("Tana Prep read failed")
+            if "structuredContent" in result:
+                result = result["structuredContent"]
+            else:
+                [block] = result["content"]
+                if block["type"] != "text":
+                    raise McpError("Unsupported Tana Prep reply")
+                result = json.loads(block["text"])
+            if not isinstance(result, dict):
+                raise McpError("Invalid Tana Prep payload")
+            remaining()
+            return result
+        except (ValueError, TypeError, KeyError, RecursionError):
+            raise McpError("Invalid Tana Prep response") from None
 
 
 def _items(client, **args) -> list[dict]:

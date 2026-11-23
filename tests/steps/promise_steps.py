@@ -7,6 +7,12 @@ import pytest
 from pytest_bdd import given, parsers, then, when
 
 from comms_terminal import clock, commands, inbox, promises, sequences
+from test_app_promises import (assert_today_detail, assert_today_fallback, assert_today_pane_moves,
+                               assert_today_panes, assert_today_return, assert_today_thread_link, run_view)
+from test_app_promises import (assert_brief_discarded_on_exit, assert_brief_offline, assert_brief_outcome,
+                               assert_brief_refresh_after_reconnect, assert_late_brief_replies_ignored,
+                               assert_literal_brief, assert_local_brief_timeout, assert_no_background_brief,
+                               assert_one_brief_and_immediate_metadata, assert_return_to_a, brief_trace)
 
 ME = "jeremy@agentmaple.example"
 NOW = datetime(2026, 11, 16, 14, 0, tzinfo=timezone.utc)  # Monday 10:00 Halifax
@@ -226,3 +232,163 @@ def task_due(owed, day):
     at = owed.db.execute("SELECT due_at FROM tasks WHERE enrollment_id = ? AND state = 'DUE'",
                          (owed.enrollment,)).fetchone()[0]
     assert datetime.fromisoformat(at).astimezone(sequences.LOCAL).date() == date.fromisoformat(day)
+
+
+@pytest.fixture(scope="module")
+def app_promise_trace():
+    return run_view()
+
+
+@given(parsers.parse('Today in the App shows a "{kind}" Promise'), target_fixture="app_item_kind")
+def app_promise(kind):
+    return kind
+
+
+@given("Today in the App shows Prep for a Meeting", target_fixture="app_item_kind")
+def app_prep():
+    return "prep"
+
+
+@when("Jeremy presses Enter on that Promise", target_fixture="app_activation")
+@when("Jeremy presses Enter on that Prep", target_fixture="app_activation")
+def app_activate(app_promise_trace, app_item_kind):
+    return app_promise_trace["activation"][app_item_kind]
+
+
+@then("its read-only Promise Detail has focus on Today and shows its history")
+@then("the Meeting's read-only Prep Detail has focus on Today")
+def app_detail(app_activation, app_item_kind):
+    assert_today_detail(app_item_kind, app_activation)
+
+
+@then("Escape returns to the same Promise row")
+@then("Escape returns to the same Prep row")
+def app_return(app_activation, app_item_kind):
+    assert_today_return(app_activation["back"], app_item_kind)
+
+
+@when("Jeremy activates the Thread link in its Promise Detail", target_fixture="app_link")
+def app_thread_link(app_promise_trace):
+    return app_promise_trace["threadLink"]
+
+
+@then("the linked Thread opens without a write")
+def app_thread(app_activation, app_link):
+    assert_today_detail("linked", app_activation)
+    assert_today_thread_link(app_link)
+
+
+@when("that Prep disappears while its Detail has focus", target_fixture="app_fallback")
+def app_remove_prep(app_promise_trace):
+    return app_promise_trace
+
+
+@then("Escape returns to the next valid Today row without obsolete Prep Detail")
+def app_return_after_prep_removed(app_fallback):
+    assert_today_fallback(app_fallback["removed"])
+
+
+@given("Today in the App shows Promise groups, Threads and an Issue", target_fixture="app_peer_fixture")
+def app_peer_fixture():
+    return "panes"
+
+
+@when("Jeremy presses Enter on a Promise", target_fixture="app_peers")
+def app_open_peer_detail(app_peer_fixture):
+    return run_view("app_today_view.mjs", app_peer_fixture)
+
+
+@then("the same nonempty Today panes stay in order")
+def app_panes(app_peers):
+    assert_today_panes(app_peers)
+
+
+@then("after Escape, arrows and Tab still select Today rows")
+def app_pane_move(app_peers):
+    assert_today_pane_moves(app_peers)
+
+
+@given("Today in the App shows Prep with local metadata and a link in Tana", target_fixture="prep_brief")
+def app_prep_brief(brief_trace):
+    return brief_trace
+
+
+@when("Jeremy hovers over and highlights Prep and focuses a Promise's Detail", target_fixture="brief_activation")
+@when("Jeremy opens that Prep's Detail", target_fixture="brief_activation")
+@when("its Brief returns with markup and outside addresses in the text", target_fixture="brief_activation")
+def app_brief_activation(prep_brief):
+    return prep_brief["activation"]
+
+
+@then("the App has not requested a Brief")
+def app_no_background_brief(brief_activation):
+    assert_no_background_brief(brief_activation)
+
+
+@then("its metadata and Tana link are visible before its one Brief read returns")
+def app_brief_immediate_metadata(brief_activation):
+    assert_one_brief_and_immediate_metadata(brief_activation)
+
+
+@then("the full Brief appears as plain text without loading or opening outside content")
+def app_brief_literal(brief_activation, prep_brief):
+    assert_literal_brief(brief_activation, prep_brief["calls"])
+
+
+@then("leaving Prep Detail discards its Brief")
+def app_brief_exited(prep_brief):
+    assert_brief_discarded_on_exit(prep_brief)
+
+
+@when(parsers.parse('the Brief read returns "{status}"'), target_fixture="brief_outcome")
+def app_brief_result(prep_brief, status):
+    return prep_brief["outcomes"][status]
+
+
+@then(parsers.parse('Prep Detail shows "{message}" without a Brief body or an invented time'))
+def app_brief_failure(brief_outcome, message):
+    assert_brief_outcome(brief_outcome, message)
+
+
+@when("the App goes offline or loses its connection while Prep Detail is open", target_fixture="brief_disconnect")
+def app_brief_disconnect(prep_brief):
+    return prep_brief["disconnect"]
+
+
+@then("the last-known metadata and link remain without a Brief")
+def app_brief_offline(brief_disconnect):
+    for result in brief_disconnect.values():
+        assert_brief_offline(result)
+
+
+@then("reopening Prep after reconnecting makes one new read")
+def app_brief_reopened(brief_disconnect):
+    for result in brief_disconnect.values():
+        assert_brief_refresh_after_reconnect(result)
+
+
+@when("Jeremy opens two Meetings' Prep Details in order and returns to the first", target_fixture="brief_a_b_a")
+def app_brief_switch(prep_brief):
+    return prep_brief["returnToA"]
+
+
+@then("the original reads cannot replace the current Brief")
+def app_brief_current(brief_a_b_a):
+    assert_return_to_a(brief_a_b_a)
+
+
+@when("a Brief read receives no reply", target_fixture="brief_deadline")
+def app_brief_pending(prep_brief):
+    return prep_brief["deadline"]
+
+
+@then("it times out locally after 8 seconds")
+def app_brief_timeout(brief_deadline):
+    for result in brief_deadline.values():
+        assert_local_brief_timeout(result)
+
+
+@then("reopening Prep or leaving Detail ignores any late replies")
+def app_brief_late(brief_deadline):
+    for result in brief_deadline.values():
+        assert_late_brief_replies_ignored(result)

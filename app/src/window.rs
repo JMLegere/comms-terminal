@@ -1,6 +1,7 @@
 //! The App's window: the layout's blocks, each a loaded view or Panel (gpui-shell), the Local core's events, key
 //! commands, live reload of the Interface files, and the escape key. Modelled on herdr-app's `window.rs`.
 
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -212,6 +213,7 @@ pub struct AppWindow {
     base_keys: Option<Vec<KeyBinding>>,
     _key_log: gpui::Subscription,
     renders: u64,
+    side_scroll_point: Rc<Cell<Option<gpui::Point<gpui::Pixels>>>>,
 }
 
 fn capabilities(home: &std::path::Path) -> Capabilities {
@@ -261,7 +263,7 @@ impl AppWindow {
         });
         let mut this = AppWindow {
             home, runtime, layout, copies: HashMap::new(), focus, problem, keys_installed: false, base_keys: None,
-            _key_log: key_log, renders: 0,
+            _key_log: key_log, renders: 0, side_scroll_point: Rc::default(),
         };
         this.install_keys(cx);
         this.load_views(window, cx);
@@ -449,6 +451,19 @@ impl AppWindow {
         if command == "app.attach" {
             return self.pick_files(cx);
         }
+        if command == "app.focus_prep" {
+            // Do not use the last drawn route: the selected row may have changed since that frame.
+            if host::shared("page") == "today" && host::shared("detail") == "promise"
+                && host::shared("focus") == "detail" && host::shared("side")["kind"] == "prep_today"
+            {
+                let entry = self.layout.find("detail").and_then(|n| n.view_on(Some("today"), Some("promise")))
+                    .filter(|view| !view.is_empty()).map(|view| format!("{view}.focus_entry"));
+                if let Some(entry) = entry {
+                    self.run(&entry, window, cx);
+                }
+            }
+            return;
+        }
         // Settings' app actions (FR-SET-2..4): zoom writes settings.json, which the watcher applies at once.
         let zoom = |z: f32| { let _ = host::write_setting("zoom", serde_json::json!((z * 20.).round() / 20.)); };
         match command {
@@ -472,7 +487,12 @@ impl AppWindow {
             "app.scroll_end" => Some(1000.),
             _ => None,
         } {
-            return scroll_thread(step, window, cx);
+            let point = if host::shared("focus") == "detail" && host::shared("detail_view") == "side" {
+                self.side_scroll_point.get()
+            } else {
+                None
+            };
+            return scroll_content(step, point, window, cx);
         }
         if let Some(module) = module_of(command) {
             let on = host::shared("modules"); // shell.summary's Modules, set by the rail (ADR 0017)
@@ -710,6 +730,11 @@ impl AppWindow {
                 if faded() && name != "status" && name != "topbar" {
                     el = el.opacity(0.45); // the bars stay clear: the bottom bar says what the update is doing
                 }
+                if node.id == "detail" && name == "side" {
+                    let point = self.side_scroll_point.clone();
+                    el = el.child(gpui::canvas(move |bounds, _, _| point.set(Some(bounds.center())),
+                                               |_, (), _, _| {}).absolute().size_full());
+                }
                 match self.copies.get(&name) {
                     Some(Copy { root: Some(root), .. }) => el.child(root.clone()).into_any_element(),
                     Some(Copy { error: Some(e), .. }) => el
@@ -729,6 +754,7 @@ impl Render for AppWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         use crate::theme::color;
         self.renders += 1;
+        self.side_scroll_point.set(None);
         // Views fit their content to it: the Thread page hides its properties column when narrow, as the Console's.
         // In the units views write (zoom 1), so a zoomed App fits its narrow rules the same way.
         let width = serde_json::json!((f32::from(window.viewport_size().width) / crate::theme::zoom()).round());
@@ -743,8 +769,22 @@ impl Render for AppWindow {
         let (page_now, detail_now) = (host::shared("page"), host::shared("detail"));
         for block in ["list", "detail"] {
             let view = self.layout.find(block).and_then(|n| n.view_on(page_now.as_str(), detail_now.as_str())).unwrap_or("");
-            if host::shared(&format!("{block}_view")).as_str() != Some(view) {
-                host::set_shared(&format!("{block}_view"), Value::String(view.to_owned()));
+            let key = format!("{block}_view");
+            let previous = host::shared(&key);
+            if previous.as_str() != Some(view) {
+                host::set_shared(&key, Value::String(view.to_owned()));
+                if block == "detail" && page == "today" && host::shared("focus") == "detail"
+                    && host::shared("side")["kind"] == "prep_today"
+                {
+                    // Enter can precede route resolution; a layout reload can replace it while focused.
+                    if view == "side" {
+                        host::request(Request::Run("side.focus_entry".into()));
+                    } else if previous == "side" {
+                        let epoch = host::shared("today_detail_epoch").as_u64().unwrap_or(0) + 1;
+                        host::set_shared("today_detail_epoch", Value::from(epoch));
+                        host::request(Request::Run("side.focus_exit".into()));
+                    }
+                }
             }
         }
         let mut root = div()
@@ -831,14 +871,12 @@ impl AppWindow {
     }
 }
 
-/// space / pgdn / pgup (D55): a page of the Thread's messages, as the Console's scroll_thread. GPUI keeps a plain
-/// scroll area's offset to itself, so this sends the wheel event a trackpad would, over the messages column.
-// ponytail: the point assumes the shipped layout (Thread pane on the right, properties column 300 px); find the
-// pane's bounds if Interface files move it.
-fn scroll_thread(step: f32, window: &mut Window, cx: &mut Context<AppWindow>) {
+/// A page of the focused content, by dispatching the same wheel event as a trackpad.
+// ponytail: the Thread keeps its existing messages-column point; measure its bounds if the layout moves it.
+fn scroll_content(step: f32, point: Option<gpui::Point<gpui::Pixels>>, window: &mut Window, cx: &mut Context<AppWindow>) {
     let size = window.viewport_size();
     let event = gpui::ScrollWheelEvent {
-        position: gpui::point(size.width - px(480.), size.height * 0.5),
+        position: point.unwrap_or_else(|| gpui::point(size.width - px(480.), size.height * 0.5)),
         delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), -size.height * 0.8 * step)),
         modifiers: gpui::Modifiers::default(),
         touch_phase: gpui::TouchPhase::Moved,

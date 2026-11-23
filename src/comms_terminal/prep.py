@@ -16,9 +16,12 @@ Interface: refresh (the Service's loop), rows (readers: Today, the Promises page
 """
 
 import re
+import time
 from datetime import datetime, timedelta
+from urllib.parse import unquote
 
 from . import clock, inbox, promises
+from .mcp import McpError
 
 TITLE = "Prep"  # a pinned doc whose title starts with this is the Meeting's Prep
 PREP_MINUTES = re.compile(r"Prep minutes:\s*(\d+)", re.I)
@@ -28,6 +31,13 @@ DAYS = 7
 EVERY = 300  # seconds between reads
 TIME = re.compile(r"(\d{4}-\d\d-\d\dT\d\d:\d\d[+-]\d\d:\d\d)->(\d\d:\d\d[+-]\d\d:\d\d|\d{4}-\d\d-\d\dT\S+)")
 DOMAIN = re.compile(r"@([a-z0-9.-]+\.[a-z]{2,})", re.I)
+
+_MEETING_ID = re.compile(r"tana:event:[A-Za-z0-9_-]{1,512}")
+_PIN_ID = re.compile(r"tana:[A-Za-z0-9_-]+:[A-Za-z0-9_-]{1,512}")
+_TEXT_ID = re.compile(r"tana:text:[A-Za-z0-9_-]{1,512}")
+_BRIEF_LINK = re.compile(r"https://home\.tana\.inc/o/[A-Za-z0-9_-]+/l/([A-Za-z0-9%:_-]{1,1024})")
+_BRIEF_BYTES = 64 * 1024
+_BRIEF_SECONDS = 5
 
 
 def _own(db) -> set[str]:
@@ -173,6 +183,96 @@ def _status(db, now: datetime, error: str | None) -> None:
 def read_error(db) -> str | None:
     row = db.execute("SELECT error FROM prep_read WHERE id = 1").fetchone()
     return row[0] if row else None
+
+
+def valid_meeting_id(value) -> bool:
+    return isinstance(value, str) and _MEETING_ID.fullmatch(value) is not None
+
+
+def _brief_doc_id(link: str) -> str | None:
+    match = _BRIEF_LINK.fullmatch(link)
+    if match is None:
+        return None
+    uri = unquote(match[1], errors="strict")
+    return uri if _TEXT_ID.fullmatch(uri) else None
+
+
+def _complete_payload(value) -> bool:
+    """Permit absent completion markers, but reject explicit failure or incomplete/unknown metadata."""
+    return (isinstance(value, dict)
+            and all(value.get(key, False) is False for key in
+                    ("isError", "partial", "isPartial", "truncated", "isTruncated", "hasMore", "hasNextPage"))
+            and all(value.get(key, True) is True for key in ("complete", "isComplete"))
+            and all(value.get(key) in (None, "") for key in
+                    ("error", "nextCursor", "nextPage", "nextPageToken", "continuationToken", "pagination"))
+            and ("pageInfo" not in value or
+                 (isinstance(value["pageInfo"], dict) and value["pageInfo"].get("hasNextPage") is False
+                  and value["pageInfo"].get("hasPreviousPage", False) is False))
+            and value.get("status", "ok") in ("ok", "success", "complete", "ready"))
+
+
+def brief(db, client, meeting_id: str) -> dict:
+    """Read the selected Meeting's explicitly pinned Brief; nothing is written or cached."""
+    unavailable = {"status": "unavailable"}
+    if client is None or not valid_meeting_id(meeting_id):
+        return unavailable
+    row = db.execute("SELECT end_at, has_prep, brief FROM preps WHERE event_uri = ?", (meeting_id,)).fetchone()
+    if row is None:
+        return unavailable
+
+    deadline = time.monotonic() + _BRIEF_SECONDS
+
+    def read_tool(name, **args):
+        if time.monotonic() >= deadline:
+            raise TimeoutError
+        response = client.read_prep_tool(name, deadline, **args)
+        if time.monotonic() >= deadline:
+            raise TimeoutError
+        return response
+
+    try:
+        if datetime.fromisoformat(row["end_at"]) <= clock.now():
+            return unavailable
+        link = row["brief"]
+        doc_id = _brief_doc_id(link) if link is not None and row["has_prep"] else None
+        if link is not None and doc_id is None:
+            return unavailable
+        event = read_tool("readEvent", eventUri=meeting_id)
+        if not _complete_payload(event) or any(event.get(key, meeting_id) != meeting_id for key in ("eventUri", "id")):
+            return unavailable
+        pins = event.get("pinnedItems")
+        if not isinstance(pins, list):
+            return unavailable
+        if not pins:
+            return {"status": "missing"}
+        ids = [pin.get("uri") if isinstance(pin, dict) else pin for pin in pins]
+        if any(not isinstance(uri, str) or not _PIN_ID.fullmatch(uri) for uri in ids) or doc_id not in ids:
+            return unavailable
+        result = read_tool("readItems", ids=[doc_id])
+        if not _complete_payload(result):
+            return unavailable
+        items = result.get("items")
+        if not isinstance(items, list) or len(items) != 1:
+            return unavailable
+        doc = items[0]
+        if not _complete_payload(doc) or doc.get("id") != doc_id:
+            return unavailable
+        title = doc.get("title")
+        if not isinstance(title, str) or not title.strip().startswith(TITLE):
+            return unavailable
+        if any(doc.get(key, "text/plain") not in ("text/plain", "text", "plain", "plain_text")
+               for key in ("format", "contentType")):
+            return unavailable
+        text = doc.get("content")
+        if not isinstance(text, str) or not text.strip() or len(text.encode()) > _BRIEF_BYTES:
+            return unavailable
+        if time.monotonic() >= deadline:
+            raise TimeoutError
+        return {"status": "ready", "text": text}
+    except TimeoutError:
+        return {"status": "timeout"}
+    except (McpError, OSError, ValueError, TypeError):
+        return unavailable
 
 
 def rows(db, now: datetime | None = None) -> list[dict]:

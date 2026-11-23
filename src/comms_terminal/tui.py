@@ -6208,25 +6208,39 @@ def promise_markup(p: dict) -> str:
     return "\n".join(lines)
 
 
-def prep_markup(p: dict, now: datetime) -> str:
-    """A Meeting's Prep (ADR 0025): read from Tana, read-only here."""
+def prep_markup(p: dict, now: datetime, *, raw_times: tuple[int | None, int | None] | None = None) -> str:
+    """A Meeting's Prep (ADR 0025), read-only. Today Detail passes raw Prep and Travel minutes."""
     grey = "#928374"
     name, color, icon = PROMISE_STATUS[promises.status(p)]
     hue = PALETTE.get(color, grey)
     at = lambda v, f="%a %d %b %H:%M": datetime.fromisoformat(v).astimezone(sequences.LOCAL).strftime(f)  # noqa: E731
     state = ("Tana unreadable: counted as not prepared" if p["unread"] else "Prepped" if p["prepared"]
              else "Not prepared" if p["has_prep"] else "No Prep yet")
+    prep, travel = raw_times if raw_times is not None else (p["work_minutes"], p["travel_minutes"])
+    prep_time = "unknown" if prep is None else minutes_text(prep)
+    travel_time = "unknown" if travel is None else minutes_text(travel)
+    leave_by = "unknown" if travel is None else at(p["leave_at"], "%H:%M")
+    slack_time = ("unknown" if travel is None or (prep is None and not p["prepared"])
+                  else minutes_text(p["slack_time"]))
     lines = [f"[b]{escape(p['what'])}[/]",
              f"[{hue}]{ICON[icon]} {name}[/]  [{grey}]{at(p['due_at'])}–{at(p['end_at'], '%H:%M')}[/]", "",
-             f"[{grey}]{ICON['meeting']} Prep[/]  [b {PALETTE['green'] if p['prepared'] else hue if p['risk'] else PALETTE['yellow']}]{state}[/]",
-             f"[{grey}]Prep[/]  {minutes_text(p['work_minutes'])}   [{grey}]Travel[/]  {minutes_text(p['travel_minutes'])}"
-             f"   [{grey}]Leave by[/]  {at(p['leave_at'], '%H:%M')}"
-             f"   [{grey}]Slack-time[/]  [{hue if p['risk'] else PALETTE['fg0']}]{minutes_text(p['slack_time'])}[/]"]
+             f"[{grey}]{ICON['meeting']} Prep[/]  [b {PALETTE['green'] if p['prepared'] else hue if p['risk'] else PALETTE['yellow']}]{state}[/]"]
+    if raw_times is not None and p["unread"]:
+        lines.append(f"[{grey}]Last known Prep metadata[/]")
+    lines.append(f"[{grey}]Prep[/]  {prep_time}   [{grey}]Travel[/]  {travel_time}"
+                 f"   [{grey}]Leave by[/]  {leave_by}"
+                 f"   [{grey}]Slack-time[/]  [{hue if p['risk'] else PALETTE['fg0']}]{slack_time}[/]")
     if p["location"]:
         lines.append(f"[{grey}]Where[/]  {escape(p['location'])}")
     for link in p["links"]:
-        lines.append(f"[{grey}]Brief[/]  [link='{render.target(link['target'])}']{escape(link['target'])}[/link]"
-                     if link["target"].startswith("http") else f"[{grey}]Brief[/]  {escape(link['target'])}")
+        url = link["target"]
+        label = escape(url)
+        if url.startswith("http"):
+            href = render.target(url)
+            # Keep legacy quoting; Today's Rich parser treats quotes as part of the URL.
+            href = f"'{href}'" if raw_times is None else href
+            label = f"[link={href}]{label}[/link]"
+        lines.append(f"[{grey}]Brief[/]  {label}")
     lines += ["", f"[{grey}]Read-only: Prep lives on the Meeting in Tana (ADR 0025)[/]"]
     return "\n".join(lines)
 

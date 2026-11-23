@@ -84,3 +84,78 @@ Feature: Promises
     Given the agent Recorded "Send the traction update" owed to "Anna Ciprick" due "2026-11-20" needing 30 minutes of work
     When the agent Fulfils "Send the traction update" citing that message, taking 45 minutes
     Then the Kept list shows "Send the traction update" with work 30 and actual 45
+
+  @AS-PR-11 @FR-PR-22 @NFR-PR-7
+  Scenario Outline: Enter opens a Promise on Today without opening its Thread
+    Given Today in the App shows a "<kind>" Promise
+    When Jeremy presses Enter on that Promise
+    Then its read-only Promise Detail has focus on Today and shows its history
+    And Escape returns to the same Promise row
+
+    Examples:
+      | kind      |
+      | linked    |
+      | unlinked  |
+      | Tentative |
+
+  @AS-PR-11 @FR-PR-22 @NFR-PR-7
+  Scenario: The Thread link in Promise Detail opens the linked Thread
+    Given Today in the App shows a "linked" Promise
+    When Jeremy presses Enter on that Promise
+    And Jeremy activates the Thread link in its Promise Detail
+    Then the linked Thread opens without a write
+
+  @AS-PR-12 @FR-PR-22 @NFR-PR-7
+  Scenario: Prep opens its own Detail and a removed Prep leaves no obsolete Detail
+    Given Today in the App shows Prep for a Meeting
+    When Jeremy presses Enter on that Prep
+    Then the Meeting's read-only Prep Detail has focus on Today
+    And Escape returns to the same Prep row
+    When that Prep disappears while its Detail has focus
+    Then Escape returns to the next valid Today row without obsolete Prep Detail
+
+  @AS-PR-13 @FR-PR-23
+  Scenario: Focusing Detail does not change which Today lists are reachable
+    Given Today in the App shows Promise groups, Threads and an Issue
+    When Jeremy presses Enter on a Promise
+    Then the same nonempty Today panes stay in order
+    And after Escape, arrows and Tab still select Today rows
+
+  @AS-PR-15 @FR-PR-24 @NFR-PR-7 @NFR-PR-8
+  Scenario: Only opening Prep Detail reads its Brief
+    Given Today in the App shows Prep with local metadata and a link in Tana
+    When Jeremy hovers over and highlights Prep and focuses a Promise's Detail
+    Then the App has not requested a Brief
+    When Jeremy opens that Prep's Detail
+    Then its metadata and Tana link are visible before its one Brief read returns
+    When its Brief returns with markup and outside addresses in the text
+    Then the full Brief appears as plain text without loading or opening outside content
+    And leaving Prep Detail discards its Brief
+
+  @AS-PR-16 @FR-PR-24 @NFR-PR-7 @NFR-PR-8
+  Scenario Outline: Prep Detail distinguishes Brief read outcomes
+    Given Today in the App shows Prep with local metadata and a link in Tana
+    When the Brief read returns "<status>"
+    Then Prep Detail shows "<message>" without a Brief body or an invented time
+
+    Examples:
+      | status      | message              |
+      | missing     | No Brief yet         |
+      | unavailable | Brief unavailable    |
+      | timeout     | Could not load Brief |
+
+  @AS-PR-16 @FR-PR-24 @NFR-PR-7 @NFR-PR-8
+  Scenario: A disconnect discards the Brief but leaves last-known Prep
+    Given Today in the App shows Prep with local metadata and a link in Tana
+    When the App goes offline or loses its connection while Prep Detail is open
+    Then the last-known metadata and link remain without a Brief
+    And reopening Prep after reconnecting makes one new read
+
+  @AS-PR-17 @FR-PR-24 @NFR-PR-8
+  Scenario: Only the current open of a Meeting can show its Brief
+    Given Today in the App shows Prep with local metadata and a link in Tana
+    When Jeremy opens two Meetings' Prep Details in order and returns to the first
+    Then the original reads cannot replace the current Brief
+    When a Brief read receives no reply
+    Then it times out locally after 8 seconds
+    And reopening Prep or leaving Detail ignores any late replies

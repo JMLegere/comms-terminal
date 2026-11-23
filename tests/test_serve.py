@@ -110,6 +110,119 @@ def test_reply_over_unix_socket(tmp_path):
         raise AssertionError("expected ReplyError")
 
 
+@pytest.fixture
+def prep_brief_socket(tmp_path, monkeypatch):
+    db_path, _ = setup(tmp_path)
+    sock = str(tmp_path / "prep.sock")
+    client = object()
+    kick = threading.Event()
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Brief read touched refresh, Context health or credential initialization")
+
+    monkeypatch.setattr(serve.prep, "refresh", forbidden)
+    monkeypatch.setattr(serve, "record_context", forbidden)
+    monkeypatch.setattr(serve, "tana_context", forbidden)
+    monkeypatch.setattr(serve, "credential", forbidden)
+    server = serve.reply_server(db_path, sock, serve.Senders(), {"tana": SimpleNamespace(client=client)}, kick=kick)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        yield sock, db_path, client
+        assert not kick.is_set()
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_private_prep_brief_reads_through_existing_client_with_a_read_only_database(
+    prep_brief_socket, monkeypatch, caplog, capsys,
+):
+    sock, db_path, client = prep_brief_socket
+    requested = []
+
+    def brief(db, current_client, meeting_id):
+        assert current_client is client
+        assert db.execute("SELECT label FROM connections WHERE id = 2").fetchone()[0] == "Slack"
+        assert db.execute("PRAGMA query_only").fetchone()[0] == 1
+        # Disable the per-connection guard to prove the file itself was opened mode=ro.
+        db.execute("PRAGMA query_only = OFF")
+        try:
+            with pytest.raises(sqlite3.OperationalError, match="readonly"):
+                db.execute("UPDATE connections SET label = 'changed' WHERE id = 2")
+        finally:
+            db.execute("PRAGMA query_only = ON")
+        requested.append(meeting_id)
+        return {"status": "ready", "text": "Brief only on wire: one\nTwo"}
+
+    caplog.set_level("DEBUG")
+    monkeypatch.setattr(serve.prep, "brief", brief, raising=False)
+    with sqlite3.connect(db_path) as observer:
+        before = tuple(observer.iterdump())
+        assert _post(sock, "/prep/brief", {"meeting_id": "tana:event:site-visit"}) == (
+            200, {"status": "ready", "text": "Brief only on wire: one\nTwo"},
+        )
+        assert tuple(observer.iterdump()) == before
+    assert requested == ["tana:event:site-visit"]
+    captured = capsys.readouterr()
+    assert "Brief only on wire" not in caplog.text + captured.out + captured.err
+
+
+@pytest.mark.parametrize("payload", [
+    None,
+    [],
+    {},
+    {"meeting_id": 2},
+    {"meeting_id": "tana:text:brief"},
+    {"meeting_id": "tana:event:site-visit", "brief": "https://example.test/other"},
+])
+def test_private_prep_brief_rejects_anything_but_one_valid_meeting_id(prep_brief_socket, monkeypatch, payload):
+    sock, _, _ = prep_brief_socket
+    monkeypatch.setattr(serve.prep, "brief", lambda *args: pytest.fail("invalid request reached Prep"), raising=False)
+    assert _post(sock, "/prep/brief", payload) == (400, {"status": "unavailable"})
+
+
+@pytest.mark.parametrize("problem, outcome", [
+    (None, "missing"),
+    (RuntimeError, "unavailable"),
+    (TimeoutError, "timeout"),
+])
+def test_private_prep_brief_failure_has_no_content_or_diagnostics(
+    prep_brief_socket, monkeypatch, caplog, capsys, problem, outcome,
+):
+    sock, _, _ = prep_brief_socket
+    marker = "private diagnostic marker"
+
+    def brief(*args):
+        if problem is not None:
+            raise problem(marker)
+        return {"status": "missing"}
+
+    caplog.set_level("DEBUG")
+    monkeypatch.setattr(serve.prep, "brief", brief, raising=False)
+    assert _post(sock, "/prep/brief", {"meeting_id": "tana:event:site-visit"}) == (200, {"status": outcome})
+    captured = capsys.readouterr()
+    assert marker not in caplog.text + captured.out + captured.err
+
+
+def test_public_hooks_do_not_admit_prep_brief(tmp_path, monkeypatch):
+    from http.client import HTTPConnection
+
+    db_path, _ = setup(tmp_path)
+    monkeypatch.setattr(serve, "credential", lambda name: None)
+    server = serve.hooks_server(db_path, "127.0.0.1", 0)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        conn = HTTPConnection(*server.server_address, timeout=3)
+        try:
+            conn.request("POST", "/prep/brief", '{"meeting_id":"tana:event:site-visit"}')
+            assert conn.getresponse().status == 404
+        finally:
+            conn.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_service_runs_with_email_only(tmp_path, monkeypatch):
     """Slack not connected yet: /hooks/slack answers 503 and email still works (runbook §6)."""
     import urllib.error
@@ -495,16 +608,20 @@ def test_resend_storage_failure_never_acknowledged_or_kicked(tmp_path, monkeypat
     db.close()
 
 
-def frame_request(headers, body=b"", path="/hooks/resend", reader=None, known=True):
+def frame_request(headers, body=b"", path="/hooks/resend", reader=None, known=True, *,
+                  response=(204, "text/plain", b""), writer=None):
     calls, statuses, timeouts = [], [], []
     handler = object.__new__(serve._Handler)
     handler.headers = HTTPMessage()
     for name, value in headers:
         handler.headers[name] = value
     handler.path = path
-    handler.routes = {path: lambda headers, body: (calls.append(body) or 204, "text/plain", b"")} if known else {}
+    handler.routes = {path: lambda headers, body: (calls.append(body) or response)} if known else {}
     handler.rfile, handler.wfile = reader or io.BytesIO(body), io.BytesIO()
-    handler.connection = SimpleNamespace(gettimeout=lambda: None, settimeout=timeouts.append)
+    handler.connection = SimpleNamespace(gettimeout=lambda: timeouts[-1] if timeouts else None,
+                                         settimeout=timeouts.append)
+    if writer is not None:
+        handler.wfile = SimpleNamespace(write=lambda data: writer(data, handler.connection.gettimeout()))
     handler.send_response = statuses.append
     handler.send_error = statuses.append
     handler.send_header = lambda *args: None
@@ -547,6 +664,28 @@ def test_resend_framing_does_not_change_old_routes():
     for route in ("/hooks/email", "/hooks/slack", "/hooks/quo", "/reply", "/up/token"):
         statuses, calls, timeouts = frame_request([("Content-Length", str(len(body)))], body, route)
         assert statuses == [204] and calls == [body] and not timeouts
+
+
+@pytest.mark.parametrize("route", ["/prep/brief", "/reply"])
+def test_prep_brief_response_write_timeout_is_finite_and_scoped_to_prep(route):
+    body = b"{}"
+    answer = b'{"status":"ready","text":"Brief"}'
+    writes = []
+
+    def write(data, active_timeout):
+        writes.append((data, active_timeout))
+        if route == "/prep/brief":
+            raise TimeoutError("synthetic stalled client")
+
+    statuses, calls, timeouts = frame_request([("Content-Length", "2")], body, route,
+                                              response=(200, "application/json", answer), writer=write)
+    assert statuses == [200] and calls == [body]
+    assert len(writes) == 1 and writes[0][0] == answer
+    if route == "/prep/brief":
+        active = writes[0][1]
+        assert active is not None and 0 < active < float("inf") and timeouts[-1] is None
+    else:
+        assert writes[0][1] is None and not timeouts
 
 
 @pytest.mark.parametrize("path", ["/tana", "/attio", "/linear"])

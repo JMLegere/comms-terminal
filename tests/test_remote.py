@@ -181,6 +181,85 @@ def test_reads_stay_local_and_offline_writes_are_refused(service, laptop):
     assert tui.inbox.get_thread(db, tid).id == tid  # reads need no service
 
 
+@pytest.mark.parametrize("status, body, expected", [
+    (200, {"status": "ready", "text": "Visit Brief\nSecond line"}, {"status": "ready", "text": "Visit Brief\nSecond line"}),
+    (200, {"status": "missing", "text": "private marker"}, {"status": "missing"}),
+    (200, {"status": "unavailable", "error": "private marker"}, {"status": "unavailable"}),
+    (200, {"status": "timeout", "text": "private marker"}, {"status": "timeout"}),
+    (200, {"status": "ready", "text": ""}, {"status": "unavailable"}),
+    (200, {"status": "ready", "text": ["private marker"]}, {"status": "unavailable"}),
+    (200, {"status": "ready", "text": "é" * 32_769}, {"status": "unavailable"}),
+    (200, {"status": "partial", "text": "private marker"}, {"status": "unavailable"}),
+    (200, ["private marker"], {"status": "unavailable"}),
+    (503, {"status": "ready", "text": "private marker"}, {"status": "unavailable"}),
+    (504, {"error": "private marker"}, {"status": "timeout"}),
+])
+def test_socket_prep_brief_has_one_bounded_request_and_sanitizes_its_result(
+    monkeypatch, caplog, status, body, expected,
+):
+    target = "/synthetic/prep.sock"
+    meeting_id = "tana:event:site-visit"
+    requests = []
+
+    def post(socket_path, path, payload, timeout, **options):
+        requests.append((socket_path, path, payload, timeout))
+        return status, body
+
+    caplog.set_level("DEBUG")
+    monkeypatch.setattr(remote, "post", post)
+    assert remote.socket_prep_brief(target)(meeting_id) == expected
+    assert requests == [(target, "/prep/brief", {"meeting_id": meeting_id}, 7)]
+    assert "private marker" not in caplog.text
+
+
+@pytest.mark.parametrize("answers, expected", [(True, "unavailable"), (False, "timeout")],
+                         ids=["old-service-404", "no-http-response"])
+def test_socket_prep_brief_distinguishes_old_service_from_no_response(tmp_path, answers, expected):
+    class NoResponse(serve._Handler):
+        def do_POST(self):
+            self.rfile.read(int(self.headers["Content-Length"]))
+            self.close_connection = True
+
+    sock = str(tmp_path / "old.sock")
+    server = serve.UnixHTTPServer(sock, serve._handler({}) if answers else NoResponse)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        fetch = remote.socket_prep_brief(LocalLink(sock).command())
+        assert fetch("tana:event:site-visit") == {"status": expected}
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_socket_prep_brief_maps_unreachable_socket_to_unavailable(tmp_path):
+    fetch = remote.socket_prep_brief(str(tmp_path / "missing.sock"))
+    assert fetch("tana:event:site-visit") == {"status": "unavailable"}
+
+
+def test_socket_prep_brief_rejects_an_oversized_wire_response(tmp_path):
+    class Oversized(serve._Handler):
+        def do_POST(self):
+            self.rfile.read(int(self.headers["Content-Length"]))
+            body = b'{"status":"missing","diagnostic":"' + b"x" * (1024 * 1024) + b'"}'
+            try:
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # bounded reader can close before receiving the oversized body
+
+    sock = str(tmp_path / "oversized.sock")
+    server = serve.UnixHTTPServer(sock, Oversized)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        assert remote.socket_prep_brief(sock)("tana:event:site-visit") == {"status": "unavailable"}
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_attachment_links_come_signed_from_the_service(service, laptop, tmp_path):
     _, sdb, _, _ = service
     _, syncer, _, _ = laptop

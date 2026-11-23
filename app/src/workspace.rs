@@ -157,6 +157,7 @@ const PREVIOUS: &[(&str, u64)] = &[
     ("keys.json", 0x8fad973448474b78),
     ("layouts/main.json", 0x471a72fca14e6470),
     ("keys.json", 0xcce20263f132a473),
+    ("layouts/main.json", 0x9b113bf534c92f9a),
 ];
 
 fn fnv(bytes: &[u8]) -> u64 {
@@ -237,4 +238,250 @@ mod tests {
         }
         std::fs::remove_dir_all(&home).unwrap();
     }
+
+    const MAIN_LAYOUT: &str = "layouts/main.json";
+    const SHIPPED_LAYOUT: &str = "layouts/main.json.shipped";
+
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        fn new(case: &str) -> Self {
+            let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+            let home = std::env::temp_dir().join(format!("ct-app-layout-{case}-{}-{stamp}", std::process::id()));
+            std::fs::create_dir(&home).unwrap();
+            Self(home)
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn load_layout(home: &Path, path: &str) -> crate::layout::Node {
+        crate::layout::parse(&read_json(home, path).unwrap()).unwrap()
+    }
+
+    fn assert_stock_routes(node: &crate::layout::Node) {
+        let list = node.find("list").unwrap();
+        let detail = node.find("detail").unwrap();
+        assert_eq!(list.view_on(Some("today"), Some("promise")), Some("today"));
+        assert_eq!(detail.view_on(Some("today"), Some("promise")), Some("side"));
+        assert_eq!(detail.view_on(Some("today"), Some("task")), Some("task"));
+        assert_eq!(detail.view_on(Some("today"), Some("issue")), Some("issue"));
+        assert_eq!(detail.view_on(Some("today"), Some("thread")), Some("thread"));
+        assert_eq!(detail.view_on(Some("calendar"), None), Some("day"));
+        assert_eq!(list.view_on(Some("promises"), None), Some("promises"));
+        assert_eq!(detail.view_on(Some("promises"), None), Some("side"));
+    }
+
+    #[test]
+    fn today_layout_upgrades_exact_6223b99_stock() {
+        let scratch = Scratch::new("old");
+        let home = &scratch.0;
+        let path = home.join(MAIN_LAYOUT);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        assert_eq!(fnv(LAYOUT_6223B99.as_bytes()), 0x9b113bf534c92f9a);
+        std::fs::write(&path, LAYOUT_6223B99).unwrap();
+        let old = load_layout(home, MAIN_LAYOUT);
+        assert_eq!(old.find("detail").unwrap().view_on(Some("today"), Some("promise")), Some("thread"));
+
+        let preferences = [
+            ("keys.json", "{\"global\": {\"t\": \"nav.today\"}}\n"),
+            ("settings.json", "{\"ui_font\": \"monospace\"}\n"),
+        ];
+        for (file, bytes) in preferences {
+            std::fs::write(home.join(file), bytes).unwrap();
+        }
+        write(home).unwrap();
+
+        assert_stock_routes(&load_layout(home, MAIN_LAYOUT));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), shipped(MAIN_LAYOUT).unwrap());
+        assert!(!home.join(SHIPPED_LAYOUT).exists());
+        for (file, bytes) in preferences {
+            assert_eq!(std::fs::read_to_string(home.join(file)).unwrap(), bytes);
+        }
+    }
+
+    #[test]
+    fn today_layout_installs_fresh_and_leaves_current_stock_alone() {
+        let scratch = Scratch::new("fresh");
+        let home = &scratch.0;
+        let path = home.join(MAIN_LAYOUT);
+        write(home).unwrap();
+        assert_stock_routes(&load_layout(home, MAIN_LAYOUT));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), shipped(MAIN_LAYOUT).unwrap());
+        assert!(!home.join(SHIPPED_LAYOUT).exists());
+
+        let file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        file.set_modified(std::time::UNIX_EPOCH).unwrap();
+        let before = file.metadata().unwrap().modified().unwrap();
+        write(home).unwrap();
+        assert_eq!(std::fs::metadata(&path).unwrap().modified().unwrap(), before);
+        assert_stock_routes(&load_layout(home, MAIN_LAYOUT));
+        assert!(!home.join(SHIPPED_LAYOUT).exists());
+    }
+
+    #[test]
+    fn today_layout_keeps_edits_and_stages_the_stock_candidate() {
+        let custom_route = LAYOUT_6223B99.replace(
+            r#""today:issue": "issue""#,
+            "\"today:issue\": \"issue\",\n                \"today:custom\": \"custom-panel\"",
+        );
+        for (case, edited, custom_view) in [
+            ("whitespace", format!("{LAYOUT_6223B99}\n"), "thread"),
+            ("custom", custom_route, "custom-panel"),
+        ] {
+            let scratch = Scratch::new(case);
+            let home = &scratch.0;
+            let path = home.join(MAIN_LAYOUT);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, &edited).unwrap();
+            write(home).unwrap();
+
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), edited);
+            assert_eq!(std::fs::read_to_string(home.join(SHIPPED_LAYOUT)).unwrap(), shipped(MAIN_LAYOUT).unwrap());
+            assert_stock_routes(&load_layout(home, SHIPPED_LAYOUT));
+            let node = load_layout(home, MAIN_LAYOUT);
+            let detail = node.find("detail").unwrap();
+            assert_eq!(detail.view_on(Some("today"), Some("promise")), Some("thread"));
+            assert_eq!(detail.view_on(Some("today"), Some("custom")), Some(custom_view));
+        }
+    }
+
+    // Exact git blob 1c7ef3b8a6b86d3fa02997901245e690d5925ad1 from 6223b99:app/defaults/layouts/main.json.
+    // Copy the bytes (including final LF) so this test also runs in source archives and shallow clones.
+    const LAYOUT_6223B99: &str = r#"{
+  "id": "root",
+  "type": "row",
+  "background": "canvas",
+  "children": [
+    {
+      "id": "sidebar",
+      "type": "column",
+      "size": {
+        "px": 248
+      },
+      "background": "chrome",
+      "border": {
+        "side": "right",
+        "color": "border"
+      },
+      "children": [
+        {
+          "id": "brand",
+          "type": "block",
+          "size": {
+            "px": 46
+          },
+          "view": "brand"
+        },
+        {
+          "id": "rail",
+          "type": "block",
+          "view": "nav"
+        }
+      ]
+    },
+    {
+      "id": "work",
+      "type": "column",
+      "children": [
+        {
+          "id": "topbar",
+          "type": "block",
+          "size": {
+            "px": 42
+          },
+          "view": "topbar"
+        },
+        {
+          "id": "work-body",
+          "type": "row",
+          "padding": 8,
+          "gap": 8,
+          "children": [
+            {
+              "id": "list",
+              "type": "block",
+              "size": {
+                "px": 460
+              },
+              "view": "threads",
+              "card": true,
+              "pages": {
+                "today": "today",
+                "calendar": "calendar",
+                "drafts": "drafts",
+                "cases": "cases",
+                "tasks": "tasks",
+                "sequences": "sequences",
+                "pipeline": null,
+                "people": "people",
+                "organizations": "organizations",
+                "channels": "channels",
+                "person": null,
+                "organization": null,
+                "connection": null,
+                "context": null,
+                "event": null,
+                "case": null,
+                "issues": "issues",
+                "actions": "actions"
+              }
+            },
+            {
+              "id": "detail",
+              "type": "block",
+              "view": "thread",
+              "card": true,
+              "pages": {
+                "today": "thread",
+                "calendar": "day",
+                "drafts": "draft",
+                "drafts:thread": "thread",
+                "cases": "case",
+                "tasks": "task",
+                "sequences": "sequence",
+                "pipeline": "pipeline",
+                "people": "person",
+                "organizations": "organization",
+                "channels": "connection",
+                "today:task": "task",
+                "tasks:draft": "draft",
+                "tasks:thread": "thread",
+                "today:draft": "draft",
+                "today:paused": "side",
+                "today:unattended": "side",
+                "person": "person",
+                "organization": "organization",
+                "connection": "connection",
+                "context": "context",
+                "event": "event",
+                "case": "case",
+                "issues": "issue",
+                "actions": null,
+                "actions:draft": "draft",
+                "actions:thread": "thread",
+                "actions:task": "task",
+                "actions:person": "person",
+                "today:issue": "issue"
+              }
+            }
+          ]
+        },
+        {
+          "id": "statusbar",
+          "type": "block",
+          "size": {
+            "px": 28
+          },
+          "view": "status"
+        }
+      ]
+    }
+  ]
+}
+"#;
 }

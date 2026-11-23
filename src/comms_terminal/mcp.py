@@ -26,13 +26,37 @@ class Retry(McpError):
     """Refused before running (token or session expired): safe to repeat, even for send_email."""
 
 
-def _http(url, body: bytes, headers: dict, timeout=30):
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def _http(url, body: bytes, headers: dict, timeout=30, *, max_bytes=None):
     req = urllib.request.Request(url, body, {"User-Agent": USER_AGENT, **headers}, method="POST")
+    open_request = (urllib.request.urlopen if max_bytes is None else
+                    urllib.request.build_opener(_NoRedirect()).open)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            return r.status, {k.lower(): v for k, v in r.headers.items()}, r.read()
+        with open_request(req, timeout=timeout) as r:
+            data = r.read() if max_bytes is None else r.read(max_bytes + 1)
+            if max_bytes is not None and len(data) > max_bytes:
+                raise McpError("MCP response is too large")
+            if max_bytes is not None:
+                lengths = r.headers.get_all("Content-Length", [])
+                if lengths and (len(lengths) != 1 or r.headers.get("Transfer-Encoding") is not None
+                                or lengths[0].strip().lstrip("0") != str(len(data)).lstrip("0")
+                                or not (lengths[0].strip().isascii() and lengths[0].strip().isdecimal())):
+                    raise McpError("Incomplete MCP response")
+            return r.status, {k.lower(): v for k, v in r.headers.items()}, data
     except urllib.error.HTTPError as e:
-        return e.code, {k.lower(): v for k, v in e.headers.items()}, e.read()
+        with e:
+            return e.code, {k.lower(): v for k, v in e.headers.items()}, e.read() if max_bytes is None else b""
+
+
+def _decode_reply(body: bytes):
+    text = body.decode()
+    if "data:" in text and not text.lstrip().startswith("{"):
+        text = "\n".join(ln[5:].strip() for ln in text.splitlines() if ln.startswith("data:"))
+    return json.loads(text)
 
 
 class McpClient:
@@ -76,11 +100,7 @@ class McpClient:
                 os.replace(self.state.with_suffix(".tmp"), self.state)
         self.session = None
 
-    def _rpc(self, method, params=None, notify=False):
-        if self.access is None or clock.now() >= self.expires:
-            self._refresh()
-        if self.session is None and method != "initialize":
-            self._initialize()
+    def _request(self, method, params=None, notify=False):
         msg = {"jsonrpc": "2.0", "method": method}
         if params is not None:
             msg["params"] = params
@@ -91,6 +111,14 @@ class McpClient:
                    "Accept": "application/json, text/event-stream", "MCP-Protocol-Version": "2025-06-18"}
         if self.session:
             headers["Mcp-Session-Id"] = self.session
+        return msg, headers
+
+    def _rpc(self, method, params=None, notify=False):
+        if self.access is None or clock.now() >= self.expires:
+            self._refresh()
+        if self.session is None and method != "initialize":
+            self._initialize()
+        msg, headers = self._request(method, params, notify)
         st, h, body = self.http(self.mcp, json.dumps(msg).encode(), headers)
         if st == 401:
             self.access = None
@@ -104,10 +132,7 @@ class McpClient:
             self.session = h.get("mcp-session-id") or ""
         if notify:
             return None
-        text = body.decode()
-        if "data:" in text and not text.lstrip().startswith("{"):
-            text = "\n".join(ln[5:].strip() for ln in text.splitlines() if ln.startswith("data:"))
-        out = json.loads(text)
+        out = _decode_reply(body)
         if "error" in out:
             raise McpError(f"{self.name} MCP error: {out['error'].get('message', out['error'])}")
         return out["result"]

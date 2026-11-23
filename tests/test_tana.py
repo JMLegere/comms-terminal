@@ -1,8 +1,18 @@
 """Tana as a read-only Context source (FR-13a): what the service asks Tana and what it answers."""
 
-from datetime import datetime, timezone
+import io
+import json
+import threading
+import time
+import urllib.error
+import urllib.request
+import urllib.response
+from datetime import datetime, timedelta, timezone
+from email.message import Message
 
-from comms_terminal import mcp, serve, tana
+import pytest
+
+from comms_terminal import clock, mcp, serve, tana
 
 NOW = datetime(2026, 10, 13, 17, 0, tzinfo=timezone.utc)
 ORG, PERSON = "tana:text:org", "tana:text:person"
@@ -109,3 +119,242 @@ def test_console_treats_a_service_without_tana_as_not_connected(tmp_path):
         assert socket_context(sock, "tana")(["a@b.ca"], []) is None
     finally:
         old.shutdown()
+
+
+def ready_prep_client(**kwargs):
+    client = tana.Client({"client_id": "synthetic-client", "refresh_token": "synthetic-refresh"}, **kwargs)
+    client.access = "synthetic-access"
+    client.expires = clock.now() + timedelta(minutes=10)
+    client.session = "synthetic-session"
+    return client
+
+
+@pytest.fixture
+def live_prep_client(monkeypatch):
+    monkeypatch.setattr(clock, "now", lambda: NOW)
+    calls = []
+
+    def client_for(respond):
+        def http(url, body, headers, timeout=30, **_):
+            calls.append((url, body, headers, timeout))
+            return respond(json.loads(body))
+
+        return ready_prep_client(http=http), calls
+
+    return client_for
+
+
+def prep_reply(message, result):
+    return 200, {}, json.dumps({"jsonrpc": "2.0", "id": message["id"], "result": result}).encode()
+
+
+@pytest.mark.parametrize("session", ["synthetic-session", ""], ids=["stateful", "initialized-stateless"])
+def test_brief_transport_uses_only_the_existing_oauth_and_mcp_session(live_prep_client, session):
+    payload = {"pinnedItems": []}
+    client, calls = live_prep_client(lambda msg: prep_reply(msg, {"structuredContent": payload}))
+    client.session = session
+    deadline = time.monotonic() + 5
+    assert client.read_prep_tool("readEvent", deadline, eventUri="tana:event:site-visit") == payload
+    [(url, raw, headers, timeout)] = calls
+    message = json.loads(raw)
+    assert url == tana.MCP and message["method"] == "tools/call"
+    assert message["params"] == {"name": "readEvent", "arguments": {"eventUri": "tana:event:site-visit"}}
+    assert headers["Authorization"] == "Bearer synthetic-access"
+    assert headers.get("Mcp-Session-Id") == (session or None)
+    assert 0 < timeout <= 5
+
+
+@pytest.mark.parametrize("attr, value", [("access", None), ("expires", NOW), ("session", None)])
+def test_brief_transport_never_refreshes_or_initializes_missing_live_state(live_prep_client, attr, value):
+    client, calls = live_prep_client(lambda msg: pytest.fail(f"unexpected MCP request: {msg['method']}"))
+    setattr(client, attr, value)
+    with pytest.raises(mcp.McpError):
+        client.read_prep_tool("readEvent", time.monotonic() + 5, eventUri="tana:event:site-visit")
+    assert calls == []
+
+
+@pytest.mark.parametrize("tool, args", [
+    ("pinItem", {"eventUri": "tana:event:site-visit"}),
+    ("readItems", {"ids": ["tana:text:brief"], "task": "Summarize"}),
+])
+def test_brief_transport_does_not_call_mutating_or_task_tools(live_prep_client, tool, args):
+    client, calls = live_prep_client(lambda msg: pytest.fail(f"unexpected MCP request: {msg['method']}"))
+    with pytest.raises(mcp.McpError):
+        client.read_prep_tool(tool, time.monotonic() + 5, **args)
+    assert calls == []
+
+
+@pytest.mark.parametrize("status", [401, 403, 404, 200], ids=["token-expired", "denied", "session-expired", "tool-error"])
+def test_brief_transport_denial_is_safe_and_not_retried(live_prep_client, caplog, status):
+    secret = "private provider detail"
+
+    def respond(message):
+        if status == 200:
+            return prep_reply(message, {"isError": True, "content": [{"type": "text", "text": secret}]})
+        return status, {}, secret.encode()
+
+    client, calls = live_prep_client(respond)
+    with pytest.raises(mcp.McpError) as error:
+        client.read_prep_tool("readEvent", time.monotonic() + 5, eventUri="tana:event:site-visit")
+    [(url, raw, _, _)] = calls
+    assert url == tana.MCP and json.loads(raw)["method"] == "tools/call"
+    assert secret not in str(error.value) and secret not in caplog.text
+    assert (client.access, client.session, client.expires) == (
+        "synthetic-access", "synthetic-session", NOW + timedelta(minutes=10),
+    )
+
+
+def test_brief_transport_exhausted_deadline_does_not_send(live_prep_client):
+    client, calls = live_prep_client(lambda msg: pytest.fail(f"unexpected MCP request: {msg['method']}"))
+    with pytest.raises(TimeoutError):
+        client.read_prep_tool("readEvent", time.monotonic() - 1, eventUri="tana:event:site-visit")
+    assert calls == []
+
+
+def test_brief_transport_preserves_network_timeout_without_retry(live_prep_client):
+    def respond(_):
+        raise urllib.error.URLError(TimeoutError("private provider detail"))
+
+    client, calls = live_prep_client(respond)
+    with pytest.raises(TimeoutError):
+        client.read_prep_tool("readEvent", time.monotonic() + 5, eventUri="tana:event:site-visit")
+    [(url, raw, _, _)] = calls
+    assert url == tana.MCP and json.loads(raw)["method"] == "tools/call"
+
+
+def test_brief_transport_never_waits_unbounded_for_shared_client_lock(live_prep_client):
+    class BusyLock:
+        def acquire(self, blocking=True, timeout=-1):
+            assert not blocking or 0 <= timeout <= 5
+            return False
+
+    client, calls = live_prep_client(lambda msg: pytest.fail(f"unexpected MCP request: {msg['method']}"))
+    client.lock = BusyLock()
+    with pytest.raises((TimeoutError, mcp.McpError)):
+        client.read_prep_tool("readEvent", time.monotonic() + 5, eventUri="tana:event:site-visit")
+    assert calls == []
+
+
+def test_brief_transport_discards_success_received_after_deadline(live_prep_client, monkeypatch):
+    now = 100.0
+    monkeypatch.setattr(time, "monotonic", lambda: now)
+
+    def respond(message):
+        nonlocal now
+        now += 6
+        return prep_reply(message, {"structuredContent": {"pinnedItems": []}})
+
+    client, calls = live_prep_client(respond)
+    with pytest.raises(TimeoutError):
+        client.read_prep_tool("readEvent", 105.0, eventUri="tana:event:site-visit")
+    assert len(calls) == 1
+
+
+def test_brief_transport_does_not_forward_authenticated_request_on_redirect(monkeypatch):
+    requests = []
+
+    def redirect(_handler, _connection, request, **_):
+        requests.append(request.full_url)
+        headers = Message()
+        headers["Location"] = "https://redirect.example.invalid/mcp"
+        response = urllib.response.addinfourl(io.BytesIO(), headers, request.full_url, 302)
+        response.msg = "Found"
+        return response
+
+    # Leave urllib's redirect handling real; replace only HTTPS I/O.
+    monkeypatch.setattr(urllib.request.HTTPSHandler, "do_open", redirect)
+    client = ready_prep_client()
+    with pytest.raises(mcp.McpError):
+        client.read_prep_tool("readEvent", time.monotonic() + 5, eventUri="tana:event:site-visit")
+    assert requests == [tana.MCP]
+
+
+def test_brief_transport_truncates_wire_read_not_supported_brief_text(monkeypatch):
+    limit = 4 * 1024 * 1024
+
+    class OversizeBody(io.BytesIO):
+        def read(self, size=-1):
+            assert 0 < size <= limit, "wire read must be bounded before decoding"
+            data = super().read(size)
+            assert self.tell() <= limit
+            return data
+
+        read1 = read
+
+    def oversize(_handler, _connection, request, **_):
+        msg = json.loads(request.data)
+        _, _, body = prep_reply(msg, {"structuredContent": {"pinnedItems": []}})
+        response = urllib.response.addinfourl(OversizeBody(body + b" " * limit), Message(), request.full_url, 200)
+        response.msg = "OK"
+        return response
+
+    monkeypatch.setattr(urllib.request.HTTPSHandler, "do_open", oversize)
+    client = ready_prep_client()
+    with pytest.raises(mcp.McpError):
+        client.read_prep_tool("readEvent", time.monotonic() + 5, eventUri="tana:event:site-visit")
+
+
+@pytest.mark.parametrize("short", [False, True], ids=["leading-zero-length", "short_body"])
+def test_brief_transport_validates_declared_length(monkeypatch, short):
+    def respond(_handler, _connection, request, **_):
+        msg = json.loads(request.data)
+        _, _, body = prep_reply(msg, {"structuredContent": {"pinnedItems": []}})
+        headers = Message()
+        headers["Content-Length"] = f"0{len(body) + (100 if short else 0)}"
+        response = urllib.response.addinfourl(io.BytesIO(body), headers, request.full_url, 200)
+        response.msg = "OK"
+        return response
+
+    monkeypatch.setattr(urllib.request.HTTPSHandler, "do_open", respond)
+    client = ready_prep_client()
+    deadline = time.monotonic() + 5
+    if short:
+        with pytest.raises(mcp.McpError):
+            client.read_prep_tool("readEvent", deadline, eventUri="tana:event:site-visit")
+    else:
+        assert client.read_prep_tool("readEvent", deadline, eventUri="tana:event:site-visit") == {"pinnedItems": []}
+
+
+def test_brief_transport_does_not_hold_shared_lock_during_http(live_prep_client):
+    def respond(message):
+        assert client.lock.acquire(blocking=False), "Brief I/O blocks normal Context/refresh work"
+        client.lock.release()
+        return prep_reply(message, {"structuredContent": {"pinnedItems": []}})
+
+    client, calls = live_prep_client(respond)
+    assert client.read_prep_tool("readEvent", time.monotonic() + 5, eventUri="tana:event:site-visit") == {"pinnedItems": []}
+    assert len(calls) == 1
+
+
+def test_brief_transport_deadline_returns_while_blocked_io_keeps_only_one_slot(live_prep_client):
+    entered, release, finished = (threading.Event() for _ in range(3))
+    outcomes = []
+
+    def respond(message):
+        entered.set()
+        if not release.wait(5):  # cleanup backstop; model a read blocked independently of the caller deadline
+            raise AssertionError("test did not release HTTP")
+        return prep_reply(message, {"structuredContent": {"pinnedItems": []}})
+
+    client, calls = live_prep_client(respond)
+
+    def first():
+        try:
+            outcomes.append(client.read_prep_tool("readEvent", time.monotonic() + 0.25, eventUri="tana:event:site-visit"))
+        except Exception as e:
+            outcomes.append(e)
+        finally:
+            finished.set()
+
+    thread = threading.Thread(target=first, daemon=True)
+    thread.start()
+    try:
+        assert entered.wait(2)
+        assert finished.wait(2), "the caller did not return before I/O completed"
+        assert len(outcomes) == 1 and isinstance(outcomes[0], TimeoutError)
+        with pytest.raises((TimeoutError, mcp.McpError)):
+            client.read_prep_tool("readEvent", time.monotonic() + 0.25, eventUri="tana:event:site-visit")
+        assert len(calls) == 1
+    finally:
+        release.set()
+        thread.join(2)

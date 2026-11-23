@@ -50,6 +50,7 @@ const NAME = { promises: "Promise", threads: "Thread", tasks: "Task", issues: "I
   unattended_person: "Unattended" };
 /** A row's key set: an Unattended row holds a Person or an Organization, which take different keys. */
 const kindOf = (row) => (row.kind === "unattended" && row.r?.person_id ? "unattended_person" : row.kind);
+const nameOf = (row) => row.kind === "promises" && row.r?.kind === "prep" ? "Prep" : NAME[kindOf(row)];
 /** "thread.reply_sender" → "reply": a command as the bar and the dead-key toast name it. */
 export const verb = (command) => command.split(".")[1].replace("reply_sender", "reply").replace(/_/g, " ");
 /** The keys a row kind takes, as [key, label] pairs, for the bar and the dead-key toast. */
@@ -93,16 +94,6 @@ export function threadItems(rows, cases) {
     const group = rows.filter((r) => r.detail === detail);
     return group.length ? [{ statusHeader: { detail, label: GLYPH[detail][2], count: group.length }, depth: 0 }, ...byCase(group, 1, detail)] : [];
   });
-}
-
-/** Its Thread in its Status view, as a person page's thread link opens one. */
-function openThread(id) {
-  call("thread.view", { thread_id: id }).then((a) => {
-    const v = a.view.thread.f ?? a.view.thread;
-    setShared("thread", id);
-    run(`nav.${v.status_detail === "IGNORED" ? "ignored" : { TODO: "todo", SNOOZED: "snoozed", DONE: "done" }[v.status] ?? "todo"}`);
-    run("thread.show");
-  }).catch((e) => toast(String(e), "error"));
 }
 
 // A Promise row's status, its bullet (as views/promises STATUS): glyph, colour token, name.
@@ -208,12 +199,14 @@ export default class Today extends View {
   }
 
   load(cx) {
+    const request = this.pageRequest = {};
     cx.spawn(async (cx) => {
       try {
+        const [data, cases] = await Promise.all([call("today.page"), call("cases.list").catch(() => [])]);
+        if (this.pageRequest !== request) return;
         const here = this.rows()[this.at], moved = this.advanced();
         const keep = moved ?? here?.key;
         const index = here ? this.panes()[here.kind].findIndex((it) => it.key === here.key) : -1;
-        const [data, cases] = await Promise.all([call("today.page"), call("cases.list").catch(() => [])]);
         this.data = data;
         this.cases = Object.fromEntries((cases ?? []).map((c) => [c.id, c]));
         // FR-UD-9: the selected row is held where it is; panes() places it there only while its Thread or Task
@@ -223,9 +216,15 @@ export default class Today extends View {
         const again = rows.findIndex((x) => x.key === keep);
         const first = Math.max(0, rows.findIndex((x) => x.r)); // on arrival: the first Thread, not its header
         this.at = again >= 0 ? again : keep ? Math.min(this.at, Math.max(rows.length - 1, 0)) : first;
+        if (again < 0 && here?.kind === "promises" && shared("page") === "today") {
+          // If the next pane starts with a header, fall through to its first actual row.
+          this.at = Math.max(this.at, rows.findIndex((x, i) => i >= this.at && x.r));
+          if (shared("focus") === "detail") setShared("focus", "list");
+        }
         this.error = null;
         this.select(cx, true);
       } catch (e) {
+        if (this.pageRequest !== request) return;
         this.error = String(e);
       }
       cx.notify();
@@ -270,7 +269,29 @@ export default class Today extends View {
       this.at = Math.max(0, this.rows().findIndex((x) => x.key === row?.key));
       row = this.rows()[this.at];
     }
-    if (!row || shared("page") !== "today") return;
+    if (shared("page") !== "today") return;
+    const promiseSide = row?.kind === "promises" ? { kind: row.r.kind === "prep" ? "prep_today" : "promise", id: row.r.id } : null;
+    const previousSide = shared("side"), wasPromise = shared("detail") === "promise";
+    if (promiseSide?.kind === "prep_today") {
+      const pin = row.r.links?.find((link) => link.kind === "tana")?.target ?? null;
+      const sameMeeting = previousSide?.kind === "prep_today" && previousSide.id === promiseSide.id;
+      promiseSide.pin = pin;
+      promiseSide.pinEpoch = sameMeeting ? (previousSide.pinEpoch ?? 0) + Number(previousSide.pin !== pin) : 0;
+    }
+    // A new row invalidates a Brief read or link click; a metadata reload of the same row does not.
+    if (promiseSide ? !wasPromise || promiseSide.kind !== previousSide?.kind || promiseSide.id !== previousSide?.id
+      : wasPromise && previousSide) {
+      setShared("today_detail_epoch", (shared("today_detail_epoch") ?? 0) + 1);
+      if (wasPromise && previousSide?.kind === "prep_today") run("side.focus_exit");
+    }
+    if (!row) {
+      // Leave an empty Side rather than surfacing another view's previous selection.
+      if (shared("detail") === "promise") {
+        setShared("side", null);
+        if (shared("focus") === "list") setShared("target", null);
+      }
+      return;
+    }
     const r = row.r;
     // A reload on the same Task leaves the pane alone: the Task may have swapped in its Draft or Thread, and the task
     // view reloads itself on rows. Showing it again put the Task over the Draft on every autosave (the flicker).
@@ -278,12 +299,17 @@ export default class Today extends View {
     const inPlace = row.kind === "drafts" && Boolean(r?.thread_id); // a Reply Draft shows as its Thread (decision #144)
     setShared("thread", row.kind === "threads" ? r?.id ?? null : inPlace ? r.thread_id : null);
     setShared("detail", inPlace ? "thread" : DETAIL[row.kind]);
+    if (!["promises", "paused", "unattended"].includes(row.kind)) setShared("side", null);
     if (row.kind === "threads") run("thread.show");
     setShared("task", row.kind === "tasks" ? r.id : null); // as the Thread: a Task off screen never acts or reloads (D87)
     if (row.kind === "tasks") { run("task.show"); run("tasks.show"); }
     if (row.kind === "drafts") { setShared("draft", r.id); run(inPlace ? "thread.show" : "draft.show"); if (inPlace) run("thread.show_reply"); }
     if (row.kind === "issues") { setShared("issue", r.id); run("issue.show"); }
-    if (row.kind === "promises") { setShared("side", { kind: "promise", id: r.id }); run("side.show"); } // read-only (ADR 0024)
+    if (row.kind === "promises") {
+      setShared("subcol", null);
+      setShared("side", promiseSide);
+      run("side.show");
+    }
     if (row.kind === "paused") { setShared("person", r.person_id); setShared("side", { kind: "paused", id: r.person_id }); run("person.show"); run("side.show"); }
     if (row.kind === "unattended" && r.person_id) { // a Person in Fundraising or Talent (ADR 0016)
       setShared("person", r.person_id);
@@ -306,7 +332,7 @@ export default class Today extends View {
     const r = row.r ?? {};
     const what = { promises: r.what, threads: r.title, tasks: r.person ?? r.title, issues: `${r.identifier} ${r.title}`, drafts: r.subject ?? r.title, paused: r.person,
       unattended: r.name ?? r.domain }[row.kind];
-    setShared("target", { col: "list", label: `${NAME[row.kind]} · ${what ?? ""}`, keys: [["enter", "open"], ...keysOf(kindOf(row))] });
+    setShared("target", { col: "list", label: `${nameOf(row)} · ${what ?? ""}`, keys: [["enter", "open"], ...keysOf(kindOf(row))] });
   }
 
   enter(cx) {
@@ -320,11 +346,9 @@ export default class Today extends View {
         if (r) run("nav.focus_right"); // into the Thread: its newest message takes the focus
         return;
       case "tasks": return run("task.open");
-      case "promises": { // its Thread, when it links one
-        const thread = (r.links ?? []).find((l) => l.kind === "thread")?.target;
-        if (thread) openThread(thread);
+      case "promises":
+        if ((shared("focus") ?? "list") === "list") run("nav.focus_right"); // into its read-only Detail, not a linked Thread
         return;
-      }
       case "issues": return run("nav.focus_right"); // into the Issue: its keys act there
       case "drafts":
         setShared("focus", "detail"); // the Draft's Composer takes the keyboard, where it is shown
@@ -337,6 +361,7 @@ export default class Today extends View {
 
   command(c, cx) {
     if (c === "show") return this.load(cx);
+    if (shared("page") !== "today") return;
     if (c === "next" || c === "prev") return this.move(c === "next" ? 1 : -1, cx);
     if (c === "tab") return this.nextPane(cx);
     if (c === "enter") return this.enter(cx);
@@ -346,7 +371,7 @@ export default class Today extends View {
       const kind = row && kindOf(row);
       const to = kind && ROUTE[kind][c];
       if (to) return run(to);
-      if (kind) toast(`${c}: ${NAME[kind]} rows take ${keysOf(kind).map(([k, l]) => `${k} ${l}`).join(" · ") || "enter"}`);
+      if (kind) toast(`${c}: ${nameOf(row)} rows take ${keysOf(kind).map(([k, l]) => `${k} ${l}`).join(" · ") || "enter"}`);
     }
   }
 

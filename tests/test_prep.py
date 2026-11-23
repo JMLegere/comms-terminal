@@ -1,10 +1,11 @@
 """Prep read back from Tana (ADR 0025; FR-PR-16): a moved Meeting, a cancelled one, Tana down, and its alert."""
 
+import time
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from comms_terminal import commands, inbox, prep, promises
+from comms_terminal import clock, commands, inbox, mcp, prep, promises
 
 ME = "jeremy@agentmaple.example"
 NOW = datetime(2026, 11, 16, 14, 0, tzinfo=timezone.utc)  # Monday 10:00 Halifax
@@ -147,3 +148,175 @@ def test_a_meeting_stays_until_it_ends_then_is_done(db):
     [m] = prep.rows(db, under_way)
     assert m["risk"] is None and m["section"] == "today" and promises.status(m | {"state": "OPEN"}) == "on_track"
     assert prep.rows(db, NOW + timedelta(hours=3)) == []
+
+
+SELECTED = "tana:event:site-visit"
+BRIEF = "tana:text:Site_visit-brief"
+BRIEF_LINK = "https://home.tana.inc/o/workspace/l/tana%3Atext%3ASite_visit-brief"
+BRIEF_TEXT = "Meeting plan — first line\n\nPrep minutes: 60\nTravel minutes: 30\n<&> Final line\n"
+PIN = {"uri": BRIEF}
+DOC = {"id": BRIEF, "title": "Prep · Site visit", "content": BRIEF_TEXT}
+
+
+@pytest.fixture
+def brief_db(db, monkeypatch):
+    monkeypatch.setattr(clock, "now", lambda: NOW)
+    with db:
+        db.execute("INSERT INTO prep_read (id, at, error) VALUES (1, ?, NULL)", (clock.iso(NOW),))
+    return db
+
+
+def store_brief(db, meeting_id=SELECTED, link=BRIEF_LINK, end_at=None):
+    end_at = end_at if end_at is not None else NOW + timedelta(hours=3)
+    with db:
+        db.execute(
+            "INSERT INTO preps (event_uri, title, start_at, end_at, has_prep, brief, prepped)"
+            " VALUES (?, 'Site visit', ?, ?, ?, ?, 0)",
+            (meeting_id, clock.iso(end_at - timedelta(hours=1)), clock.iso(end_at), int(link is not None), link),
+        )
+
+
+class BriefTana:
+    """Fake only Tana's live-session read boundary, never its normal refresh client."""
+
+    def __init__(self, event_result, item_result=None):
+        self.results = {"readEvent": event_result, "readItems": item_result}
+        self.calls = []
+        self.deadlines = []
+
+    def read_prep_tool(self, name, deadline, **args):
+        self.calls.append((name, args))
+        self.deadlines.append(deadline)
+        result = self.results[name]
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+
+def read_brief(db, client, meeting_id=SELECTED):
+    before = db.total_changes
+    answer = prep.brief(db, client, meeting_id)
+    assert db.total_changes == before  # catches writes even if rolled back or the old values were restored
+    return answer
+
+
+def test_brief_reads_only_selected_persisted_id_after_explicit_pin(brief_db, caplog):
+    store_brief(brief_db, "tana:event:other", BRIEF_LINK.replace("Site_visit-brief", "other"))
+    store_brief(brief_db)
+    client = BriefTana({"eventUri": SELECTED, "pinnedItems": ["tana:text:other", PIN]},
+                       {"items": [DOC]})
+    before = time.monotonic()
+    assert read_brief(brief_db, client) == {"status": "ready", "text": BRIEF_TEXT}
+    after = time.monotonic()
+    assert client.calls == [("readEvent", {"eventUri": SELECTED}), ("readItems", {"ids": [BRIEF]})]
+    assert len(client.deadlines) == 2 and client.deadlines[0] == client.deadlines[1]
+    assert before + 5 <= client.deadlines[0] <= after + 5
+    assert "Final line" not in caplog.text
+
+
+@pytest.mark.parametrize("meeting_id", [None, "tana:text:site-visit", "tana:event:absent", SELECTED])
+def test_brief_without_current_eligible_local_meeting_never_calls_tana(brief_db, meeting_id):
+    store_brief(brief_db, end_at=NOW)
+    client = BriefTana({"pinnedItems": [PIN]}, {"items": [DOC]})
+    assert read_brief(brief_db, client, meeting_id) == {"status": "unavailable"}
+    assert client.calls == []
+
+
+@pytest.mark.parametrize("meeting_id", ["tana:text:site-visit", "tana:event:site-visit/extra", "tana:event:site-visit\n"])
+def test_brief_never_admits_malformed_meeting_id_even_if_persisted(brief_db, meeting_id):
+    store_brief(brief_db, meeting_id)
+    client = BriefTana({"pinnedItems": [PIN]}, {"items": [DOC]})
+    assert read_brief(brief_db, client, meeting_id) == {"status": "unavailable"}
+    assert client.calls == []
+
+
+@pytest.mark.parametrize("link", [
+    "http://home.tana.inc/o/workspace/l/tana%3Atext%3ASite_visit-brief",
+    "https://home.tana.inc.example/o/workspace/l/tana%3Atext%3ASite_visit-brief",
+    "https://user@home.tana.inc/o/workspace/l/tana%3Atext%3ASite_visit-brief",
+    "https://home.tana.inc/o/workspace/l/tana%3Atext%3ASite_visit-brief/extra",
+    "https://home.tana.inc/o/workspace/l/tana%253Atext%253ASite_visit-brief",
+    "https://home.tana.inc/o/workspace/l/tana%3Aevent%3Asite-visit",
+])
+def test_brief_rejects_non_provider_or_ambiguous_persisted_links(brief_db, link):
+    store_brief(brief_db, link=link)
+    client = BriefTana({"pinnedItems": [PIN]}, {"items": [DOC]})
+    assert read_brief(brief_db, client) == {"status": "unavailable"}
+    assert client.calls == []
+
+
+@pytest.mark.parametrize("link", [None, BRIEF_LINK], ids=["no-local-link", "old-local-link"])
+def test_brief_reports_missing_only_for_explicit_authoritative_empty_pins(brief_db, link):
+    store_brief(brief_db, link=link)
+    client = BriefTana({"pinnedItems": []})
+    assert read_brief(brief_db, client) == {"status": "missing"}
+    assert client.calls == [("readEvent", {"eventUri": SELECTED})]
+
+
+@pytest.mark.parametrize("page", [{"hasNextPage": True}, {"hasNextPage": False, "hasPreviousPage": True}])
+def test_brief_empty_pins_with_nested_page_are_unavailable(brief_db, page):
+    store_brief(brief_db)
+    client = BriefTana({"pinnedItems": [], "pageInfo": page})
+    assert read_brief(brief_db, client) == {"status": "unavailable"}
+    assert client.calls == [("readEvent", {"eventUri": SELECTED})]
+
+
+def test_brief_without_stored_link_never_guesses_from_current_pins(brief_db):
+    store_brief(brief_db, link=None)
+    client = BriefTana({"pinnedItems": [PIN]})
+    assert read_brief(brief_db, client) == {"status": "unavailable"}
+    assert client.calls == [("readEvent", {"eventUri": SELECTED})]
+
+
+@pytest.mark.parametrize("event_result", [
+    {},
+    {"relatedDocs": [PIN]},
+    {"pinnedItems": ["tana:text:other"], "relatedDocs": [PIN]},
+    {"pinnedItems": None},
+    {"pinnedItems": BRIEF},
+    {"pinnedItems": [PIN, {"not-a-uri": BRIEF}]},
+    {"pinnedItems": [], "hasMore": True},
+    {"pinnedItems": [PIN], "nextCursor": "page-two"},
+    {"pinnedItems": [PIN], "partial": True},
+    {"pinnedItems": [PIN], "eventUri": "tana:event:other"},
+], ids=["unreported", "related-only", "stale", "null", "wrong-type", "malformed-entry", "empty-page",
+        "matching-page", "partial", "wrong-meeting"])
+def test_brief_does_not_read_a_doc_without_complete_explicit_pin_proof(brief_db, event_result):
+    store_brief(brief_db)
+    client = BriefTana(event_result)
+    assert read_brief(brief_db, client) == {"status": "unavailable"}
+    assert client.calls == [("readEvent", {"eventUri": SELECTED})]
+
+
+@pytest.mark.parametrize("item_result", [
+    {},
+    {"items": []},
+    {"items": [DOC | {"id": "tana:text:other"}]},
+    {"items": [DOC, DOC | {"id": "tana:text:other"}]},
+    {"items": [DOC | {"title": "Unrelated notes"}]},
+    {"items": [DOC | {"content": " \n"}]},
+    {"items": [{"id": BRIEF, "editableBlocks": [["p", "Not plain content"]]}]},
+    {"items": [DOC | {"content": {"text": BRIEF_TEXT}}]},
+    {"items": [DOC | {"truncated": True}]},
+    {"items": [DOC], "nextCursor": "page-two"},
+    {"items": [DOC | {"content": "é" * 32769}]},
+], ids=["no-items-key", "no-doc", "wrong-doc", "extra-doc", "renamed-doc", "empty-text", "editable-only",
+        "structured-content", "truncated", "paged", "over-64-kib-utf8"])
+def test_brief_rejects_incomplete_or_unsupported_doc_without_leaking_body(brief_db, item_result):
+    store_brief(brief_db)
+    client = BriefTana({"pinnedItems": [BRIEF]}, item_result)
+    assert read_brief(brief_db, client) == {"status": "unavailable"}
+    assert client.calls == [("readEvent", {"eventUri": SELECTED}), ("readItems", {"ids": [BRIEF]})]
+
+
+@pytest.mark.parametrize("stage", ["event", "item"])
+@pytest.mark.parametrize("failure, status", [
+    (mcp.McpError("private provider detail"), "unavailable"),
+    (TimeoutError("private provider detail"), "timeout"),
+])
+def test_brief_distinguishes_denial_from_timeout_without_retention(brief_db, caplog, stage, failure, status):
+    store_brief(brief_db)
+    client = BriefTana(failure if stage == "event" else {"pinnedItems": [PIN]}, failure)
+    assert read_brief(brief_db, client) == {"status": status}
+    assert [name for name, _ in client.calls] == (["readEvent"] if stage == "event" else ["readEvent", "readItems"])
+    assert "private provider detail" not in caplog.text
