@@ -229,14 +229,17 @@ def handle_respond(db, body: bytes, client: gcal.Client | None) -> tuple[int, di
 
 
 def handle_reply(db, body: bytes, senders: Senders) -> tuple[int, dict]:
-    """POST /reply: {"thread_id", "text", "to", "cc"} -> (status, JSON body): the text is saved as the Thread's
-    Reply Draft and sent through send_draft with the Reply Draft's files. 502 refused (the Draft stays editable),
-    504 outcome unknown (the Draft locks); nothing is recorded either way."""
+    """POST /reply: thread_id, text, to, cc and an optional expected_reply_to_activity_id.
+    Saves and sends the Reply Draft with its files via send_draft. 409 target changed, 502 refused (editable),
+    504 outcome unknown (locked); nothing is sent on a definitive refusal."""
     try:
         req = json.loads(body)
         thread_id, text = str(req["thread_id"]), str(req["text"])
     except (ValueError, KeyError, TypeError):
         return 400, {"error": "expected thread_id and text"}
+    pin = req.get("expected_reply_to_activity_id")
+    if pin is not None and not inbox.is_id(pin):
+        return 400, {"error": "expected_reply_to_activity_id must be an Activity ID"}
     r = db.execute("SELECT c.* FROM threads t JOIN channels ch ON ch.id = t.channel_id"
                    " JOIN connections c ON c.id = ch.connection_id WHERE t.id = ?", (thread_id,)).fetchone()
     if r is None:
@@ -247,7 +250,10 @@ def handle_reply(db, body: bytes, senders: Senders) -> tuple[int, dict]:
     if sender is None:
         return 503, {"error": f"{r['label'] or r['platform']} is not connected for sending"}
     try:
-        t = inbox.reply(db, thread_id, text, sender, req.get("to") or [], req.get("cc") or [])
+        expected = {"expected_reply_to_activity_id": pin} if pin is not None else {}
+        t = inbox.reply(db, thread_id, text, sender, req.get("to") or [], req.get("cc") or [], **expected)
+    except inbox.DraftConflict as e:
+        return 409, {"error": str(e)}
     except inbox.SendUnknown as e:
         return 504, {"error": str(e)}
     except inbox.SendFailed as e:

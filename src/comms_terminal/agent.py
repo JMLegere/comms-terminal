@@ -10,12 +10,13 @@ import re
 import shlex
 import sys
 from datetime import date, datetime, timedelta
+from uuid import UUID
 
 from . import calendar, clock, commands, files, inbox, issues, pipeline, promises, sequence_md, sequences
 from .platforms import PLATFORMS
 from .remote import ReplyError, socket_context
 from .tui import (CONTEXT_SOURCES, DRAFT_FIELDS, connection_label, draft_history, draft_text, parse_time,
-                  staged_files, task_markdown, thread_addresses, thread_text)
+                  slack_reply_target_text, staged_files, task_markdown, thread_addresses, thread_text)
 
 # Parity with the console (Jeremy, 2026-10-29): every writer (writers.WRITERS) is reachable from one command here,
 # or sits in CONSOLE_ONLY with its reason. tests/test_cli_parity.py fails when a new writer lands in neither.
@@ -172,10 +173,12 @@ def add_parsers(sub):
     x.add_argument("id")
     sub.add_parser("drafts", help="list Drafts, then the Connections a new Draft can use")
     d = sub.add_parser("draft", help="one Draft as Markdown; with --to/--cc/--bcc/--subject/--body, change it first (never sends)")
-    d.add_argument("id", help="a Draft id, or `new` (needs --connection for a new Thread, or --thread for a reply)")
+    d.add_argument("id", help="a Draft id, or `new` with --connection, --thread, or --reply-to")
     d.add_argument("--revision", type=int, help="the revision you read; required to change an existing Draft")
     d.add_argument("--connection", help="new Draft: the Connection id it sends from")
     d.add_argument("--thread", help="new Draft: the Thread it replies to; its reply box sends it")
+    d.add_argument("--reply-to", metavar="ACTIVITY_ID",
+                   help="new Slack Reply Draft: the Activity UUID or activity:UUID from `comms-terminal thread`")
     for field in ("to", "cc", "bcc", "subject"):
         d.add_argument(f"--{field}")
     d.add_argument("--body", help="the body, or - to read it from stdin")
@@ -708,6 +711,8 @@ def _run(a, db):
                 issues.set_urgency(db, a.name, a.value, now=clock.now())
             for name, value in issues.coefficients(db).items():
                 print(f"{name}\t{value:g}")
+        elif getattr(a, "reply_to", None) is not None and (a.delete or a.attach is not None or a.detach is not None):
+            raise ValueError("--reply-to cannot be combined with --delete, --attach, or --detach")
         elif a.delete or a.attach or a.detach:
             print(draft_files(db, a), end="")
         else:
@@ -715,7 +720,7 @@ def _run(a, db):
             if changes.get("body") == "-":
                 changes["body"] = sys.stdin.read()
             print(draft(db, a.id, changes, a.revision, a.connection, getattr(a, "thread", None),
-                        getattr(a, "needs_edit", False)), end="")
+                        getattr(a, "needs_edit", False), reply_to=getattr(a, "reply_to", None)), end="")
     except inbox.ModuleDisabled as e:
         print(f"comms-terminal {a.cmd}: {e.args[0]}", file=sys.stderr)
         raise SystemExit(DISABLED_EXIT) from e
@@ -867,14 +872,22 @@ def thread(db, thread_id, socket) -> str:
     return thread_text(v, files.raw_dir(db), context)
 
 
-def draft(db, ref, changes, revision, connection_id, thread_id=None, needs_edit=False) -> str:
-    if ref == "new" and thread_id is not None:  # a reply Draft: the Thread gives its envelope
-        if old := inbox.reply_draft(db, thread_id):
-            raise ValueError(f"Thread {thread_id} already has reply Draft {old['id']}: change it with "
-                             f"`comms-terminal draft {old['id']} --revision {old['revision']}`")
+def draft(db, ref, changes, revision, connection_id, thread_id=None, needs_edit=False, *, reply_to=None) -> str:
+    if reply_to is not None:
+        if ref != "new" or any(v is not None for v in (connection_id, thread_id, revision)) or changes.keys() - {"body"}:
+            raise ValueError("--reply-to only creates a Slack Reply Draft: use `draft new --reply-to ACTIVITY_ID --body -`")
+        activity_id = str(UUID(reply_to.removeprefix("activity:")))
+        thread_id, _, _ = inbox.slack_reply_target(db, activity_id)
+        d = inbox.save_reply_draft(db, thread_id, changes.get("body", ""), reply_to_activity_id=activity_id)
+        if d is None:
+            raise ValueError("a reply Draft needs --body")
+    elif ref == "new" and thread_id is not None:  # a reply Draft: the Thread gives its envelope
         with db:  # one transaction: a refused change (a Bcc) leaves no reply Draft behind
             if not db.in_transaction:
                 db.execute("BEGIN IMMEDIATE")
+            if old := inbox.reply_draft(db, thread_id):
+                raise ValueError(f"Thread {thread_id} already has reply Draft {old['id']}: change it with "
+                                 f"`comms-terminal draft {old['id']} --revision {old['revision']}`")
             d = inbox.save_reply_draft(db, thread_id, changes.pop("body", ""))
             if d is None:
                 raise ValueError("a reply Draft needs --body")
@@ -902,8 +915,9 @@ def draft(db, ref, changes, revision, connection_id, thread_id=None, needs_edit=
         d = inbox.mark_needs_edit(db, d["id"])
     c = next((c for c in inbox.connections(db) if c["id"] == d["connection_id"]), None)
     history = draft_history(db, d["kind"], d["connection_id"], d["to"]) or []
+    target = slack_reply_target_text(db, d["reply_to_activity_id"], d["thread_id"]) if d.get("reply_to_activity_id") else None
     return draft_text(d, connection_label(c), history, files.raw_dir(db), (d["id"], d["revision"]),
-                      staged_files(db, ("draft", d["id"])))
+                      staged_files(db, ("draft", d["id"])), reply_target=target)
 
 
 def enroll(db, person: str, sequence: str, start: str | None = None, org: str | None = None,

@@ -27,7 +27,7 @@ from typing import Protocol, Sequence
 from . import clock, commands, files, platforms
 from .writers import writer
 
-SCHEMA_VERSION = 49
+SCHEMA_VERSION = 50
 WAIT = timedelta(days=4)  # Waiting for them ends after this with no reply: back to Todo to follow up (#116)
 EMAIL_CONFIRMATION_PENDING = "Email confirmation pending; wait for its sent receipt before replying."
 NO_BCC = "Only an email New Thread Draft has Bcc; a Reply Draft, SMS or Slack Draft has none."
@@ -1018,6 +1018,10 @@ INSERT INTO promise_alerts_new (kind, item_id, level, sent_at) SELECT kind, item
 DROP TABLE promise_alerts;
 ALTER TABLE promise_alerts_new RENAME TO promise_alerts;"""  # Promises (ADR 0024, 0027)
 
+# Exact Slack Reply Drafts (FR-4c): the original target Activity, not the newest post in the Thread.
+MIGRATIONS[50] = """ALTER TABLE composition_drafts ADD COLUMN reply_to_activity_id TEXT REFERENCES activities (id)
+  CHECK (reply_to_activity_id IS NULL OR (kind = 'slack' AND thread_id IS NOT NULL));"""
+
 
 class SendUnknown(SendFailed):
     """The provider may or may not have sent the message (timeout, lost response, crash before recording)."""
@@ -1395,6 +1399,53 @@ def mark_needs_edit(db, draft_id: int, needs: bool = True, *, now: datetime | No
     return get_draft(db, draft_id)
 
 
+def slack_reply_target(db, activity_id: str, *, thread_id: str | None = None) -> tuple[str, dict, str]:
+    """Resolve an original Slack message (folded for display) and the native parent its reply must use."""
+    from . import slack
+    if not is_id(activity_id):
+        raise ValueError("Choose a stored Slack message Activity.")
+    with _read_snapshot(db):
+        source = db.execute(
+            "SELECT a.thread_id, a.native_id, a.data, t.channel_id, ch.native_id AS channel,"
+            " ch.kind AS channel_kind, c.platform FROM activities a JOIN threads t ON t.id = a.thread_id"
+            " JOIN channels ch ON ch.id = t.channel_id JOIN connections c ON c.id = ch.connection_id"
+            " WHERE a.id = ? AND a.kind = 'MESSAGE'", (activity_id,)).fetchone()
+        if source is None or source["platform"] != "slack":
+            raise ValueError("Choose a stored Slack message Activity.")
+        t = get_thread(db, source["thread_id"])
+        if thread_id is not None:
+            try:
+                expected = get_thread(db, thread_id)
+            except KeyError:
+                raise ValueError("The Slack Reply Draft's Thread is unavailable.") from None
+            if t.id != expected.id:
+                raise ValueError("The selected Slack message belongs to a different Thread.")
+        data, channel = json.loads(source["data"]), source["channel"]
+        if isinstance(data, dict) and "channel" not in data and "ts" not in data:
+            data = data.get("slack_reply")
+        if not isinstance(data, dict):
+            raise ValueError("The selected Slack message has no verified source coordinates.")
+        ts = data.get("ts")
+        parent_ts = data.get("thread_ts", ts)
+        if (t.channel_id != source["channel_id"] or source["channel_kind"] not in slack.CHANNEL_KINDS.values()
+                or not re.fullmatch(r"[CDG][A-Z0-9]+", channel) or data.get("channel") != channel
+                or not all(isinstance(x, str) and slack.MESSAGE_TS.fullmatch(x) for x in (ts, parent_ts))
+                or source["native_id"] != f"{channel}:{ts}"
+                or data.get("kind", source["channel_kind"]) != source["channel_kind"]):
+            # A locally recorded reply may have only its native ID, which does not establish its parent.
+            raise ValueError("The selected Slack message has no verified source coordinates.")
+        # Slack can deliver a reply without its parent. Its exact thread_ts is usable unless deletion is known.
+        if db.execute("SELECT 1 FROM activities gone JOIN activities original ON original.id = gone.target_id"
+                      " JOIN threads owner ON owner.id = original.thread_id"
+                      " WHERE gone.kind = 'DELETE' AND gone.native_id IN (?, ?) AND owner.channel_id = ?",
+                      (source["native_id"], f"{channel}:{parent_ts}", t.channel_id)).fetchone():
+            raise ValueError("The selected Slack message or its parent was deleted.")
+        message = next((m for m in thread_view(db, t.id)["messages"] if m["id"] == activity_id), None)
+        if message is None or message["deleted"]:
+            raise ValueError("The selected Slack message is unavailable or deleted.")
+        return t.id, message | {"data": data | {"kind": source["channel_kind"]}}, parent_ts
+
+
 def _reply_values(db, thread_id: int, body: str) -> dict:
     """A Reply Draft's envelope as its Composer shows it: the Thread's Connection and place, and for email the
     reply-all To and Cc and the "Re:" Subject."""
@@ -1417,16 +1468,21 @@ def _reply_values(db, thread_id: int, body: str) -> dict:
 @writer("write")
 def save_reply_draft(db, thread_id: int, body: str, task_id: int | None = None, *,
                      expected_revision: int | None = None, to: str | None = None, cc: str | None = None,
+                     reply_to_activity_id: str | None = None, expected_reply_to_activity_id: str | None = None,
                      now: datetime | None = None) -> dict | None:
     """Save the Reply Draft kept under one Thread id (the one its Composer opened on, so an alias keeps its own)
     as a new revision. The latest save wins (ADR 0012): `expected_revision` is the revision the editor read, and
-    without it the save applies over any stored one. Empty text deletes the Reply Draft unless files are staged
-    on it. An email Reply Draft starts with the reply-all To and Cc and keeps its own after that; `to` and `cc`
-    replace them."""
+    without it the save applies over any stored revision. The expected Slack target must match even for a blank
+    save; only creation sets a new target. Empty text deletes an unpinned Reply Draft unless files are staged.
+    An email Reply Draft starts with the reply-all To and Cc; `to` and `cc` replace them."""
     with _write_snapshot(db):
-        row = db.execute('SELECT id, revision, task_id, send_at, "to", cc FROM composition_drafts WHERE thread_id = ?',
-                         (thread_id,)).fetchone()
-        if not body.strip() and not (row and db.execute(
+        if reply_to_activity_id is not None:
+            thread_id, _, _ = slack_reply_target(db, reply_to_activity_id, thread_id=thread_id)
+        row = reply_draft(db, thread_id)
+        if row is not None and reply_to_activity_id is not None:
+            raise DraftConflict("This Thread already has a Reply Draft; it was not changed.")
+        _check_reply_pin(row, expected_reply_to_activity_id)
+        if not body.strip() and not (row and row["reply_to_activity_id"] is not None) and not (row and db.execute(
                 "SELECT 1 FROM staged_attachments WHERE draft_id = ?", (row["id"],)).fetchone()):
             if row:
                 whole = get_draft(db, row["id"])
@@ -1441,6 +1497,8 @@ def save_reply_draft(db, thread_id: int, body: str, task_id: int | None = None, 
                     commands.inverse("inbox.restore_draft", whole)
             return None
         values = _reply_values(db, thread_id, body)
+        if row and row["reply_to_activity_id"] is not None and row["connection_id"] != values["connection_id"]:
+            raise DraftConflict("The Slack Reply Draft does not match its Thread's Connection.")
         if values["kind"] == "email":
             if row:
                 values |= dict(to=row["to"], cc=row["cc"])
@@ -1448,7 +1506,12 @@ def save_reply_draft(db, thread_id: int, body: str, task_id: int | None = None, 
         if row:
             return save_draft(db, values, draft_id=row["id"], expected_revision=expected_revision or row["revision"],
                               now=now)
-        return save_draft(db, values, thread_id=thread_id, task_id=task_id, now=now)
+        d = save_draft(db, values, thread_id=thread_id, task_id=task_id, now=now)
+        if reply_to_activity_id is not None:
+            db.execute("UPDATE composition_drafts SET reply_to_activity_id = ? WHERE id = ?",
+                       (reply_to_activity_id, d["id"]))
+            return get_draft(db, d["id"])
+        return d
 
 
 def send_time(choice: str, now: datetime, rand=random.random) -> datetime:
@@ -1480,12 +1543,20 @@ def schedule_draft(db, draft_id: int, send_at: datetime | None, *, now: datetime
 
 
 @writer("write")
-def schedule_reply(db, thread_id: int, body: str, to: list[str], cc: list[str], send_at: datetime | None, *, now: datetime | None = None) -> dict:
+def schedule_reply(db, thread_id: int, body: str, to: list[str], cc: list[str], send_at: datetime | None, *,
+                   expected_reply_to_activity_id: str | None = None, now: datetime | None = None) -> dict:
     """Save a reply box as its Thread's reply Draft, with the box's To and Cc, to send at `send_at`."""
     with db:
         if not db.in_transaction:
             db.execute("BEGIN IMMEDIATE")
-        d = save_reply_draft(db, thread_id, body, to=", ".join(to), cc=", ".join(cc), now=now)
+        draft = reply_draft(db, thread_id)
+        _check_reply_pin(draft, expected_reply_to_activity_id)
+        if send_at is not None and expected_reply_to_activity_id is not None:
+            slack_reply_target(db, expected_reply_to_activity_id, thread_id=thread_id)
+            if not body.strip() and not staged(db, draft_id=draft["id"]):
+                raise ValueError("Nothing to send.")
+        d = save_reply_draft(db, thread_id, body, to=", ".join(to), cc=", ".join(cc),
+                             expected_reply_to_activity_id=expected_reply_to_activity_id, now=now)
         if d is None:
             raise ValueError("Nothing to send.")
         return schedule_draft(db, d["id"], send_at, now=now)
@@ -1505,6 +1576,11 @@ def reply_draft(db, thread_id: int) -> dict | None:
     """The reply Draft saved under this Thread id, or None."""
     r = db.execute("SELECT * FROM composition_drafts WHERE thread_id = ?", (thread_id,)).fetchone()
     return dict(r) if r else None
+
+
+def _check_reply_pin(draft, expected_reply_to_activity_id) -> None:
+    if expected_reply_to_activity_id != (draft["reply_to_activity_id"] if draft else None):
+        raise DraftConflict("The Reply Draft's Slack target changed. Reopen the Reply Draft before continuing.")
 
 
 def get_draft(db, draft_id: int) -> dict:
@@ -1726,6 +1802,11 @@ def carry_send(db, action, sender, now: datetime) -> dict:
     try:
         if sender is None:
             raise SendFailed("Not connected for sending")
+        if d["reply_to_activity_id"] is not None:
+            if d["revision"] != p["revision"]:
+                raise DraftConflict("Draft changed since this revision; reload before sending.")
+            if d["connection_id"] != action["connection_id"]:
+                raise ValueError("The Slack Reply Draft no longer matches the send Action's Connection.")
         if d["thread_id"] is not None:
             connection_id, fmt, call, record, settle = _reply_send(db, d, files, sender, started)
         else:
@@ -1830,18 +1911,28 @@ def _new_send(db, d, files, sender, started, at):
 def _reply_send(db, d, files, sender, started):
     """A Reply Draft's checks (ValueError before anything is claimed) and its connection, format, provider call,
     record and settle steps for `_send`: the saved text goes into the Thread the Draft was saved under, with the
-    Thread's history for threading, and the Thread moves on as any reply of Jeremy's does (decision #59)."""
+    exact Slack target when pinned (otherwise the Thread's history for threading). The Thread moves on as any
+    reply of Jeremy's does (decision #59)."""
     from . import sequences
     draft_id, staged_on = d["id"], d["thread_id"]
     t = get_thread(db, staged_on)
     thread_id = t.id
-    records = db.execute(
-        "SELECT native_id, data, content, occurred_at, identity_id FROM thread_activities"
-        " WHERE thread_id = ? AND kind = 'MESSAGE' ORDER BY occurred_at, id", (thread_id,)).fetchall()
-    history = [{"native_id": r["native_id"], "data": json.loads(r["data"]), "content": r["content"],
-                "at": r["occurred_at"]} for r in records]
     connection_id, platform = db.execute("SELECT c.id, c.platform FROM channels ch JOIN connections c"
                                          " ON c.id = ch.connection_id WHERE ch.id = ?", (t.channel_id,)).fetchone()
+    reply_kwargs = {}
+    if (pin := d["reply_to_activity_id"]) is not None:
+        if platform != "slack" or d["kind"] != "slack" or d["connection_id"] != connection_id:
+            raise ValueError("The Slack Reply Draft does not match its Thread's Connection.")
+        _, target, parent_ts = slack_reply_target(db, pin, thread_id=thread_id)
+        history = [target]  # only the verified target supplies the Slack channel; ignore the rest of the Thread
+        reply_kwargs["reply_to_ts"] = parent_ts
+        records = ()
+    else:
+        records = db.execute(
+            "SELECT native_id, data, content, occurred_at, identity_id FROM thread_activities"
+            " WHERE thread_id = ? AND kind = 'MESSAGE' ORDER BY occurred_at, id", (thread_id,)).fetchall()
+        history = [{"native_id": r["native_id"], "data": json.loads(r["data"]), "content": r["content"],
+                    "at": r["occurred_at"]} for r in records]
     p = platforms.PLATFORMS[platform]
     if not p.takes_replies:
         raise ValueError(NO_REPLY)
@@ -1871,6 +1962,10 @@ def _reply_send(db, d, files, sender, started):
         t = get_thread(db, thread_id)  # reconciliation may have happened while the Sender was in flight
         changes.update(_send_changes(db, connection_id, checkpoint))
         data = {"to": list(to), "cc": list(cc)}
+        if pin is not None:
+            # Keep exact targets usable without feeding local sends into Slack grouping or untargeted routing.
+            data["slack_reply"] = {"channel": target["data"]["channel"], "kind": target["data"]["kind"],
+                                   "ts": native_id.partition(":")[2], "thread_ts": parent_ts}
         if receipts:
             data["seen_through_activity_id"] = checkpoint[0]
         row = db.execute(
@@ -1891,7 +1986,14 @@ def _reply_send(db, d, files, sender, started):
                 _set_status(db, t.id, recorded_at[0], *nxt, cause="reply")
         return t.id
 
-    call = lambda: sender.send(t, text, list(to), list(cc), history, files=files)  # noqa: E731
+    def call():
+        native_id = sender.send(t, text, list(to), list(cc), history, files=files, **reply_kwargs)
+        if pin is not None:
+            from .slack import MESSAGE_TS
+            channel, _, ts = native_id.partition(":")
+            if channel != target["data"]["channel"] or not MESSAGE_TS.fullmatch(ts):
+                raise SendUnknown("Slack did not identify the sent Reply Draft.")
+        return native_id
     return connection_id, p.format, call, record, settle
 
 
@@ -2635,15 +2737,15 @@ def staged_files(db, *, draft_id: int | None = None, thread_id: int | None = Non
 
 @writer("write")
 def unstage(db, staged_id: int, *, now: datetime | None = None) -> None:
-    """Take a file off its Draft; a Reply Draft left with no text and no files goes too."""
+    """Take a file off its Draft; an unpinned Reply Draft left with no text and no files goes too."""
     with db:
         r = db.execute("SELECT d.* FROM staged_attachments s JOIN composition_drafts d ON d.id = s.draft_id"
                        " WHERE s.id = ?", (staged_id,)).fetchone()
         f = db.execute("SELECT * FROM staged_attachments WHERE id = ?", (staged_id,)).fetchone()
         db.execute("DELETE FROM staged_attachments WHERE id = ?", (staged_id,))
         gone = False
-        if r and r["thread_id"] is not None and not r["body"].strip() and not db.execute(
-                "SELECT 1 FROM staged_attachments WHERE draft_id = ?", (r["id"],)).fetchone():
+        if (r and r["thread_id"] is not None and r["reply_to_activity_id"] is None and not r["body"].strip()
+                and not db.execute("SELECT 1 FROM staged_attachments WHERE draft_id = ?", (r["id"],)).fetchone()):
             db.execute("DELETE FROM composition_drafts WHERE id = ?", (r["id"],))
             from . import sequences
             sequences.task_draft_deleted(db, dict(r), now=now)
@@ -3083,16 +3185,21 @@ def _act_command(db, t: Thread, action) -> None:
 
 
 def reply(db, thread_id: int, text: str, sender: Sender,
-          to: list[str] = (), cc: list[str] = ()) -> Thread:
+          to: list[str] = (), cc: list[str] = (), *, expected_reply_to_activity_id: str | None = None) -> Thread:
     """Send a Composer's text as this Thread's reply: save it as the Thread's Reply Draft revision (with the
     Composer's To and Cc, for email), then send that revision through `send_draft`, which locks the Draft when
     the outcome is unknown. SendFailed (refused) or SendUnknown (it may have gone out) propagates and the Draft
     stays with its files. ValueError: nothing to send, or a problem found before sending (FR-A15)."""
-    locked = reply_draft(db, thread_id)
-    if locked and locked["sending_at"]:  # keep the text that may have gone out; send_draft(again=True) resends it
-        raise SendUnknown("Send outcome unknown; check before sending again.")
-    d = save_reply_draft(db, thread_id, text, to=", ".join(to) if to or cc else None,
-                         cc=", ".join(cc) if to or cc else None)
+    with _write_snapshot(db):
+        locked = reply_draft(db, thread_id)
+        _check_reply_pin(locked, expected_reply_to_activity_id)
+        if locked and locked["sending_at"]:  # send_draft(again=True) resends the locked text instead
+            raise SendUnknown("Send outcome unknown; check before sending again.")
+        if expected_reply_to_activity_id is not None:
+            slack_reply_target(db, expected_reply_to_activity_id, thread_id=thread_id)
+        d = save_reply_draft(db, thread_id, text, to=", ".join(to) if to or cc else None,
+                             cc=", ".join(cc) if to or cc else None,
+                             expected_reply_to_activity_id=expected_reply_to_activity_id)
     if d is None:
         raise ValueError("Write a message")
     return send_draft(db, d["id"], d["revision"], sender)

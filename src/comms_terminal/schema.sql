@@ -246,6 +246,8 @@ CREATE TABLE composition_drafts (
   needs_edit INTEGER NOT NULL DEFAULT 0 CHECK (needs_edit IN (0, 1)),  -- unsendable until its text changes
   bcc TEXT NOT NULL DEFAULT ''
     CHECK (bcc = '' OR (kind = 'email' AND thread_id IS NULL)),  -- an email New Thread Draft's Bcc (decision #147)
+  reply_to_activity_id TEXT REFERENCES activities (id)  -- exact Slack Reply Draft: original message (FR-4c)
+    CHECK (reply_to_activity_id IS NULL OR (kind = 'slack' AND thread_id IS NOT NULL)),
   CHECK ((kind = 'email' AND subject IS NOT NULL)
          OR (kind IN ('sms', 'slack') AND subject IS NULL AND cc = ''))
 ) STRICT;

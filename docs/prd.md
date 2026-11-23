@@ -125,6 +125,9 @@ Status key in brackets:
   - [D] The first reply to a top-level message starts its own Thread; later replies in that Slack reply-thread join it (decision #124).
   - [D] A top-level message Jeremy posts starts a Thread in Snoozed / Waiting for them. Reason: it shows he is waiting on an answer (decision #61); replaces the Plain-inferred rule that his own post makes no Thread until someone else posts.
 - **FR-4c** [PL]: **Slack sending.** A reply written in the console posts to the Thread's conversation from Jeremy's Slack profile, "as if you typed it there". [D] In a channel the reply always goes inside a Slack reply-thread, never top-level: a Thread made of replies gets it in that reply-thread, and a Thread of top-level messages gets it under its latest top-level message. In a DM or group DM it goes top-level unless the Thread is made of replies (decision #124).
+  - [D] The Thread Markdown gives each Slack message's Activity ID as `activity:<uuid>`. An agent can stage a Reply Draft with `comms-terminal draft new --reply-to ACTIVITY_ID --body -`, using that reference or its raw UUID. The selected Activity determines the Thread; this command never sends and refuses to overwrite an existing Reply Draft.
+  - [D] The Draft Markdown and the Console Composer identify the selected message. Its Activity ID stays with the Draft when reopened or edited. When Jeremy sends the Draft now or later, the selected top-level message is the Slack reply parent, even if newer posts join the Thread. If the selected message is already a Slack reply, use its existing parent.
+  - [D] A missing, deleted, mismatched, or non-Slack Activity is refused. Sending never falls back to a different message. Untargeted replies keep the rules above, and Slack grouping (FR-4b) is unchanged.
 - **FR-5** [PL]: **No history backfill.** Ingestion starts when a Connection is connected (Plain is forward-only).
 
 ### Status (Plain logic)
@@ -270,6 +273,7 @@ Executable form: `features/<domain>.feature` (Gherkin via pytest-bdd), each scen
 - **AS-15**: A message in an unselected channel. → Not ingested; no Thread.
 - **AS-16**: A Snooze with no date is refused, and the Thread stays as it was (FR-OA-10; superseded the earlier "indefinitely" scenario).
 - **AS-17**: Jeremy replies to a Slack Thread from the console. → The reply posts from his Slack profile in the Thread's conversation; the Thread is Snoozed / Waiting for them.
+  - An agent stages a Reply Draft for Slack message A by Activity ID. Newer top-level messages B and C join the same Thread. The reopened and edited Draft still identifies A, and Jeremy's send replies to A, not B or C. A Draft for a Slack reply posts under that reply's original parent. If the selected message is deleted before sending, nothing is sent and the Draft is kept.
 - **AS-18**: Jeremy replies to an email directly in Gmail. → Not seen; the Thread stays Todo (accepted Plain limitation, decision #55).
 - **AS-19**: An inbound request carries the Platform's signature header, but the signature is wrong or stale. → Rejected; nothing stored; the Connection shows broken. A request with no signature header at all is rejected the same way but leaves the Connection's health as it was: anyone can reach a public hook route, so only a request that claims to come from the Platform says something about the Connection (2026-11-09).
 - **AS-20**: Logan deletes a Slack message on a Thread. → A Delete Activity is added; the message's stored content is cleared; the Thread moves to Todo / Needs next response (FR-6c).

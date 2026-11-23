@@ -188,6 +188,7 @@ DataTable > .datatable--header { background: #f9f5d7; color: #928374; }
 .field Input:focus { background: #f3eac7; }
 .card .composer { border: none; border-top: solid #ebdbb2; background: transparent; margin: 1 0 0 0; padding: 0 0 1 0; }
 .composer TextArea { height: 8; margin: 1 0 0 0; background: #f9f5d7; color: #654735; border: none; }
+.replytarget { height: auto; color: #654735; }
 .replyhint { color: #928374; height: 1; }
 .composer > .staged { height: auto; max-height: 6; border: none; padding: 0; background: #f9f5d7; color: #654735; }
 .mimage { width: auto; margin: 1 0 0 0; }
@@ -352,6 +353,18 @@ def ago(iso: str | None) -> str:
 def stamp(iso: str | None) -> str:
     """Exact time for the timeline: Mon Oct 12, 10:02."""
     return datetime.fromisoformat(iso).astimezone().strftime("%a %b %-d, %H:%M") if iso else ""
+
+
+def slack_reply_target_text(db, activity_id, thread_id) -> str:
+    """Describe the selected message, not the Slack parent it may share with other replies."""
+    try:
+        _, message, _ = inbox.slack_reply_target(db, activity_id, thread_id=thread_id)
+    except (KeyError, ValueError):
+        return "Selected Slack message unavailable"
+    snippet = render.from_slack(message["content"]).snippet
+    if len(snippet) > 80:
+        snippet = snippet[:79] + "…"
+    return f"{message['who']} · {stamp(message['at'])}" + (f" · {snippet}" if snippet else "")
 
 
 def send_menu(draft: dict | None) -> tuple[list[tuple[str, str]], dict]:
@@ -1656,6 +1669,8 @@ class ReplyBox(Composer, Vertical):
         super().__init__(classes="replybox composer")
         self.thread_id, self.view, self.mode = thread_id, None, "sender"
         self.draft_key = thread_id  # keep the original saved-text key when this Thread becomes an alias
+        self.reply_to_activity_id = None
+        self.reply_target = ""
         self.pending_confirmation = False
 
     def compose(self) -> ComposeResult:
@@ -1676,6 +1691,7 @@ class ReplyBox(Composer, Vertical):
             with Horizontal(classes="field subject"):
                 yield Static("Subject", classes="flabel")
                 yield Static(classes="fvalue subjectvalue")
+            yield Static(classes="replytarget")
         yield ComposeArea(classes="reply")
         yield StagedList()
         yield Static("", classes="replyhint")
@@ -1738,6 +1754,9 @@ class ReplyBox(Composer, Vertical):
         if self.has_class("open"):
             self.query_one(TextArea).focus()
             return
+        for key in self.app.drafts.held:
+            if key[0] in view["members"] and self.app.drafts.offer_recovery(key):
+                return
         drafts = self.app.thread_drafts(self.thread_id)
         if len({text for _, text in drafts}) > 1:
             options = [(str(key), f"[#928374]Thread {key}[/] · {escape(text.strip().splitlines()[0][:80])}")
@@ -1753,6 +1772,14 @@ class ReplyBox(Composer, Vertical):
 
     def _open_draft(self, view, mode, draft_key):
         self.view, self.thread_id, self.draft_key = view, view["thread"].id, draft_key
+        draft = inbox.reply_draft(self.app.db, draft_key)
+        self.reply_to_activity_id = (draft or {}).get("reply_to_activity_id")
+        self.reply_target = (
+            f"Replying to: {slack_reply_target_text(self.app.db, self.reply_to_activity_id, draft_key)}"
+            if self.reply_to_activity_id else "")
+        target = self.query_one(".replytarget")
+        target.display = bool(self.reply_target)
+        target.update(escape(self.reply_target))
         email_thread = self.email
         for row in self.query(".field.to, .field.cc, .field.subject"):
             row.display = email_thread
@@ -1762,16 +1789,15 @@ class ReplyBox(Composer, Vertical):
             title = view["thread"].title
             self.query_one(".subjectvalue").update(escape(title if title.lower().startswith("re:") else f"Re: {title}"))
             self.set_mode(mode)
-            if self.app._managed_console:
-                draft = inbox.reply_draft(self.app.db, draft_key)
-                if draft is not None:
-                    self.query_one(".toinput", Input).value = draft["to"]
-                    self.query_one(".ccinput", Input).value = draft["cc"]
+            if self.app._managed_console and draft is not None:
+                self.query_one(".toinput", Input).value = draft["to"]
+                self.query_one(".ccinput", Input).value = draft["cc"]
         else:
             self.query_one(".flabel").update("To")
-            self.query_one(".fromvalue").update(f"{escape(view['where'])} [#928374]· in thread[/]")
+            place = escape(view["where"])
+            self.query_one(".fromvalue").update(place if self.reply_to_activity_id else f"{place} [#928374]· in thread[/]")
         area = self.query_one(TextArea)
-        area.text = self.app.drafts.get(self.draft_key, "")
+        area.text = self.app.drafts.body(draft_key, draft)
         area.move_cursor(area.document.end)
         self.add_class("open")
         owner = self.attach_owner()
@@ -1801,11 +1827,33 @@ class ReplyBox(Composer, Vertical):
         h.update(escape(text))
         h.set_class(error, "error")
 
-    def keep_draft(self):
+    def _target_matches(self, draft, activity_id):
+        if (draft or {}).get("reply_to_activity_id") == activity_id:
+            return True
+        self.hint("Reply target changed · esc to copy or discard your edits.", error=True)
+        return False
+
+    def keep_draft(self, *, only_changed=False):
         if getattr(self.app, "_console_editors_saved", False):
             return
         if self.has_class("open") and self.query(TextArea):
-            self.app.drafts[self.draft_key] = self.query_one(TextArea).text
+            text = self.query_one(TextArea).text
+            if only_changed:
+                held = self.app.drafts.held.get((self.draft_key, self.reply_to_activity_id))
+                if held is not None:
+                    if text == held[0]:
+                        return True
+                else:
+                    draft = inbox.reply_draft(self.app.db, self.draft_key) or {}
+                    if draft.get("reply_to_activity_id") == self.reply_to_activity_id and text == draft.get("body", ""):
+                        return True
+            try:
+                return self.app.drafts.save(self.draft_key, text,
+                                            expected_reply_to_activity_id=self.reply_to_activity_id)
+            except inbox.DraftConflict:
+                self.hint("Reply edits not saved · esc to copy or discard.", error=True)
+                return False
+        return True
 
     def on_text_area_changed(self, event):
         self.schedule_autosave()
@@ -1816,14 +1864,26 @@ class ReplyBox(Composer, Vertical):
 
     def action_save(self):
         self.cancel_autosave()
-        self.keep_draft()
-        self.hint("Saved.")
+        if self.keep_draft():
+            self.hint("Save queued." if self.app.remote is not None else "Saved.")
 
     def on_unmount(self):
-        self.keep_draft()
+        if self.keep_draft() is False:
+            self.app.notify("Reply edits not saved.", severity="warning")
 
     def action_close(self):
-        self.keep_draft()
+        self.cancel_autosave()
+        if self.keep_draft():
+            self._close()
+        else:
+            def close():
+                if self.is_attached and not self._pruning and self.has_class("open"):
+                    self._close()
+
+            self.app.drafts.offer_recovery((self.draft_key, self.reply_to_activity_id), close)
+
+    def _close(self):
+        self.cancel_autosave()
         self.remove_class("open")
         self.query_one(StagedList).show(None)  # staged files stay with the Thread for the next reply
         self.show_idle(self.view)
@@ -1831,15 +1891,27 @@ class ReplyBox(Composer, Vertical):
 
     def action_send(self):
         self.cancel_autosave()  # a pending autosave must not bring back a reply that went out
-        draft = inbox.reply_draft(self.app.db, self.draft_key)
+        draft_key = self.draft_key
+        draft = inbox.reply_draft(self.app.db, draft_key)
+        activity_id = self.reply_to_activity_id  # the target shown with this body, not the current saved pin
+        if not self._target_matches(draft, activity_id):
+            return
+        confirmation = escape(self.reply_target)
+
+        def still_current():
+            return (self.is_attached and self.has_class("open") and self.draft_key == draft_key
+                    and self._target_matches(inbox.reply_draft(self.app.db, draft_key), activity_id))
+
         if draft and draft["sending_at"]:  # the Reply Draft is locked, as any Draft is (decision #144)
+            body = "This reply may already have gone out. Check the Thread and the provider's Sent folder first."
             self.app.push_screen(Pick("Send outcome unknown", [
                 ("keep", "Keep locked"), ("again", "Send again anyway"), ("sent", "Mark as sent · remove Draft")],
-                "This reply may already have gone out. Check the Thread and the provider's Sent folder first."),
-                lambda choice: self.resolve_unknown(choice, draft) if self.is_attached else None)
+                f"{body}\n\n{confirmation}" if confirmation else body),
+                lambda choice: self.resolve_unknown(choice, draft)
+                if choice in ("again", "sent") and still_current() else None)
             return
         text = self.query_one(TextArea).text.strip()
-        if not text and not inbox.staged(self.app.db, thread_id=self.draft_key):
+        if not text and not inbox.staged(self.app.db, thread_id=draft_key):
             self.hint("Nothing to send.", error=True)
             return
         split = lambda s: [a.strip() for a in s.split(",") if a.strip()]  # noqa: E731
@@ -1848,31 +1920,35 @@ class ReplyBox(Composer, Vertical):
         if self.email and not to:
             self.hint("Not sent: add at least one recipient in To.", error=True)
             return
-        options, later = send_menu(inbox.reply_draft(self.app.db, self.draft_key))
+        options, later = send_menu(draft)
+        expected = {"expected_reply_to_activity_id": activity_id} if activity_id else {}
 
         def chosen(choice):
-            if not self.is_attached or choice in (None, "keep"):
+            if choice in (None, "keep") or not still_current():
                 return
             if choice == "send" and not (window := inbox.undo_window(self.app.db)):
                 self.hint("sending…")
-                self.send(text, to, cc)
+                self.send(text, to, cc, **expected)
                 return
-            when = clock.now() + timedelta(seconds=window) if choice == "send" else later[choice]
+            at = clock.now()
+            when = at + timedelta(seconds=window) if choice == "send" else later[choice]
             try:
-                inbox.schedule_reply(self.app.db, self.draft_key, text, to, cc, when)
+                inbox.schedule_reply(self.app.db, draft_key, text, to, cc, when,
+                                     expected_reply_to_activity_id=activity_id, now=at)
             except (ValueError, inbox.SendUnknown) as e:
                 self.hint(f"Not scheduled: {e}", True)
                 return
+            self.app.drafts.track_save((draft_key, activity_id), text, at)
             if choice == "send":  # it waits out the Undo window on the Service (ADR 0021)
                 self.app.offer_undo(f"Sending in {window} s.")
                 self.app.main.pending_select = getattr(self.app.main.list, "next_thread_id", lambda: None)()
             else:
                 self.app.notify(f"Sends {stamp(later[choice].isoformat())}." if later[choice] else "Unscheduled · kept as a draft.")
-            self.action_close()
+            self._close()
             if choice == "send" and (page := self.app.main.page) is not None:
                 page.after_change()  # the queue moves on, as after a send at once
 
-        self.app.push_screen(Pick("Send", options), chosen)
+        self.app.push_screen(Pick("Send", options, confirmation), chosen)
 
     def resolve_unknown(self, choice, draft):
         if choice == "again" and self.app.send_draft is None:
@@ -1889,13 +1965,14 @@ class ReplyBox(Composer, Vertical):
             self.sent()
 
     @work(thread=True, exclusive=True)
-    def send(self, text="", to=(), cc=(), again=None):  # its own worker: send_result needs the worker to drop a cancelled send
+    def send(self, text="", to=(), cc=(), again=None, *, expected_reply_to_activity_id=None):
         worker = get_current_worker()
         try:
             if again is not None:  # Jeremy's choice: the locked Reply Draft once more, as saved
                 self.app.send_draft(again["id"], again["revision"], True)
             else:
-                self.app.send_reply(self.draft_key, text, to, cc)
+                expected = {"expected_reply_to_activity_id": expected_reply_to_activity_id} if expected_reply_to_activity_id else {}
+                self.app.send_reply(self.draft_key, text, to, cc, **expected)
         except ReplyError as e:  # the text and staged files stay either way
             self.app.call_from_thread(self.send_result, worker, REPLY_UNKNOWN if e.status == 504 else str(e))
             return
@@ -1914,7 +1991,9 @@ class ReplyBox(Composer, Vertical):
 
     def sent(self):
         super().sent()
-        self.app.drafts.pop(self.draft_key, None)
+        held = self.app.drafts.held.get((self.draft_key, None))
+        if self.reply_to_activity_id is None and (held is None or held[2] != "refused"):
+            self.app.drafts.pop(self.draft_key, None)
         self.remove_class("open")
         self.query_one(StagedList).show(None)
         self.show_idle(self.view)
@@ -2667,6 +2746,8 @@ def thread_text(v, raw=None, context=None) -> str:
              f"- Organizations: {', '.join(v.get('organizations') or []) or 'none'}", "", "## Messages"]
     for m in v["messages"]:
         lines += ["", f"### {m['who']} · {m['at']}" + (" · edited" if m["edited"] else "")]
+        if slack:
+            lines.append(f"Activity: `activity:{m['id']}`")
         lines += [f"{k}: {', '.join(m[k]) if isinstance(m[k], list) else m[k]}" for k in ("from", "to", "cc") if m[k]]
         if m["deleted"]:
             lines.append("(message deleted)")
@@ -2702,7 +2783,7 @@ def connection_label(connection) -> str:
     return f"{PLATFORMS[connection['platform']].title} · {conn_name(connection)}" if connection else "none"
 
 
-def draft_text(values, connection_label, history, raw=None, ref=None, staged=()) -> str:
+def draft_text(values, connection_label, history, raw=None, ref=None, staged=(), *, reply_target=None) -> str:
     """A Draft as Markdown: its envelope, body, and staged files, then each captured-history Thread in full.
     `ref` is the saved Draft's (id, revision), which the `comms-terminal draft` command needs to change it."""
     kind = "Reply Draft" if values.get("thread_id") else "New Thread Draft"
@@ -2711,6 +2792,8 @@ def draft_text(values, connection_label, history, raw=None, ref=None, staged=())
         lines.append(f"- Draft: {ref[0]} · revision {ref[1]} · change it with "
                      f"`comms-terminal draft {ref[0]} --revision {ref[1]} --body -` (also --to, --cc, --bcc, --subject)")
     lines += [f"- Reply to: Thread {values['thread_id']} (its reply box sends it)"] if values.get("thread_id") else []
+    if activity_id := values.get("reply_to_activity_id"):
+        lines.append(f"- Reply to Slack message: `activity:{activity_id}`" + (f" · {reply_target}" if reply_target else ""))
     lines += ["- Needs edit: it cannot send until its text is changed"] if values.get("needs_edit") else []
     lines += [f"- Connection: {connection_label}",
               f"- From: {values['sender'] or 'not selected'}", f"- To: {values['to'] or 'not selected'}"]
@@ -7701,6 +7784,9 @@ class ReplyDrafts(MutableMapping):
 
     def __init__(self, app):
         self.app, self.own = app, None
+        # Latest (text, write time, state) per (saved Thread, expected target).
+        self.held: dict[tuple[str, str | None], tuple[str, datetime, str]] = {}
+        self.receipts = Counter()  # In-order receipts can share a write time when the clock repeats.
 
     @property
     def db(self):
@@ -7711,24 +7797,103 @@ class ReplyDrafts(MutableMapping):
             inbox.migrate(self.own)
         return self.own
 
-    held: dict  # texts a read-only laptop copy could not save yet (remote.Offline); saved when back online
+    def body(self, thread_id, draft):
+        """Use held text only with the same pin as the supplied Draft."""
+        pin = (draft or {}).get("reply_to_activity_id")
+        held = self.held.get((thread_id, pin))
+        if held is not None and held[2] != "refused":
+            return held[0]
+        return draft["body"] if draft is not None else ""
 
     def _all(self):
-        return inbox.reply_drafts(self.db) | {k: v for k, v in self.__dict__.get("held", {}).items() if v.strip()}
+        texts = inbox.reply_drafts(self.db)
+        for key, _ in self.held:
+            draft = inbox.reply_draft(self.db, key)
+            text = self.body(key, draft)
+            if draft is not None or text.strip():
+                texts[key] = text
+            else:
+                texts.pop(key, None)
+        return texts
 
     def __getitem__(self, thread_id):
         return self._all()[thread_id]
 
     def __setitem__(self, thread_id, text):
+        self.save(thread_id, text)
+
+    def save(self, thread_id, text, *, expected_reply_to_activity_id=None):
         from .remote import Offline
+        key = thread_id, expected_reply_to_activity_id
+        previous = self.held.get(key)
+        at = previous[1] if previous is not None and previous[0] == text and previous[2] != "pending" else clock.now()
+        if previous is not None and previous[2] == "refused":
+            self.held[key] = (text, at, "refused")
+            raise inbox.DraftConflict("Earlier reply edits were not saved.")
         try:
-            inbox.save_reply_draft(self.db, thread_id, text)
+            inbox.save_reply_draft(self.db, thread_id, text, now=at,
+                                   expected_reply_to_activity_id=expected_reply_to_activity_id)
         except Offline:
-            self.__dict__.setdefault("held", {})[thread_id] = text
-            self.app.notify("Read-only · this reply stays open here and is saved once the service answers.",
+            draft = inbox.reply_draft(self.db, thread_id)
+            if (draft or {}).get("reply_to_activity_id") != expected_reply_to_activity_id:
+                self.held[key] = (text, at, "refused")
+                raise inbox.DraftConflict("Reply target changed.") from None
+            self.held[key] = (text, at, "offline")
+            self.app.notify("Read-only · reply edits kept here until they can be saved.",
                             severity="warning")
+            return False
+        except inbox.DraftConflict:
+            self.held[key] = (text, at, "refused")
+            raise
+        self.track_save(key, text, at)
+        return True
+
+    def track_save(self, key, text, at):
+        """Record a successful local write; the laptop still needs its Service receipt."""
+        if getattr(self.app, "remote", None) is None:
+            self.discard_held(*key)
         else:
-            self.__dict__.get("held", {}).pop(thread_id, None)
+            self.held[key] = (text, at, "pending")
+            self.receipts[key, at] += 1
+
+    def discard_held(self, thread_id, activity_id):
+        self.held.pop((thread_id, activity_id), None)
+
+    def reply_save_finished(self, thread_id, activity_id, text, at, error):
+        key = thread_id, activity_id
+        receipt = key, at
+        if (rest := self.receipts.pop(receipt, 0) - 1) > 0:
+            self.receipts[receipt] = rest
+            return
+        if self.held.get(key) != (text, at, "pending"):
+            return  # An older receipt must not touch newer edits or reopen discarded ones.
+        if error is None:
+            self.discard_held(*key)
+        else:
+            self.held[key] = (text, at, "refused")
+            self.offer_recovery(key)
+
+    def offer_recovery(self, key, close=None):
+        held = self.held.get(key)
+        if held is None or held[2] != "refused":
+            return False
+        text, _, _ = held
+        preview = text.strip().partition("\n")[0][:100] or "(empty)"
+
+        def chosen(choice):
+            if choice not in ("copy", "discard") or self.held.get(key) != held:
+                return
+            if choice == "copy":
+                self.app.copy_to_clipboard(text)
+                self.app.notify("Copied reply edits.")
+            self.discard_held(*key)
+            if close is not None:
+                close()
+
+        self.app.push_screen(Pick("Reply edits not confirmed", [("copy", "Copy text"), ("discard", "Discard text")],
+                                  f"{escape(preview)}\n\nCopy or discard these edits without changing the saved Reply Draft."),
+                             chosen)
+        return True
 
     def __delitem__(self, thread_id):
         if thread_id not in self._all():
@@ -7742,8 +7907,13 @@ class ReplyDrafts(MutableMapping):
         return len(self._all())
 
     def save_held(self):
-        for thread_id, text in list(self.__dict__.get("held", {}).items()):
-            self[thread_id] = text
+        for (thread_id, activity_id), (text, _, state) in list(self.held.items()):
+            if state != "offline":
+                continue
+            try:
+                self.save(thread_id, text, expected_reply_to_activity_id=activity_id)
+            except inbox.DraftConflict:
+                self.offer_recovery((thread_id, activity_id))
 
 
 APP_LOCK_PATH = Path("/run/comms-terminal-deploy/app.lock")
@@ -7920,7 +8090,8 @@ class Console(App):
             if not editor.save(refresh=False):
                 return False
         for reply in self.main.query(ReplyBox):
-            reply.keep_draft()
+            if reply.keep_draft() is False:
+                return False
             if reply.has_class("open") and reply.email:
                 draft = inbox.reply_draft(self.db, reply.draft_key)
                 if draft is not None:
@@ -7928,6 +8099,8 @@ class Console(App):
                     values.update(to=reply.query_one(".toinput", Input).value,
                                   cc=reply.query_one(".ccinput", Input).value)
                     inbox.save_draft(self.db, values, draft_id=draft["id"], expected_revision=draft["revision"])
+        if self.drafts.held:
+            return False
         for editor in self.main.query(DescriptionBox):
             if editor.has_class("open"):
                 page = next(parent for parent in editor.ancestors if isinstance(parent, CasePage))
@@ -7989,6 +8162,16 @@ class Console(App):
         if self._managed_console:
             self._request_console_stop(exit_requested=True)
         elif self.main.save_draft():
+            if self.remote is not None:
+                for reply in self.main.query(ReplyBox):
+                    if not reply._pruning:
+                        reply.cancel_autosave()
+                        reply.keep_draft(only_changed=True)
+                if self.drafts.held:
+                    self.notify("Console kept open · wait for the Service to save reply edits, "
+                                "or use Escape in the reply box to recover refused text.", severity="warning")
+                    return
+                self._console_editors_saved = True  # Do not queue unchanged replies again on unmount.
             self.exit()
 
     @work(thread=True)
@@ -8739,7 +8922,7 @@ class Console(App):
             self.call_after_refresh(self.update_now)  # tore the main screen down mid-mount and exited 1, not 75
             return
         if (self.remote is None or not self.remote.idle.is_set() or not self.main.save_draft()
-                or self.drafts.__dict__.get("held")
+                or self.drafts.held
                 or any(state["pending"] for state in self.reaction_states.values())):
             return
         self.exit(return_code=UPDATE_EXIT)

@@ -172,6 +172,7 @@ A successful read proves current membership, not which request caused it. If Rea
 
 - `r` opens the box under the timeline; the conversation stays visible.
 - Email: `To` and `Cc` are prefilled reply-all (FR-3b) and editable with `tab` into a one-line field. Slack: no recipient line; the box shows the channel or DM.
+- An exact Slack Reply Draft shows the selected message's author, timestamp and excerpt in the reply box and the Send menu (FR-4c). If the target changes while the box is open, close and reopen it before sending.
 - `ctrl+enter` sends (#100); `ctrl+s` saves the reply without sending, and typed text also saves 2 seconds after the last keystroke (Drafts too), so it reaches the service without `esc`; `esc` closes the box and keeps the text as the Thread's Reply Draft, which survives a restart and is listed on the Drafts page with a "reply" label; `enter` there opens the Thread's reply box (FR-SEQ-11).
 - Attachments (#134), email and Slack only (SMS and Fastmail have no attach): `ctrl+o` opens the attach menu, "File on Workbox…" (a file tree from `~`) or "Upload from Mani" (a link to a 1-hour upload page, opened with Ctrl+Shift+click). Pasting an image path, which is what Herdr's Ctrl+V sends, stages the image. Staged files list under the message, each linked to its stored copy as a received Attachment's chip is (Ctrl+Shift+click opens it); `delete` removes the highlighted one. They are kept with the Thread across restarts, sent with the reply, and cleared once it is sent. Email refuses to send over 25 MB in total (#135).
 - Drafts take the same attach menu, paste, and file list.
@@ -269,6 +270,7 @@ Terms follow `GLOSSARY.md` (Pipeline, Stage, Value, Target, Conversion rate, Tim
 - Reply and Draft: `ctrl+o` attach, `delete` remove the highlighted staged file, paste an image path to attach it.
 - Copy for an agent: `y` on a Thread (or its Case card) or a Draft copies it to the clipboard (OSC 52) as Markdown to paste into a terminal agent. A Thread gives its properties, every message in full with link URLs, Trimmed content, and each Attachment's Workbox path, and the Attio, Tana, and Linear answers as JSON. A Draft gives its envelope, current unsaved body, and staged files with their paths, then each Thread in its Captured history.
 - The same Markdown comes from the command line, so an agent can fetch it fresh: `comms-terminal threads [view]`, `comms-terminal thread ID`, `comms-terminal drafts`, `comms-terminal draft ID`. `comms-terminal draft ID --revision N --body -` (or `--to`, `--cc`, `--subject`) changes a Draft only at the revision the agent read, `comms-terminal draft new --connection ID` starts one for a new Thread, and `comms-terminal draft new --thread ID --body -` starts a Thread's reply Draft, which its reply box opens on. Nothing on the command line sends; Jeremy sends from the console.
+- Slack messages in Thread Markdown give their `activity:<uuid>` references. Use `comms-terminal draft new --reply-to ACTIVITY_ID --body -` to stage an exact Slack Reply Draft. Draft Markdown shows that reference in the envelope.
 - General: `?` all keys, `q` quit.
 - The footer lists every action for the page as plain text: key in blue, description in grey, no icons or blocks (#94).
 
@@ -279,7 +281,7 @@ Rendered with Textual's test driver (`run_test`, SVG screenshots) and once in a 
 1. Queue with all seven glyphs present, narrow (80 columns) and wide (160 columns).
 2. Empty Todo view.
 3. Thread with a long email (scrolling), an edited message, and a deleted message.
-4. Reply box open: email with To/Cc, Slack without. An email New Thread Draft with To, Cc, Bcc and Subject (Bcc in the send confirmation); an SMS or Slack one without Cc, Bcc or Subject.
+4. Reply box open: email with To/Cc, Slack without. An exact Slack Reply Draft shows the original selected message in the box and Send menu even when newer messages arrive. An email New Thread Draft with To, Cc, Bcc and Subject (Bcc in the send confirmation); an SMS or Slack one without Cc, Bcc or Subject.
 5. Send failure: box stays open with the error.
 6. Health BROKEN in the sidebar.
 7. Person record with a blocked Identity.

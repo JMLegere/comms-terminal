@@ -214,6 +214,8 @@ def undo(db, command_id: str, *, now: datetime | None = None) -> str:
     if c["inverse"] is None:
         raise Refused(f"Cannot undo {c['label']}: {c['reason']}.")
     for table, row_id, row in json.loads(c["guard"]):
+        if table == "composition_drafts" and row is not None:
+            row.setdefault("reply_to_activity_id", None)  # guards written before schema 50
         if _row(db, table, row_id) != row:
             raise Refused(f"Cannot undo {c['label']}: it changed since.")
     for name, args, kwargs in reversed(json.loads(c["inverse"])):

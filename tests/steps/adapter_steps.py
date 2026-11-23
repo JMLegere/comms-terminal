@@ -3,14 +3,17 @@ External services are faked at the HTTP-call seam (`post` / `get`)."""
 
 import hashlib
 import hmac
+import io
 import json
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
+import pytest
 from pytest_bdd import given, parsers, then, when
 
 from steps.inbox_steps import EMAIL, MAILBOX, SLACK, keep, tick
 from comms_terminal import email, health, inbox, serve, slack
+from test_cli_parity import run as run_cli
 
 EMAIL_SECRET, SLACK_SECRET = b"inbox-test-secret", b"slack-test-secret"
 NOW = datetime(2026, 10, 12, 12, tzinfo=timezone.utc)
@@ -265,6 +268,116 @@ def slack_received(ctx, channel, thread_ts):
     url, token, payload = ctx.slack_api.calls[-1]
     assert url == "https://slack.com/api/chat.postMessage" and token == "xoxp-test"
     assert (payload["channel"], payload["thread_ts"]) == (channel, thread_ts)
+
+
+@given(parsers.parse('Ingest has received the top-level Slack message "{text}" in "{channel}" at "{ts}"'))
+@when(parsers.parse('Ingest receives the top-level Slack message "{text}" in "{channel}" at "{ts}"'))
+@given(parsers.parse('Ingest has received the Slack reply "{text}" in "{channel}" at "{ts}" under "{thread_ts}"'))
+def ingest_slack_post(ctx, text, channel, ts, thread_ts=None):
+    event = slack_event(channel, ts=ts) | {"text": text}
+    if thread_ts is not None:
+        event["thread_ts"] = thread_ts
+    inc = slack.parse(event, connection(ctx, SLACK), [("prefix", "ext-")], FakeClient({channel: "ext-acme"}),
+                      lambda c, t: slack.stored_member(ctx.db, c, t))
+    assert inc is not None
+    keep(ctx, inbox.ingest(ctx.db, inc))
+
+
+def activity_id(ctx, text):
+    return next(m["id"] for m in inbox.thread_view(ctx.db, ctx.thread.id)["messages"] if m["content"] == text)
+
+
+def stage_reply_to(ctx, monkeypatch, target, body):
+    with monkeypatch.context() as mp:
+        mp.setattr("sys.stdin", io.StringIO(body))
+        run_cli(ctx.db, "draft", "new", "--reply-to", target, "--body", "-")
+
+
+@when(parsers.parse('the CLI stages a Reply Draft for the {form} of "{text}" with Body "{body}"'))
+def stage_slack_reply_draft(ctx, monkeypatch, form, text, body):
+    aid = activity_id(ctx, text)
+    target = {"Activity reference": f"activity:{aid}", "raw Activity ID": aid}[form]
+    stage_reply_to(ctx, monkeypatch, target, body)
+    ctx.slack_draft = inbox.reply_draft(ctx.db, ctx.thread.id)
+    assert ctx.slack_draft is not None and ctx.slack_draft["body"] == body
+
+
+@when(parsers.parse('the CLI reopens and edits that Reply Draft with Body "{body}"'))
+def edit_slack_reply_draft(ctx, monkeypatch, body):
+    draft = ctx.slack_draft
+    run_cli(ctx.db, "draft", draft["id"])
+    monkeypatch.setattr("sys.stdin", io.StringIO(body))
+    run_cli(ctx.db, "draft", draft["id"], "--revision", str(draft["revision"]), "--body", "-")
+
+
+@then("all three messages are in the Reply Draft's Thread")
+def grouped_slack_posts(ctx):
+    assert ctx.seen == [ctx.slack_draft["thread_id"]] * 3
+
+
+@then("the Thread Markdown gives their Activity IDs")
+def thread_has_activity_ids(ctx, capsys):
+    capsys.readouterr()
+    run_cli(ctx.db, "thread", ctx.thread.id)
+    markdown = capsys.readouterr().out
+    for text in ("A", "B", "C"):
+        assert f"activity:{activity_id(ctx, text)}" in markdown
+
+
+@then(parsers.parse('reopening the Reply Draft in the CLI identifies the Activity of "{text}"'))
+def reply_draft_names_activity(ctx, capsys, text):
+    capsys.readouterr()
+    run_cli(ctx.db, "draft", ctx.slack_draft["id"])
+    # The Activity must be in the Draft's envelope, not merely its captured Thread history.
+    envelope = capsys.readouterr().out.partition("\n## Body\n")[0]
+    assert f"activity:{activity_id(ctx, text)}" in envelope
+
+
+@when("Send Draft sends that Reply Draft through the Slack Sender")
+def send_slack_reply_draft(ctx):
+    draft = inbox.get_draft(ctx.db, ctx.slack_draft["id"])
+    ctx.slack_api = Recorder({"ok": True, "ts": "1728700500.000300"})
+
+    def unexpected_transport(*_):
+        pytest.fail("Only the fake Slack post transport may be used")
+
+    sender = slack.SlackSender("xoxp-test", post=ctx.slack_api, get=unexpected_transport, upload=unexpected_transport)
+    ctx.thread = inbox.send_draft(ctx.db, draft["id"], draft["revision"], sender)
+
+
+@then(parsers.parse('Slack receives only the updated Body "{body}"'))
+def slack_receives_edited_body(ctx, body):
+    [(_, _, payload)] = ctx.slack_api.calls
+    assert payload["text"] == body
+
+
+@then("Send Draft refuses that Reply Draft without contacting Slack or clearing the Draft")
+def deleted_slack_target(ctx):
+    before = inbox.get_draft(ctx.db, ctx.slack_draft["id"])
+    with pytest.raises(ValueError):
+        send_slack_reply_draft(ctx)
+    assert ctx.slack_api.calls == []
+    after = inbox.get_draft(ctx.db, before["id"])
+    assert (after["body"], after["revision"], after["sending_at"]) == (before["body"], before["revision"], None)
+
+
+@then(parsers.parse('the CLI refuses a second Reply Draft for "{text}" and keeps the first Draft unchanged'))
+def second_slack_reply_draft(ctx, monkeypatch, text):
+    with pytest.raises(SystemExit, match=r"^comms-terminal draft:"):
+        stage_reply_to(ctx, monkeypatch, activity_id(ctx, text), "Do not overwrite the Draft.")
+    assert inbox.list_drafts(ctx.db) == [ctx.slack_draft]
+
+
+@then(parsers.parse('the CLI refuses to stage a Reply Draft for a "{kind}" Activity'))
+def invalid_slack_reply_target(ctx, monkeypatch, kind):
+    target = "00000000-0000-7000-8000-000000000001"
+    if kind == "non-Slack":
+        thread = inbox.ingest(ctx.db, email.parse(raw_mail(), connection(ctx, EMAIL)))
+        [message] = inbox.thread_view(ctx.db, thread.id)["messages"]
+        target = message["id"]
+    with pytest.raises(SystemExit, match=r"^comms-terminal draft:"):
+        stage_reply_to(ctx, monkeypatch, f"activity:{target}", "Do not save this Draft.")
+    assert inbox.list_drafts(ctx.db) == []
 
 
 @when("a request reaches /hooks/slack with a wrong X-Slack-Signature")

@@ -16,6 +16,7 @@ from . import clock, inbox
 SIGNATURE_WINDOW = 300  # seconds
 CHANNEL_KINDS = {"channel": "channel", "group": "private", "im": "im", "mpim": "mpim"}
 MESSAGE_SUBTYPES = {None, "thread_broadcast", "file_share"}
+MESSAGE_TS = re.compile(r"[0-9]+\.[0-9]+")
 REACTION_NAMES = {"+1", "pray", "eyes"}
 # Only documented rejections establish no change; unknown/new source errors stay uncertain.
 REACTION_REFUSALS = {
@@ -465,17 +466,21 @@ class SlackSender:
             out.append({"id": c["id"], "kind": kind, "label": f"#{label}" if kind in ("channel", "private") else label})
         return sorted(out, key=lambda c: c["label"].lstrip("#").casefold())
 
-    def send(self, thread, text, to, cc, history, files=()) -> str:
+    def send(self, thread, text, to, cc, history, files=(), *, reply_to_ts=None) -> str:
         channel = next((h["data"]["channel"] for h in history if "channel" in h["data"]), None)
         if channel is None:
             raise inbox.SendFailed("slack send failed: Thread has no Slack channel")
-        # In a channel, always answer inside a Slack reply-thread (FR-4c): a Thread made of replies answers in
-        # that reply-thread, a Thread of top-level messages under its latest top-level message. A DM or group
-        # DM answers top-level unless the Thread is made of replies.
-        slack = [h["data"] for h in history if h["data"].get("ts")]
-        replies = [d["thread_ts"] for d in slack if d.get("thread_ts") not in (None, d["ts"])]
-        dm = any(d.get("kind") in ("im", "mpim") for d in slack)
-        thread_ts = replies[-1] if replies else slack[-1]["ts"] if slack and not dm else None
+        if reply_to_ts is None:
+            # Legacy Drafts answer in the last Slack reply-thread, or under the latest top-level channel
+            # message. DMs and group DMs without replies stay top-level (FR-4c).
+            slack = [h["data"] for h in history if h["data"].get("ts")]
+            replies = [d["thread_ts"] for d in slack if d.get("thread_ts") not in (None, d["ts"])]
+            dm = any(d.get("kind") in ("im", "mpim") for d in slack)
+            thread_ts = replies[-1] if replies else slack[-1]["ts"] if slack and not dm else None
+        elif not isinstance(reply_to_ts, str) or not MESSAGE_TS.fullmatch(reply_to_ts):
+            raise inbox.SendFailed("slack send failed: invalid explicit reply timestamp")
+        else:
+            thread_ts = reply_to_ts
         if files:
             return self._share(channel, text, thread_ts, files)
         payload = {"channel": channel, "text": text, **({"thread_ts": thread_ts} if thread_ts else {})}

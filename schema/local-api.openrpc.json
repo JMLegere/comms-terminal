@@ -1100,6 +1100,16 @@
      "schema": {}
     },
     {
+     "name": "reply_to_activity_id",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "expected_reply_to_activity_id",
+     "required": false,
+     "schema": {}
+    },
+    {
      "name": "now",
      "required": false,
      "schema": {}
@@ -1186,6 +1196,11 @@
     {
      "name": "send_at",
      "required": true,
+     "schema": {}
+    },
+    {
+     "name": "expected_reply_to_activity_id",
+     "required": false,
      "schema": {}
     },
     {

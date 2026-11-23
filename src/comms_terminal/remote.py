@@ -223,8 +223,11 @@ def socket_respond(socket_path):
 def socket_reply(socket_path):
     """Reply function that calls POST /reply on the service's local socket; a lost response means the outcome
     is unknown (504)."""
-    def reply(thread_id, text, to, cc):
-        status, body = post(socket_path, "/reply", {"thread_id": thread_id, "text": text, "to": to, "cc": cc})
+    def reply(thread_id, text, to, cc, *, expected_reply_to_activity_id=None):
+        payload = {"thread_id": thread_id, "text": text, "to": to, "cc": cc}
+        if expected_reply_to_activity_id is not None:
+            payload["expected_reply_to_activity_id"] = expected_reply_to_activity_id
+        status, body = post(socket_path, "/reply", payload)
         if status != 200:
             raise ReplyError(body.get("error", f"HTTP {status}"), status)
         return body
@@ -689,12 +692,28 @@ class Remote:
                 said = (f"{str(e).split(' is disabled')[0]} is disabled · not saved"
                         if isinstance(e, inbox.ModuleDisabled) else f"Not saved on the inbox service · {e}. Showing its state.")
                 self.say(said, error=True)
+                self._reply_save_finished(name, args, kwargs, e)
+            else:
+                self._reply_save_finished(name, args, kwargs, None)
             finally:
                 with self.lock:
                     self.busy -= 1
                     if not self.busy:
                         self.idle.set()
                         self.fresh.set()
+
+    def _reply_save_finished(self, name, args, kwargs, error):
+        if (name not in ("inbox.save_reply_draft", "inbox.schedule_reply")
+                or "expected_reply_to_activity_id" not in kwargs):
+            return
+        app = self.app
+        drafts = getattr(app, "drafts", None)  # the desktop App's Core has no Textual Reply Drafts
+        if drafts is not None:
+            try:
+                app.call_from_thread(drafts.reply_save_finished, args[0], kwargs["expected_reply_to_activity_id"],
+                                     args[1], kwargs["now"], error)
+            except RuntimeError:  # the app is not running
+                pass
 
     def say(self, message, error=False):
         app = self.app

@@ -364,6 +364,7 @@ def test_a_relaunch_on_an_unchanged_copy_needs_no_new_snapshot(service, laptop):
 
 
 def test_a_new_service_build_quits_for_the_launcher_to_update_unless_a_reply_is_held(service, laptop, monkeypatch):
+    _, _, _, tid = service
     rem, syncer, db, _ = laptop
     db.close()
     monkeypatch.setattr(tui, "build_version", lambda: "2026-10-19-1810-46ecc16")
@@ -373,13 +374,14 @@ def test_a_new_service_build_quits_for_the_launcher_to_update_unless_a_reply_is_
     async def scenario(app, pilot):
         await pilot.pause()
         seen["held"] = app.return_code  # the mount's check found the held reply
-        app.drafts.__dict__["held"] = {}
+        app.drafts.discard_held(tid, None)
         app.check_copy()
         await pilot.pause()
 
     from test_console import run
     app = tui.Console(syncer.db_path, remote=rem, syncer=syncer)
-    app.drafts.__dict__["held"] = {1: "half a reply"}  # read-only text with nowhere to go yet
+    rem.online = False
+    assert not app.drafts.save(tid, "half a reply")  # read-only text awaiting the Service
     run(app, [scenario])
     assert seen["held"] is None
     assert app.return_code == tui.UPDATE_EXIT
@@ -483,3 +485,99 @@ def test_the_ssh_master_starts_off_linux_too(monkeypatch):
     monkeypatch.setattr(sys, "platform", "darwin")
     monkeypatch.setattr(ctypes, "CDLL", lambda *a, **k: object())  # a libc without prctl, as macOS's
     remote._die_with_parent()  # no AttributeError
+
+
+def test_refused_offline_reply_replay_keeps_the_exact_unsaved_text(service, laptop):
+    from types import SimpleNamespace
+
+    _, sdb, _, _ = service
+    rem, syncer, copy, _ = laptop
+    channel, ts = "C0EXTACME", "1795206480.000100"
+    thread = inbox.ingest(sdb, inbox.Incoming("2", channel, "channel", "MESSAGE", f"{channel}:{ts}",
+        inbox.Identity("slack_user", "U0LOGAN"), datetime.now(timezone.utc), "Actual target",
+        data={"channel": channel, "ts": ts, "kind": "channel"}, channel_name="dev"))
+    tid = thread.id
+    assert syncer.apply(copy, syncer.once())
+
+    callbacks = []
+    app = SimpleNamespace(remote=rem, db=copy, notify=lambda *args, **kwargs: None,
+                          push_screen=lambda *args: None,
+                          call_from_thread=lambda fn, *args, **kwargs: callbacks.append((fn, args, kwargs)))
+    app.drafts = tui.ReplyDrafts(app)
+    rem.app = app
+    try:
+        rem.online = False
+        assert not app.drafts.save(tid, "Unsaved offline text")
+        activity = inbox.thread_view(sdb, tid)["messages"][0]["id"]
+        pinned = inbox.save_reply_draft(sdb, tid, "Draft for the actual target", reply_to_activity_id=activity)
+        rem.online = True
+        app.drafts.save_held()  # still an old, unpinned laptop snapshot; Service must refuse
+        assert app.drafts.held, "queued is not acknowledged"
+        assert rem.drain(10)
+        for callback, args, kwargs in callbacks:
+            callback(*args, **kwargs)
+        assert inbox.reply_draft(sdb, tid) == pinned
+        assert app.drafts.held and "Unsaved offline text" in repr(app.drafts.held)
+    finally:
+        rem.app = None
+
+
+@pytest.mark.undo_window
+def test_refused_remote_schedule_recovers_the_typed_reply(service, laptop, monkeypatch):
+    from asyncio import to_thread
+    from test_console import run
+
+    _, sdb, _, _ = service
+    rem, syncer, copy, _ = laptop
+    channel = "C0EXTACME"
+    now = datetime.now(timezone.utc)
+    for i, text in enumerate(("First Slack target", "Replacement Slack target"), 1):
+        ts = f"179520648{i}.000100"
+        thread = inbox.ingest(sdb, inbox.Incoming("2", channel, "channel", "MESSAGE", f"{channel}:{ts}",
+            inbox.Identity("slack_user", "U0LOGAN"), now + timedelta(seconds=i), text,
+            data={"channel": channel, "ts": ts, "kind": "channel"}, channel_name="dev"))
+    tid = thread.id
+    first, second = [m["id"] for m in inbox.thread_view(sdb, tid)["messages"]]
+    original = inbox.save_reply_draft(sdb, tid, "Original draft", reply_to_activity_id=first)
+    assert syncer.apply(copy, syncer.once())
+    inbox.delete_draft(sdb, original["id"])
+    replacement = inbox.save_reply_draft(sdb, tid, "Unchanged replacement", reply_to_activity_id=second)
+    monkeypatch.setattr(syncer, "start", lambda: None)  # keep the laptop on the earlier pin
+
+    async def open_thread(app, pilot):
+        app.main.open_thread(tid)
+
+    async def type_and_schedule(app, pilot):
+        box = app.main.thread_view.query_one(tui.ReplyBox)
+        assert box.reply_to_activity_id == first
+        box.query_one(tui.ComposeArea).text = "Typed before scheduling"
+        await pilot.press("ctrl+enter", "enter")
+        assert await to_thread(rem.drain, 10)
+        await pilot.pause()
+        assert "Typed before scheduling" in repr(app.drafts.held)
+        assert isinstance(app.screen, tui.Pick)
+
+    app = tui.Console(syncer.db_path, remote=rem, syncer=syncer)
+    run(app, [open_thread, "r", type_and_schedule])
+    assert inbox.reply_draft(sdb, tid) == replacement
+
+
+def test_laptop_quit_keeps_unconfirmed_reply_text(service, laptop, monkeypatch):
+    from test_console import run
+
+    _, _, _, tid = service
+    rem, syncer, _, _ = laptop
+    monkeypatch.setattr(syncer, "start", lambda: None)
+    app = tui.Console(syncer.db_path, remote=rem, syncer=syncer)
+
+    async def quit_while_offline(app, pilot):
+        exits = []
+        app.set_online("Offline")
+        assert not app.drafts.save(tid, "Not saved yet")
+        with monkeypatch.context() as fixture:
+            fixture.setattr(app, "exit", lambda *args, **kwargs: exits.append(True))
+            await app.action_quit()
+        assert exits == []
+        assert "Not saved yet" in repr(app.drafts.held)
+
+    run(app, [quit_while_offline])

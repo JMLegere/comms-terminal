@@ -6,6 +6,8 @@ Feature: Slack
   one-to-one ingestion mode, #115); otherwise Ingest (inbox.ingest) groups a conversation's messages into one Thread
   until it has been quiet for 24 hours, whoever sent them (decision #126). The Slack Sender (slack.SlackSender)
   posts replies inside the Slack thread.
+  The CLI (agent.run) stages a Reply Draft by Activity ID and identifies it in the Draft Markdown.
+  Send Draft (inbox.send_draft) sends the saved Draft revision through the Slack Sender.
   Slack Identity (slack.SlackClient.identity) verifies the connected workspace and user.
   Slack Reaction Snapshot (slack.SlackClient.reaction_snapshot) reads source totals and own membership.
   Slack Reaction Change (slack.SlackSender.change_reaction) adds or removes only own membership.
@@ -47,6 +49,61 @@ Feature: Slack
     Given a Thread in "C0EXTACME" that began in the Slack reply-thread "1728700000.000100"
     When Reply is called with "Fixed, deploying now." through the Slack Sender
     Then Slack receives chat.postMessage with Jeremy's user token, channel "C0EXTACME", and thread_ts "1728700000.000100"
+
+  @AS-17 @FR-4c
+  Scenario: An exact Slack Reply Draft keeps its parent when newer messages join the Thread
+    Given Ingest has received the top-level Slack message "A" in "C0EXTACME" at "1728700000.000100"
+    When the CLI stages a Reply Draft for the Activity reference of "A" with Body "I'll check."
+    And Ingest receives the top-level Slack message "B" in "C0EXTACME" at "1728700100.000200"
+    And the CLI reopens and edits that Reply Draft with Body "Fixed, deploying now."
+    And Ingest receives the top-level Slack message "C" in "C0EXTACME" at "1728700200.000300"
+    Then all three messages are in the Reply Draft's Thread
+    And the Thread Markdown gives their Activity IDs
+    And reopening the Reply Draft in the CLI identifies the Activity of "A"
+    When Send Draft sends that Reply Draft through the Slack Sender
+    Then Slack receives chat.postMessage with Jeremy's user token, channel "C0EXTACME", and thread_ts "1728700000.000100"
+    And Slack receives only the updated Body "Fixed, deploying now."
+    And that Thread has Status "SNOOZED" and Status Detail "WAITING_FOR_CUSTOMER"
+
+  @AS-17 @FR-4c
+  Scenario: A Reply Draft for a Slack reply uses the parent supplied by Slack even when it was not ingested
+    Given Ingest has received the Slack reply "Reply to A" in "C0EXTACME" at "1728700100.000200" under "1728700000.000100"
+    When the CLI stages a Reply Draft for the raw Activity ID of "Reply to A" with Body "Following up."
+    Then reopening the Reply Draft in the CLI identifies the Activity of "Reply to A"
+    When Send Draft sends that Reply Draft through the Slack Sender
+    Then Slack receives chat.postMessage with Jeremy's user token, channel "C0EXTACME", and thread_ts "1728700000.000100"
+
+  @AS-17 @FR-4c
+  Scenario: A known deleted Slack parent stops a Reply Draft for one of its replies
+    Given Ingest has received the top-level Slack message "A" in "C0EXTACME" at "1728700000.000100"
+    And Ingest has received the Slack reply "Reply to A" in "C0EXTACME" at "1728700100.000200" under "1728700000.000100"
+    When the CLI stages a Reply Draft for the raw Activity ID of "Reply to A" with Body "Following up."
+    And Ingest receives a deletion from "U0ANA" of "C0EXTACME:1728700000.000100"
+    Then Send Draft refuses that Reply Draft without contacting Slack or clearing the Draft
+
+  @AS-17 @FR-4c
+  Scenario: A deleted Slack message stops its Reply Draft from reaching Slack
+    Given Ingest has received the top-level Slack message "A" in "C0EXTACME" at "1728700000.000100"
+    When the CLI stages a Reply Draft for the Activity reference of "A" with Body "Following up."
+    And Ingest receives the top-level Slack message "B" in "C0EXTACME" at "1728700100.000200"
+    And Ingest receives a deletion from "U0ANA" of "C0EXTACME:1728700000.000100"
+    Then Send Draft refuses that Reply Draft without contacting Slack or clearing the Draft
+
+  @AS-17 @FR-4c
+  Scenario: Staging a Reply Draft for a second Slack message leaves the existing Draft unchanged
+    Given Ingest has received the top-level Slack message "A" in "C0EXTACME" at "1728700000.000100"
+    When the CLI stages a Reply Draft for the Activity reference of "A" with Body "First draft."
+    And Ingest receives the top-level Slack message "B" in "C0EXTACME" at "1728700100.000200"
+    Then the CLI refuses a second Reply Draft for "B" and keeps the first Draft unchanged
+
+  @AS-17 @FR-4c
+  Scenario Outline: A Slack Reply Draft requires a stored Slack message Activity
+    Then the CLI refuses to stage a Reply Draft for a "<kind>" Activity
+
+    Examples:
+      | kind      |
+      | missing   |
+      | non-Slack |
 
   @AS-20 @FR-2a @FR-6c
   Scenario: Ingest of a deletion stores a Delete Activity and clears the deleted message's content

@@ -41,6 +41,7 @@ def _integer_keys_sql() -> str:
 
 
 UNDO = {
+    50: "ALTER TABLE composition_drafts DROP COLUMN reply_to_activity_id;",
     49: """CREATE TABLE promise_alerts_old (  -- the one SMS per item when it first goes At risk (FR-PR-18, ADR 0026); never again
   kind     TEXT NOT NULL CHECK (kind IN ('promise', 'prep')),
   item_id  TEXT NOT NULL,
