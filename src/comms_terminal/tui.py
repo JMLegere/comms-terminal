@@ -785,11 +785,12 @@ class Rail(OptionList):
         except Exception:  # a failed Draft read must not take the rail down; the Drafts list says why
             waiting = ""
         try:
-            owed = promises.view(db)["count"]  # the rows the Promises list shows, Prep included
+            v = promises.view(db)
+            owed, today_owed = v["count"], promises.for_today(v)["count"]
         except Exception:  # a laptop copy from before migration 47
-            owed = ""
-        if isinstance(waiting, int) and isinstance(owed, int):
-            waiting += owed  # Today lists every owed Promise (FR-PR-9)
+            owed, today_owed = "", 0
+        if isinstance(waiting, int):
+            waiting += today_owed
         opts = [item("today", "today", "Today", waiting), item("calendar", "calendar", "Calendar"), gap,
                 header("threads", "threads")]
         for i, name in enumerate(VIEW_NAMES):
@@ -6248,8 +6249,8 @@ def prep_markup(p: dict, now: datetime, *, raw_times: tuple[int | None, int | No
 class PromisesPage(TablePage):
     """Promises (FR-PR-8), laid out as the Threads list: a header per section (Overdue, Urgent, At risk, Today, This week,
     Later, Tentative) with its glyph and count, then its Promises, each with the section's glyph, who it is owed to,
-    what, and the time to its due time. Read-only (ADR 0024); enter opens the Promise's Thread. Today shows the same
-    rows (FR-PR-9)."""
+    what, and the time to its due time. Read-only (ADR 0024); enter opens the Promise's Thread. Today leaves
+    Later Promises on the standalone page (FR-PR-9)."""
     TITLE = f"{ICON['promise']} promises"
     RAIL = "promises"
     KIND = "promise"
@@ -6260,6 +6261,8 @@ class PromisesPage(TablePage):
     def rows(self):
         now = clock.now()
         v = promises.view(self.app.db, now)
+        if self.host is not None:
+            v = promises.for_today(v)
         self.captured = v["captured"]
         out = []
         for key in promises.SECTIONS:

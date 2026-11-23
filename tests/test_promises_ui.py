@@ -49,7 +49,7 @@ def test_the_promises_page_lists_by_section_and_shows_history(tmp_path):
     assert seen["rows"] == ["urgent", ("Send the deck", "urgent"), "later", ("Send the term sheet", "later")]
 
 
-def test_today_lists_promises_first(tmp_path, monkeypatch):
+def test_today_lists_promises_first_without_later(tmp_path, monkeypatch):
     monkeypatch.setattr(Console, "HOME", "today")  # conftest opens other console tests on Threads
     path, seen = with_promises(tmp_path), {}
 
@@ -57,12 +57,13 @@ def test_today_lists_promises_first(tmp_path, monkeypatch):
         today = app.main.current
         seen["page"] = type(today)
         seen["first"] = today.lists[0]
-        seen["count"] = today.count(today.lists[0])
+        seen["rows"] = [p["what"] if "what" in p else p["header"] for p, _ in today.promises.items]
         seen["title"] = str(today.lists[0].parent.border_title)
 
     run(Console(path), [scenario])
     assert seen["page"] is TodayPage and isinstance(seen["first"], PromisesPage)
-    assert seen["count"] == 2 and "promises · 2" in seen["title"] and "1 at risk or overdue" in seen["title"]
+    assert seen["rows"] == ["urgent", "Send the deck"]
+    assert "promises · 1" in seen["title"] and "1 at risk or overdue" in seen["title"]
 
 
 def test_the_console_cannot_change_a_promise(tmp_path):

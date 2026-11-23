@@ -62,6 +62,14 @@ Feature: Promises
     And the View lists "Call back" under "overdue"
     And the View lists "Send the term sheet" under "later"
 
+  @AS-PR-18 @FR-PR-9
+  Scenario: Today leaves Promises in Later on the Promises page
+    Given the agent Recorded "Send the term sheet" owed to "Anna Ciprick" due "2026-11-30"
+    And the agent Recorded "Send the update" owed to "Anna Ciprick" due "2026-11-20"
+    And the agent Recorded "Write the report" owed to "Anna Ciprick" due "2026-11-30" needing 2000 minutes of work
+    Then Today lists only the Promises "Write the report" and "Send the update"
+    And the View lists "Send the term sheet" under "later"
+
   @AS-PR-8 @FR-PR-10 @NFR-PR-5
   Scenario: Capture resumes after the last Activity it finished
     When the agent Advances Capture to that message

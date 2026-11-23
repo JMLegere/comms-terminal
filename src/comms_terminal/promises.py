@@ -413,6 +413,12 @@ def view(db, now: datetime | None = None) -> dict:
     return {"sections": out, "captured": capture_mark(db), "count": sum(len(v) for v in out.values())}
 
 
+def for_today(view: dict) -> dict:
+    """Today leaves Later Promises on their own page; Prep is unchanged (FR-PR-9)."""
+    sections = view["sections"] | {"later": [p for p in view["sections"]["later"] if p["kind"] == "prep"]}
+    return view | {"sections": sections, "count": sum(map(len, sections.values()))}
+
+
 def prep_row(m: dict) -> dict:
     """A Meeting's Prep shaped as a Promise row, so every list shows it the same way: "Prep" stands where the
     People owed stand, the Meeting's title is what, its start is the time. `kind` tells them apart."""

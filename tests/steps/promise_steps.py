@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 from pytest_bdd import given, parsers, then, when
 
-from comms_terminal import clock, commands, inbox, promises, sequences
+from comms_terminal import clock, commands, core, inbox, promises, sequences
 from test_app_promises import (assert_today_detail, assert_today_fallback, assert_today_pane_moves,
                                assert_today_panes, assert_today_return, assert_today_thread_link, run_view)
 from test_app_promises import (assert_brief_discarded_on_exit, assert_brief_offline, assert_brief_outcome,
@@ -191,6 +191,15 @@ def none(owed):
 @then(parsers.parse('the View lists "{what}" under "{section}"'))
 def view_lists(owed, what, section):
     assert what in [p["what"] for p in promises.view(owed.db, owed.now)["sections"][section]]
+
+
+@then(parsers.parse('Today lists only the Promises "{first}" and "{second}"'))
+def today_lists_only(owed, first, second):
+    today = core._today(None, owed.db)
+    summary = core._shell(None, owed.db)
+    assert [p["what"] for p in today["promises"]] == [first, second]
+    assert summary["today"] == sum(len(today[k]) for k in ("threads", "tasks", "drafts", "paused", "unattended")) + 2
+    assert summary["promises"] == 3
 
 
 @then("nothing is pending after the mark")
