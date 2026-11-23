@@ -2,12 +2,189 @@
 the view kit's doubles (tests/app_promises_view.mjs)."""
 import json
 import re
+import shlex
 import subprocess
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
+from comms_terminal import agent, clock, core, inbox, promises
+
 ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.fixture
+def promise_copy(tmp_path, monkeypatch):
+    now = datetime(2026, 11, 23, 14, tzinfo=timezone.utc)
+    monkeypatch.setattr(clock, "now", lambda: now)
+    path = str(tmp_path / "promise-copy.db")
+    db = inbox.connect(path)
+    inbox.migrate(db)
+    me = "jeremy@example.test"
+    with db:
+        db.execute("INSERT INTO connections (id, platform, external_id, self_id, label, connected_at)"
+                   " VALUES ('1', 'fastmail', ?, ?, 'Fastmail', ?)", (me, me, now.isoformat()))
+    person = inbox.Identity("email", "anna@example.test", "Anna Buyer")
+    inbox.ingest(db, inbox.Incoming("1", me, "mailbox", "MESSAGE", "<old@example.test>", person,
+                                   now - timedelta(days=10), "Synthetic private transcript",
+                                   title="Original agreement https://example.test/fixture-path?fixture=query-value"))
+    inbox.ingest(db, inbox.Incoming("1", me, "mailbox", "MESSAGE", "<recent@example.test>", person,
+                                   now - timedelta(days=9), "Synthetic private message"))
+    old, recent = db.execute("SELECT id, thread_id FROM activities ORDER BY rowid").fetchall()
+    promises.advance_capture(db, recent["id"], now=now - timedelta(days=8))
+    assert not promises.pending(db)
+    person_id = db.execute("SELECT id FROM persons").fetchone()[0]
+    origin = {"kind": "activity", "ref": old["id"]}
+    pid = promises.record(db, "Deliver the review packet", [person_id], now + timedelta(hours=3), origin,
+                          inferred=True, work_minutes=45, travel_minutes=10, now=now)
+    api = core.Core(path)
+    try:
+        yield db, api, pid, old, recent, origin, now
+    finally:
+        api.call_from_thread(api.db.close)
+        db.close()
+
+
+def copy_promise(api, promise_id):
+    return api.handle({"jsonrpc": "2.0", "id": 1, "method": "promise.markdown",
+                       "params": {"origin": "view", "promise_id": promise_id}})
+
+
+def test_promise_markdown_refreshes_historical_activity_without_explicit_links(promise_copy):
+    db, api, pid, old, recent, _, _ = promise_copy
+    assert not db.execute("SELECT 1 FROM promise_links WHERE promise_id = ?", (pid,)).fetchone()
+    before = api.call_from_thread(lambda: api.db.total_changes)
+    text = copy_promise(api, pid)["result"]
+    assert isinstance(text, str)
+    for fact in ("Deliver the review packet", "Anna Buyer", "2026", "13:00", "inferred", "At risk",
+                 "recorded", f"Activity `activity:{old['id']}`", f"`comms-terminal promise {pid}`",
+                 f"`comms-terminal thread {old['thread_id']}`"):
+        assert fact in text
+    assert "- Work estimate: 45 minutes" in text.splitlines()
+    assert "- Travel: 10 minutes" in text.splitlines()
+    origin_line = next(line for line in text.splitlines() if f"Activity `activity:{old['id']}`" in line)
+    assert "2026-11-13T14:00:00.000000+00:00" in origin_line and "by `Anna Buyer`" in origin_line
+    assert "folded edits" in text and "source content" in text and "unverified" in text
+    assert "anna@example.test" not in text and "Original agreement" not in text
+    for omitted in (recent["thread_id"], "Synthetic private transcript", "fixture-path", "query-value"):
+        assert omitted not in text
+    assert api.call_from_thread(lambda: api.db.total_changes) == before
+
+
+def test_promise_markdown_deduplicates_thread_reads_and_copies_only_safe_references(promise_copy):
+    db, api, pid, old, recent, origin, now = promise_copy
+    draft = inbox.save_draft(db, {"connection_id": None, "kind": "sms", "sender": "", "to": "", "cc": "",
+                                  "subject": None, "body": "Synthetic private Draft body"}, now=now)
+    quoted = "thread's fixture"
+    for kind, target in (("thread", old["thread_id"]), ("thread", recent["thread_id"]),
+                         ("draft", draft["id"]), ("issue", "DEMO-12"), ("tana", "tana:node:brief"),
+                         ("thread", quoted), ("url", "https://example.test/fixture/hidden-fragment")):
+        promises.link(db, pid, kind, target, origin, now=now)
+    promises.change(db, pid, {"kind": "customer_request", "ref": "request-4"},
+                    what="Deliver the review packet https://example.test/fixture/hidden-text#hidden-hash", now=now)
+    promises.change(db, pid, {"kind": "words", "words": "Recorded words https://example.test/fixture/hidden-words"},
+                    work_minutes=60, now=now)
+    promises.change(db, pid, {"kind": "tana", "ref": "https://example.test/fixture/hidden-origin"},
+                    travel_minutes=20, now=now)
+    text = copy_promise(api, pid)["result"]
+    for entry in (old, recent):
+        assert text.count(f"`comms-terminal thread {entry['thread_id']}`") == 1
+    argv = [shlex.split(line.removeprefix("- `").removesuffix("`")) for line in text.splitlines()
+            if line.startswith("- `comms-terminal thread ")]
+    assert ["comms-terminal", "thread", quoted] in argv
+    for ref in (f"draft:{draft['id']}", "issue:DEMO-12", "tana:node:brief", "customer_request:request-4"):
+        assert ref in text
+    assert "URL" in text and "Comms Terminal" in text
+    assert "untrusted" in text and "read-only" in text
+    for omitted in ("Synthetic private Draft body", "Synthetic private message", "Synthetic private transcript",
+                    "fixture-path", "query-value", "hidden-fragment", "hidden-text", "hidden-hash", "hidden-words",
+                    "hidden-origin"):
+        assert omitted not in text
+
+
+@pytest.mark.parametrize("bare_url", [
+    "signed.example.test:8443/private-path?signature=fixture-query#fixture-fragment",
+    "signed.example.test/private-path",
+    "signed.example.test?signature=fixture-query",
+    "signed.example.test#fixture-fragment",
+])
+def test_promise_markdown_omits_bare_signed_urls_in_facts_and_references(promise_copy, bare_url):
+    db, api, pid, _, _, origin, now = promise_copy
+    promises.change(db, pid, {"kind": "tana", "ref": f"tana:{bare_url}"},
+                    what=f"Deliver the review packet ({bare_url})", now=now)
+    promises.link(db, pid, "thread", bare_url, origin, now=now)
+    text = copy_promise(api, pid)["result"]
+    assert "Deliver the review packet ([URL omitted]" in text
+    assert "tana reference omitted" in text and "thread reference omitted" in text
+    for omitted in ("signed.example.test", "private-path", "fixture-query", "fixture-fragment"):
+        assert omitted not in text
+
+
+@pytest.mark.parametrize("work,travel", [(0, 3600), (3600, 0)])
+def test_promise_markdown_keeps_exact_minutes_including_zero(promise_copy, work, travel):
+    db, api, pid, _, _, origin, now = promise_copy
+    promises.change(db, pid, origin, work_minutes=work, travel_minutes=travel, now=now)
+    lines = copy_promise(api, pid)["result"].splitlines()
+    assert f"- Work estimate: {work} minutes" in lines
+    assert f"- Travel: {travel} minutes" in lines
+
+
+@pytest.mark.parametrize("address,author", [
+    ("source-without-name@example.test", ""),
+    ("jeremy@example.test", " by Jeremy"),
+])
+def test_promise_markdown_identifies_a_known_activity_author_without_email(promise_copy, address, author):
+    db, api, pid, _, _, _, now = promise_copy
+    sender = inbox.Identity("email", address)
+    inbox.ingest(db, inbox.Incoming("1", "jeremy@example.test", "mailbox", "MESSAGE", "<anonymous@example.test>",
+                                   sender, now - timedelta(hours=1), "Synthetic unnamed source body"))
+    activity_id = db.execute("SELECT id FROM activities ORDER BY rowid DESC LIMIT 1").fetchone()[0]
+    promises.change(db, pid, {"kind": "activity", "ref": activity_id}, work_minutes=20, now=now)
+    text = copy_promise(api, pid)["result"]
+    origin_line = next(line for line in text.splitlines() if f"Activity `activity:{activity_id}`" in line)
+    assert origin_line.endswith(f"at 2026-11-23T13:00:00.000000+00:00{author}")
+    assert address not in text and "Synthetic unnamed source body" not in text
+
+
+def test_promise_handoff_reads_one_snapshot_without_writing(promise_copy):
+    db, api, pid, _, recent, _, now = promise_copy
+    writer = inbox.connect(api.db_path)
+    new_origin = {"kind": "customer_request", "ref": "concurrent-request"}
+    db.execute("PRAGMA query_only = ON")
+    before = db.total_changes
+    expected = agent.promise_handoff(db, pid)
+
+    def change_between_reads(sql):
+        if "FROM promise_people" in sql:
+            db.set_trace_callback(None)
+            inbox.rename_person(writer, writer.execute("SELECT id FROM persons").fetchone()[0], "Anna Renamed")
+            promises.change(writer, pid, new_origin, what="Deliver a revised packet", now=now)
+            promises.link(writer, pid, "thread", recent["thread_id"], new_origin, now=now)
+
+    db.set_trace_callback(change_between_reads)
+    try:
+        assert agent.promise_handoff(db, pid) == expected
+        assert not db.in_transaction and db.total_changes == before
+        text = agent.promise_handoff(db, pid)
+        for fact in ("Anna Renamed", "Deliver a revised packet", "concurrent-request", recent["thread_id"]):
+            assert fact in text
+    finally:
+        db.set_trace_callback(None)
+        writer.close()
+
+
+def test_promise_markdown_refuses_missing_promise_and_real_prep(promise_copy):
+    db, api, _, _, _, _, now = promise_copy
+    meeting_id = "tana:event:demo-meeting"
+    with db:
+        db.execute("INSERT INTO preps (event_uri, title, start_at, end_at, has_prep, prepped)"
+                   " VALUES (?, 'Demo Meeting', ?, ?, 0, 0)",
+                   (meeting_id, (now + timedelta(hours=1)).isoformat(), (now + timedelta(hours=2)).isoformat()))
+    for unknown in ("missing", meeting_id):
+        result = copy_promise(api, unknown)
+        assert result["error"]["code"] == -32602
+        assert "no Promise" in result["error"]["message"]
 
 
 def run_view(script="app_promises_view.mjs", *args):

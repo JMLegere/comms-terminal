@@ -1,5 +1,6 @@
 """Promises steps (features/promises.feature); synthetic local records only."""
 
+import sqlite3
 from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -7,12 +8,14 @@ import pytest
 from pytest_bdd import given, parsers, then, when
 
 from comms_terminal import clock, commands, core, inbox, promises, sequences
+from comms_terminal.tui import Console
 from test_app_promises import (assert_today_detail, assert_today_fallback, assert_today_pane_moves,
                                assert_today_panes, assert_today_return, assert_today_thread_link, run_view)
 from test_app_promises import (assert_brief_discarded_on_exit, assert_brief_offline, assert_brief_outcome,
                                assert_brief_refresh_after_reconnect, assert_late_brief_replies_ignored,
                                assert_literal_brief, assert_local_brief_timeout, assert_no_background_brief,
                                assert_one_brief_and_immediate_metadata, assert_return_to_a, brief_trace)
+from test_console import run
 
 ME = "jeremy@agentmaple.example"
 NOW = datetime(2026, 11, 16, 14, 0, tzinfo=timezone.utc)  # Monday 10:00 Halifax
@@ -419,3 +422,43 @@ def app_brief_timeout(brief_deadline):
 def app_brief_late(brief_deadline):
     for result in brief_deadline.values():
         assert_late_brief_replies_ignored(result)
+
+
+@when('Jeremy presses "y" on that Promise in the Console')
+def copy_promise(owed, tmp_path):
+    path = tmp_path / "promise.db"
+    dest = sqlite3.connect(path)
+    try:
+        owed.db.backup(dest)
+    finally:
+        dest.close()
+
+    async def copy(app, pilot):
+        app.main.go("promises")
+        await pilot.pause()
+        await pilot.press("y")
+        owed.copied = app.clipboard
+        owed.after = promises.promise(app.db, _only(owed)["id"], owed.now)
+
+    run(Console(path), [copy])
+
+
+@then("the clipboard names the Promise, its People and its time")
+def clipboard_names_promise(owed):
+    assert "Send the checklist" in owed.copied
+    assert "Ana" in owed.copied
+    assert "Nov 17" in owed.copied
+
+
+@then("it gives the read commands for the Promise and its Activity's Thread")
+def clipboard_read_commands(owed):
+    thread_id = owed.db.execute("SELECT thread_id FROM activities WHERE id = ?", (owed.message,)).fetchone()[0]
+    assert f"comms-terminal promise {_only(owed)['id']}" in owed.copied
+    assert f"comms-terminal thread {thread_id}" in owed.copied
+
+
+@then("it asks for a fulfilment plan without copying the message body or changing the Promise")
+def clipboard_plan_only(owed):
+    assert "plan" in owed.copied.lower()
+    assert "I'll send the checklist tomorrow" not in owed.copied
+    assert owed.after == _only(owed)

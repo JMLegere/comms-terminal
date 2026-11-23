@@ -1,8 +1,9 @@
 // The App's Promises page and Today's promises pane (FR-PR-8, FR-PR-9), run in the shipped views with the kit's
 // doubles. Usage: node --experimental-vm-modules app_promises_view.mjs
+import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
-  answers, calls, clicks, cx, emitEvent, hovers, load, mountedTexts, opened, ran, settle, state, texts, toasts, virtualLists,
+  answers, calls, clicks, clipboard, cx, emitEvent, hovers, load, mountedTexts, opened, ran, settle, state, texts, toasts, virtualLists,
   releasedViews,
 } from "./app_view_kit.mjs";
 
@@ -53,17 +54,17 @@ const nav = Object.assign(Object.create(Nav.prototype), { summary: {}, shell: {}
 const side = Object.create(Side.prototype);
 const threads = Object.assign(Object.create(Threads.prototype), { items: [], scroll: { scroll_to_item() {} } });
 const thread = Object.assign(Object.create(Thread.prototype), { bodies: {} });
-const views = { today, nav, side, threads, thread };
+const views = { today, promises: page, nav, side, threads, thread };
 function resolvePrepFocus(route) {
   if (state.page !== "today" || state.detail !== "promise" || state.focus !== "detail" || state.side?.kind !== "prep_today") return;
   // Only the renderer publishes detail_view. The host command sends the resolved entry.
   dispatch(`${route}.focus_entry`);
 }
 function dispatch(command) {
-  const [view, name] = command.split(".");
+  const dot = command.indexOf(".");
+  const view = command.slice(0, dot), name = command.slice(dot + 1);
   if (command === "app.focus_prep") return resolvePrepFocus("side");
-  if (view === "promises" && name === "show") return page.load(cx);
-  views[view]?.command(name, cx);
+  views[view]?.command?.(name, cx);
 }
 async function pump(wait = settle) {
   await wait();
@@ -570,4 +571,100 @@ async function traceBrief() {
 }
 
 if (process.argv[2] === "brief") out.brief = await traceBrief();
+
+// Press y via the shipped page bindings. Only the host and clipboard are doubled;
+// both list selections, Today routing, and Promise command are production code.
+answers["today.side"] = answerSide; // end the deferred Prep metadata fixtures before selecting new rows
+const pressCopy = () => {
+  const command = keys[`page:${state.page}`]?.y;
+  if (command) dispatch(command);
+};
+const handoff = "# Synthetic Promise handoff\n\n- Check the original evidence.\n";
+answers["promise.markdown"] = handoff;
+async function expectCopy(id) {
+  const start = calls.length, copied = clipboard.length;
+  pressCopy();
+  await pump();
+  const requested = calls.slice(start);
+  if (id) {
+    assert.deepEqual(requested.map((c) => c.method), ["promise.markdown"], `y on ${state.page} reads only the selected Promise`);
+    assert.deepEqual(Object.entries(requested[0].params), [["promise_id", id]]);
+    assert.deepEqual(clipboard.slice(copied), [handoff]);
+    assert.equal(toasts.at(-1), "Copied the Promise for an agent.");
+  } else {
+    assert.deepEqual(requested, [], `y on ${state.page} without a Promise must not call the core`);
+    assert.equal(clipboard.length, copied);
+  }
+}
+
+delete views.promises; // custom Today layout omits the standalone Promises view
+Object.assign(state, { page: "today", focus: "list", promise: "a" }); // a different standalone selection
+today.data = { promises: rows };
+today.at = today.rows().findIndex(({ r }) => r?.id === "b");
+today.select(cx);
+await pump();
+await expectCopy("b");
+assert.ok(state.target.keys.some(([key, label]) => key === "y" && label === "copy"));
+dispatch(keys.global.right);
+await pump();
+assert.equal(state.focus, "detail");
+await expectCopy("b");
+assert.ok(state.target.keys.some(([key]) => key === "y"));
+dispatch(keys.global.escape);
+await pump();
+today.at = today.rows().findIndex(({ r }) => r?.id === prepId);
+today.select(cx);
+await pump();
+await expectCopy(null);
+assert.ok(state.target.keys.every(([key]) => key !== "y"));
+today.at = -1;
+today.render();
+const header = today.column().find((row) => row.promiseHeader);
+virtualLists.get("today-column").click(header.key, cx);
+await expectCopy(null);
+today.data = {};
+today.at = 0;
+await expectCopy(null);
+
+views.promises = page;
+dispatch("nav.promises");
+await pump();
+dispatch(keys["page:promises"].j);
+await pump();
+await expectCopy("b");
+assert.ok(state.target.keys.some(([key, label]) => key === "y" && label === "copy"));
+answers["promise.markdown"] = () => { throw new Error("Synthetic Promise read failed"); };
+const copied = clipboard.length;
+pressCopy();
+await pump();
+assert.equal(clipboard.length, copied);
+assert.equal(toasts.at(-1), "Error: Synthetic Promise read failed");
+
+// Prep can also appear in the standalone list. Neither it nor an empty list can
+// copy, even if a Promise was selected on the other page.
+answers["promises.page"] = { sections: { this_week: [prep] } };
+dispatch("promises.show");
+await pump();
+await expectCopy(null);
+assert.ok(state.target.keys.every(([key]) => key !== "y"));
+answers["promises.page"] = { sections: {} };
+dispatch("promises.show");
+await pump();
+await expectCopy(null);
+assert.equal(state.target, null);
+
+state.page = "today";
+today.data = {
+  threads: [{ id: "synthetic-thread", detail: "NEW_REPLY" }],
+  drafts: [{ id: "synthetic-draft" }],
+  tasks: [{ id: "synthetic-task", group: "today" }],
+  issues: [{ id: "synthetic-issue" }],
+};
+for (const [kind, command] of Object.entries({ threads: "thread.copy", drafts: "drafts.copy", tasks: "tasks.copy", issues: "issue.copy" })) {
+  today.at = today.rows().findIndex((r) => r.kind === kind && r.r);
+  today.select(cx);
+  ran.length = 0;
+  pressCopy();
+  assert.deepEqual(ran.splice(0), [command], `Today retains y for ${kind}`);
+}
 console.log(JSON.stringify(out));

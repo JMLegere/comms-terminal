@@ -169,3 +169,13 @@ Feature: Promises
     When a Brief read receives no reply
     Then it times out locally after 8 seconds
     And reopening Prep or leaving Detail ignores any late replies
+
+  @AS-PR-19 @FR-PR-25
+  Scenario: Copying a Promise gives an agent its source and a path to fulfilment
+    Given "Ana" wrote to Jeremy from "ana@example.test"
+    And Jeremy wrote "I'll send the checklist tomorrow" to "ana@example.test"
+    When the agent Records "Send the checklist" owed to "Ana" due "2026-11-17" citing that message
+    And Jeremy presses "y" on that Promise in the Console
+    Then the clipboard names the Promise, its People and its time
+    And it gives the read commands for the Promise and its Activity's Thread
+    And it asks for a fulfilment plan without copying the message body or changing the Promise

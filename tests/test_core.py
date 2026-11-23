@@ -56,6 +56,12 @@ def test_every_query_answers_on_the_demo_data(demo_core):
     def first(sql):
         row = db.execute(sql).fetchone()
         return None if row is None else str(row[0])
+
+    from comms_terminal import commands, promises
+    with commands.source("cli"):
+        promise_id = promises.record(db, "Send the checklist", [first("SELECT id FROM persons")],
+                                     promises.due_from("2026-11-24"), {"kind": "words", "words": "I will send it."})
+
     values = {"view": "Todo", "thread_id": first("SELECT id FROM threads"), "case_id": first("SELECT id FROM cases"),
               "draft_id": first("SELECT id FROM composition_drafts"), "sequence_id": first("SELECT id FROM sequences"),
               "person_id": first("SELECT id FROM persons"), "domain": first("SELECT domain FROM organizations"),
@@ -63,6 +69,7 @@ def test_every_query_answers_on_the_demo_data(demo_core):
               "start": "2026-01-01", "end": "2026-12-31", "mode": "all", "organization_id": "", "org_id": first("SELECT id FROM organizations"),
               "task_id": first("SELECT id FROM tasks WHERE state = 'DUE'"), "since": "2000-01-01", "service": True,
               "enrollment_id": first("SELECT id FROM enrollments"),
+              "promise_id": promise_id,
               "keep": first("SELECT id FROM persons"), "value": "a", "kind": "email", "drop": first("SELECT id FROM persons ORDER BY id DESC"),
               "id": first("SELECT id FROM organizations"), "uid": "no-such-event", "step_id": first("SELECT id FROM sequence_steps"), "fields": {}, "body": "", "voicemail": "", "source": "tana", "state": "ok", "checked": "2026-11-07T00:00:00+00:00",
               "options": {}, "today": False, "issue_id": first("SELECT id FROM issues"),  # today.side: kind "email" reads as an Organization row

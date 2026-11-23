@@ -86,7 +86,11 @@ export default class Side extends View {
     const name = this.matches() ? this.lines?.[0]?.[0]?.[0] ?? "" : "";
     const label = TODAY_DETAIL[s.kind];
     if (label) {
-      if (shared("detail") === "promise") setShared("target", { col: "detail", label: `${label} · ${name}`, keys: [["j/k", "scroll"], ["esc", "list"]] });
+      if (shared("detail") === "promise") {
+        const keys = [["j/k", "scroll"], ["esc", "list"]];
+        if (s.kind === "promise") keys.unshift(["y", "copy"]);
+        setShared("target", { col: "detail", label: `${label} · ${name}`, keys });
+      }
       return;
     }
     setShared("target", s.kind === "unattended_person"

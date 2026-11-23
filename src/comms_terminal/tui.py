@@ -6255,6 +6255,7 @@ class PromisesPage(TablePage):
     RAIL = "promises"
     KIND = "promise"
     SIDE = f"{ICON['promise']} promise"
+    BINDINGS = [Binding("y", "copy", "copy for agent")]
     COLUMNS = ("", "", "", "")
     EMPTY = "No Promises owed."
 
@@ -6311,6 +6312,21 @@ class PromisesPage(TablePage):
         item = super().selected()
         return None if item is None or item.get("header") else item
 
+    def _copyable_promise(self):
+        p = self.selected() if self.active and getattr(self, "items", None) else None
+        return p if p is not None and p["kind"] == "promise" else None
+
+    def check_action(self, action, parameters):
+        if action == "copy":
+            return self._copyable_promise() is not None
+        return super().check_action(action, parameters)
+
+    def action_copy(self):
+        if (p := self._copyable_promise()) is not None:
+            from .agent import promise_handoff
+
+            copy_for_agent(self.app, promise_handoff(self.app.db, p["id"]), "the Promise")
+
     def _step(self, step: int):
         """↓/↑ skip the section headers, as the Threads list skips its status headers."""
         rows, table = self.selectable_rows(), self.query_one(DataTable)
@@ -6327,6 +6343,7 @@ class PromisesPage(TablePage):
         self._step(-1)
 
     def show_selected(self):
+        self.refresh_bindings()
         p = self.selected()
         if p is None:
             return

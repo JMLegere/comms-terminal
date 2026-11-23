@@ -631,6 +631,15 @@ def _issue_markdown(core, db, issue_id):
     return agent.issue_markdown(i) + f"\nFresh copy: `comms-terminal issue {issue_id}`\n"
 
 
+@query("promise.markdown", promise_id="string")
+def _promise_markdown(core, db, promise_id):
+    """One Promise as a Markdown handoff with read-only refresh commands, for an agent."""
+    try:
+        return agent.promise_handoff(db, promise_id)
+    except KeyError as e:
+        raise ApiError(-32602, "no Promise with that id") from e
+
+
 @query("task.markdown", task_id="string")
 def _task_markdown(core, db, task_id):
     """One due Task as the Markdown `comms-terminal tasks` prints, for an agent."""

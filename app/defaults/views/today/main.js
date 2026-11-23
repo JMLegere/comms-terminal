@@ -32,7 +32,7 @@ const DETAIL = { promises: "promise", threads: null, tasks: "task", issues: "iss
 const THREAD_KEYS = { r: "reply_sender", a: "reply_all", e: "done", g: "snooze", b: "block", m: "ignore", x: "ignore", l: "case",
   s: "status", p: "person", o: "link", y: "copy", f: "forward", v: "react", i: "respond", delete: "unstage" };
 const ROUTE = {
-  promises: {}, // read-only: only an agent changes a Promise (ADR 0024)
+  promises: { y: "today.copy" }, // read-only: only an agent changes a Promise (ADR 0024)
   threads: Object.fromEntries(Object.entries(THREAD_KEYS).map(([k, c]) => [k, `thread.${c}`])),
   tasks: { e: "tasks.done", x: "tasks.skip", n: "tasks.new_thread", p: "tasks.person", y: "tasks.copy", "1": "tasks.pick_first",
     "2": "tasks.pick_second" },
@@ -44,11 +44,14 @@ const ROUTE = {
   unattended_person: { p: "person.stage", v: "person.value" }, // a Person in Fundraising or Talent (ADR 0016)
 };
 const KEYS = [...new Set(Object.values(ROUTE).flatMap(Object.keys))];
-const NAME = { promises: "Promise", threads: "Thread", tasks: "Task", issues: "Issue", drafts: "Draft", paused: "Paused", unattended: "Unattended",
+const NAME = { promises: "Promise", prep: "Prep", threads: "Thread", tasks: "Task", issues: "Issue", drafts: "Draft", paused: "Paused", unattended: "Unattended",
   unattended_person: "Unattended" };
-/** A row's key set: an Unattended row holds a Person or an Organization, which take different keys. */
-const kindOf = (row) => (row.kind === "unattended" && row.r?.person_id ? "unattended_person" : row.kind);
-const nameOf = (row) => row.kind === "promises" && row.r?.kind === "prep" ? "Prep" : NAME[kindOf(row)];
+/** Prep and Promises share a pane; an Unattended row holds a Person or an Organization. */
+const kindOf = (row) => {
+  if (row.kind === "promises" && row.r?.kind === "prep") return "prep";
+  return row.kind === "unattended" && row.r?.person_id ? "unattended_person" : row.kind;
+};
+const nameOf = (row) => NAME[kindOf(row)];
 /** "thread.reply_sender" → "reply": a command as the bar and the dead-key toast name it. */
 export const verb = (command) => command.split(".")[1].replace("reply_sender", "reply").replace(/_/g, " ");
 /** The keys a row kind takes, as [key, label] pairs, for the bar and the dead-key toast. */
@@ -390,7 +393,19 @@ export default class Today extends View {
     if (KEYS.includes(c)) { // a key goes to the row's own kind; one it does not take says what that row takes
       const row = this.rows()[this.at];
       const kind = row && kindOf(row);
-      const to = kind && ROUTE[kind][c];
+      const to = kind && ROUTE[kind]?.[c];
+      if (to === "today.copy") {
+        const id = row.r?.id;
+        if (!id) return;
+        return cx.spawn(async (cx) => {
+          try {
+            cx.write_to_clipboard(await call("promise.markdown", { promise_id: id }));
+            toast("Copied the Promise for an agent.");
+          } catch (e) {
+            toast(String(e), "error");
+          }
+        });
+      }
       if (to) return run(to);
       if (kind) toast(`${c}: ${nameOf(row)} rows take ${keysOf(kind).map(([k, l]) => `${k} ${l}`).join(" · ") || "enter"}`);
     }

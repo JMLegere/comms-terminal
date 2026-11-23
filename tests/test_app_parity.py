@@ -80,6 +80,7 @@ APP = {
     ("ThreadsPage", "scroll_thread(1)"): "thread.scroll_down", ("ThreadsPage", "scroll_thread(-1)"): "thread.scroll_up",
     ("MainScreen", "app.expand_all(True)"): "thread.expand_all", ("MainScreen", "app.expand_all(False)"): "thread.collapse_all",
     ("MainScreen", "go('today')"): "nav.today", ("MainScreen", "go('drafts')"): "nav.drafts",
+    ("PromisesPage", "copy"): "promises.copy",
     ("MainScreen", "go('people')"): "nav.people", ("MainScreen", "go('organizations')"): "nav.organizations",
     ("MainScreen", "go('cases:0')"): "nav.cases", ("MainScreen", "go('channels')"): "nav.channels",
     ("TablePage", "back"): "nav.back", ("PersonPage", "back"): "nav.back", ("ConnectionPage", "back"): "nav.back", ("ContextSourcePage", "back"): "nav.back",

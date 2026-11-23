@@ -1,7 +1,7 @@
 // Promises (FR-PR-8; ADR 0024): what People expect Jeremy to do, by section (Overdue, Urgent, At risk, Today, This week,
 // Later, Tentative), soonest first, as the Console's PromisesPage. Read-only: only an agent changes a Promise. j/k move
 // and the Promise (its People, time, Slack, links and history) fills the right pane through the "side" view; Enter
-// opens its Thread when it links one. The foot says where Promise capture is up to.
+// opens its Thread when it links one. y copies the Promise for an agent. The foot says where Promise capture is up to.
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { call, nextEvent, nextCommand, theme, shared, setShared, run, focusMain, toast } from "comms";
@@ -66,17 +66,20 @@ export default class Promises extends View {
       while (true) if ((await nextEvent()).kind === "rows" && shared("page") === "promises") this.load(cx);
     });
     cx.spawn(async (cx) => {
-      while (true) {
-        const c = await nextCommand();
-        const rows = promiseRows(this.view).filter((r) => r.p);
-        const i = rows.findIndex((r) => r.p.id === shared("promise"));
-        if (c === "show") this.load(cx);
-        else if (c === "focus_entry") this.target();
-        else if (c === "enter") this.open(rows[i]?.p);
-        else if (c === "next" || c === "prev") this.select(rows[Math.max(0, Math.min(rows.length - 1, i + (c === "next" ? 1 : -1)))]?.p);
-        cx.notify();
-      }
+      while (true) this.command(await nextCommand(), cx);
     });
+  }
+
+  command(c, cx) {
+    const rows = promiseRows(this.view).filter((r) => r.p);
+    const i = rows.findIndex((r) => r.p.id === shared("promise"));
+    const p = rows[i]?.p;
+    if (c === "show") this.load(cx);
+    else if (c === "focus_entry") this.target();
+    else if (c === "enter") this.open(p);
+    else if (c === "copy" && shared("page") === "promises" && p && p.kind !== "prep") return this.copy(p.id, cx);
+    else if (c === "next" || c === "prev") this.select(rows[Math.max(0, Math.min(rows.length - 1, i + (c === "next" ? 1 : -1)))]?.p);
+    cx.notify();
   }
 
   load(cx) {
@@ -94,10 +97,9 @@ export default class Promises extends View {
   }
 
   select(p) {
-    if (!p) return;
-    setShared("promise", p.id);
-    setShared("side", { kind: "promise", id: p.id });
-    run("side.show");
+    setShared("promise", p?.id ?? null);
+    setShared("side", p ? { kind: "promise", id: p.id } : null);
+    if (p) run("side.show");
     this.target();
   }
 
@@ -106,11 +108,26 @@ export default class Promises extends View {
     if (thread) openThread(thread);
   }
 
+  copy(id, cx) {
+    if (!id) return;
+    return cx.spawn(async (cx) => {
+      try {
+        cx.write_to_clipboard(await call("promise.markdown", { promise_id: id }));
+        toast("Copied the Promise for an agent.");
+      } catch (e) {
+        toast(String(e), "error");
+      }
+    });
+  }
+
   /** The bar's line for the focused row (element focus): the Promise; it takes no change keys (ADR 0024). */
   target() {
-    if (shared("page") !== "promises" || shared("focus") === "detail") return;
+    if (shared("page") !== "promises" || (shared("focus") ?? "list") !== "list") return;
     const p = promiseRows(this.view).find((r) => r.p?.id === shared("promise"))?.p;
-    if (p) setShared("target", { col: "list", label: `Promise · ${p.what}`, keys: [["enter", "thread"], ["j/k", "move"]] });
+    if (!p) return setShared("target", null);
+    const prep = p.kind === "prep";
+    setShared("target", { col: "list", label: `${prep ? "Prep" : "Promise"} · ${p.what}`,
+      keys: prep ? [["j/k", "move"]] : [["enter", "thread"], ["j/k", "move"], ["y", "copy"]] });
   }
 
   render() {

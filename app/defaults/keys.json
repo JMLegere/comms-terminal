@@ -292,6 +292,7 @@
     "k": "promises.prev",
     "down": "promises.next",
     "up": "promises.prev",
+    "y": "promises.copy",
     "enter": "promises.enter"
   },
   "page:issues": {

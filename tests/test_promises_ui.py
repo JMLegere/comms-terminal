@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from test_console import run, seeded
+from test_copy_for_agent import copied
 from comms_terminal import clock as comms_clock, commands, inbox, promises
 from comms_terminal.tui import Console, PromisesPage, TodayPage
 
@@ -64,6 +65,69 @@ def test_today_lists_promises_first_without_later(tmp_path, monkeypatch):
     assert seen["page"] is TodayPage and isinstance(seen["first"], PromisesPage)
     assert seen["rows"] == ["urgent", "Send the deck"]
     assert "promises · 1" in seen["title"] and "1 at risk or overdue" in seen["title"]
+
+
+@pytest.mark.parametrize("section", ["today", "promises"])
+def test_y_copies_only_the_selected_promise(tmp_path, section):
+    path = with_promises(tmp_path)
+    db = inbox.connect(path)
+    ids = dict(db.execute("SELECT what, id FROM promises"))
+    if section == "today":
+        with commands.source("cli"):
+            promises.change(db, ids["Send the term sheet"], {"kind": "words", "words": "Send it this week"},
+                            due_at=MONDAY + timedelta(days=3), now=MONDAY)
+    with db:
+        db.execute("INSERT INTO preps (event_uri, title, start_at, end_at, has_prep, prepped)"
+                   " VALUES ('tana:event:synthetic', 'Acme review', ?, ?, 0, 0)",
+                   ((MONDAY + timedelta(hours=3)).isoformat(), (MONDAY + timedelta(hours=4)).isoformat()))
+    db.close()
+
+    async def scenario(app, pilot):
+        out = copied(app)
+        app.main.go(section)
+        await pilot.pause()
+        page = app.main.list
+        assert isinstance(page, PromisesPage)
+        assert page.selected()["what"] == "Send the deck"
+        await pilot.press("y")
+        assert len(out) == 1 and "Send the deck" in out[0] and "Send the term sheet" not in out[0]
+        assert f"comms-terminal promise {ids['Send the deck']}" in out[0]
+        assert app.screen.active_bindings["y"].binding.description == "copy for agent"
+
+        await pilot.press("j")
+        assert page.selected()["kind"] == "prep"
+        await pilot.press("y")
+        assert len(out) == 1
+        assert "y" not in app.screen.active_bindings
+
+        await pilot.press("j")
+        assert page.selected()["what"] == "Send the term sheet"
+        await pilot.press("y")
+        assert len(out) == 2 and "Send the term sheet" in out[1] and "Send the deck" not in out[1]
+        assert f"comms-terminal promise {ids['Send the term sheet']}" in out[1]
+
+        if section == "today":
+            await pilot.press("j", "y")
+            assert len(out) == 3 and "- Thread:" in out[2]
+        else:
+            await pilot.press("left", "y")
+            assert len(out) == 2 and app.main.rail.has_focus
+
+    run(Console(path), [scenario])
+
+
+def test_y_does_not_copy_from_an_empty_promises_page(tmp_path):
+    path, _ = seeded(tmp_path)
+
+    async def scenario(app, pilot):
+        out = copied(app)
+        app.main.go("promises")
+        await pilot.pause()
+        assert app.main.list.selected() is None
+        await pilot.press("y")
+        assert not out and "y" not in app.screen.active_bindings
+
+    run(Console(path), [scenario])
 
 
 def test_the_console_cannot_change_a_promise(tmp_path):
