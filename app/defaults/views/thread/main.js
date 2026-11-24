@@ -155,7 +155,7 @@ export function offerUndo(message) {
 export default class Thread extends View {
   init(_props, cx) {
     this.view = null;
-    this.bodies = {}; // message id -> { html, remote, loaded } from message.body
+    this.bodies = {}; // message id -> { html, compact, remote, loaded } from message.body
     // The Composer on this Thread's Reply Draft (FR-UD-1); its `reply` is set while it is open.
     this.composer = new Composer("thread", { placeholder: "Write a reply…", rows: 6, grow: [4, 16], bodyName: "reply",
       command: (c, cx) => this.command(c, cx), done: (cx) => cx.notify() });
@@ -257,7 +257,10 @@ export default class Thread extends View {
     switch (name) {
       case "show": return this.load(cx);
       case "images":
-        for (const m of v?.messages ?? []) if (this.bodies[m.id]?.remote > 0) this.body(m, true, cx);
+        for (const m of v?.messages ?? []) if (this.bodies[m.id]?.remote > 0) {
+          if (this.bodies[m.id].compact) this.msgState().trim.add(m.native_id);
+          this.body(m, true, cx);
+        }
         return;
       case "done": return this.act(dc("Done"), "Done. It returns to Todo if they write again.", cx);
       case "ignore":
@@ -618,7 +621,7 @@ export default class Thread extends View {
     cx.spawn(async (cx) => {
       try {
         const answer = await call(images ? "message.load_images" : "message.body", { raw: m.raw });
-        this.bodies[m.id] = answer ? { html: answer.html, remote: answer.remote, loaded: images } : { none: true };
+        this.bodies[m.id] = answer ? { ...answer, loaded: images } : { none: true };
       } catch (e) {
         this.bodies[m.id] = { none: true, error: String(e) };
       }
@@ -630,21 +633,24 @@ export default class Thread extends View {
   content(m, t) {
     if (m.deleted) return div().italic().text_color(t.dim).child(`${I.deleted} message deleted`);
     const b = this.bodies[m.id];
-    const text = div().text_size(13.5).line_height(1.5).text_color(t.foreground).child(m.shown ?? m.content ?? "");
-    const st = this.msgState();
-    const trim = Boolean(m.trimmed) && (!m.raw || !b?.html);
-    const folded = trim ? v_flex().gap(6).child(text) // Trimmed content folds behind ••• (D38)
-      .child(div().id(`trim-${m.id}`).px(4).bg(t.chrome).text_color(t.dim).cursor_pointer()
-        .on_click((_e, cx) => { st.trim.has(m.native_id) ? st.trim.delete(m.native_id) : st.trim.add(m.native_id); cx.notify(); }).child(" ••• "))
-      .when(st.trim.has(m.native_id), (el) => el.child(div().text_size(13.5).line_height(1.5).text_color(t.muted).child(m.trimmed))) : text;
-    if (!m.raw || !b || b.none) return folded;
-    if (!b.html) return folded;
-    return v_flex().gap(6)
+    const text = (value, color = t.foreground) => div().text_size(13.5).line_height(1.5).text_color(color).child(value);
+    const shown = m.shown ?? m.content ?? "";
+    const hasHtml = m.raw && b?.html;
+    const trim = hasHtml ? b.compact : m.trimmed;
+    const st = this.msgState(), expanded = st.trim.has(m.native_id);
+    const toggle = () => div().id(`trim-${m.id}`).px(4).bg(t.chrome).text_color(t.dim).cursor_pointer()
+      .on_click((_e, cx) => { expanded ? st.trim.delete(m.native_id) : st.trim.add(m.native_id); cx.notify(); }).child(" ••• ");
+    if (!hasHtml) return trim ? v_flex().gap(6).child(text(shown)).child(toggle())
+      .when(expanded, (el) => el.child(text(trim, t.muted))) : text(shown);
+    const full = () => v_flex().gap(6)
       .when(b.remote > 0 && !b.loaded, (el) => el.child(h_flex().gap(8).text_size(11.5).text_color(t.muted)
         .child(div().child(`${b.remote} remote image${b.remote === 1 ? "" : "s"} held back`))
         .child(div().id(`load-${m.id}`).px(6).rounded(4).bg(t.selected).text_color(t.accent).cursor_pointer()
           .on_click((_, cx) => this.body(m, true, cx)).child(b.loading ? "Loading…" : "Load images"))))
       .child(div().rounded(6).bg("#ffffff").p(8).child(MessageBody(`${m.id}:${b.loaded ? 1 : 0}`, b.html)));
+    return trim ? v_flex().gap(6)
+      .when(!expanded, (el) => el.child(text(trim))).child(toggle())
+      .when(expanded, (el) => el.child(full())) : full();
   }
 
   /** Attachment chips: a stored copy opens in Files, selected in Downloads; one not copied yet opens the message in

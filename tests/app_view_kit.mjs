@@ -32,6 +32,7 @@ function eventReader() {
 }
 let captureMounts = false;
 const mountedChildren = new WeakMap();
+const messageBodyHtml = new WeakMap();
 
 function element(list) {
   const children = captureMounts ? [] : null;
@@ -57,9 +58,10 @@ function virtualList(id, length, _height, keyAt, render) {
 }
 
 // Unlike texts, exclude elements built during a render but never attached to its root.
-export function mountedTexts(render, { includeNested = true } = {}) {
+export function mountedTexts(render, { includeNested = true, messageBodies } = {}) {
   const visit = (node) => {
     if (typeof node === "string") return [node];
+    if (messageBodies && messageBodyHtml.has(node)) messageBodies.push(messageBodyHtml.get(node));
     const child = nestedViews.get(node);
     if (child) return includeNested ? visit(child.render(cx)) : [];
     return (mountedChildren.get(node) ?? []).flatMap(visit);
@@ -97,7 +99,14 @@ const comms = {
   fonts: () => ["Alpha Mono", "Beta Sans"], settings: () => state.settingsFile ?? {}, logTail: () => state.log ?? [],
   setting(key, value) { calls.push({ method: "setting", params: { key, value } }); return true; },
 };
-const modules = { "gpui-kit": { View: class {}, div: element, svg: element } };
+const modules = {
+  "gpui-kit": { View: class {}, div: element, svg: element },
+  "gpui-component": { MessageBody(_key, html) {
+    const node = element();
+    messageBodyHtml.set(node, html);
+    return node;
+  } },
+};
 // A relative import is a file in the view's own directory; app/src/workspace.rs ships a shared file such as
 // views/composer.js into each directory that imports it, so one missing beside the view is read from views/.
 function file(name, spec) {

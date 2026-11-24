@@ -380,6 +380,53 @@ def test_message_body_strips_remote_fetches_and_load_images_fetches_on_request(l
     assert 'src="data:image/gif;base64,R0lG"' in loaded["html"] and "s.css" not in loaded["html"]
 
 
+def test_message_body_offers_compact_reply_but_keeps_original_html(laptop_core):
+    c, _, _ = laptop_core
+    raw = (b"Content-Type: text/html\r\nSubject: Re: Plans\r\n\r\n"
+           b"<p>New answer.</p><div>-----Original Message-----</div><p>Earlier history.</p>")
+    for message, compact in ((raw, "New answer."), (raw.replace(b"Re:", b"Fwd:"), None),
+                             (raw.replace(b"<p>New answer.</p>", b""), None)):
+        sha = c.call_from_thread(files.store_raw, c.db, message)
+        body = call(c, "message.body", raw=sha)["result"]
+        assert body.get("compact") == compact
+        assert "Earlier history." in body["html"]
+
+
+@pytest.mark.parametrize("subject,markup,compact", [
+    ("Re: Outlook", '<p>New answer.</p><div id="divRplyFwdMsg">From: Alex</div><p>Earlier history.</p>', "New answer."),
+    ("Re: Outlook inline reply", '<p>New answer.</p><blockquote><div id="divRplyFwdMsg">From: Alex</div>'
+     '<p>Earlier history.</p></blockquote><p>Follow-up answer.</p>', "New answer.\n\nFollow-up answer."),
+    ("Re: Gmail reply to forward", '<p>New answer.</p><div class="gmail_quote gmail_quote_container">'
+     '<div class="gmail_attr">Am Dienstag schrieb Alex:</div>'
+     '<blockquote class="gmail_quote"><div class="gmail_attr">---------- Forwarded message ---------</div>'
+     '<p>Earlier history.</p></blockquote></div>', "New answer."),
+    ("Re: Divider only", '<hr><div>-----Original Message-----</div><p>Earlier history.</p>', None),
+    ("Updated subject", '<p>New answer.</p><blockquote class="gmail_quote">Earlier history.</blockquote>', "New answer."),
+    ("Re: Renamed forward", '<p>My note.</p><div class="gmail_quote"><div class="gmail_attr">---------- Forwarded message ---------</div>'
+     '<p>Forwarded body.</p><div class="gmail_quote">Earlier history.</div></div>', None),
+    ("Re: Invalid link", '<p>New answer. <a href="https://[example.test">Link</a></p>'
+     '<div>-----Original Message-----</div><p>Earlier history.</p>', None),
+])
+def test_message_body_only_compacts_reliable_reply_text(laptop_core, subject, markup, compact):
+    c, _, _ = laptop_core
+    raw = f"Content-Type: text/html\r\nSubject: {subject}\r\nIn-Reply-To: <old@example.test>\r\n\r\n{markup}".encode()
+    sha = c.call_from_thread(files.store_raw, c.db, raw)
+    body = call(c, "message.body", raw=sha)["result"]
+    assert "Earlier history." in body["html"]
+    assert body.get("compact") == compact
+
+
+@pytest.mark.parametrize("subject", ["Weekly newsletter", "Re: Weekly newsletter"])
+def test_message_body_keeps_newsletter_rich(laptop_core, subject):
+    c, _, _ = laptop_core
+    raw = (f"Content-Type: text/html\r\nSubject: {subject}\r\n\r\n"
+           "<p>Weekly update.</p><img src='https://t.example/photo.png'><p>Unsubscribe.</p>").encode()
+    sha = c.call_from_thread(files.store_raw, c.db, raw)
+    body = call(c, "message.body", raw=sha)["result"]
+    assert body.get("compact") is None
+    assert "Unsubscribe." in body["html"] and body["remote"] == 1
+
+
 def test_upload_stages_a_file_through_the_service_upload_page(service, laptop_core, tmp_path, monkeypatch):
     path, sdb, _, tid = service
     c, _, _ = laptop_core

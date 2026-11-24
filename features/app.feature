@@ -21,6 +21,13 @@ Feature: App
     When the App opens its Message Body
     Then a logging HTTP server receives no request
 
+  # App design §3 (D38): the full HTML stays available behind the fold.
+  @AS-APP-1 @FR-APP-8
+  Scenario: An HTML reply in the App folds Trimmed content
+    Given a Thread in the App with an HTML reply containing Trimmed content
+    When Jeremy opens the Thread and clicks "•••" twice
+    Then the App shows only the new reply first, the full HTML after the first click, and only the new reply again after the second
+
   @wip @AS-APP-3 @FR-APP-9
   Scenario: One click opens an Attachment and one click opens a link
     Given a Thread whose email has a PDF Attachment and a link

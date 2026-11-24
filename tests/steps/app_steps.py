@@ -173,6 +173,25 @@ def no_request(app):
     assert app.hits == []
 
 
+# --- AS-1 / D38: the shipped Thread view folds an HTML reply ---
+
+@given("a Thread in the App with an HTML reply containing Trimmed content")
+def html_reply_with_trimmed_content():
+    pass  # The shipped view's driver provides the reply fixture.
+
+
+@when('Jeremy opens the Thread and clicks "•••" twice', target_fixture="quote_view")
+def click_quote_toggle_twice():
+    script = Path(__file__).resolve().parents[1] / "app_email_quotes_view.mjs"
+    return subprocess.run(["node", "--experimental-vm-modules", str(script)],
+                          capture_output=True, text=True, timeout=10)
+
+
+@then("the App shows only the new reply first, the full HTML after the first click, and only the new reply again after the second")
+def quote_view_folds_and_expands(quote_view):
+    assert quote_view.returncode == 0, quote_view.stderr
+
+
 # --- AS-8: a Panel cannot send ---
 
 @given("a Panel that calls the send command for a Draft")

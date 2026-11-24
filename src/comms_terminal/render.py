@@ -137,7 +137,7 @@ FOOTER = re.compile(r"unsubscribe|désinscri|©|\(c\) ?\d{4}|all rights reserved
 FORWARD = re.compile(r"^-{5,} ?Forwarded message ?-{5,}|^Begin forwarded message:", re.I | re.M)
 
 
-def split_quote(markup: str, forward: bool) -> tuple[str, str]:
+def split_quote(markup: str, forward: bool, *, quote_only: bool = False) -> tuple[str, str]:
     """Cut at the first quote header: `On … wrote:`, an Outlook `From:/Sent:` block, `-- ` signature,
     or a trailing run of `>` lines. A forward's header block stays (it is the content)."""
     lines = markup.split("\n")
@@ -148,7 +148,7 @@ def split_quote(markup: str, forward: bool) -> tuple[str, str]:
             return "\n".join(lines[:i]), "\n".join(lines[i:])
         if any(p.match(t) for p in QUOTE_START[2:]) and i > 0 and not forward:
             return "\n".join(lines[:i]), "\n".join(lines[i:])
-        if t == "--" or lines[i] == "-- ":
+        if not quote_only and (t == "--" or lines[i] == "-- "):
             if i > 0:
                 return "\n".join(lines[:i]), "\n".join(lines[i:])
         if not forward and i > 0 and HEADER_BLOCK.match("\n".join(texts[i:i + 4])):
@@ -174,11 +174,11 @@ def split_footer(markup: str) -> tuple[str, str]:
     return markup, ""
 
 
-def finish(markup: str, trimmed: str, forward: bool) -> tuple[str, str]:
+def finish(markup: str, trimmed: str, forward: bool, *, quote_only: bool = False) -> tuple[str, str]:
     markup, trimmed = open_brackets(markup), open_brackets(trimmed)
     markup = re.sub(r"\n{3,}", "\n\n", markup).strip()
-    markup, quote = split_quote(markup, forward)
-    markup, footer = split_footer(markup)
+    markup, quote = split_quote(markup, forward, quote_only=quote_only)
+    markup, footer = (markup, "") if quote_only else split_footer(markup)
     rest = "\n\n".join(p for p in (footer.strip(), quote.strip(), trimmed.strip()) if p)
     if not markup.strip() and rest:  # nothing new to say: show it all rather than a bare •••
         return rest, ""
@@ -194,30 +194,48 @@ VOID = {"br", "img", "hr", "meta", "link", "input", "col", "area", "base", "wbr"
 HIDDEN_STYLE = ("display:none", "max-height:0", "opacity:0", "visibility:hidden", "mso-hide:all")
 TRIM_CLASS = re.compile(r"gmail_quote|gmail_signature|yahoo_quoted|moz-cite-prefix|OutlookMessageHeader")
 TRIM_ID = re.compile(r"divRplyFwdMsg|appendonsend|^Signature")
+QUOTE_CLASSES = {"gmail_quote", "gmail_quote_container", "yahoo_quoted", "moz-cite-prefix"}
 WS = re.compile(r"[ \t\r\n ​‌͏ 　﻿]+")
 FWD_OPEN, FWD_CLOSE = "\x01", "\x02"
+GMAIL_FORWARD = re.compile(r'class="gmail_attr"[^>]*>\s*-+ ?Forwarded message')
 
 
 class _Html(HTMLParser):
-    def __init__(self):
+    def __init__(self, *, quote_only: bool = False):
         super().__init__(convert_charrefs=True)
         self.out: list[str] = []
         self.trim: list[str] = []
-        self.stack: list[tuple[str, bool, bool, bool]] = []  # (tag, hidden, trims, forward)
+        self.stack: list[tuple[str, bool, bool, bool, int]] = []  # tag, hidden, trims, forward, output start
         self.href: str | None = None
         self.label: list[str] = []
         self.lists: list[list] = []
         self.pre = 0
+        self.quote_only = quote_only
+        self.outlook_history = False
+        self.gmail_attribution: list[str] = []
+        self.gmail_attr_depth: int | None = None  # None before first attribution, 0 after it closes
 
     @property
     def hidden(self):
-        return any(h for _, h, _, _ in self.stack)
+        return any(h for _, h, _, _, _ in self.stack)
 
     def emit(self, s: str, label: bool = True):
         if label and self.href is not None and s != "\n":
             self.label.append(s)
         else:
-            (self.trim if any(t for _, _, t, _ in self.stack) else self.out).append(s)
+            (self.trim if self.outlook_history or any(t for _, _, t, _, _ in self.stack) else self.out).append(s)
+
+    def _outlook_boundary(self):
+        if self.outlook_history or any(t for _, _, t, _, _ in self.stack[:-1]):
+            return
+        for i in range(len(self.stack) - 2, -1, -1):
+            tag, hidden, _, forward, start = self.stack[i]
+            if tag == "blockquote":
+                self.trim.extend(self.out[start:])
+                del self.out[start:]
+                self.stack[i] = (tag, hidden, True, forward, start)
+                return
+        self.outlook_history = True  # Outside a quote container, Outlook's history follows the header.
 
     def handle_starttag(self, tag, attrs):
         a = {k: v or "" for k, v in attrs}
@@ -238,12 +256,24 @@ class _Html(HTMLParser):
             return
         style = a.get("style", "").replace(" ", "").lower()
         hide = tag in SKIP or any(s in style for s in HIDDEN_STYLE) or "hidden" in a
-        forward = "fwd_quote" in a.get("class", "")
-        trims = not forward and bool(TRIM_CLASS.search(a.get("class", "")) or TRIM_ID.search(a.get("id", ""))
-                                     or (tag == "blockquote" and a.get("type") == "cite"))
-        self.stack.append((tag, hide, trims, forward))
+        classes = a.get("class", "")
+        names = set(classes.split()) if self.quote_only else set()
+        outlook = self.quote_only and (a.get("id") == "divRplyFwdMsg" or "OutlookMessageHeader" in names)
+        cite = tag == "blockquote" and a.get("type") == "cite"
+        forward = not self.quote_only and "fwd_quote" in classes
+        if self.quote_only:
+            trims = cite or outlook or bool(QUOTE_CLASSES & names)
+        else:
+            trims = not forward and bool(TRIM_CLASS.search(classes) or TRIM_ID.search(a.get("id", "")) or cite)
+        self.stack.append((tag, hide, trims, forward, len(self.out)))
         if self.hidden:
             return
+        if outlook:
+            self._outlook_boundary()
+        if "gmail_attr" in names and self.gmail_attr_depth is None and not any(
+            parent == "blockquote" for parent, _, _, _, _ in self.stack[:-1]
+        ):
+            self.gmail_attr_depth = len(self.stack)
         if tag in BLOCK:
             self.emit("\n")
         if forward:
@@ -275,6 +305,8 @@ class _Html(HTMLParser):
                 break
         else:
             return
+        if self.gmail_attr_depth and self.gmail_attr_depth > len(self.stack):
+            self.gmail_attr_depth = 0
         if was_hidden:
             return
         if tag == "a" and self.href is not None:
@@ -298,6 +330,8 @@ class _Html(HTMLParser):
     def handle_data(self, data):
         if self.hidden:
             return
+        if self.gmail_attr_depth:
+            self.gmail_attribution.append(data)
         data = data if self.pre else WS.sub(" ", data)
         self.emit(escape(data) if self.href is not None else text_markup(data))
 
@@ -321,17 +355,19 @@ def _quote_forward(markup: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", "\n".join(out)).strip()
 
 
-def html_body(html: str, forward: bool = False) -> tuple[str, str]:
+def html_body(html: str, forward: bool = False, *, quote_only: bool = False) -> tuple[str, str]:
     """HTML -> (shown, trimmed) markup."""
-    if forward or re.search(r'class="gmail_attr"[^>]*>\s*-+ ?Forwarded message', html):
+    if not quote_only and (forward or GMAIL_FORWARD.search(html)):
         # Gmail wraps a forward in the same gmail_quote div as a reply; mark the first one as a forward.
         html = re.sub(r'class="gmail_quote', 'class="fwd_quote', html, count=1)
         forward = True
-    p = _Html()
+    p = _Html(quote_only=quote_only)
     p.feed(html)
     p.close()
     shown, trimmed = _tidy(p.out), _tidy(p.trim)
-    shown, rest = finish(shown, trimmed, forward)
+    if quote_only and FORWARD.match("".join(p.gmail_attribution).strip()):
+        return shown, ""  # The outer Gmail attribution marks a genuine forward.
+    shown, rest = finish(shown, trimmed, forward, quote_only=quote_only)
     return _quote_forward(shown), _quote_forward(rest)
 
 
@@ -426,9 +462,12 @@ def chip(name: str, ctype: str, size: int) -> str:
     return f"{escape(name)} · {kind}" + (f" · {_size(size)}" if size else "")  # size 0 = unknown (Quo media)
 
 
+FORWARD_SUBJECT = re.compile(r"\s*(fwd?|tr)\s*:", re.I)
+
+
 def from_raw(raw: bytes) -> Body:
     msg = message_from_bytes(raw, policy=policy.default)
-    forward = bool(re.match(r"\s*(fwd?|tr)\s*:", str(msg.get("Subject", "")), re.I))
+    forward = bool(FORWARD_SUBJECT.match(str(msg.get("Subject", ""))))
     html = msg.get_body(preferencelist=("html",))
     text_part = msg.get_body(preferencelist=("plain",))
     if html is not None:
@@ -670,8 +709,7 @@ def clean_html(html: str, cids: dict[str, str] | None = None, fetch=None) -> tup
 
 
 def safe_html(raw: bytes, fetch=None) -> dict | None:
-    """A message's HTML for the App (FR-7): no remote fetch, inline images as data: URIs. None without an HTML
-    part. `remote` counts the references removed, so the App knows whether "Load images" would change anything."""
+    """Safe full HTML for the App, with compact text only when a reply has earlier history."""
     msg = message_from_bytes(raw, policy=policy.default)
     part = msg.get_body(preferencelist=("html",))
     if part is None:
@@ -682,5 +720,17 @@ def safe_html(raw: bytes, fetch=None) -> dict | None:
         if cid and p.get_content_maintype() == "image":
             data = p.get_payload(decode=True) or b""
             cids[cid] = f"data:{p.get_content_type()};base64,{base64.b64encode(data).decode()}"
-    html, removed = clean_html(part.get_content(), cids, fetch)
-    return {"html": html, "remote": removed}
+    source = part.get_content()
+    html, removed = clean_html(source, cids, fetch)
+    subject = str(msg.get("Subject", ""))
+    compact = None
+    reply = msg.get("In-Reply-To") or msg.get("References") or re.match(r"\s*re\s*:", subject, re.I)
+    if reply and not FORWARD_SUBJECT.match(subject):
+        try:
+            shown, trimmed = html_body(source, quote_only=True)
+            text = plain(shown).strip()
+            if trimmed and text.strip(" \t\n─_-"):
+                compact = text
+        except ValueError:
+            pass  # A bad link in the preview must not discard the sanitized HTML.
+    return {"html": html, "remote": removed, "compact": compact}
