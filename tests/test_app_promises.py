@@ -238,7 +238,8 @@ def assert_today_detail(kind, activation):
     assert detail["route"] == "side"
     assert (detail["target"]["col"], detail["target"]["label"]) == ("detail", label)
     assert detail["thread"] is None
-    calls = [c for c in activation["calls"] if kind != "prep" or c["method"] != "prep.brief"]
+    extra = "prep.brief" if kind == "prep" else "today.promise_context"
+    calls = [c for c in activation["calls"] if c["method"] != extra]
     assert {c["method"] for c in calls} == {"today.side"}
     assert all(c["params"] == {"kind": "prep_today" if kind == "prep" else "promise", "id": row} for c in calls)
     assert any(line.startswith("Read-only") for line in detail["lines"])
@@ -378,7 +379,7 @@ def test_today_prep_retry_keeps_last_known_until_fresh_metadata_arrives(out):
 
 def test_today_promise_and_prep_navigation_only_reads_local_api(out):
     assert set(out["todayCalls"]) - {"prep.brief"} == {
-        "today.page", "today.side", "cases.list", "thread.view", "threads.queue", "promises.page",
+        "today.page", "today.side", "cases.list", "thread.view", "threads.queue", "promises.page", "today.promise_context",
     }
 
 
@@ -427,7 +428,7 @@ def assert_literal_brief(activation, calls):
     assert rendered["links"] == 1  # only the existing Prep link; no rendered link/image from the body
     assert rendered["opened"] == []  # no implicit launch before the next user action
     assert activation["explicitlyOpened"] == ["https://home.tana.inc/o/test/l/site"]
-    assert {c["method"] for c in calls} == {"today.page", "today.side", "cases.list", "prep.brief"}
+    assert {c["method"] for c in calls} == {"today.page", "today.side", "cases.list", "prep.brief", "today.promise_context"}
 
 
 def assert_brief_discarded_on_exit(trace):
@@ -574,7 +575,7 @@ def test_brief_paused_to_custom_prep_resolves_before_reading(brief_trace):
     assert trace["beforeResolution"]["focus"] == "detail"
     assert trace["beforeResolution"]["route"] == "side"  # previous renderer-published Paused route
     assert trace["beforeResolution"]["reads"] == []
-    assert trace["commands"].count("app.focus_prep") == 1
+    assert trace["commands"].count("app.focus_today_detail") == 1
     assert "side.focus_entry" not in trace["commands"]
     assert trace["current"]["route"] == "custom"
     assert trace["current"]["reads"] == []

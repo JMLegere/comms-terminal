@@ -61,6 +61,7 @@ class ApiError(Exception):
 # --- queries: one per view (PRD Phase 0.5) ---------------------------------------------------------------------------
 
 QUERIES: dict = {}  # name -> (fn(core, db, **params), {param: json type}, summary)
+PROMISE_TEXT_QUERIES = {"today.promise_context", "today.promise_thread"}
 
 
 def query(method, **params):
@@ -463,6 +464,23 @@ def _today_side(core, db, kind, id):
         domain = f"  [#928374]{o['domain']}[/]" if o and o["domain"] != o["name"] else ""
         markup = f"[b]{o['name'] if o else ''}[/]{domain}\n\n" + pipeline_section(db, id)
     return segments(markup)
+
+
+@query("today.promise_context", promise_id="string")
+def _today_promise_context(core, db, promise_id):
+    """Read linked Thread cards and visible passages from exact recorded Origins of one Promise."""
+    from . import promises
+    return promises.thread_context(db, promise_id)
+
+
+@query("today.promise_thread", promise_id="string", thread_id="string")
+def _today_promise_thread(core, db, promise_id, thread_id):
+    """Read visible Activity from one Thread linked to the selected Promise."""
+    from . import promises
+    try:
+        return promises.linked_thread_text(db, promise_id, thread_id)
+    except promises.Refused as e:
+        raise ApiError(-32602, str(e)) from None
 
 
 def segments(markup: str) -> list:
@@ -1050,7 +1068,16 @@ class Core:
             if changed == []:  # the answer only confirmed what the copy shows: the views keep their rows
                 self.answers = {}  # but answer the next queries from the rebased copy
                 return
-            self.publish("rows", {"changed": None if changed is None else [list(c) for c in changed]})
+            # Activity row ids alone cannot tell an open Promise Detail whether its Threads changed.
+            data = {"changed": None if changed is None else [list(c) for c in changed]}
+            activities = [row_id for table, row_id in changed or () if table == "activities"]
+            if activities:
+                rows = self.db.execute("SELECT id, thread_id FROM thread_activities"
+                                       " WHERE id IN (SELECT value FROM json_each(?))",
+                                       (json.dumps(activities),)).fetchall()
+                if len(rows) == len(set(activities)):
+                    data["activity_threads"] = sorted({row["thread_id"] for row in rows})
+            self.publish("rows", data)
 
     def check_copy(self):
         """Writes stay off while the copy's schema or the Service's build differ from this core's code."""
@@ -1139,6 +1166,11 @@ class Core:
         if method in QUERIES:
             fn, spec, _ = QUERIES[method]
             _require(params, spec)
+            if method in PROMISE_TEXT_QUERIES:
+                if origin != "view":
+                    raise Refused(f"{method} runs only from the App's views")
+                if any(not isinstance(v, str) or not v.strip() for v in params.values()):
+                    raise ApiError(-32602, "Promise and Thread IDs must be nonempty strings")
             return self.call_from_thread(self._answer, method, fn, params)
         if method in ("message.body", "message.load_images"):
             raw = self._raw(params.get("raw"))
@@ -1161,6 +1193,9 @@ class Core:
         """A query's answer, on the worker. The Views reload together after each event and several ask the same
         query, so an answer is kept until the next event (or the next minute: Today's groups and "now/next" move
         with the clock) and computed once."""
+        if method in PROMISE_TEXT_QUERIES:
+            # A new request must see local redaction and link changes, not reuse an earlier copy of the body.
+            return fn(self, self.db, **params)
         key = (method, json.dumps(params, sort_keys=True), _minute())
         if self.answers_seq != self.seq:
             self.answers, self.answers_seq = {}, self.seq
@@ -1368,6 +1403,7 @@ def openrpc() -> dict:
     ]
     for name, (_, spec, summary) in QUERIES.items():
         methods.append({"name": name, "summary": summary,
+                        **({"x-panel": False} if name in PROMISE_TEXT_QUERIES else {}),
                         "params": [_param(p, {"type": t}, True) for p, t in spec.items()]})
     for name in writers.WRITERS:
         module, fn = name.split(".")

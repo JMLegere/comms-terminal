@@ -13,6 +13,26 @@ const BRIEF_NOTE = {
   offline: "Brief unavailable offline. Reopen Prep after reconnecting.",
   timeout: "Could not load Brief (timeout)",
 };
+const CONTEXT_TABLES = new Set(["threads", "activities", "promise_links", "promise_changes"]);
+const CARD_NOTE = {
+  no_match: "No recorded Origin in this Thread",
+  unavailable: "Original passage unavailable",
+};
+const READ_NOTE = {
+  timeout: "Could not load messages (timeout)",
+  unavailable: "Messages unavailable",
+  error: "Could not load messages",
+};
+const stamp = (at) => at ? new Date(at).toLocaleString("en-CA", {
+  month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
+}) : "";
+
+function activity(t, messages) {
+  return messages.map(({ who, at, text }) => v_flex().w_full().min_w(0).flex_none().gap(2)
+    .child(div().text_size(11.5).text_color(t.muted).child([who, stamp(at)].filter(Boolean).join(" · ")))
+    .children(text.split(/\r\n|\n|\r/).map((line) => line
+      ? div().w_full().min_w(0).flex_none().text_size(14).child(line) : div().h(10).flex_none())));
+}
 
 /** Console segment lines ([text, colour, bold, link]) as rows; a blank line keeps its height. A person or org link
  * opens that page on the stack; a Today Promise Thread link opens its Thread. URLs take Ctrl+click (Cmd+click on macOS). */
@@ -52,6 +72,19 @@ export default class Side extends View {
     cx.spawn(async (cx) => {
       while (true) {
         const { kind, data } = await nextEvent();
+        const context = this.context;
+        if (kind === "rows" && this.ownsContext(context) && ["ready", "loading"].includes(context.state)
+            && this.linkedContextChanged(context, data)) {
+          // Rebase may redact an Origin or remove a link. Never refresh expanded bodies in the background.
+          this.context = null;
+          this.openContext(cx);
+        }
+        if (kind === "disconnected" && this.ownsContext(this.context)) {
+          const { id, epoch } = this.context;
+          this.context = { id, epoch, state: "error" };
+          this.target();
+          cx.notify();
+        }
         if (kind !== "status" && kind !== "disconnected") continue;
         // The host updates status() for status events, not when the Local core socket closes.
         this.disconnected = kind === "disconnected";
@@ -69,10 +102,25 @@ export default class Side extends View {
   command(c, cx) {
     switch (c) {
       case "show": return this.load(cx);
-      case "focus_entry": this.target(); this.openBrief(cx); return cx.notify();
-      case "focus_exit": this.discardBrief(); return cx.notify();
+      case "focus_entry": this.openContext(cx); this.openBrief(cx); this.target(); return cx.notify();
+      case "focus_exit": this.discardBrief(); this.discardContext(); return cx.notify();
+      case "tab": {
+        const context = this.context;
+        if (!this.ownsContext(context) || !context.cards?.length) return;
+        context.active = (context.active + 1) % context.cards.length;
+        this.target();
+        return cx.notify();
+      }
       case "next": case "prev": return run(c === "next" ? "app.scroll_down" : "app.scroll_up");
       case "enter":
+        if (this.ownsContext(this.context)) {
+          const context = this.context, card = context.cards?.[context.active];
+          if (card) return this.toggleContext(context, card.id, cx);
+          if (["error", "timeout"].includes(context.state)) {
+            this.context = null;
+            return this.openContext(cx);
+          }
+        }
         if (shared("page") === "today" && ["paused", "unattended", "unattended_person"].includes(shared("side")?.kind))
           return run("today.enter"); // the Person or Organization's own page
         return;
@@ -89,7 +137,11 @@ export default class Side extends View {
       if (shared("detail") === "promise") {
         const keys = [["j/k", "scroll"], ["esc", "list"]];
         if (s.kind === "promise") keys.unshift(["y", "copy"]);
-        setShared("target", { col: "detail", label: `${label} · ${name}`, keys });
+        const context = this.ownsContext(this.context) ? this.context : null;
+        const card = context?.cards?.[context.active];
+        if (card) keys.unshift(["tab", "Thread"], ["enter", "show/hide messages"]);
+        else if (["error", "timeout"].includes(context?.state)) keys.unshift(["enter", "retry"]);
+        setShared("target", { col: "detail", label: card ? `${label} · ${name} · ${card.title}` : `${label} · ${name}`, keys });
       }
       return;
     }
@@ -157,6 +209,108 @@ export default class Side extends View {
     });
   }
 
+  linkedContextChanged(context, data) {
+    if (!data?.changed) return true;
+    const ids = context.cards && new Set(context.cards.map((card) => card.id));
+    return data.changed.some(([table, id]) => {
+      if (!CONTEXT_TABLES.has(table)) return false;
+      if (!ids) return true; // a pending preview hasn't resolved its canonical Thread IDs yet
+      if (table === "threads") return ids.has(id);
+      if (table === "activities") return !data.activity_threads || data.activity_threads.some((tid) => ids.has(tid));
+      return true; // deleted Promise links don't have a parent row available on the copy
+    });
+  }
+
+  ownsContext(owner) {
+    return Boolean(owner && owner === this.context && shared("page") === "today" && shared("focus") === "detail"
+      && shared("detail") === "promise" && shared("detail_view") === "side"
+      && shared("side")?.kind === "promise" && shared("side").id === owner.id
+      && shared("today_detail_epoch") === owner.epoch);
+  }
+
+  discardContext() {
+    if (!this.ownsContext(this.context)) this.context = null;
+  }
+
+  openContext(cx) {
+    this.discardContext();
+    if (this.context) return;
+    const { id, kind } = shared("side") ?? {};
+    if (kind !== "promise" || !id) return;
+    const owner = this.context = { id, epoch: shared("today_detail_epoch"), state: "loading", active: 0, reads: new Map() };
+    if (!this.ownsContext(owner)) { this.context = null; return; }
+    this.readContext("today.promise_context", { promise_id: id }, (state, cards) => {
+      if (!this.ownsContext(owner) || owner.state !== "loading") return false;
+      owner.state = state;
+      if (Array.isArray(cards)) owner.cards = cards;
+      return true;
+    }, cx);
+  }
+
+  readContext(method, params, accept, cx) {
+    const finish = (cx, state, value) => {
+      if (!accept(state, value)) return;
+      this.target();
+      cx.notify();
+    };
+    cx.notify();
+    cx.timer.after(8000, (cx) => finish(cx, "timeout"));
+    cx.spawn(async (cx) => {
+      try { finish(cx, "ready", await call(method, params)); }
+      catch { finish(cx, "error"); }
+    });
+  }
+
+  toggleContext(owner, id, cx) {
+    if (!this.ownsContext(owner)) return;
+    const at = owner.cards.findIndex((card) => card.id === id);
+    if (at < 0) return;
+    owner.active = at;
+    const current = owner.reads.get(id);
+    if (current?.state === "ready") {
+      owner.reads.delete(id);
+      this.target();
+      return cx.notify();
+    }
+    if (current?.state === "loading") return;
+    const attempt = { state: "loading" };
+    owner.reads.set(id, attempt);
+    this.target();
+    this.readContext("today.promise_thread", { promise_id: owner.id, thread_id: id }, (state, result) => {
+      if (!this.ownsContext(owner) || owner.reads.get(id) !== attempt || attempt.state !== "loading") return false;
+      attempt.state = state === "ready" && result?.status !== "ready" ? "unavailable" : state;
+      attempt.messages = result?.status === "ready" ? result.messages : [];
+      return true;
+    }, cx);
+  }
+
+  renderThreadCards(t, owner, followThread) {
+    if (!owner) return [];
+    if (owner.state === "loading") return [div().mt(8).text_color(t.muted).child("Loading linked Threads…")];
+    if (owner.state !== "ready") return [div().mt(8).text_color(t.muted).child("Could not load linked Threads · Enter to retry")];
+    return (owner.cards ?? []).map((card, i) => {
+      const read = owner.reads.get(card.id), state = read?.state;
+      const focused = owner.active === i;
+      const control = state === "ready" ? "Hide messages" : state === "loading" ? "Loading messages…"
+        : READ_NOTE[state] ? "Retry messages" : "Show messages";
+      return v_flex().id(`promise-card-${card.id}`).w_full().min_w(0).flex_none().mt(8).p(10).gap(5).rounded(6)
+        .border(1).border_color(focused ? t.accent : t.border).when(focused, (e) => e.border_l(3))
+        .child(div().font_semibold().child(card.title))
+        .when(card.passages.length > 0, (e) => e.child(div().text_color(t.muted).child("Original passage"))
+          .children(activity(t, card.passages)))
+        .when(Boolean(CARD_NOTE[card.origin]), (e) => e.child(div().text_color(t.muted).child(CARD_NOTE[card.origin])))
+        .child(h_flex().flex_wrap().gap(8)
+          .child(div().id(`promise-messages-${card.id}`).p(4).rounded(4).border(1).border_color(focused ? t.accent : t.border)
+            .cursor_pointer().on_click((_, cx) => this.toggleContext(owner, card.id, cx)).child(control))
+          .child(div().id(`promise-thread-${card.id}`).p(4).text_color(t.blue).cursor_pointer()
+            .on_click(() => { if (this.ownsContext(owner)) followThread?.(card.id); }).child("Open Thread")))
+        .when(Boolean(READ_NOTE[state]), (e) => e.child(div().text_color(t.muted).child(READ_NOTE[state])))
+        .when(state === "ready", (e) => e.child(div().mt(6).font_semibold().child("Thread Activity"))
+          .children(read.messages?.length ? activity(t, read.messages)
+            : [div().text_color(t.muted).child("No visible messages")]));
+    });
+  }
+
   /** Follow the linked Thread in its Status view, only while the originating selection still owns the click. */
   openThread(id, request, epoch) {
     const selected = () => this.matches(request) && shared("today_detail_epoch") === epoch;
@@ -174,6 +328,7 @@ export default class Side extends View {
 
   load(cx) {
     this.discardBrief();
+    this.discardContext();
     const s = shared("side");
     if (!s) return;
     const request = { page: shared("page"), ...s };
@@ -210,7 +365,9 @@ export default class Side extends View {
     const t = theme();
     const request = this.request;
     const selected = this.matches(request);
-    const lines = selected ? this.lines : [];
+    const context = this.ownsContext(this.context) ? this.context : null;
+    const lines = !selected ? [] : context?.cards?.length
+      ? this.lines.filter((line) => !line.some(([, , , link]) => link?.startsWith("thread:"))) : this.lines;
     const todayKind = selected && request.page === "today" ? request.kind : null;
     const epoch = shared("today_detail_epoch");
     const followThread = TODAY_DETAIL[todayKind] ? (id) => this.openThread(id, request, epoch) : null;
@@ -225,6 +382,7 @@ export default class Side extends View {
     return v_flex().id(ready ? `side-brief-${brief.epoch}` : "side").size_full().min_h(0).overflow_y_scroll().p(20).gap(2).bg(t.background).text_size(13)
       .when(selected && Boolean(this.error), (el) => el.child(div().text_color(t.danger).child(this.error ?? "")))
       .children(segLines(t, lines, "side", {}, followThread))
+      .children(this.renderThreadCards(t, context, followThread))
       .when(lastKnownPrep, (el) => el.child(div().text_color(t.muted).child(LAST_KNOWN)))
       .when(Boolean(note), (el) => el.child(div().text_color(t.muted).child(note)))
       .when(ready, (el) => el.child(div().mt(8).font_semibold().child("Brief")).child(brief.body));

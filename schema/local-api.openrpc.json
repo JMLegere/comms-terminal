@@ -4986,6 +4986,71 @@
    }
   },
   {
+   "name": "today.promise_context",
+   "summary": "Read linked Thread cards and visible passages from exact recorded Origins of one Promise.",
+   "x-panel": false,
+   "params": [
+    {
+     "name": "promise_id",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
+   "name": "today.promise_thread",
+   "summary": "Read visible Activity from one Thread linked to the selected Promise.",
+   "x-panel": false,
+   "params": [
+    {
+     "name": "promise_id",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
+    {
+     "name": "thread_id",
+     "required": true,
+     "schema": {
+      "type": "string"
+     }
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
    "name": "today.side",
    "summary": "The right pane for a Today Paused row (kind \"paused\", a Person id) or Unattended row (\"unattended\", an Organization id; \"unattended_person\", a Person id), or a Promise (\"promise\", a Promise id; FR-PR-8), as the Console fills it: lines of [text, colour or null, bold] segments.",
    "params": [

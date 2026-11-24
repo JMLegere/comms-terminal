@@ -182,3 +182,37 @@ Feature: Promises
     Then the clipboard names the Promise, its People and its time
     And it gives the read commands for the Promise and its Activity's Thread
     And it asks for a fulfilment plan without copying the message body or changing the Promise
+
+  @AS-PR-20 @FR-PR-26 @FR-PR-27 @FR-PR-28
+  Scenario: Promise Detail shows linked Threads without leaving Today
+    Given Today in the App shows a Promise linked to two Threads
+    When Jeremy opens the Promise Detail and reads more in one Thread
+    Then both Threads stay beside the Promise with their Origins separate from other Activity
+    And Escape returns from linked Thread context to the same Promise row
+
+  @AS-PR-21 @FR-PR-27 @NFR-PR-9
+  Scenario: Promise Detail does not quote a newer edit as the recorded Origin
+    Given "Ana" wrote to Jeremy from "ana@example.test"
+    And Jeremy wrote "I'll send the checklist tomorrow" to "ana@example.test"
+    And the agent Recorded "Send the checklist" owed to "Ana" due "2026-11-17"
+    And the Promise links to that message's Thread
+    When Jeremy's message is edited to "I can send it next week"
+    Then linked Thread context distinguishes the unavailable Origin from the visible edit
+
+  @AS-PR-22 @FR-PR-28 @NFR-PR-9 @NFR-PR-10
+  Scenario: A delayed linked Thread context read cannot replace a fresh read
+    Given Today in the App shows a Promise linked to two Threads
+    When a read in one Thread card times out and Jeremy retries
+    Then the other card stays readable and an obsolete reply does not appear
+
+  @AS-PR-23 @FR-PR-26 @NFR-PR-9 @NFR-PR-11
+  Scenario: Promise Detail reads more with the keyboard without moving Today
+    Given Today in the App shows a Promise linked to two Threads
+    When Jeremy opens the Promise Detail and reads more in one Thread
+    Then the keyboard can read either Thread without changing selection or opening a Thread
+
+  @AS-PR-24 @NFR-PR-10 @NFR-PR-11
+  Scenario: Promise Detail requests messages only for the card Jeremy expands
+    Given Today in the App shows a Promise linked to two Threads
+    When Jeremy opens the Promise Detail and reads more in one Thread
+    Then highlighting has not fetched context and expansion reads only that Thread

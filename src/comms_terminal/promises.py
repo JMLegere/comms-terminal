@@ -22,7 +22,7 @@ import logging
 import re
 from datetime import date, datetime, time, timedelta, timezone
 
-from . import clock, commands
+from . import clock, commands, inbox
 from .writers import writer
 
 STATES = ("TENTATIVE", "OPEN", "FULFILLED", "CANCELLED")
@@ -333,6 +333,79 @@ def promise(db, promise_id: str, now: datetime | None = None) -> dict:
                         "history": [dict(h) | {"detail": json.loads(h["detail"]), "origin": origin_label(db, h),
                                                "origin_via": origin_via(db, h)} for h in history],
                         "slack_time": slack_time(row, now), "risk": risk(row, now), "draft_ready": ready}
+
+
+def _linked_threads(db, promise_id):
+    """Resolve only typed Promise links; canonical ids deduplicate merged Threads."""
+    find(db, promise_id)
+    threads = {}
+    for (target,) in db.execute(
+            "SELECT target FROM promise_links WHERE promise_id = ? AND kind = 'thread' ORDER BY target",
+            (promise_id,)):
+        try:
+            thread = inbox.get_thread(db, target)
+        except KeyError:
+            threads[target] = None
+        else:
+            threads[thread.id] = thread
+    return threads
+
+
+def thread_context(db, promise_id):
+    """Cards with visible wording from exact recorded Activity Origins, not newer revisions."""
+    with inbox._read_snapshot(db):
+        cards = []
+        for thread_id, thread in _linked_threads(db, promise_id).items():
+            card = {"id": thread_id, "title": thread.title if thread else "Thread unavailable",
+                    "origin": "no_match" if thread else "unavailable", "passages": []}
+            cards.append(card)
+            if not thread:
+                continue
+            origins = db.execute(
+                "SELECT DISTINCT a.id, COALESCE(a.target_id, a.id) AS message_id"
+                " FROM promise_changes h JOIN thread_activities a ON a.id = h.origin_ref"
+                " WHERE h.promise_id = ? AND h.origin_kind = 'activity' AND a.thread_id = ?",
+                (promise_id, thread_id)).fetchall()
+            if not origins:
+                continue
+            refs = {o["id"] for o in origins}
+            platform, acts, messages = inbox.thread_text(db, thread_id, message_ids=[o["message_id"] for o in origins])
+            visible = {m["revision"]: m for m in messages if m["content"] and not m["deleted"]}
+            for a in acts:
+                m = visible.get(a["id"])
+                if a["id"] not in refs or not m or not a["content"]:
+                    continue
+                shown = inbox.visible_message_text(platform, m["content"])
+                if a["kind"] == "EDIT" and "call" in m["data"]:
+                    # The Call summary can change trimming. Quote only the transcript portion visible after it.
+                    text = shown.partition("\n\n")[2]
+                    who = m["who"]  # the provider's transcript EDIT has no speaker identity
+                else:
+                    text = shown
+                    who, _ = inbox._sender(db, a["identity_id"])
+                if text.strip():
+                    card["passages"].append({"who": who, "at": a["occurred_at"], "text": text})
+            card["origin"] = "ready" if len(card["passages"]) == len(refs) else "unavailable"
+        return cards
+
+
+def linked_thread_text(db, promise_id, thread_id):
+    """Read a linked Thread's currently visible Activity, or refuse an unlinked target."""
+    with inbox._read_snapshot(db):
+        threads = _linked_threads(db, promise_id)
+        try:
+            canonical = inbox.get_thread(db, thread_id).id
+        except KeyError:
+            canonical = thread_id
+        if canonical not in threads:
+            raise Refused("Thread is not linked to this Promise")
+        if threads[canonical] is None:
+            return {"status": "unavailable", "messages": []}
+        platform, _, messages = inbox.thread_text(db, canonical)
+        return {"status": "ready", "messages": [
+            {"who": m["who"], "at": m["at"], "text": inbox.visible_message_text(platform, m["content"])}
+            for m in messages if not m["deleted"] and m["content"]
+        ]}
 
 
 def _link_label(db, link) -> str:

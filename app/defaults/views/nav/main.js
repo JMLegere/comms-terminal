@@ -179,10 +179,10 @@ export default class Nav extends View {
     // Invalidate pending Today reads and links before the new focus is visible to async replies.
     if (changedTodayDetail) setShared("today_detail_epoch", (shared("today_detail_epoch") ?? 0) + 1);
     setShared("focus", col);
-    if (changedTodayDetail && col !== "detail" && shared("side")?.kind === "prep_today") run("side.focus_exit");
+    if (changedTodayDetail && col !== "detail") run("side.focus_exit");
     if (col === "rail") this.railTarget();
-    // The cached detail_view can still name the previous row's layout. Resolve Prep in the host.
-    else if (changedTodayDetail && col === "detail" && shared("side")?.kind === "prep_today") run("app.focus_prep");
+    // The cached detail_view can still name the previous row's layout. Resolve the current route in the host.
+    else if (changedTodayDetail && col === "detail") run("app.focus_today_detail");
     else {
       const view = shared(col === "list" ? "list_view" : "detail_view");
       if (view) run(`${view}.focus_entry`);
@@ -197,12 +197,12 @@ export default class Nav extends View {
 
   /** Apply a stack entry's shared keys, then load its page. */
   show(entry) {
-    const prep = shared("side")?.kind === "prep_today";
+    const todaySide = ["promise", "prep_today"].includes(shared("side")?.kind);
     const leavingTodayDetail = shared("page") === "today" && shared("detail") === "promise"
-      && (entry.page !== "today" || (prep && (entry.detail !== "promise" || shared("focus") !== "detail")));
+      && (entry.page !== "today" || (todaySide && (entry.detail !== "promise" || shared("focus") !== "detail")));
     if (leavingTodayDetail) setShared("today_detail_epoch", (shared("today_detail_epoch") ?? 0) + 1);
     for (const k of KEYS) if (k in entry) setShared(k, entry[k]);
-    if (leavingTodayDetail && prep) run("side.focus_exit");
+    if (leavingTodayDetail && todaySide) run("side.focus_exit");
     for (const c of SHOW[entry.page] ?? [`${entry.page}.show`]) run(c);
   }
 

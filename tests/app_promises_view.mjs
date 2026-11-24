@@ -55,15 +55,16 @@ const side = Object.create(Side.prototype);
 const threads = Object.assign(Object.create(Threads.prototype), { items: [], scroll: { scroll_to_item() {} } });
 const thread = Object.assign(Object.create(Thread.prototype), { bodies: {} });
 const views = { today, promises: page, nav, side, threads, thread };
-function resolvePrepFocus(route) {
-  if (state.page !== "today" || state.detail !== "promise" || state.focus !== "detail" || state.side?.kind !== "prep_today") return;
+function resolveTodayDetail(route) {
+  if (state.page !== "today" || state.detail !== "promise" || state.focus !== "detail" ||
+      !["prep_today", "promise"].includes(state.side?.kind)) return;
   // Only the renderer publishes detail_view. The host command sends the resolved entry.
   dispatch(`${route}.focus_entry`);
 }
 function dispatch(command) {
   const dot = command.indexOf(".");
   const view = command.slice(0, dot), name = command.slice(dot + 1);
-  if (command === "app.focus_prep") return resolvePrepFocus("side");
+  if (command === "app.focus_today_detail") return resolveTodayDetail("side");
   views[view]?.command?.(name, cx);
 }
 async function pump(wait = settle) {
@@ -490,12 +491,12 @@ async function traceBrief() {
     let focusPrep = false;
     while (ran.length) {
       const command = ran.shift();
-      if (command === "app.focus_prep") focusPrep = true; // model delivery after the navigation commands
+      if (command === "app.focus_today_detail") focusPrep = true; // model delivery after the navigation commands
       else dispatch(command);
     }
     await flush();
     const before = capture();
-    if (focusPrep) resolvePrepFocus(route);
+    if (focusPrep) resolveTodayDetail(route);
     await flush();
     const afterCommand = capture(); // still the previous renderer-published route
     state.detail_view = route;
@@ -527,7 +528,7 @@ async function traceBrief() {
   while (ran.length) {
     const command = ran.shift();
     commands.push(command);
-    if (command === "app.focus_prep") resolvePrepFocus("custom");
+    if (command === "app.focus_today_detail") resolveTodayDetail("custom");
     else dispatch(command); // layout has not yet run
   }
   await flush();
@@ -666,5 +667,94 @@ for (const [kind, command] of Object.entries({ threads: "thread.copy", drafts: "
   ran.length = 0;
   pressCopy();
   assert.deepEqual(ran.splice(0), [command], `Today retains y for ${kind}`);
+}
+if (process.argv[2] === "context") {
+  const a = { id: "thread-9", title: "Pilot checklist", origin: "ready",
+    passages: [{ who: "You", at: "2026-11-20T12:00:00Z", text: "I'll send the checklist." }] };
+  const b = { id: "thread-10", title: "Site access", origin: "no_match", passages: [] };
+  const contextCalls = () => calls.slice(start).filter(({ method }) => method.startsWith("today.promise_"));
+  const snap = () => ({ ...snapshot(), reads: contextCalls(), external: opened.slice(openStart) });
+  const timers = [], attempts = [];
+  cx.timer.after = (ms, fn) => timers.push({ ms, fn });
+  answers["today.promise_context"] = ({ promise_id }) => promise_id === "a" ? [a, b] : [];
+  let deferred = false;
+  answers["today.promise_thread"] = ({ thread_id }) => deferred
+    ? new Promise((resolve, reject) => attempts.push({ resolve, reject }))
+    : { status: "ready", messages: [{ who: "Ana", at: "2026-11-20T12:05:00Z",
+      text: thread_id === a.id ? "Use the west gate." : "Call reception." }] };
+  Object.assign(state, { page: "today", detail: null, focus: "list", list_view: "today", detail_view: "thread", thread: null });
+  today.data = { promises: rows };
+  const select = (id) => { today.at = today.rows().findIndex(({ r }) => r?.id === id); today.select(cx); };
+  const start = calls.length, openStart = opened.length;
+  select("a");
+  await pump();
+  const preview = snap();
+  const enter = () => dispatch(keys[`page:today`].enter);
+  const activate = () => dispatch(keys.detail.enter);
+  const escape = () => dispatch(keys.global.escape);
+  // A deferred RPC must not block the driver from sending new input.
+  const flush = () => pump(async () => { void settle(); await new Promise(setImmediate); });
+  enter();
+  await flush();
+  const detail = snap();
+  activate();
+  await flush();
+  const first = snap();
+  dispatch(keys.detail.tab);
+  await flush();
+  activate();
+  await flush();
+  const second = snap();
+  escape();
+  await flush();
+  const back = snap();
+  enter();
+  await flush();
+  deferred = true;
+  activate();
+  await flush();
+  assert.equal(timers.at(-1)?.ms, 8000);
+  timers.at(-1)?.fn(cx);
+  await flush();
+  const timedOut = snap();
+  activate();
+  await flush();
+  attempts[1]?.resolve({ status: "ready", messages: [{ who: "Ana", text: "FRESH CONTEXT" }] });
+  await flush();
+  attempts[0]?.resolve({ status: "ready", messages: [{ who: "Ana", text: "OBSOLETE CONTEXT" }] });
+  await flush();
+  const retried = snap();
+  escape();
+  await flush();
+  const pending = [];
+  answers["today.promise_context"] = ({ promise_id }) => new Promise((resolve, reject) => pending.push({ promise_id, resolve, reject }));
+  enter();
+  await flush();
+  escape();
+  select("b");
+  await flush();
+  enter();
+  await flush();
+  escape();
+  select("a");
+  await flush();
+  enter();
+  await flush();
+  assert.deepEqual(pending.map((p) => p.promise_id), ["a", "b", "a"]);
+  pending[2].resolve([a, b]);
+  pending[1].reject(new Error("OBSOLETE ERROR"));
+  pending[0].resolve([{ ...a, title: "OBSOLETE CARD" }]);
+  await flush();
+  const returned = snap();
+  clicks[0]({}, cx); // first card's disclosure, not its full Thread link
+  await flush();
+  assert.equal(attempts.length, 3);
+  const removing = attempts[2];
+  answers["today.page"] = { promises: rows.filter((r) => r.id !== "a") };
+  dispatch("today.show");
+  await flush();
+  removing.resolve({ status: "ready", messages: [{ who: "Ana", text: "REMOVED PROMISE CONTEXT" }] });
+  await flush();
+  out.context = { preview, detail, first, second, back, timedOut, retried, returned, removed: snap(), calls: calls.slice(start) };
 }
 console.log(JSON.stringify(out));

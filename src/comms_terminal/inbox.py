@@ -24,7 +24,7 @@ from email.parser import BytesHeaderParser
 from email.utils import getaddresses
 from typing import Protocol, Sequence
 
-from . import clock, commands, files, platforms
+from . import clock, commands, files, platforms, render
 from .writers import writer
 
 SCHEMA_VERSION = 50
@@ -3724,6 +3724,54 @@ def _shaped(db, m: dict, platform, channel, lan) -> dict:
     return m
 
 
+def _fold_messages(db, acts, gmail_connection=None):
+    msgs, by_id = [], {}
+    for a in acts:
+        if a["kind"] == "MESSAGE":
+            who, _ = _sender(db, a["identity_id"]) if a["identity_id"] else ("You", None)
+            m = {"id": a["id"], "who": who, "at": a["occurred_at"], "content": a["content"], "edited": False,
+                 "deleted": False, "native_id": a["native_id"], "data": json.loads(a["data"]), "revision": a["id"]}
+            if gmail_connection is not None:
+                m["wire_id"] = _gmail_wire_id(db, a["native_id"], gmail_connection, a["identity_id"])
+            by_id[a["id"]] = m
+            msgs.append(m)
+        elif a["target_id"] in by_id:
+            m = by_id[a["target_id"]]
+            m["revision"] = a["id"]
+            if a["kind"] == "EDIT" and "call" in m["data"]:  # a Call transcript goes under the call's summary
+                m["content"] = (m["content"] or "").partition("\n")[0] + "\n\n" + (a["content"] or "")
+            elif a["kind"] == "EDIT":
+                m["edited"], m["content"] = True, a["content"]
+            else:
+                m["deleted"], m["content"] = True, None
+    return msgs
+
+
+def _thread_activities(db, thread_id, message_ids=None):
+    sql = "SELECT * FROM thread_activities WHERE thread_id = ?"
+    params = (thread_id,)
+    if message_ids is not None:
+        # Origin preview reads only the corresponding message chains, not neighboring bodies.
+        sql += " AND COALESCE(target_id, id) IN (SELECT value FROM json_each(?))"
+        params += (json.dumps(message_ids),)
+    return db.execute(sql + " ORDER BY occurred_at, id", params).fetchall()
+
+
+def thread_text(db, thread_id, *, message_ids=None):
+    """Read the same timeline as Thread view, without participants, raw mail, URLs or Attachments."""
+    t = get_thread(db, thread_id)
+    platform = db.execute("SELECT c.platform FROM channels ch JOIN connections c ON c.id = ch.connection_id"
+                          " WHERE ch.id = ?", (t.channel_id,)).fetchone()[0]
+    acts = _thread_activities(db, t.id, message_ids)
+    return platform, acts, _fold_messages(db, acts)
+
+
+def visible_message_text(platform, content):
+    """The visible plain body, excluding Trimmed content and remote assets."""
+    body = render.from_slack(content) if platform == "slack" else render.from_text(content)
+    return render.plain(body.text)
+
+
 def thread_view(db, thread_id: int, files: tuple[str, int] | None = None) -> dict:
     """Timeline (latest edit wins; deleted messages have no content) and the sender's records. `files` is the
     file server's (host, port), for stored Attachments' links."""
@@ -3732,27 +3780,9 @@ def thread_view(db, thread_id: int, files: tuple[str, int] | None = None) -> dic
         thread_id = t.id
         ch = db.execute("SELECT ch.*, c.platform, c.external_id FROM channels ch"
                         " JOIN connections c ON c.id = ch.connection_id WHERE ch.id = ?", (t.channel_id,)).fetchone()
-        acts = db.execute("SELECT * FROM thread_activities WHERE thread_id = ? ORDER BY occurred_at, id", (thread_id,)).fetchall()
-        msgs, by_id = [], {}
-        for a in acts:
-            if a["kind"] == "MESSAGE":
-                who, _ = _sender(db, a["identity_id"]) if a["identity_id"] else ("You", None)
-                m = {"id": a["id"], "who": who, "at": a["occurred_at"], "content": a["content"], "edited": False,
-                     "deleted": False, "native_id": a["native_id"], "data": json.loads(a["data"])}
-                m["revision"] = a["id"]
-                if platforms.PLATFORMS[ch["platform"]].receipts:
-                    m["wire_id"] = _gmail_wire_id(db, a["native_id"], ch["connection_id"], a["identity_id"])
-                by_id[a["id"]] = m
-                msgs.append(m)
-            elif a["target_id"] in by_id:
-                m = by_id[a["target_id"]]
-                m["revision"] = a["id"]
-                if a["kind"] == "EDIT" and "call" in m["data"]:  # a Call transcript goes under the call's summary
-                    m["content"] = m["content"].partition("\n")[0] + "\n\n" + (a["content"] or "")
-                elif a["kind"] == "EDIT":
-                    m["edited"], m["content"] = True, a["content"]
-                else:
-                    m["deleted"], m["content"] = True, None
+        acts = _thread_activities(db, thread_id)
+        gmail_connection = ch["connection_id"] if platforms.PLATFORMS[ch["platform"]].receipts else None
+        msgs = _fold_messages(db, acts, gmail_connection)
         first = next((a["identity_id"] for a in acts if a["identity_id"]), None)
         person, every = None, person_thread_ids(db)  # read once for every Person shown, not once each
         if first:

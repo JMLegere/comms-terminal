@@ -61,6 +61,8 @@ def test_every_query_answers_on_the_demo_data(demo_core):
     with commands.source("cli"):
         promise_id = promises.record(db, "Send the checklist", [first("SELECT id FROM persons")],
                                      promises.due_from("2026-11-24"), {"kind": "words", "words": "I will send it."})
+        promises.link(db, promise_id, "thread", first("SELECT id FROM threads"), {"kind": "words", "words": "I will send it."})
+        db.commit()
 
     values = {"view": "Todo", "thread_id": first("SELECT id FROM threads"), "case_id": first("SELECT id FROM cases"),
               "draft_id": first("SELECT id FROM composition_drafts"), "sequence_id": first("SELECT id FROM sequences"),
@@ -79,11 +81,37 @@ def test_every_query_answers_on_the_demo_data(demo_core):
         assert summary, name
         if any(values[p] is None for p in spec):  # the demo data has none to show
             continue
-        answer = call(demo_core, name, origin="panel", **{p: values[p] for p in spec})
+        origin = "view" if name in core.PROMISE_TEXT_QUERIES else "panel"
+        answer = call(demo_core, name, origin=origin, **{p: values[p] for p in spec})
         assert "result" in answer, (name, answer)
         json.dumps(answer)  # plain JSON all the way down
         answered += 1
     assert answered >= len(core.QUERIES) - 6  # the demo data has no Sequence Steps, Enrollments or due Tasks
+
+
+def test_promise_text_reads_are_scoped_fresh_and_view_only(demo_core):
+    from comms_terminal import commands, promises
+
+    with inbox.connect(demo_core.db_path) as db, commands.source("cli"):
+        thread_id, activity_id = db.execute(
+            "SELECT thread_id, id FROM activities WHERE kind = 'MESSAGE' AND length(content) > 0 LIMIT 1"
+        ).fetchone()
+        foreign = db.execute("SELECT id FROM threads WHERE id != ? LIMIT 1", (thread_id,)).fetchone()[0]
+        person = db.execute("SELECT id FROM persons LIMIT 1").fetchone()[0]
+        origin = {"kind": "activity", "ref": activity_id}
+        pid = promises.record(db, "Send update", [person], promises.due_from("2026-11-26"), origin)
+        promises.link(db, pid, "thread", thread_id, origin)
+    params = {"promise_id": pid, "thread_id": thread_id}
+    assert call(demo_core, "today.promise_thread", origin="panel", **params)["error"]["code"] == -32012
+    assert call(demo_core, "today.promise_thread", **(params | {"thread_id": foreign}))["error"]["code"] == -32602
+    assert call(demo_core, "today.promise_context", promise_id=[])["error"]["code"] == -32602
+    assert call(demo_core, "today.promise_context", promise_id=pid)["result"][0]["passages"]
+    assert call(demo_core, "today.promise_thread", **params)["result"]["messages"]
+    with db:
+        db.execute("DELETE FROM promise_links WHERE promise_id = ?", (pid,))
+    db.close()
+    assert call(demo_core, "today.promise_context", promise_id=pid)["result"] == []
+    assert call(demo_core, "today.promise_thread", **params)["error"]["code"] == -32602
 
 
 def test_a_pipeline_with_a_target_answers_with_its_dates_as_text(demo_core):

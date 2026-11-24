@@ -472,3 +472,89 @@ def clipboard_plan_only(owed):
     assert "plan" in owed.copied.lower()
     assert "I'll send the checklist tomorrow" not in owed.copied
     assert owed.after == _only(owed)
+
+
+@given("Today in the App shows a Promise linked to two Threads", target_fixture="promise_context_trace")
+def app_linked_context():
+    return run_view("app_promises_view.mjs", "context")["context"]
+
+
+@when("Jeremy opens the Promise Detail and reads more in one Thread", target_fixture="context_open")
+def app_context_open(promise_context_trace):
+    return promise_context_trace["first"]
+
+
+@then("both Threads stay beside the Promise with their Origins separate from other Activity")
+def app_context_read(context_open, promise_context_trace):
+    detail = promise_context_trace["detail"]
+    assert {"Promise a", "History", "Pilot checklist", "Site access", "Original passage",
+            "I'll send the checklist.", "No recorded Origin in this Thread"} <= set(detail["lines"])
+    assert {"Thread Activity", "Use the west gate."} <= set(context_open["lines"])
+    assert "Call reception." not in context_open["lines"]
+
+
+@then("the keyboard can read either Thread without changing selection or opening a Thread")
+def app_context_keys(context_open, promise_context_trace):
+    second = promise_context_trace["second"]
+    assert "Call reception." in second["lines"]
+    for snapshot in (context_open, second):
+        assert (snapshot["page"], snapshot["focus"], snapshot["row"], snapshot["thread"]) == ("today", "detail", "a", None)
+        assert snapshot["external"] == []
+
+
+@then("Escape returns from linked Thread context to the same Promise row")
+def app_context_return(promise_context_trace):
+    assert_today_return(promise_context_trace["back"], "linked")
+    assert "Use the west gate." not in promise_context_trace["back"]["lines"]
+
+
+@then("highlighting has not fetched context and expansion reads only that Thread")
+def app_context_scope(context_open, promise_context_trace):
+    assert promise_context_trace["preview"]["reads"] == []
+    assert context_open["reads"] == [
+        {"method": "today.promise_context", "params": {"promise_id": "a"}},
+        {"method": "today.promise_thread", "params": {"promise_id": "a", "thread_id": "thread-9"}},
+    ]
+    assert all(not row["method"].startswith("command.") for row in promise_context_trace["calls"])
+
+
+@when("a read in one Thread card times out and Jeremy retries", target_fixture="context_retry")
+def app_context_retry(promise_context_trace):
+    return promise_context_trace
+
+
+@then("the other card stays readable and an obsolete reply does not appear")
+def app_context_recovered(context_retry):
+    timed_out, retried = context_retry["timedOut"], context_retry["retried"]
+    assert {"Promise a", "Site access", "Could not load messages (timeout)"} <= set(timed_out["lines"])
+    assert {"Site access", "FRESH CONTEXT"} <= set(retried["lines"])
+    assert "OBSOLETE CONTEXT" not in retried["lines"]
+    returned, removed = context_retry["returned"], context_retry["removed"]
+    assert {"Pilot checklist", "Site access"} <= set(returned["lines"])
+    assert not any("OBSOLETE" in line for line in returned["lines"])
+    assert removed["page"] == "today" and removed["focus"] == "list" and removed["row"] != "a"
+    assert not {"Pilot checklist", "Site access", "REMOVED PROMISE CONTEXT"} & set(removed["lines"])
+
+
+@given("the Promise links to that message's Thread")
+def link_original_thread(owed):
+    owed.thread = owed.db.execute("SELECT thread_id FROM activities WHERE id = ?", (owed.message,)).fetchone()[0]
+    promises.link(owed.db, _only(owed)["id"], "thread", owed.thread, _message(owed), now=owed.now)
+
+
+@when(parsers.parse('Jeremy\'s message is edited to "{text}"'))
+def edit_origin(owed, text):
+    with owed.db:
+        owed.db.execute("INSERT INTO activities (thread_id, kind, occurred_at, native_id, target_id, content)"
+                        " VALUES (?, 'EDIT', ?, 'test-edit', ?, ?)",
+                        (owed.thread, owed.now.isoformat(), owed.message, text))
+
+
+@then("linked Thread context distinguishes the unavailable Origin from the visible edit")
+def context_shows_edit_only_in_expansion(owed):
+    pid = _only(owed)["id"]
+    [card] = core.QUERIES["today.promise_context"][0](None, owed.db, pid)
+    assert (card["id"], card["origin"], card["passages"]) == (owed.thread, "unavailable", [])
+    expanded = core.QUERIES["today.promise_thread"][0](None, owed.db, pid, owed.thread)
+    assert [m["text"] for m in expanded["messages"]][-1] == "I can send it next week"
+    assert all(m["text"] != "I'll send the checklist tomorrow" for m in expanded["messages"])

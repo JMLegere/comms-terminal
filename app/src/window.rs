@@ -451,10 +451,11 @@ impl AppWindow {
         if command == "app.attach" {
             return self.pick_files(cx);
         }
-        if command == "app.focus_prep" {
+        if command == "app.focus_today_detail" {
             // Do not use the last drawn route: the selected row may have changed since that frame.
             if host::shared("page") == "today" && host::shared("detail") == "promise"
-                && host::shared("focus") == "detail" && host::shared("side")["kind"] == "prep_today"
+                && host::shared("focus") == "detail"
+                && matches!(host::shared("side")["kind"].as_str(), Some("prep_today" | "promise"))
             {
                 let entry = self.layout.find("detail").and_then(|n| n.view_on(Some("today"), Some("promise")))
                     .filter(|view| !view.is_empty()).map(|view| format!("{view}.focus_entry"));
@@ -774,7 +775,7 @@ impl Render for AppWindow {
             if previous.as_str() != Some(view) {
                 host::set_shared(&key, Value::String(view.to_owned()));
                 if block == "detail" && page == "today" && host::shared("focus") == "detail"
-                    && host::shared("side")["kind"] == "prep_today"
+                    && matches!(host::shared("side")["kind"].as_str(), Some("prep_today" | "promise"))
                 {
                     // Enter can precede route resolution; a layout reload can replace it while focused.
                     if view == "side" {

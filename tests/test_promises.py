@@ -153,3 +153,75 @@ def test_capture_pending_lists_who_wrote_each(db, capsys):
 ])
 def test_each_row_has_one_status_its_bullet(row, expected):
     assert promises.status(row) == expected
+
+
+def test_promise_thread_context_scopes_passages_and_reads_current_visibility(db):
+    from comms_terminal import core
+
+    origin = mine(db)
+    first = db.execute("SELECT thread_id FROM activities WHERE id = ?", (origin["ref"],)).fetchone()[0]
+    other = inbox.ingest(db, inbox.Incoming("1", ME, "mailbox", "MESSAGE", "<other@x>", None,
+                                           NOW, "Other conversation", title="Other")).id
+    other_activity = db.execute("SELECT id FROM activities WHERE native_id = '<other@x>'").fetchone()[0]
+    words = {"kind": "words", "words": "Recorded off Thread"}
+    pid = promises.record(db, "Send update", [anna(db)], NOW, origin)
+    with db:
+        promises.link(db, pid, "thread", first, origin)  # duplicate Origin, not a duplicate passage
+        promises.link(db, pid, "thread", other, words)
+        promises.link(db, pid, "thread", "missing-thread", words)
+    before = db.total_changes
+
+    def preview(promise_id=pid):
+        return {c["id"]: c for c in core.QUERIES["today.promise_context"][0](None, db, promise_id)}
+
+    def expand(thread_id):
+        return core.QUERIES["today.promise_thread"][0](None, db, pid, thread_id)
+
+    cards = preview()
+    assert cards[first]["passages"] == [
+        {"who": "You", "at": "2026-11-16T13:00:00.000000+00:00", "text": "I'll send it Friday"},
+    ]
+    assert cards[other]["origin"] == "no_match" and cards[other]["passages"] == []
+    assert cards["missing-thread"]["origin"] == "unavailable"
+    assert expand("missing-thread") == {"status": "unavailable", "messages": []}
+    with pytest.raises(core.ApiError, match="not linked"):
+        expand("unlinked-thread")
+    assert db.total_changes == before
+    with db:
+        db.execute("UPDATE threads SET merged_into = ? WHERE id = ?", (first, other))
+        edit = db.execute("INSERT INTO activities (thread_id, kind, occurred_at, native_id, target_id, content)"
+                          " VALUES (?, 'EDIT', ?, 'edit', ?, 'Monday instead') RETURNING id",
+                          (other, (NOW + timedelta(minutes=1)).isoformat(), other_activity)).fetchone()[0]
+        promises.link(db, pid, "thread", other, {"kind": "activity", "ref": edit})
+    before = db.total_changes
+    assert set(preview()) == {first, "missing-thread"}
+    assert [p["text"] for p in preview()[first]["passages"]] == ["I'll send it Friday", "Monday instead"]
+    assert expand(other) == expand(first)
+    assert db.total_changes == before
+    with db:
+        db.execute("INSERT INTO activities (thread_id, kind, occurred_at, native_id, target_id)"
+                   " VALUES (?, 'DELETE', ?, 'delete', ?)", (other, (NOW + timedelta(minutes=2)).isoformat(), other_activity))
+    assert preview()[first]["origin"] == "unavailable"
+    assert [p["text"] for p in preview()[first]["passages"]] == ["I'll send it Friday"]
+    assert "Monday instead" not in str(expand(first))
+
+
+@pytest.mark.parametrize("text, passages", [
+    ("Call me about the bid.", [{"who": "Anna Ciprick", "at": NOW.isoformat(), "text": "Call me about the bid."}]),
+    ("Privacy policy: this is a footer.", []),
+])
+def test_promise_thread_context_attributes_only_visible_voicemail(db, text, passages):
+    ref, tid = db.execute("SELECT id, thread_id FROM activities WHERE identity_id IS NOT NULL").fetchone()
+    sender = db.execute("SELECT identity_id FROM activities WHERE id = ?", (ref,)).fetchone()[0]
+    with db:
+        call_id = db.execute("INSERT INTO activities (thread_id, kind, occurred_at, native_id, identity_id, content, data)"
+                             " VALUES (?, 'MESSAGE', ?, 'call', ?, 'Incoming call', '{\"call\": {}}') RETURNING id",
+                             (tid, (NOW - timedelta(minutes=1)).isoformat(), sender)).fetchone()[0]
+        edit_id = db.execute("INSERT INTO activities (thread_id, kind, occurred_at, native_id, target_id, content)"
+                             " VALUES (?, 'EDIT', ?, 'transcript', ?, ?) RETURNING id",
+                             (tid, NOW.isoformat(), call_id, text)).fetchone()[0]
+        origin = {"kind": "activity", "ref": edit_id}
+        pid = promises.record(db, "Call back", [anna(db)], NOW, origin)
+        promises.link(db, pid, "thread", tid, origin)
+    [card] = promises.thread_context(db, pid)
+    assert card["passages"] == passages
