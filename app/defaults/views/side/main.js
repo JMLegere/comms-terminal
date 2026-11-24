@@ -141,7 +141,7 @@ export default class Side extends View {
         const card = context?.cards?.[context.active];
         if (card) keys.unshift(["tab", "Thread"], ["enter", "show/hide messages"]);
         else if (["error", "timeout"].includes(context?.state)) keys.unshift(["enter", "retry"]);
-        setShared("target", { col: "detail", label: card ? `${label} · ${name} · ${card.title}` : `${label} · ${name}`, keys });
+        setShared("target", { col: "detail", label: card ? `Thread · ${card.title}` : `${label} · ${name}`, keys });
       }
       return;
     }
@@ -368,6 +368,8 @@ export default class Side extends View {
     const context = this.ownsContext(this.context) ? this.context : null;
     const lines = !selected ? [] : context?.cards?.length
       ? this.lines.filter((line) => !line.some(([, , , link]) => link?.startsWith("thread:"))) : this.lines;
+    const history = context?.cards?.length ? lines.findIndex((line) => line.length === 1 && line[0][0] === "History") : -1;
+    const split = history < 0 ? lines.length : history;
     const todayKind = selected && request.page === "today" ? request.kind : null;
     const epoch = shared("today_detail_epoch");
     const followThread = TODAY_DETAIL[todayKind] ? (id) => this.openThread(id, request, epoch) : null;
@@ -381,8 +383,9 @@ export default class Side extends View {
     // A fresh scroll identity for a reading that can outgrow the pane; returning to metadata restores its top.
     return v_flex().id(ready ? `side-brief-${brief.epoch}` : "side").size_full().min_h(0).overflow_y_scroll().p(20).gap(2).bg(t.background).text_size(13)
       .when(selected && Boolean(this.error), (el) => el.child(div().text_color(t.danger).child(this.error ?? "")))
-      .children(segLines(t, lines, "side", {}, followThread))
+      .children(segLines(t, lines.slice(0, split), "side", {}, followThread))
       .children(this.renderThreadCards(t, context, followThread))
+      .children(segLines(t, lines.slice(split), "history", {}, followThread))
       .when(lastKnownPrep, (el) => el.child(div().text_color(t.muted).child(LAST_KNOWN)))
       .when(Boolean(note), (el) => el.child(div().text_color(t.muted).child(note)))
       .when(ready, (el) => el.child(div().mt(8).font_semibold().child("Brief")).child(brief.body));
