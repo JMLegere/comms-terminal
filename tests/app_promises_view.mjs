@@ -686,7 +686,11 @@ if (process.argv[2] === "context") {
   today.data = { promises: rows };
   const select = (id) => { today.at = today.rows().findIndex(({ r }) => r?.id === id); today.select(cx); };
   const start = calls.length, openStart = opened.length;
-  select("a");
+  const clickRow = (id) => {
+    today.render();
+    virtualLists.get("today-column").click(today.rows().find(({ r }) => r?.id === id).key, cx);
+  };
+  clickRow("a");
   await pump();
   const preview = snap();
   const enter = () => dispatch(keys[`page:today`].enter);
@@ -694,6 +698,12 @@ if (process.argv[2] === "context") {
   const escape = () => dispatch(keys.global.escape);
   // A deferred RPC must not block the driver from sending new input.
   const flush = () => pump(async () => { void settle(); await new Promise(setImmediate); });
+  dispatch(keys["page:today"].j);
+  await flush();
+  const next = snap();
+  dispatch(keys["page:today"].k);
+  await flush();
+  const keyboard = snap();
   enter();
   await flush();
   const detail = snap();
@@ -708,6 +718,12 @@ if (process.argv[2] === "context") {
   escape();
   await flush();
   const back = snap();
+  clicks[0]({}, cx);
+  await flush();
+  assert.equal(state.focus, "detail", "pointer disclosure focuses its card");
+  clickRow("a");
+  await flush();
+  assert.ok(!snap().lines.includes("Use the west gate."), "row click closes the disclosure but keeps its card");
   enter();
   await flush();
   deferred = true;
@@ -726,8 +742,12 @@ if (process.argv[2] === "context") {
   const retried = snap();
   escape();
   await flush();
+  select("b");
+  await flush();
   const pending = [];
   answers["today.promise_context"] = ({ promise_id }) => new Promise((resolve, reject) => pending.push({ promise_id, resolve, reject }));
+  select("a");
+  await flush();
   enter();
   await flush();
   escape();
@@ -741,10 +761,14 @@ if (process.argv[2] === "context") {
   enter();
   await flush();
   assert.deepEqual(pending.map((p) => p.promise_id), ["a", "b", "a"]);
+  state.detail_view = "custom";
+  state.target = { col: "detail", label: "Custom Detail" };
   pending[2].resolve([a, b]);
   pending[1].reject(new Error("OBSOLETE ERROR"));
   pending[0].resolve([{ ...a, title: "OBSOLETE CARD" }]);
   await flush();
+  assert.equal(state.target.label, "Custom Detail", "background Side cannot replace another view’s key hints");
+  state.detail_view = "side";
   const returned = snap();
   clicks[0]({}, cx); // first card's disclosure, not its full Thread link
   await flush();
@@ -755,6 +779,6 @@ if (process.argv[2] === "context") {
   await flush();
   removing.resolve({ status: "ready", messages: [{ who: "Ana", text: "REMOVED PROMISE CONTEXT" }] });
   await flush();
-  out.context = { preview, detail, first, second, back, timedOut, retried, returned, removed: snap(), calls: calls.slice(start) };
+  out.context = { preview, next, keyboard, detail, first, second, back, timedOut, retried, returned, removed: snap(), calls: calls.slice(start) };
 }
 console.log(JSON.stringify(out));

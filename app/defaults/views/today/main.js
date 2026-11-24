@@ -300,11 +300,15 @@ export default class Today extends View {
       promiseSide.pin = pin;
       promiseSide.pinEpoch = sameMeeting ? (previousSide.pinEpoch ?? 0) + Number(previousSide.pin !== pin) : 0;
     }
-    // A new row invalidates a Brief read or link click; a metadata reload of the same row does not.
-    if (promiseSide ? !wasPromise || promiseSide.kind !== previousSide?.kind || promiseSide.id !== previousSide?.id
-      : wasPromise && previousSide) {
+    // A new row invalidates its reads and link clicks; a metadata reload of the same row does not.
+    const changed = promiseSide ? !wasPromise || promiseSide.kind !== previousSide?.kind || promiseSide.id !== previousSide?.id
+      : wasPromise && previousSide;
+    if (changed) {
       setShared("today_detail_epoch", (shared("today_detail_epoch") ?? 0) + 1);
       if (wasPromise && previousSide?.kind === "prep_today") run("side.focus_exit");
+    }
+    if (promiseSide?.kind === "promise") {
+      promiseSide.selectionEpoch = changed ? shared("today_detail_epoch") : previousSide.selectionEpoch;
     }
     if (!row) {
       // Leave an empty Side rather than surfacing another view's previous selection.
@@ -549,6 +553,7 @@ export default class Today extends View {
         const at = this.rows().findIndex((x) => x.key === key);
         if (at < 0) return;
         this.at = at;
+        if (shared("focus") === "detail" && shared("detail") === "promise") run("side.focus_exit");
         setShared("focus", "list"); // a click focuses the row and takes the keys from any text field
         focusMain();
         this.select(cx);

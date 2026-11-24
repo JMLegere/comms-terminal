@@ -508,11 +508,38 @@ def app_context_return(promise_context_trace):
     assert "Use the west gate." not in promise_context_trace["back"]["lines"]
 
 
-@then("highlighting has not fetched context and expansion reads only that Thread")
-def app_context_scope(context_open, promise_context_trace):
-    assert promise_context_trace["preview"]["reads"] == []
-    assert context_open["reads"] == [
-        {"method": "today.promise_context", "params": {"promise_id": "a"}},
+@when("Jeremy selects the Promise by click or arrow key", target_fixture="selected_context")
+def app_select_context(promise_context_trace):
+    trace = promise_context_trace
+    return trace["preview"], trace["next"], trace["keyboard"]
+
+
+@then("the Thread cards appear without taking focus or loading surrounding messages")
+def app_preview_context(selected_context):
+    clicked, next_row, by_key = selected_context
+    for snapshot in (clicked, by_key):
+        assert (snapshot["focus"], snapshot["row"], snapshot["thread"]) == ("list", "a", None)
+        assert {"I'll send the checklist.", "Site access", "Show messages"} <= set(snapshot["lines"])
+        assert all(row["method"] == "today.promise_context" for row in snapshot["reads"])
+    assert next_row["row"] != "a"
+    assert "Show messages" not in next_row["lines"]
+
+
+@then("entering the Detail does not reload its Thread cards")
+def app_focus_context(selected_context, promise_context_trace):
+    preview = selected_context[-1]
+    detail, back = promise_context_trace["detail"], promise_context_trace["back"]
+    assert detail["focus"] == "detail"
+    assert detail["reads"] == preview["reads"]
+    assert {"I'll send the checklist.", "Site access", "Show messages"} <= set(back["lines"])
+
+
+@then("expansion reads only that Thread")
+def app_context_scope(promise_context_trace):
+    context_open = promise_context_trace["first"]
+    before = promise_context_trace["detail"]["reads"]
+    assert context_open["reads"][:len(before)] == before
+    assert context_open["reads"][len(before):] == [
         {"method": "today.promise_thread", "params": {"promise_id": "a", "thread_id": "thread-9"}},
     ]
     assert all(not row["method"].startswith("command.") for row in promise_context_trace["calls"])

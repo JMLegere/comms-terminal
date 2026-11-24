@@ -211,8 +211,10 @@ Feature: Promises
     When Jeremy opens the Promise Detail and reads more in one Thread
     Then the keyboard can read either Thread without changing selection or opening a Thread
 
-  @AS-PR-24 @NFR-PR-10 @NFR-PR-11
-  Scenario: Promise Detail requests messages only for the card Jeremy expands
+  @AS-PR-24 @FR-PR-26 @NFR-PR-10 @NFR-PR-11
+  Scenario: Promise selection shows Thread cards without moving Today focus
     Given Today in the App shows a Promise linked to two Threads
-    When Jeremy opens the Promise Detail and reads more in one Thread
-    Then highlighting has not fetched context and expansion reads only that Thread
+    When Jeremy selects the Promise by click or arrow key
+    Then the Thread cards appear without taking focus or loading surrounding messages
+    And entering the Detail does not reload its Thread cards
+    And expansion reads only that Thread
