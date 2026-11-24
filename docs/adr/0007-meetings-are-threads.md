@@ -6,6 +6,8 @@ Jeremy's Organization actions were scattered across Attio, Tana, Linear, and the
 
 **2026-11-23 amendment ([FR-ICA-1–2](../prd.md#held-activity)):** Supersedes only the former Held transition to Todo (FR-OA-13 and decision #142). An eligible Held Activity records history without moving Status, changing timer deadlines, or adding a Status Audit entry. Timed Wake is independent. Booking scope, cancellation, attendee decline, and Jeremy's own Response rules are unchanged.
 
+**2026-11-24 amendment ([FR-ICA-5](../prd.md#organization-actions)):** A new Block booking keeps its Event in Calendar and records Booked on a Done Thread outside Todo, while Meeting and All-day Event bookings, existing Threads, and later Activities keep their rules.
+
 ## Considered Options
 
 - **Meetings stay calendar context only** (the 2026-10-13 decision). Rejected: meeting prep and follow-up then need a second to-do object beside Threads, which is the scattered-actions problem again.

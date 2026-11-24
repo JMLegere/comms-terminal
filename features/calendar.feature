@@ -117,3 +117,10 @@ Feature: Calendar
     When Held runs at "2026-11-05T20:01:00+00:00"
     Then Jeremy can see "Held · Weekly review" in the Done Thread timeline
     And the Meeting Thread is absent from Todo and Today Threads
+
+  @AS-ICA-7 @FR-ICA-5
+  Scenario: Booking a Block keeps it in history without entering Todo
+    When Calendar sync books the Block "Call prep"
+    Then the Thread has Status "DONE" and Status Detail "DONE_MANUALLY_SET"
+    And Jeremy can see "Booked · Call prep" in the Done Thread timeline
+    And the Meeting Thread is absent from Todo and Today Threads

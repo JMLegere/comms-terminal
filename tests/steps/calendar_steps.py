@@ -346,6 +346,12 @@ def booked_weekly_meeting(ctx, monkeypatch, title):
     ctx.calendar_now += timedelta(minutes=2)
 
 
+@when(parsers.parse('Calendar sync books the Block "{title}"'))
+def book_block(ctx, monkeypatch, title):
+    monkeypatch.setattr(clock, "now", lambda: datetime.fromisoformat("2026-10-27T15:00:00+00:00"))
+    meeting_thread_for(ctx, event(ctx, title, ME, state="ACCEPTED", guest=ME))
+
+
 @given("Jeremy marks the Meeting Thread Done")
 def mark_meeting_done(ctx):
     inbox.act(ctx.db, ctx.thread.id, inbox.Done())

@@ -473,14 +473,14 @@ Any entry with a date or a time on Jeremy's work calendar. Every Event is a Meet
 _Avoid_: Appointment, Calendar entry
 
 **Meeting**:
-One synchronous conversation booked as an Event with attendees besides Jeremy, held on Google Meet, Zoom, Microsoft Teams, by phone, or in person. Its Meeting Activities share one Thread per Event or repeating series. Internal Meetings count the same as Meetings with someone outside agentmaple.com, and a Block has a Thread the same way. Booking starts the Thread in Todo under the usual rules; eligible cancellations and declines by other attendees can return it to Todo. Tana adds its summary and linked documents without changing Status. Meetings booked before Meetings became Threads start a Thread only if Jeremy Responds. His Response adds an Activity without changing an existing Thread's Status.
+One synchronous conversation booked as an Event with attendees besides Jeremy, held on Google Meet, Zoom, Microsoft Teams, by phone, or in person. Its Meeting Activities share one Thread per Event or repeating series. Internal Meetings count the same as Meetings with someone outside agentmaple.com. Booking a Meeting starts its Thread in Todo under the usual rules; eligible cancellations and declines by other attendees can return it to Todo. Tana adds its summary and linked documents without changing Status. Meetings booked before Meetings became Threads start a Thread only if Jeremy Responds. His Response adds an Activity without changing an existing Thread's Status.
 _Avoid_: Call (for a meeting), Appointment
 
 **Held**:
 The Meeting Activity recorded when an eligible occurrence of a Meeting or Block ends. It stays in the Thread's history without changing Status, Status detail, or timer deadlines, or adding a Status Audit entry. A due Snooze or follow-up still wakes on its own.
 
 **Block**:
-A timed Event with no attendees besides Jeremy, such as focus time, lunch, or a reminder to himself. Like a Meeting, it has a Thread and records Held when an eligible occurrence ends.
+A timed Event with no attendees besides Jeremy, such as focus time, lunch, or a reminder to himself. On booking, its Event stays in Calendar and its Thread starts in Done with a Booked Activity. It records Held when an eligible occurrence ends.
 _Avoid_: Focus time, Hold
 
 **All-day Event**:

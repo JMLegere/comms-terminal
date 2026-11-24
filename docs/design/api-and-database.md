@@ -243,6 +243,7 @@ Deletion content clearing and Sequence pause hooks still run. A Phone call (`MES
 - New Thread from another person, sender not blocked → `TODO` / `CREATED` (FR-6a).
 - New Thread from another person, sender blocked → `DONE` / `IGNORED` (FR-7a).
 - New Thread from Jeremy (his own top-level Slack post) → `SNOOZED` / `WAITING_FOR_CUSTOMER` **[D]** (decision #61).
+- New Thread from a Booked Meeting Activity whose normalized Event kind is `block` → `DONE` / `DONE_MANUALLY_SET` without a manual Status Audit entry (FR-ICA-5). The existing Thread and subsequent Activity rules are unchanged.
 - Another person's eligible message, edit, or deletion on an existing Thread (FR-6c):
   - from `SNOOZED` or `DONE_MANUALLY_SET` → `TODO` / `NEW_REPLY`.
   - from `TODO` / `CREATED` → unchanged **[C]**: the first response is still owed.

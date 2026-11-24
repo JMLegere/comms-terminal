@@ -3099,9 +3099,15 @@ def _ingest(db, inc: Incoming) -> Thread | None:
 
     created = thread_id is None
     event = Arrived(inc.kind, identity is None and not call, bool(identity and identity["blocked"]))
+    meeting_data = inc.data.get("meeting") if meeting else None
     if thread_id is None:
         title = inc.title or (inc.content or "").strip()[:80] or "(no subject)"
-        thread_id = _new_thread(db, channel_id, inc.native_id, title, status := transition(None, event), at)
+        if (isinstance(meeting_data, dict) and meeting_data.get("what") == "booked"
+                and meeting_data.get("kind") == "block"):
+            status = ("DONE", "DONE_MANUALLY_SET")
+        else:
+            status = transition(None, event)
+        thread_id = _new_thread(db, channel_id, inc.native_id, title, status, at)
         if status[1] == "IGNORED":  # Block, at Thread creation (I-4)
             _audit(db, thread_id, at, "blocked", None, "IGNORED")
     elif inc.kind == "MESSAGE" and identity is None and not call and _echo_of_sent(db, thread_id, inc):
@@ -3118,7 +3124,6 @@ def _ingest(db, inc: Incoming) -> Thread | None:
         db.executemany("INSERT OR IGNORE INTO email_refs (activity_id, native_id) VALUES (?, ?)",
                        [(activity_id, n) for n in sorted(_email_ids(inc.thread_ref))])
         _reconcile_email_threads(db, True, channel_id)
-    meeting_data = inc.data.get("meeting") if meeting else None
     held = isinstance(meeting_data, dict) and meeting_data.get("what") == "held"
     t = get_thread(db, thread_id)
     if not held and (not created or t.id != thread_id):

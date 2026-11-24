@@ -238,19 +238,18 @@ DTEND:20261021T180000Z
 ORGANIZER:mailto:jeremy@agentmaple.com"""
 
 
-def test_an_event_with_no_one_besides_jeremy_is_a_meeting_thread_too(db, clock):
-    """One rule, no exceptions (decision #142): Jeremy's own blocks book, hold, and cancel like any Event."""
+def test_block_booking_stays_out_of_todo_but_eligible_cancellation_reopens(db, clock):
     meetings.connect(db)
     clock[0] = datetime(2026, 10, 20, 14, tzinfo=UTC)
     cal.sync(db, feed(SOLO), "2026-10-20T14:00:00+00:00")
     assert meetings.synced(db) == 1
     t = thread(db, "solo")
-    assert (t.title, t.status_detail) == ("Focus block", "CREATED")
+    assert (t.title, t.status, t.status_detail) == ("Focus block", "DONE", "DONE_MANUALLY_SET")
     first = inbox.thread_view(db, t.id)["messages"][0]
     assert first["content"].startswith("Booked · Focus block") and "With:" not in first["content"]
-    inbox.act(db, t.id, inbox.Done())
     before = triage(db, t.id)
     audit = inbox.thread_view(db, t.id)["audit"]
+    assert not audit
     assert meetings.held(db, datetime(2026, 10, 21, 18, 1, tzinfo=UTC)) == 1
     assert meeting_activities(db, "solo") == [":booked", "20261021T170000Z:held"]
     assert triage(db, t.id) == before
