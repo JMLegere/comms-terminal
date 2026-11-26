@@ -336,3 +336,11 @@ The teammate needs their own Service, set up like Oracle (§1–§8) on their ow
 4. Updates work as on Mani: their Service updates from `main` (§8), and the App follows it.
 5. Uninstall: remove `~/Applications/Comms Terminal App.app`, `~/.local/bin/comms-terminal-app-launch` and `~/.local/share/comms-terminal-app/`.
 
+## 11. Workbox Promise capture
+
+The existing `promise-capture.timer` starts `promise-capture.service` on Workbox. Oracle owns the data, and the Workbox `comms-terminal` wrapper owns CLI routing. The Work log coverage fix changes neither the schedule nor the capture watermark protocol.
+
+- After the approved Oracle release, verify `comms-terminal capture draft-progress --help` and the existing read-only `promise ID` and evidence commands. Do not use a write command as a compatibility check.
+- With the capture service idle, save the current unit and the shared OMP/Claude `promise-capture/SKILL.md` for rollback. Apply `deploy/promise-capture-coverage.patch` to a copy of the deployed skill and install only after its patch check passes. For a fresh install, apply `deploy/promise-capture-progress.patch` to the original skill first.
+- Install `deploy/promise_capture_run.py` at a stable Workbox path. Replace only the service's `ExecStart`: put `/usr/bin/python3 <installed runner> --cli <absolute Workbox comms-terminal wrapper> --` before the existing Claude executable and arguments. Preserve its working directory, tool permissions, logs, timeout and timer. Reload the user unit, then read back the installed command, skill checksum, and active timer. Do not start another run while one is active.
+- The runner logs counts, not messages. A missing or blocked review makes the service fail even if Claude itself exits zero. A captured Activity, Work log update, or other successful write is not rolled back. Check the service result and persisted History before any retry; use the next scheduled run or one separately authorized manual run. Roll back the runner and skill together if needed.

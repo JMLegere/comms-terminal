@@ -14,13 +14,14 @@ only moves forward, in Activity insertion order, so a late Call transcript (an E
 When an Open Promise first goes At risk, and again when it first goes Urgent or Overdue, the Service sends Jeremy one SMS (FR-PR-18, ADR 0026), and only
 once Jeremy's own mobile is set.
 
-Interface: record, firm, change, fulfil, cancel, link, advance_capture, set_alert_mobile (writers); find, promise,
-view, kept, slack_time, capture_mark, pending, alert_mobile (readers); alert (the Service's wake pass).
+Interface: record, firm, change, fulfil, cancel, link, advance_capture, capture_draft_progress, set_alert_mobile
+(writers); find, promise, view, kept, slack_time, capture_mark, pending, alert_mobile (readers); alert (the Service's wake pass).
 """
 
 import json
 import logging
 import re
+from collections import Counter
 from datetime import date, datetime, time, timedelta, timezone
 
 from . import calendar, clock, commands, inbox
@@ -329,6 +330,78 @@ def link(db, promise_id: str, kind: str, target: str, origin: dict, *, now: date
     _label(row, f"linked to {kind}")
 
 
+_DRAFT_READY = "Reply Draft ready to send (not sent)."
+_DRAFT_READY_LINE = re.compile(
+    r"(?:[-*] )?(?:\d{4}-\d{2}-\d{2}(?:: | [–—-] ))?(?:(?:reply )?draft (?:is )?)?"
+    r"ready(?: to send)?(?:[ (;,.\-]+(?:but )?(?:not sent|unsent)\)?)?\.?", re.IGNORECASE)
+
+
+def _draft_progress_logged(db, promise_id: str, draft_id: str) -> bool:
+    # A full Work log carries earlier entries forward; only the lines added by a Draft Origin count for that Draft.
+    for (raw,) in db.execute(
+            "SELECT detail FROM promise_changes WHERE promise_id = ? AND change = 'changed'"
+            " AND origin_kind = 'draft' AND instr(origin_ref, ?) = 1", (promise_id, f"{draft_id}@")):
+        detail = json.loads(raw)
+        before = Counter(detail.get("before", {}).get("work_log", "").splitlines())
+        after = Counter(detail.get("after", {}).get("work_log", "").splitlines())
+        if any(_DRAFT_READY_LINE.fullmatch(line.strip()) for line in after - before):
+            return True
+    return False
+
+
+@writer("write")
+def capture_draft_progress(db, *, now: datetime | None = None) -> int:
+    """Record the newest ready, explicitly linked Reply Draft for each Open Promise, without sending or closing."""
+    _agent_only()
+    now = now or clock.now()
+    # The outer writer holds the transaction: link, Draft revision, send locks and Promise revision cannot race.
+    candidates = db.execute(
+        "SELECT p.id AS promise_id, p.work_log, COALESCE(dt.merged_into, dt.id) AS reply_thread, d.* FROM promises p"
+        " JOIN promise_links l ON l.promise_id = p.id AND l.kind = 'draft'"
+        " JOIN composition_drafts d ON d.id = l.target JOIN threads dt ON dt.id = d.thread_id"
+        " WHERE p.state = 'OPEN' AND d.sending_at IS NULL AND d.send_at IS NULL AND d.needs_edit = 0"
+        " AND NOT EXISTS (SELECT 1 FROM actions a WHERE a.target = d.id AND a.kind = 'send'"
+        " AND a.state IN ('scheduled', 'running'))"
+        " ORDER BY p.id, d.updated_at DESC, d.id DESC").fetchall()
+    seen = set()
+    count = 0
+    for row in candidates:
+        pid, did = row["promise_id"], row["id"]
+        if pid in seen or row["reply_thread"] not in _evidence_threads(db, pid):
+            continue
+        try:
+            staged = inbox.staged_files(db, draft_id=did)
+            # As in inbox._claim_send, constructing the Reply steps with no Sender performs only local checks.
+            inbox._reply_send(db, dict(row), staged, None, now)
+        except ValueError:
+            continue
+        if row["kind"] == "email" and not row["to"].strip():
+            continue
+        seen.add(pid)  # don't fall back to an older Draft once the newest eligible one is known
+        if _draft_progress_logged(db, pid, did):
+            continue
+        try:
+            day = clock.local(datetime.fromisoformat(row["updated_at"])).date()
+        except (ValueError, OverflowError):
+            raise Refused("Draft has an invalid saved time") from None
+        entry = f"{day}: {_DRAFT_READY}"
+        log = row["work_log"]
+        status, newline, notes = log.partition("\n")
+        if not status.strip():
+            log = _DRAFT_READY + newline + notes
+        if not log.endswith("\n"):
+            log += "\n"
+        changes = _review_changes(db, pid)
+        if not changes:
+            raise Refused("Open Promise has no review revision")
+        change(db, pid, origin_from(f"draft:{did}@{row['revision']}"), work_log=log + entry,
+               if_current=changes[0]["id"], now=now)
+        count += 1
+    if count:
+        commands.label("Reply Draft progress recorded")
+    return count
+
+
 def capture_mark(db) -> dict | None:
     """Where capture is: the Activity (`activity_id`, its `occurred_at`) and when the mark moved (`at`)."""
     row = db.execute("SELECT c.*, a.occurred_at FROM promise_capture c LEFT JOIN activities a ON a.id = c.activity_id"
@@ -414,19 +487,22 @@ def promise(db, promise_id: str, now: datetime | None = None) -> dict:
                         "slack_time": slack_time(row, now), "risk": risk(row, now), "draft_ready": ready}
 
 
+def _evidence_threads(db, promise_id: str) -> list[str]:
+    return [tid for (tid,) in db.execute(
+        "SELECT COALESCE(t.merged_into, t.id) FROM promise_links l JOIN threads t ON t.id = l.target"
+        " WHERE l.promise_id = ? AND l.kind = 'thread'"
+        " UNION SELECT a.thread_id FROM promise_changes h JOIN thread_activities a ON a.id = h.origin_ref"
+        " WHERE h.promise_id = ? AND h.origin_kind = 'activity' ORDER BY 1", (promise_id, promise_id),
+    )]
+
+
 def review(db, promise_id: str, now: datetime) -> dict:
     """What capture reviews, and a revision from the very same snapshot for its conditional write."""
     with inbox._read_snapshot(db):
         p = promise(db, promise_id, now)
         changes = _review_changes(db, promise_id)
-        threads = db.execute(
-            "SELECT COALESCE(t.merged_into, t.id) FROM promise_links l JOIN threads t ON t.id = l.target"
-            " WHERE l.promise_id = ? AND l.kind = 'thread'"
-            " UNION SELECT a.thread_id FROM promise_changes h JOIN thread_activities a ON a.id = h.origin_ref"
-            " WHERE h.promise_id = ? AND h.origin_kind = 'activity' ORDER BY 1", (promise_id, promise_id),
-        )
         return p | {"review_revision": changes[0]["id"] if changes else None,
-                    "evidence_threads": [tid for (tid,) in threads]}
+                    "evidence_threads": _evidence_threads(db, promise_id)}
 
 
 def _linked_threads(db, promise_id):

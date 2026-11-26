@@ -51,6 +51,7 @@ COMMANDS = {
     "pipeline.set_stage": "pipeline stage",
     "promises.advance_capture": "capture advance",
     "promises.cancel": "promise ID --cancel",
+    "promises.capture_draft_progress": "capture draft-progress",
     "promises.change": "promise ID --what/--due/--work/--travel/--to/--work-log",
     "promises.firm": "promise ID --firm",
     "promises.fulfil": "promise ID --fulfil [--actual MIN]",
@@ -342,6 +343,7 @@ def add_parsers(sub):
     x.add_argument("--json", action="store_true")
     cs.add_parser("advance", help="move the mark to this Activity once its Promise changes are written"
                   ).add_argument("activity_id")
+    cs.add_parser("draft-progress", help="record ready unsent Reply Draft progress on Open Promises")
     al = sub.add_parser("alerts", help="the one At-risk SMS per Promise (ADR 0026): where it goes, or set it")
     alg = al.add_mutually_exclusive_group()
     alg.add_argument("--mobile", help="Jeremy's own mobile, +15065550100; turns the SMS on")
@@ -623,6 +625,9 @@ def promise_cmd(db, a) -> str:
 
 
 def capture_cmd(db, a) -> str:
+    if a.capture_cmd == "draft-progress":
+        count = promises.capture_draft_progress(db, now=clock.now())
+        return f"Draft progress recorded for {count} Promise(s).\n"
     if a.capture_cmd == "advance":
         promises.advance_capture(db, a.activity_id, now=clock.now())
     if a.capture_cmd in ("mark", "advance"):
