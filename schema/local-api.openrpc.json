@@ -1965,6 +1965,33 @@
    }
   },
   {
+   "name": "command.promises.capture_draft_progress",
+   "summary": "The promises.capture_draft_progress writer (write).",
+   "params": [
+    {
+     "name": "now",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "origin",
+     "required": false,
+     "schema": {
+      "enum": [
+       "view",
+       "panel"
+      ]
+     },
+     "summary": "view or panel; panel when omitted"
+    }
+   ],
+   "x-panel": true,
+   "result": {
+    "name": "result",
+    "schema": {}
+   }
+  },
+  {
    "name": "command.promises.change",
    "summary": "The promises.change writer (write).",
    "params": [
@@ -2005,6 +2032,16 @@
     },
     {
      "name": "people",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "work_log",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "if_current",
      "required": false,
      "schema": {}
     },
@@ -2089,6 +2126,16 @@
     },
     {
      "name": "actual_minutes",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "work_log",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "if_current",
      "required": false,
      "schema": {}
     },
@@ -2203,6 +2250,11 @@
     },
     {
      "name": "tentative",
+     "required": false,
+     "schema": {}
+    },
+    {
+     "name": "work_log",
      "required": false,
      "schema": {}
     },
