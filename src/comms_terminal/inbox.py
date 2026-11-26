@@ -27,7 +27,7 @@ from typing import Protocol, Sequence
 from . import clock, commands, files, platforms, render
 from .writers import writer
 
-SCHEMA_VERSION = 50
+SCHEMA_VERSION = 51
 WAIT = timedelta(days=4)  # Waiting for them ends after this with no reply: back to Todo to follow up (#116)
 EMAIL_CONFIRMATION_PENDING = "Email confirmation pending; wait for its sent receipt before replying."
 NO_BCC = "Only an email New Thread Draft has Bcc; a Reply Draft, SMS or Slack Draft has none."
@@ -1021,6 +1021,34 @@ ALTER TABLE promise_alerts_new RENAME TO promise_alerts;"""  # Promises (ADR 002
 # Exact Slack Reply Drafts (FR-4c): the original target Activity, not the newest post in the Thread.
 MIGRATIONS[50] = """ALTER TABLE composition_drafts ADD COLUMN reply_to_activity_id TEXT REFERENCES activities (id)
   CHECK (reply_to_activity_id IS NULL OR (kind = 'slack' AND thread_id IS NOT NULL));"""
+
+# Promise work log and exact Calendar and Draft Origins. Preserve rowids: equal-time history is ordered by rowid.
+MIGRATIONS[51] = """ALTER TABLE promises ADD COLUMN work_log TEXT NOT NULL DEFAULT '';
+CREATE TABLE promise_changes_new (
+  id          TEXT PRIMARY KEY NOT NULL DEFAULT (new_id()),
+  promise_id  TEXT NOT NULL REFERENCES promises (id),
+  at          TEXT NOT NULL,
+  change      TEXT NOT NULL,
+  detail      TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(detail)),
+  origin_kind TEXT NOT NULL CHECK (origin_kind IN ('activity', 'customer_request', 'tana', 'words', 'calendar', 'draft')),
+  origin_ref  TEXT,
+  words       TEXT,
+  CHECK ((origin_kind = 'words') = (words IS NOT NULL AND length(words) > 0)),
+  CHECK (origin_kind = 'words' OR (origin_ref IS NOT NULL AND length(origin_ref) > 0))
+) STRICT;
+INSERT INTO promise_changes_new (rowid, id, promise_id, at, change, detail, origin_kind, origin_ref, words)
+SELECT rowid, id, promise_id, at, change, detail, origin_kind, origin_ref, words FROM promise_changes;
+DROP TABLE promise_changes;
+ALTER TABLE promise_changes_new RENAME TO promise_changes;
+CREATE INDEX promise_changes_promise ON promise_changes (promise_id, at);
+CREATE TRIGGER promise_changes_no_delete BEFORE DELETE ON promise_changes
+BEGIN
+  SELECT RAISE(ABORT, 'Promise changes are append-only');
+END;
+CREATE TRIGGER promise_changes_no_update BEFORE UPDATE ON promise_changes
+BEGIN
+  SELECT RAISE(ABORT, 'Promise changes are append-only');
+END;"""
 
 
 class SendUnknown(SendFailed):

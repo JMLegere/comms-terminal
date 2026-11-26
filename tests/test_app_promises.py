@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from comms_terminal import agent, clock, core, inbox, promises
+from comms_terminal import agent, clock, commands, core, inbox, promises
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -308,6 +308,45 @@ def test_return_to_standalone_promises_refreshes_its_retained_selection(out):
     assert "Site walkthrough" not in returned["lines"]
     assert any("enter opens its Thread" in line for line in returned["lines"])
     assert {"method": "today.side", "params": {"kind": "promise", "id": "a"}} in returned["calls"]
+
+
+def test_work_log_reaches_both_app_routes_as_plain_text(promise_copy):
+    db, api, pid, _, _, origin, now = promise_copy
+    status = "Ready to send [READY] [unfinished :warning:"
+    entry = "2026-11-23: Prepared [link=https://example.test]the packet[/link]."
+
+    def set_log(work_log):
+        with commands.source("cli"):
+            promises.change(db, pid, origin, work_log=work_log, now=now)
+        # The local copy publishes this event after applying Service rows.
+        api.publish("rows", {"changed": [["promises", pid]]})
+
+    def read():
+        return api.handle({"jsonrpc": "2.0", "id": 1, "method": "today.side",
+                           "params": {"origin": "view", "kind": "promise", "id": pid}})["result"]
+
+    assert not any(seg[0] == "Work log" for line in read() for seg in line)
+    set_log(" \n\t ")
+    assert not any(seg[0] == "Work log" for line in read() for seg in line)
+    set_log(f"{status}\r\nHistory\r\n\r{entry}")
+    projected = read()
+    heading = next((i for i, line in enumerate(projected) if line and line[0][0] == "Work log"), None)
+    assert heading is not None, "today.side must include the Work log"
+    assert projected[heading + 1:heading + 5] == [
+        [[status, None, False, None]], [["History", None, False, None]], [], [[entry, None, False, None]],
+    ]
+
+    rendered = run_view("app_promises_view.mjs", "context", json.dumps(projected))
+    today = rendered["context"]["detail"]
+    standalone = rendered["standaloneReturn"]
+    assert (today["page"], today["route"], today["focus"]) == ("today", "side", "detail")
+    assert (standalone["page"], standalone["route"], standalone["focus"]) == ("promises", "side", "list")
+    for view in (today, standalone):
+        lines = view["lines"]
+        start = lines.index("Work log")
+        assert lines[start + 1:start + 4] == [status, "History", entry]
+    assert today["lines"].index(entry) < today["lines"].index("Pilot checklist")
+    assert "Work log" not in rendered["context"]["next"]["lines"]
 
 
 @pytest.mark.parametrize("outcome", ["success", "error"])

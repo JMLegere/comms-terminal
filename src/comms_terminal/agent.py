@@ -51,7 +51,7 @@ COMMANDS = {
     "pipeline.set_stage": "pipeline stage",
     "promises.advance_capture": "capture advance",
     "promises.cancel": "promise ID --cancel",
-    "promises.change": "promise ID --what/--due/--work/--travel/--to",
+    "promises.change": "promise ID --what/--due/--work/--travel/--to/--work-log",
     "promises.firm": "promise ID --firm",
     "promises.fulfil": "promise ID --fulfil [--actual MIN]",
     "promises.link": "promise new/ID --link",
@@ -124,6 +124,7 @@ def add_parsers(sub):
     t = sub.add_parser("thread", help="one Thread as Markdown, with its Attio and Tana context; --status or --case"
                                       " changes it instead")
     t.add_argument("id")
+    t.add_argument("--evidence", action="store_true", help="read visible Activity revisions only (JSONL, no Context)")
     t.add_argument("--status", choices=list(STATUSES), help="set its Status, as the console's keys do")
     t.add_argument("--until", help="--status snooze: 14:30 or 2026-10-20 09:00")
     t.add_argument("--detail", choices=list(TODO_DETAILS), default="in-progress", help="--status todo: which Todo")
@@ -174,6 +175,7 @@ def add_parsers(sub):
     sub.add_parser("drafts", help="list Drafts, then the Connections a new Draft can use")
     d = sub.add_parser("draft", help="one Draft as Markdown; with --to/--cc/--bcc/--subject/--body, change it first (never sends)")
     d.add_argument("id", help="a Draft id, or `new` with --connection, --thread, or --reply-to")
+    d.add_argument("--evidence", action="store_true", help="read this unsent Draft only (JSON, no recipient history)")
     d.add_argument("--revision", type=int, help="the revision you read; required to change an existing Draft")
     d.add_argument("--connection", help="new Draft: the Connection id it sends from")
     d.add_argument("--thread", help="new Draft: the Thread it replies to; its reply box sends it")
@@ -263,6 +265,7 @@ def add_parsers(sub):
     v.add_argument("--last", type=int, metavar="N", help="the last N Events that already started, newest first")
     v.add_argument("--deleted", action="store_true", help="include Deleted Events (gone from Google, kept here)")
     v.add_argument("--json", action="store_true", help="one JSON object per line")
+    v.add_argument("--evidence", action="store_true", help="scoped JSONL for Promise evidence, without private links")
     p = sub.add_parser("pipeline", help="a Pipeline's math as Markdown, or set a Target, Stage, or Value")
     ps = p.add_subparsers(dest="pipeline_cmd", required=True)
     for name in ("revenue", "fundraising"):
@@ -312,7 +315,7 @@ def add_parsers(sub):
     t = sub.add_parser("promise", help="one Promise with its history; `promise new` records one; flags change it."
                                        " Every change needs --origin (ADR 0024)")
     t.add_argument("id", help="a Promise id, or new")
-    t.add_argument("--origin", help="activity:ID, customer_request:ID, tana:ID, or words:TEXT (Jeremy's own words)")
+    t.add_argument("--origin", help=promises.ORIGIN_HELP + "; words are Jeremy's own")
     t.add_argument("--what", help="what is owed")
     t.add_argument("--to", action="append", help="a Person owed (id, email, phone or exact name); repeat for more;"
                                                  " on an existing Promise it replaces the People")
@@ -320,6 +323,8 @@ def add_parsers(sub):
     t.add_argument("--inferred", action="store_true", help="the time was inferred, not stated")
     t.add_argument("--work", type=int, help="minutes of work still needed")
     t.add_argument("--travel", type=int, help="minutes of travel it needs")
+    t.add_argument("--work-log", help="work status on the first line, then dated entries; - reads stdin")
+    t.add_argument("--if-current", metavar="ID", help="change the Work log only if this reviewed Promise revision still matches")
     t.add_argument("--tentative", action="store_true", help="new: not yet sure it is owed")
     t.add_argument("--link", action="append", help="KIND:TARGET context (thread, case, issue, draft, enrollment,"
                                                    " tana, url); an enrollment starts on the Promise's day")
@@ -459,19 +464,24 @@ def promise_markdown(p: dict) -> str:
              + (f" · actual {_hours(p['actual_minutes'])}" if p.get("actual_minutes") is not None else "")
              + (f" · {SECTION_NAMES[p['risk']]}" if p["risk"] else "") + (" · Draft ready" if p["draft_ready"] else ""),
              "- Owed to: " + ", ".join(x["display_name"] for x in p["people"])]
+    if revision := p.get("review_revision"):
+        lines.append(f"- Review revision: {revision}")
+    lines += [f"- Evidence Thread: {tid}" for tid in p.get("evidence_threads", ())]
     lines += [f"- Link: {l['kind']} {l['label']}" + (f" ({l['target']})" if l["label"] != l["target"] else "")
               for l in p["links"]]
+    if work_log := p.get("work_log"):
+        fence = "`" * (1 + max(2, max(map(len, re.findall(r"`+", work_log)), default=0)))
+        lines += ["", "## Work log", fence, work_log.rstrip("\n"), fence]
     lines += ["", "## History"]
     for h in p["history"]:
         ref = f" ({h['origin_ref']})" if h["origin_kind"] != "words" else ""
+        if h["origin_kind"] in ("calendar", "draft"):
+            ref = f" (`{h['origin_kind']}:{h['origin_ref']}`)"
         lines.append(f"- {_when(h['at'])} {h['change']} · {h['origin']}{ref}")
     return "\n".join(lines) + "\n"
 
 
-_HANDOFF_URL = re.compile(
-    r"(?:[a-z][a-z0-9+.-]*://|(?<!\w)//|www\.|\b(?:[a-z0-9-]+\.)+[a-z0-9-]+\.?(?::[0-9]+)?(?=[/?#]))\S+",
-    re.IGNORECASE,
-)
+_HANDOFF_URL = calendar.EVIDENCE_URL
 
 
 def promise_handoff(db, promise_id: str) -> str:
@@ -571,24 +581,32 @@ def promise_handoff(db, promise_id: str) -> str:
 def promise_cmd(db, a) -> str:
     now = clock.now()
     changes = any(x is not None for x in (a.what, a.to, a.due, a.work, a.travel)) or a.inferred
-    acting = a.id == "new" or changes or a.link or a.firm or a.fulfil or a.cancel
+    if a.if_current is not None and (a.work_log is None or a.id == "new" or changes
+                                     or a.link or a.firm or a.cancel or a.tentative):
+        raise promises.Refused("--if-current requires a Work log update on an existing Promise, optionally with --fulfil")
+    acting = a.id == "new" or changes or a.work_log is not None or a.link or a.firm or a.fulfil or a.cancel
     if not acting:
-        return promise_markdown(promises.promise(db, a.id, now))
+        return promise_markdown(promises.review(db, a.id, now))
     if not a.origin:
         raise promises.Refused("every change to a Promise needs --origin (ADR 0024)")
     origin = promises.origin_from(a.origin)
+    if origin["kind"] == "draft" and (a.id == "new" or changes or a.work_log is None or a.link
+                                     or a.firm or a.fulfil or a.cancel):
+        raise promises.Refused("a Draft Origin is only evidence of work for the Work log, not sending")
+    work_log = sys.stdin.read() if a.work_log == "-" else a.work_log
     people = [find_person(db, x) for x in a.to] if a.to else None
     due = promises.due_from(a.due) if a.due else None
     if a.id == "new":
         if not (a.what and people and due):
             raise promises.Refused("promise new needs --what, --to and --due")
         pid = promises.record(db, a.what, people, due, origin, inferred=a.inferred, work_minutes=a.work or 0,
-                              travel_minutes=a.travel or 0, tentative=a.tentative, now=now)
+                              travel_minutes=a.travel or 0, tentative=a.tentative, work_log=work_log or "", now=now)
     else:
         pid = promises.find(db, a.id)["id"]
-        if changes:
+        if changes or (work_log is not None and not a.fulfil):
             promises.change(db, pid, origin, what=a.what, due_at=due, inferred=True if a.inferred else None,
-                            work_minutes=a.work, travel_minutes=a.travel, people=people, now=now)
+                            work_minutes=a.work, travel_minutes=a.travel, people=people,
+                            work_log=None if a.fulfil else work_log, if_current=a.if_current, now=now)
         if a.firm:
             promises.firm(db, pid, origin, now=now)
     for item in a.link or []:
@@ -597,10 +615,11 @@ def promise_cmd(db, a) -> str:
             raise promises.Refused("--link is KIND:TARGET")
         promises.link(db, pid, kind, target, origin, now=now)
     if a.fulfil:
-        promises.fulfil(db, pid, origin, at=promises.due_from(a.at) if a.at else None, actual_minutes=a.actual, now=now)
+        promises.fulfil(db, pid, origin, at=promises.due_from(a.at) if a.at else None, actual_minutes=a.actual,
+                        work_log=work_log if a.id != "new" else None, if_current=a.if_current, now=now)
     elif a.cancel:
         promises.cancel(db, pid, origin, now=now)
-    return promise_markdown(promises.promise(db, pid, now))
+    return promise_markdown(promises.review(db, pid, now))
 
 
 def capture_cmd(db, a) -> str:
@@ -632,7 +651,7 @@ def run(a, db):
 
 
 def _run(a, db):
-    module = CLI_MODULE.get(a.cmd) or ("cases" if a.cmd == "thread" and a.case is not None else None)
+    module = CLI_MODULE.get(a.cmd) or ("cases" if a.cmd == "thread" and a.case is not None and not a.evidence else None)
     try:
         if module and module not in inbox.modules_on(db):
             raise inbox.disabled(module)
@@ -643,7 +662,12 @@ def _run(a, db):
                 print(f"{t['id']}\t{t['detail']}\t{t['who']} · {t['where']}\t{t['title']}")
         elif a.cmd == "thread":
             changes = a.status is not None or a.case is not None
-            print(thread_change(db, a) if changes else thread(db, a.id, a.socket), end="")
+            if a.evidence:
+                if changes or a.until is not None:
+                    raise ValueError("thread --evidence is read-only")
+                print(thread_evidence(db, a.id), end="")
+            else:
+                print(thread_change(db, a) if changes else thread(db, a.id, a.socket), end="")
         elif a.cmd == "case":
             print(case_cmd(db, a), end="")
         elif a.cmd == "person":
@@ -711,6 +735,13 @@ def _run(a, db):
                 issues.set_urgency(db, a.name, a.value, now=clock.now())
             for name, value in issues.coefficients(db).items():
                 print(f"{name}\t{value:g}")
+        elif a.cmd == "draft" and a.evidence:
+            if a.id == "new" or a.delete or a.needs_edit or any(
+                getattr(a, k) is not None for k in ("to", "cc", "bcc", "subject", "body", "revision", "connection",
+                                                   "thread", "reply_to", "attach", "detach")
+            ):
+                raise ValueError("draft --evidence is read-only and needs an existing Draft id")
+            print(draft_evidence(db, a.id), end="")
         elif getattr(a, "reply_to", None) is not None and (a.delete or a.attach is not None or a.detach is not None):
             raise ValueError("--reply-to cannot be combined with --delete, --attach, or --detach")
         elif a.delete or a.attach or a.detach:
@@ -870,6 +901,56 @@ def thread(db, thread_id, socket) -> str:
         except ReplyError as e:
             context[source] = (None, str(e))
     return thread_text(v, files.raw_dir(db), context)
+
+
+def thread_evidence(db, thread_id) -> str:
+    """One Thread's visible revisions, with provenance and delivery facts, but no remote Context or URLs."""
+    redact = calendar.redact_evidence
+    with inbox._read_snapshot(db):
+        platform, acts, messages = inbox.thread_text(db, thread_id)
+        gmail_connection = None
+        if platform == "gmail":
+            gmail_connection = db.execute("SELECT connection_id FROM channels WHERE id = ?",
+                                          (inbox.get_thread(db, thread_id).channel_id,)).fetchone()[0]
+        by_id = {a["id"]: a for a in acts}
+        evidence = []
+        for m in messages:
+            if m["deleted"]:
+                continue
+            a = by_id[m["revision"]]
+            data = m["data"]
+            kind = "call" if "call" in data else "meeting" if "meeting" in data else "message"
+            transcript = a["kind"] == "EDIT" and kind == "call"
+            author = "Provider transcript" if transcript else "Jeremy" if a["identity_id"] is None else (
+                redact(inbox._sender(db, a["identity_id"])[0]))
+            body = inbox.visible_message_text(platform, redact(m["content"] or ""))
+            if transcript:
+                body = body.partition("\n\n")[2]  # the original Call summary is not part of the transcript revision
+            names = [r[0] for r in db.execute(
+                "SELECT name FROM attachments WHERE activity_id = ? AND NOT inline ORDER BY position", (m["id"],))]
+            if not names:
+                names = [item[0] for item in data.get("attachments") or []]
+            confirmation_pending = gmail_connection is not None and inbox._gmail_wire_id(
+                db, m["native_id"], gmail_connection, by_id[m["id"]]["identity_id"]) is None
+            evidence.append(json.dumps({
+                "origin": f"activity:{a['id']}", "author": author, "at": a["occurred_at"],
+                "edited": m["edited"], "by_jeremy": not transcript and a["identity_id"] is None,
+                "platform": platform, "kind": kind, "body": redact(body), "email_confirmation_pending": confirmation_pending,
+                "to": [redact(addr) for addr in data.get("to") or []],
+                "cc": [redact(addr) for addr in data.get("cc") or []],
+                "peer": redact(data["peer"]) if data.get("peer") else None,
+                "attachments": [redact(name) for name in names],
+            }) + "\n")
+        return "".join(evidence)
+
+
+def draft_evidence(db, draft_id) -> str:
+    d = inbox.get_draft(db, draft_id)
+    if d["sending_at"] is not None:
+        raise ValueError("Draft send outcome is not confirmed; it cannot be used as unsent evidence")
+    return json.dumps({"id": d["id"], "revision": d["revision"], "saved_at": d["updated_at"],
+                       "origin": f"draft:{d['id']}@{d['revision']}", "needs_edit": bool(d["needs_edit"]),
+                       **{k: calendar.redact_evidence(d[k] or "") for k in ("subject", "body", "to", "cc", "bcc")}}) + "\n"
 
 
 def draft(db, ref, changes, revision, connection_id, thread_id=None, needs_edit=False, *, reply_to=None) -> str:
@@ -1083,6 +1164,13 @@ def _problems(db, sequence_id: int) -> str:
 
 
 def events(db, a) -> str:
+    with inbox._read_snapshot(db):
+        if a.evidence and calendar.broken(db):
+            raise ValueError("Calendar sync is broken; Events cannot be used as current evidence")
+        return _events(db, a)
+
+
+def _events(db, a) -> str:
     today = date.today()
     if a.last:
         start, end = date(1970, 1, 1), today + timedelta(days=1)
@@ -1098,10 +1186,13 @@ def events(db, a) -> str:
     if a.last:
         now = clock.local()
         found = [e for e in found if clock.local(e["start"]) <= now][::-1][:a.last]
+    if a.evidence:
+        return "".join(json.dumps(calendar.evidence_event(db, e)) + "\n" for e in found)
     if a.json:
         return "".join(json.dumps({**{k: e[k] for k in ("id", "kind", "all_day", "title", "location", "join_url",
                                                           "organizer", "attendees", "state", "repeats", "deleted_at")},
-                                   "start": e["start"].isoformat(), "end": e["end"].isoformat()}) + "\n" for e in found)
+                                   "start": e["start"].isoformat(), "end": e["end"].isoformat(),
+                                   **calendar.promise_origin(db, e)}) + "\n" for e in found)
     return "".join(event_line(e) + "\n" for e in found) or "No Events.\n"
 
 

@@ -27,6 +27,7 @@ from pathlib import Path
 from rich.cells import cell_len, set_cell_size
 from rich.markup import escape
 from rich.style import Style
+from rich.text import Text
 from textual import events, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -6257,10 +6258,9 @@ def due_in(p: dict, now: datetime) -> str:
     return f"-{text}" if m < 0 else text
 
 
-def promise_markup(p: dict) -> str:
-    """One Promise in the right pane, as a Thread shows: its title, its section and due time, who it is owed to,
-    then its history like messages, each with how its Origin came in. Read-only (ADR 0024). A Meeting's Prep
-    (`kind` "prep") shows its start, leave-by time, Prep and Brief instead."""
+def promise_markup(p: dict, *, console: bool = False) -> str | Text | Content:
+    """One read-only Promise in the right pane: summary, Work log if present, and History with Origins (ADR 0024).
+    A Meeting's Prep (`kind` "prep") shows its start, leave-by time, Prep and Brief instead."""
     grey = "#928374"
     now = clock.now()
     if p.get("kind") == "prep":
@@ -6283,13 +6283,24 @@ def promise_markup(p: dict) -> str:
         elif link["kind"] == "thread":
             label = f"[@click=app.open_thread({link['target']!r})][underline]{label}[/][/]"
         lines.append(f"[{grey}]{link['kind'].title()}[/]  {label}")
+    work_log = p.get("work_log") or ""
+    log_head = ""
+    if work_log.strip():
+        log_head = "\n".join([*lines, "", f"[{grey}]Work log[/]", ""])
+        lines = [""]
     lines += ["", f"[{grey}]History[/]"]
     for h in p["history"]:
         at = datetime.fromisoformat(h["at"]).astimezone(sequences.LOCAL).strftime("%d %b %H:%M")
         lines.append(f"[{grey}]{ICON.get(VIA_ICON.get(h['origin_via'], 'message'), '')}[/] {escape(h['origin'])}")
         lines.append(f"    [{grey}]{h['change']} · {at}[/]")
     lines += ["", f"[{grey}]Read-only: tell an agent to change a Promise (ADR 0024) · enter opens its Thread[/]"]
-    return "\n".join(lines)
+    markup = "\n".join(lines)
+    if not log_head:
+        return markup
+    # Keep the existing markup parser for each surface; never parse the Work log as markup.
+    text = Content if console else Text
+    log = text(work_log.replace("\r\n", "\n").replace("\r", "\n"))
+    return text.assemble(text.from_markup(log_head), log, text.from_markup(markup))
 
 
 def prep_markup(p: dict, now: datetime, *, raw_times: tuple[int | None, int | None] | None = None) -> str:
@@ -6431,7 +6442,7 @@ class PromisesPage(TablePage):
         if p is None:
             return
         self.app.main.showing = f"promise:{p['id']}"
-        self.app.main.show_side(promise_markup(p))
+        self.app.main.show_side(promise_markup(p, console=True))
         self.app.main.query_one("#thread").border_title = pill(self.SIDE, "green")
 
     def on_data_table_row_highlighted(self, event):

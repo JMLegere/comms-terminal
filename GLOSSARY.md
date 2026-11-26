@@ -159,8 +159,12 @@ A Promise no longer owed because the Person knows: they withdrew the ask, or Jer
 _Avoid_: Released, Dismissed, Dropped
 
 **Origin**:
-The message, Phone call, Call transcript, Meeting note, Customer request, or Jeremy's own recorded words that a Promise, or a change to it, came from. Every Promise and every change has one.
+The message, Phone call, Call transcript, Meeting note, Calendar Event revision, Customer request, or Jeremy's own recorded words that a Promise, or a change to it, came from. Every Promise and every change has one.
+A saved Draft revision is an Origin only for the Work log; it does not show that anything was sent.
 _Avoid_: Source (the word for where messages come in), Evidence
+
+**Work log** (Promise):
+One agent-managed text field, with current work status first and dated evidence of work below. Work status describes progress without changing the Promise's state.
 
 **Promise link**:
 A reference from a Promise to anything that gives it context: a Thread, Case, Issue, Draft, Tana node, or outside address. A Promise can have any number; a link never changes the Promise's state.

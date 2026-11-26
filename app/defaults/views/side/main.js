@@ -386,7 +386,10 @@ export default class Side extends View {
     const context = this.ownsContext(this.context) ? this.context : null;
     const lines = !selected ? [] : context?.cards?.length
       ? this.lines.filter((line) => !line.some(([, , , link]) => link?.startsWith("thread:"))) : this.lines;
-    const history = context?.cards?.length ? lines.findIndex((line) => line.length === 1 && line[0][0] === "History") : -1;
+    // A literal Work log line can say "History"; the heading has a colour.
+    const history = context?.cards?.length
+      ? lines.findIndex((line) => line.length === 1 && line[0][0] === "History" && Boolean(line[0][1]))
+      : -1;
     const split = history < 0 ? lines.length : history;
     const todayKind = selected && request.page === "today" ? request.kind : null;
     const epoch = shared("today_detail_epoch");

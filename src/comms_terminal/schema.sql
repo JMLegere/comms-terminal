@@ -544,6 +544,7 @@ CREATE TABLE promises (  -- what a Person expects Jeremy to do by a time; only a
   created_at     TEXT NOT NULL,
   closed_at      TEXT,                       -- when it became Fulfilled or Cancelled (Fulfilled: when it was kept)
   actual_minutes INTEGER CHECK (actual_minutes >= 0),  -- work it actually took, filled on Fulfil when known (FR-PR-21)
+  work_log       TEXT NOT NULL DEFAULT '',   -- current work status, then dated entries
   CHECK ((state IN ('FULFILLED', 'CANCELLED')) = (closed_at IS NOT NULL))
 ) STRICT;
 CREATE INDEX promises_open ON promises (state, due_at);
@@ -566,8 +567,8 @@ CREATE TABLE promise_changes (  -- every change to a Promise with its Origin, ap
   at          TEXT NOT NULL,
   change      TEXT NOT NULL,                -- recorded, firmed, changed, linked, fulfilled, cancelled
   detail      TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(detail)),
-  origin_kind TEXT NOT NULL CHECK (origin_kind IN ('activity', 'customer_request', 'tana', 'words')),
-  origin_ref  TEXT,                         -- an Activity id, a Customer request or Tana node id or address
+  origin_kind TEXT NOT NULL CHECK (origin_kind IN ('activity', 'customer_request', 'tana', 'words', 'calendar', 'draft')),
+  origin_ref  TEXT,                         -- a typed source reference, including its revision where required
   words       TEXT,                         -- Jeremy's own words when origin_kind is 'words'
   CHECK ((origin_kind = 'words') = (words IS NOT NULL AND length(words) > 0)),
   CHECK (origin_kind = 'words' OR (origin_ref IS NOT NULL AND length(origin_ref) > 0))

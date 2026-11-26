@@ -1,6 +1,7 @@
 """Promises (ADR 0024, 0027; .agents/prd/2026-11-18-promises.md): what specific People expect Jeremy to do by a
 time. Only an agent changes them, through the CLI, and every change cites an Origin (FR-PR-3, FR-PR-4): an
-Activity, a Customer request, a Tana node, or Jeremy's own recorded words. Slack-time, Urgent, At risk and Overdue are worked
+Activity, a Customer request, a Tana node, Jeremy's own recorded words, an Event revision, or, for the work log,
+a saved Draft revision. Slack-time, Urgent, At risk and Overdue are worked
 out from the time, the work and the travel (FR-PR-7), never stored.
 
 A Promise is Tentative, Open, Fulfilled or Cancelled. Cancelled needs an Origin showing the Person knows, or, for a
@@ -22,12 +23,13 @@ import logging
 import re
 from datetime import date, datetime, time, timedelta, timezone
 
-from . import clock, commands, inbox
+from . import calendar, clock, commands, inbox
 from .writers import writer
 
 STATES = ("TENTATIVE", "OPEN", "FULFILLED", "CANCELLED")
 OPEN_STATES = ("TENTATIVE", "OPEN")
-ORIGINS = ("activity", "customer_request", "tana", "words")
+ORIGINS = ("activity", "customer_request", "tana", "words", "calendar", "draft")
+ORIGIN_HELP = "activity:ID, customer_request:ID, tana:ID, words:TEXT, calendar:REVISION, or draft:ID@REVISION (work log only)"
 LINKS = ("thread", "case", "issue", "draft", "enrollment", "tana", "url")
 DUE_TIME = time(17)  # a Promise given only a day is due at 17:00 Jeremy's time
 NO_UNDO = "Promises change only by an agent with an Origin (ADR 0024); record a new change instead"
@@ -60,10 +62,10 @@ def _iso(when: datetime) -> str:
 
 
 def origin_from(text: str) -> dict:
-    """An Origin as an agent writes it: activity:ID, customer_request:ID, tana:ID, or words:TEXT."""
+    """Parse a typed Origin; Calendar and Draft refer to exact revisions."""
     kind, sep, value = (text or "").partition(":")
     if not sep or kind not in ORIGINS or not value.strip():
-        raise Refused("an Origin is activity:ID, customer_request:ID, tana:ID or words:TEXT")
+        raise Refused(f"an Origin is {ORIGIN_HELP}")
     return {"kind": kind, "words": value.strip()} if kind == "words" else {"kind": kind, "ref": value.strip()}
 
 
@@ -73,7 +75,7 @@ def _agent_only() -> None:
         raise Refused("only an agent changes Promises; tell an agent what to change (ADR 0024)")
 
 
-def _origin(db, origin: dict | None) -> tuple[str, str | None, str | None]:
+def _origin(db, origin: dict | None, *, draft_work_log: bool = False, current_activity: bool = False) -> tuple:
     _agent_only()
     if not origin or origin.get("kind") not in ORIGINS:
         raise Refused("every change to a Promise cites its Origin (ADR 0024)")
@@ -82,17 +84,39 @@ def _origin(db, origin: dict | None) -> tuple[str, str | None, str | None]:
         words = (origin.get("words") or "").strip()
         if not words:
             raise Refused("an Origin of Jeremy's words needs the words")
-        return kind, None, words
+        return kind, None, words, None
     ref = (origin.get("ref") or "").strip()
     if not ref:
         raise Refused(f"a {kind} Origin needs its id")
-    if kind == "activity" and not db.execute("SELECT 1 FROM activities WHERE id = ?", (ref,)).fetchone():
-        raise Refused(f"no Activity {ref}")
-    return kind, ref, None
+    if kind == "activity":
+        activity = db.execute("SELECT thread_id, id, target_id FROM activities WHERE id = ?", (ref,)).fetchone()
+        if activity is None:
+            raise Refused(f"no Activity {ref}")
+        if current_activity:
+            _, _, messages = inbox.thread_text(db, activity["thread_id"],
+                                               message_ids=[activity["target_id"] or activity["id"]])
+            if not any(m["revision"] == ref and not m["deleted"] for m in messages):
+                raise Refused("the Activity Origin is not the current visible revision; reread the Thread")
+    evidence = None
+    if kind == "calendar":
+        if not (evidence := calendar.promise_evidence(db, ref)):
+            raise Refused("the Calendar Origin must cite one current Event revision from events --evidence")
+    elif kind == "draft":
+        if not draft_work_log:
+            raise Refused("a Draft Origin is only evidence of work for the Work log, not sending")
+        parts = re.fullmatch(r"([a-zA-Z0-9_-]+)@([1-9][0-9]*)", ref)
+        saved = db.execute("SELECT revision, updated_at FROM composition_drafts WHERE id = ? AND sending_at IS NULL",
+                           (parts[1],)).fetchone() if parts else None
+        if not saved or str(saved["revision"]) != parts[2]:
+            raise Refused("the Draft Origin must cite the exact current unsent Draft as draft:ID@REVISION")
+        evidence = {"revision": saved["revision"], "saved_at": saved["updated_at"]}
+    return kind, ref, None, evidence
 
 
 def _log(db, promise_id: str, change: str, origin: tuple, now: datetime, **detail) -> None:
-    kind, ref, words = origin
+    kind, ref, words, evidence = origin
+    if evidence is not None:
+        detail[kind] = evidence
     db.execute("INSERT INTO promise_changes (promise_id, at, change, detail, origin_kind, origin_ref, words)"
                " VALUES (?, ?, ?, ?, ?, ?, ?)", (promise_id, _iso(now), change, json.dumps(detail, default=str),
                                                  kind, ref, words))
@@ -134,7 +158,7 @@ def _label(row, words: str) -> None:
 @writer("write")
 def record(db, what: str, people: list[str], due_at: datetime, origin: dict, *, inferred: bool = False,
            work_minutes: int = 0, travel_minutes: int = 0, tentative: bool = False,
-           now: datetime | None = None) -> str:
+           work_log: str = "", now: datetime | None = None) -> str:
     """A new Promise (FR-PR-1); Tentative when the agent is not yet sure it is owed."""
     now = now or clock.now()
     o = _origin(db, origin)
@@ -143,11 +167,12 @@ def record(db, what: str, people: list[str], due_at: datetime, origin: dict, *, 
     if work_minutes < 0 or travel_minutes < 0:
         raise Refused("work and travel are minutes, 0 or more")
     pid = db.execute("INSERT INTO promises (what, due_at, due_inferred, work_minutes, travel_minutes, state,"
-                     " created_at) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id",
+                     " created_at, work_log) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
                      (what.strip(), _iso(due_at), int(inferred), work_minutes, travel_minutes,
-                      "TENTATIVE" if tentative else "OPEN", _iso(now))).fetchone()[0]
+                      "TENTATIVE" if tentative else "OPEN", _iso(now), work_log)).fetchone()[0]
     _set_people(db, pid, people)
-    _log(db, pid, "recorded", o, now, due_at=_iso(due_at), tentative=tentative)
+    _log(db, pid, "recorded", o, now, due_at=_iso(due_at), tentative=tentative,
+         **({"work_log": work_log} if work_log else {}))
     _label(find(db, pid), "recorded")
     return pid
 
@@ -172,22 +197,60 @@ def firm(db, promise_id: str, origin: dict, *, now: datetime | None = None) -> N
     _label(row, "firmed")
 
 
+def _keep_work_log(previous: str, updated: str | None) -> None:
+    """The first line is editable; do not let a stale full-text write lose another agent's notes."""
+    if updated is None:
+        return
+    entries = previous.partition("\n")[2].rstrip("\n")
+    notes = updated.partition("\n")[2].rstrip("\n")
+    if entries.strip() and notes != entries and not notes.startswith(entries + "\n"):
+        raise Refused("keep the existing Work log entries; reread the Promise before updating")
+
+
+def _review_changes(db, promise_id, limit=1):
+    return db.execute(
+        "SELECT id, change, detail, origin_kind, origin_ref, words FROM promise_changes"
+        " WHERE promise_id = ? ORDER BY rowid DESC LIMIT ?", (promise_id, limit)).fetchall()
+
+
+def _check_review(db, promise_id, expected, origin, *, retry=None, after=None):
+    """Compare inside the writer. Only the immediate, exact committed retry may use the previous revision."""
+    if expected is None:
+        return
+    changes = _review_changes(db, promise_id, 2)
+    if changes:
+        latest, *previous = changes
+        if latest["id"] == expected:
+            return
+        if (previous and previous[0]["id"] == expected and latest["change"] == retry
+                and (latest["origin_kind"], latest["origin_ref"], latest["words"]) == origin[:3]
+                and (after is None or json.loads(latest["detail"]).get("after") == after)):
+            return
+    raise Refused("the reviewed revision changed; reread the Promise before updating")
+
+
 @writer("write")
 def change(db, promise_id: str, origin: dict, *, what: str | None = None, due_at: datetime | None = None,
            inferred: bool | None = None, work_minutes: int | None = None, travel_minutes: int | None = None,
-           people: list[str] | None = None, now: datetime | None = None) -> None:
-    """Changes what, the time, work, travel or People of an owed Promise; the history keeps the old values."""
+           people: list[str] | None = None, work_log: str | None = None, if_current: str | None = None,
+           now: datetime | None = None) -> None:
+    """Changes an owed Promise or records work progress; the history keeps the old values."""
     now = now or clock.now()
-    o = _origin(db, origin)
+    work_log_only = work_log is not None and all(
+        v is None for v in (what, due_at, inferred, work_minutes, travel_minutes, people))
+    o = _origin(db, origin, draft_work_log=work_log_only, current_activity=if_current is not None)
     row = _open(db, promise_id)
+    _keep_work_log(row["work_log"], work_log)
     fields, before = {}, {}
     for name, value in (("what", what), ("due_at", _iso(due_at) if due_at else None),
                         ("due_inferred", None if inferred is None else int(inferred)),
-                        ("work_minutes", work_minutes), ("travel_minutes", travel_minutes)):
+                        ("work_minutes", work_minutes), ("travel_minutes", travel_minutes), ("work_log", work_log)):
         if value is not None and value != row[name]:
             if name.endswith("_minutes") and value < 0:
                 raise Refused("work and travel are minutes, 0 or more")
             fields[name], before[name] = value, row[name]
+    retry = "changed" if work_log_only and not fields else None
+    _check_review(db, promise_id, if_current, o, retry=retry, after={"work_log": work_log} if retry else None)
     if fields:
         db.execute(f"UPDATE promises SET {', '.join(f'{k} = ?' for k in fields)} WHERE id = ?",
                    (*fields.values(), promise_id))
@@ -197,6 +260,8 @@ def change(db, promise_id: str, origin: dict, *, what: str | None = None, due_at
         _set_people(db, promise_id, people)
         fields["people"] = people
     if not fields:
+        if work_log is not None:
+            return  # retry of the same work log is not another change or Command
         raise Refused("nothing to change")
     _log(db, promise_id, "changed", o, now, before=before, after=fields)
     if "due_at" in fields:
@@ -206,18 +271,32 @@ def change(db, promise_id: str, origin: dict, *, what: str | None = None, due_at
 
 @writer("write")
 def fulfil(db, promise_id: str, origin: dict, *, at: datetime | None = None, actual_minutes: int | None = None,
-           now: datetime | None = None) -> None:
+           work_log: str | None = None, if_current: str | None = None, now: datetime | None = None) -> None:
     """The Promise was kept, as its Origin shows; late when after its time. actual_minutes is the work it took,
     when the evidence shows it (FR-PR-21)."""
     now = now or clock.now()
-    o = _origin(db, origin)
-    row = _open(db, promise_id)
+    o = _origin(db, origin, current_activity=if_current is not None)
+    row = find(db, promise_id)
+    if row["state"] not in OPEN_STATES:
+        if (row["state"] == "FULFILLED" and work_log is not None and work_log == row["work_log"]
+                and row["actual_minutes"] == actual_minutes and (at is None or row["closed_at"] == _iso(at))
+                and db.execute("SELECT 1 FROM promise_changes WHERE promise_id = ? AND change = 'fulfilled'"
+                               " AND origin_kind = ? AND origin_ref IS ? AND words IS ?",
+                               (promise_id, *o[:3])).fetchone()):
+            _check_review(db, promise_id, if_current, o, retry="fulfilled")
+            return  # exact retry of a combined Work log and Fulfil command
+        _check_review(db, promise_id, if_current, o)
+        raise Refused(f"the Promise is already {row['state'].title()}")
+    _check_review(db, promise_id, if_current, o)
+    _keep_work_log(row["work_log"], work_log)
     if actual_minutes is not None and actual_minutes < 0:
         raise Refused("actual is minutes, 0 or more")
     kept = _iso(at or now)
-    db.execute("UPDATE promises SET state = 'FULFILLED', closed_at = ?, actual_minutes = ? WHERE id = ?",
-               (kept, actual_minutes, promise_id))
-    _log(db, promise_id, "fulfilled", o, now, at=kept, late=kept > row["due_at"], actual_minutes=actual_minutes)
+    db.execute("UPDATE promises SET state = 'FULFILLED', closed_at = ?, actual_minutes = ?,"
+               " work_log = coalesce(?, work_log) WHERE id = ?", (kept, actual_minutes, work_log, promise_id))
+    changed = {"before": {"work_log": row["work_log"]}, "after": {"work_log": work_log}} if (
+        work_log is not None and row["work_log"] != work_log) else {}
+    _log(db, promise_id, "fulfilled", o, now, at=kept, late=kept > row["due_at"], actual_minutes=actual_minutes, **changed)
     _label(row, "fulfilled")
 
 
@@ -335,6 +414,21 @@ def promise(db, promise_id: str, now: datetime | None = None) -> dict:
                         "slack_time": slack_time(row, now), "risk": risk(row, now), "draft_ready": ready}
 
 
+def review(db, promise_id: str, now: datetime) -> dict:
+    """What capture reviews, and a revision from the very same snapshot for its conditional write."""
+    with inbox._read_snapshot(db):
+        p = promise(db, promise_id, now)
+        changes = _review_changes(db, promise_id)
+        threads = db.execute(
+            "SELECT COALESCE(t.merged_into, t.id) FROM promise_links l JOIN threads t ON t.id = l.target"
+            " WHERE l.promise_id = ? AND l.kind = 'thread'"
+            " UNION SELECT a.thread_id FROM promise_changes h JOIN thread_activities a ON a.id = h.origin_ref"
+            " WHERE h.promise_id = ? AND h.origin_kind = 'activity' ORDER BY 1", (promise_id, promise_id),
+        )
+        return p | {"review_revision": changes[0]["id"] if changes else None,
+                    "evidence_threads": [tid for (tid,) in threads]}
+
+
 def _linked_threads(db, promise_id):
     """Resolve only typed Promise links; canonical ids deduplicate merged Threads."""
     find(db, promise_id)
@@ -420,6 +514,12 @@ def origin_label(db, h) -> str:
     """An Origin as Jeremy reads it: who wrote what, in which Thread; his own words quoted."""
     if h["origin_kind"] == "words":
         return f'Jeremy: "{h["words"]}"'
+    if h["origin_kind"] == "calendar":
+        event = json.loads(h["detail"])["calendar"]
+        return f"Calendar · {event['title']} · {event['start']} → {event['end']} (changed {event['changed_at']})"
+    if h["origin_kind"] == "draft":
+        saved = json.loads(h["detail"])["draft"]
+        return f"Draft revision {saved['revision']} (saved {saved['saved_at']})"
     if h["origin_kind"] == "activity":
         a = db.execute("SELECT a.occurred_at, t.title, p.display_name FROM activities a JOIN threads t ON t.id = a.thread_id"
                        " LEFT JOIN identities i ON i.id = a.identity_id LEFT JOIN persons p ON p.id = i.person_id"

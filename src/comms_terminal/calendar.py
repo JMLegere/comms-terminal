@@ -3,6 +3,9 @@ every 30 seconds; `sync` stores each Event as Google gives it and keeps every Ev
 feed becomes a Deleted Event. `expand` turns stored Events into occurrences for any range, so repeating Events
 have no horizon; `items` adds the inbox's own dated things (Calendar Items) for the Calendar page."""
 
+import hashlib
+import html
+import json
 import re
 import urllib.request
 from datetime import date, datetime, time, timedelta, timezone
@@ -16,6 +19,17 @@ CREDENTIAL = "google-calendar-ics"  # the secret address: a bearer secret, held 
 SYNTHETIC = "X-UI-REMOVED-OCCURRENCE"  # marks a stored copy of one occurrence Google removed from a series
 FAILED = 3  # failed fetches in a row before the Calendar says the Event provider is broken
 JOIN = re.compile(r"https://(?:meet\.google\.com|[\w.-]*zoom\.us|teams\.microsoft\.com)/[^\s<>\"\\]+")
+# Omit links even when an Event puts one in its title, not just in dedicated URL/description fields.
+EVIDENCE_URL = re.compile(
+    r"<?(?:[a-z][a-z0-9+.-]*://|https?%3a(?:/|%2f){2}|https?:(?:%2f){2}|(?<!\w)//|www\.|"
+    r"\b(?:mailto|data|tel|sip|cid):|\b(?:[a-z0-9-]+\.)+[a-z0-9-]+\.?(?::[0-9]+)?(?=[/?#]))\S+",
+    re.IGNORECASE,
+)
+_EVIDENCE_REF = re.compile(
+    r"[a-f0-9]{64}@(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))@[a-f0-9]{64}"
+)
+_EVIDENCE_EMAIL = re.compile(r"[\w.!#$%&'*+=^`{|}~-]+@[\w.-]+")
+_INVITE_STATES = {"ACCEPTED", "DECLINED", "DELEGATED", "NEEDS-ACTION", "TENTATIVE"}
 
 
 def fetch(url: str, timeout: float = 20) -> str:
@@ -96,6 +110,7 @@ def sync(db, feed: str, now: str | None = None) -> bool:
         with db:
             for sql, args in writes:
                 db.execute(sql, args)
+        _cache.pop("key", None)  # two real changes in the same second can otherwise keep the same cache key
     return bool(writes)
 
 
@@ -202,6 +217,88 @@ def expand(db, start: date, end: date, deleted: bool = True) -> list[dict]:
             out = [e for e in out if not e["deleted_at"]]
         kept[key] = sorted(out, key=lambda e: (not e["all_day"], clock.local(e["start"])))
     return list(kept[key])  # callers read the occurrences and never change them
+
+
+def _promise_occurrence(db, row):
+    """Only a standalone Event or an explicit override has its own stored occurrence revision."""
+    ev = icalendar.Event.from_ical(row["ics"])
+    uid, rid = row["uid"], row["recurrence_id"]
+    recurrence = ev.get("RECURRENCE-ID")
+    if ("DTSTART" not in ev or "RRULE" in ev or "RDATE" in ev or
+            (recurrence and recurrence.params.get("RANGE")) or str(ev.get("STATUS", "")).upper() == "CANCELLED"):
+        return None
+    if not rid and db.execute(
+            "SELECT 1 FROM events WHERE uid = ? AND recurrence_id != '' AND deleted_at IS NULL", (uid,)).fetchone():
+        return None  # not a uniquely grounded standalone occurrence
+    return _occurrence(ev, me(db), set(), {})
+
+
+def _promise_ref(row):
+    # The stable key follows a move even when the occurrence display ID changes. The second digest binds the
+    # actual stored revision (changed_at alone is second-precision); neither digest exposes UID, URLs or content.
+    key = hashlib.sha256(json.dumps([row["uid"], row["recurrence_id"]]).encode()).hexdigest()
+    revision = hashlib.sha256(row["ics"].encode()).hexdigest()
+    return f"{key}@{row['changed_at']}@{revision}"
+
+
+_EVIDENCE_FIELDS = ("title", "start", "end", "attendees", "organizer", "state")
+
+
+def redact_evidence(text: str) -> str:
+    return EVIDENCE_URL.sub("[URL omitted]", html.unescape(text))
+
+
+def promise_origin(db, event):
+    """Return an agent CLI Origin for the exact stored Event behind this displayed occurrence, if grounded."""
+    if event["deleted_at"] or broken(db):
+        return {}
+    uid = event["uid"]
+    rid = event["id"][len(uid) + 1:]
+    refs = []
+    for row in db.execute("SELECT * FROM events WHERE uid = ? AND recurrence_id IN ('', ?) AND deleted_at IS NULL",
+                          (uid, rid)):
+        if not (stored := _promise_occurrence(db, row)):
+            continue
+        if event["id"] != stored["id"] and (row["recurrence_id"] or rid != _rid(stored["start"])):
+            continue
+        if all(event[k] == stored[k] for k in _EVIDENCE_FIELDS) and _EVIDENCE_REF.fullmatch(ref := _promise_ref(row)):
+            refs.append({"promise_origin": f"calendar:{ref}", "changed_at": row["changed_at"],
+                         "first_seen_at": row["first_seen_at"]})
+    return refs[0] if len(refs) == 1 else {}
+
+
+def promise_evidence(db, ref):
+    """Re-check the cited revision against the current local feed and return only the facts History may keep."""
+    if broken(db) or not (parsed := _EVIDENCE_REF.fullmatch(ref)):
+        return None
+    matches = [r for r in db.execute("SELECT * FROM events WHERE changed_at = ? AND deleted_at IS NULL", (parsed[1],))
+               if _promise_ref(r) == ref]
+    if len(matches) != 1 or not (event := _promise_occurrence(db, matches[0])):
+        return None
+    if matches[0]["recurrence_id"]:
+        shown = current(db, event)
+        if not shown or shown["deleted_at"] or any(shown[k] != event[k] for k in _EVIDENCE_FIELDS):
+            return None
+    return {"changed_at": parsed[1], "first_seen_at": matches[0]["first_seen_at"], **_evidence_facts(event)}
+
+
+def _evidence_facts(event):
+    """Only the fields needed to compare an Event with a Promise; no private access links or provider payloads."""
+    organizer = (event["organizer"] or {}).get("email", "")
+    return {"title": " ".join(redact_evidence(event["title"]).split())[:512],
+            "start": event["start"].isoformat(), "end": event["end"].isoformat(),
+            "organizer": organizer if _EVIDENCE_EMAIL.fullmatch(organizer) else None,
+            "attendees": [{"email": a["email"], "state": a["state"]}
+                          for a in event["attendees"] if _EVIDENCE_EMAIL.fullmatch(a["email"])
+                          and a["state"] in _INVITE_STATES]}
+
+
+def evidence_event(db, event):
+    """The capture projection; its occurrence ID does not expose the provider's UID."""
+    return {"id": hashlib.sha256(event["id"].encode()).hexdigest(),
+            "kind": event["kind"], "deleted_at": event["deleted_at"],
+            "state": event["state"] if event["state"] in _INVITE_STATES else None,
+            **_evidence_facts(event), **promise_origin(db, event)}
 
 
 def on_day(db, day: date, today: date) -> list[dict]:

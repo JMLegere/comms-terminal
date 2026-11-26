@@ -218,3 +218,16 @@ Feature: Promises
     Then the Thread cards appear without taking focus or loading surrounding messages
     And entering the Detail does not reload its Thread cards
     And expansion reads only that Thread
+
+  @AS-PR-25 @FR-PR-27
+  Scenario: Partial work is logged once and leaves a Promise Open
+    Given the agent Recorded "Send the traction update" owed to "Anna Ciprick" due "2026-11-20"
+    When the agent Changes "Send the traction update" citing Jeremy's words "I prepared it but have not sent it" with this Work log:
+      """
+      Ready to send
+      2026-11-16 — Jeremy prepared the traction update.
+      """
+    And the agent repeats the same Work log change
+    Then the Promise "Send the traction update" has State "OPEN"
+    And the Promise has the same Work log
+    And its history has 1 change "changed" citing Jeremy's words "I prepared it but have not sent it"

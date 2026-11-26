@@ -68,6 +68,42 @@ def test_today_lists_promises_first_without_later(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("section", ["today", "promises"])
+@pytest.mark.parametrize("work_log", [
+    None,
+    " \n\t ",
+    "Ready to send [READY] [b]literally[/b] [unfinished :warning:\n\n"
+    + "\n".join(f"2026-10-19: Prepared review item {i}" for i in range(35)),
+], ids=["old-payload", "blank", "multiline-literal"])
+def test_work_log_is_plain_read_only_text_in_both_console_routes(tmp_path, monkeypatch, section, work_log):
+    path = with_promises(tmp_path)
+    detail = promises.promise
+
+    def with_log(*args, **kwargs):
+        row = detail(*args, **kwargs)
+        row.pop("work_log", None)  # also simulate a payload from a pre-log reader
+        if work_log is not None:
+            row["work_log"] = work_log
+        return row
+
+    monkeypatch.setattr(promises, "promise", with_log)
+
+    async def scenario(app, pilot):
+        app.main.go(section)
+        await pilot.pause()
+        assert app.main.list.selected()["what"] == "Send the deck"
+        assert app.focused is app.main.list.query_one("#table")
+        text = app.main.query_one(".sidetext").render().plain
+        assert "History" in text and "Read-only: tell an agent to change a Promise" in text
+        if work_log and work_log.strip():
+            assert f"Work log\n{work_log}\n\nHistory" in text
+            assert app.main.query_one(".sidescroll").max_scroll_y > 0
+        else:
+            assert "Work log" not in text
+
+    run(Console(path), [scenario])
+
+
+@pytest.mark.parametrize("section", ["today", "promises"])
 def test_y_copies_only_the_selected_promise(tmp_path, section):
     path = with_promises(tmp_path)
     db = inbox.connect(path)

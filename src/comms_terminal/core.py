@@ -30,6 +30,8 @@ from datetime import datetime
 from importlib import resources
 from pathlib import Path
 
+from rich.text import Text
+
 from . import actions, agent, calendar, commands, files, inbox, pipeline, prep, remote, render, sequences, writers
 
 LOG = logging.getLogger("comms_terminal.core")
@@ -483,14 +485,14 @@ def _today_promise_thread(core, db, promise_id, thread_id):
         raise ApiError(-32602, str(e)) from None
 
 
-def segments(markup: str) -> list:
-    """Console markup as lines of [text, colour or null, bold, link or null] segments, for a view to draw as the
-    Console does. A link is "person:<id>", "org:<domain>", "thread:<id>" (the Console's open_person, open_org and
-    open_thread) or a URL."""
+def segments(markup: str | Text) -> list:
+    """Console markup or assembled text as lines of [text, colour or null, bold, link or null] segments.
+    A link is "person:<id>", "org:<domain>", "thread:<id>" (the Console's open_person, open_org and open_thread)
+    or a URL."""
     import re
 
     from rich.console import Console
-    from rich.text import Text
+
     con = Console(color_system="truecolor")
 
     def link(s):
@@ -502,8 +504,9 @@ def segments(markup: str) -> list:
         return s.link if s and s.link else None
 
     style = lambda s: (s.color.get_truecolor().hex if s and s.color else None, bool(s and s.bold), link(s))  # noqa: E731
+    text = Text.from_markup(markup) if isinstance(markup, str) else markup
     return [[[seg.text, *style(seg.style)] for seg in line.render(con, end="") if seg.text]
-            for line in Text.from_markup(markup).split("\n", allow_blank=True)]
+            for line in text.split("\n", allow_blank=True)]
 
 
 @query("calendar.page", start="string", end="string")

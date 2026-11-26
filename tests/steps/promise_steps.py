@@ -249,6 +249,23 @@ def changes_time(owed, what, due):
     promises.change(owed.db, _promise(owed, what), _message(owed), due_at=promises.due_from(due), now=owed.now)
 
 
+@when(parsers.parse('the agent Changes "{what}" citing Jeremy\'s words "{words}" with this Work log:'))
+def change_work_log(owed, what, words, docstring):
+    owed.work_log = docstring
+    owed.work_log_args = (_promise(owed, what), {"kind": "words", "words": words})
+    repeat_work_log(owed)
+
+
+@when("the agent repeats the same Work log change")
+def repeat_work_log(owed):
+    promises.change(owed.db, *owed.work_log_args, work_log=owed.work_log, now=owed.now)
+
+
+@then("the Promise has the same Work log")
+def has_work_log(owed):
+    assert _only(owed)["work_log"] == owed.work_log
+
+
 @then(parsers.parse('her Enrollment\'s Due Task comes due "{day}"'))
 def task_due(owed, day):
     at = owed.db.execute("SELECT due_at FROM tasks WHERE enrollment_id = ? AND state = 'DUE'",

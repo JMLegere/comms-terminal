@@ -11,6 +11,7 @@ Decision:
 - An uncertain Promise is Tentative; Jeremy never confirms or dismisses anything. He corrects by telling an agent.
 - A Promise is Cancelled only once the Person knows; until then it stays owed.
 - Comms Terminal stays free of LLM calls (NFR-8): the agent runs outside it as a skill, by hand or on an hourly Workbox timer, and resumes from a "captured up to" mark Comms Terminal keeps.
+- Work log follow-up (accepted 2026-11-26): the same agent checks still-owed Promises against linked evidence even without new Activities. A Calendar Event revision can be an Origin; keep the exact evidence with the auditable change rather than depending on the mutable current Event. The Console and App still do not write Promises.
 
 ## Considered Options
 

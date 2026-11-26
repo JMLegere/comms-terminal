@@ -88,7 +88,8 @@ const segment = (text, link = null) => [[text, null, false, link]];
 const readPromise = (id) => [
   segment(labels[id]), segment(id === "c" ? "Tentative" : "On track"), segment("due Fri 20 Nov 17:00"),
   segment("Owed to Anna Ciprick"), ...(id === "a" ? [segment("Pilot checklist", "thread:thread-9")] : []),
-  segment("History"), segment(`Recorded from Origin ${id}`), segment("Read-only: tell an agent to change a Promise (ADR 0024) · enter opens its Thread"),
+  [["History", "#928374", false, null]], segment(`Recorded from Origin ${id}`),
+  segment("Read-only: tell an agent to change a Promise (ADR 0024) · enter opens its Thread"),
 ];
 const prepMetadata = [
   segment(labels[prepId]), segment("Not prepared"), segment("Prep 0m"), segment("Travel 12m"),
@@ -96,9 +97,10 @@ const prepMetadata = [
   segment("Read-only: Prep lives on the Meeting in Tana (ADR 0025)"),
 ];
 let prepFailed = false;
+const projectedPromise = process.argv[3] ? JSON.parse(process.argv[3]) : null;
 answers["today.side"] = ({ kind, id }) => id === prepId
   ? [...prepMetadata, ...(kind === "prep_today" && prepFailed ? [segment("Last known Prep metadata")] : [])]
-  : readPromise(id);
+  : id === "a" && projectedPromise ? projectedPromise : readPromise(id);
 answers["prep.brief"] = { status: "ready", text: "Baseline local Brief fixture" };
 const canonical = { id: "thread-current", title: "Canonical linked Thread", detail: "WAITING_FOR_CUSTOMER" };
 const other = { id: "thread-other", title: "Unrelated first Thread", detail: "WAITING_FOR_CUSTOMER" };

@@ -40,7 +40,26 @@ def _integer_keys_sql() -> str:
     return ";\n".join(out) + ";"
 
 
+def _undo_promise_work_log_sql() -> str:
+    # Reuse the frozen History definition (including its original append-only triggers).
+    old = inbox.MIGRATIONS[47].split("CREATE TABLE promise_changes", 1)[1].split("CREATE TABLE promise_capture", 1)[0]
+    sync = [inbox.CHANGE_TRIGGER.format(table="promise_changes", event=event, row=row, key="id", op=op) + ";"
+            for event, row, op in inbox.CHANGE_EVENTS]
+    return ("ALTER TABLE promises DROP COLUMN work_log;"
+            "ALTER TABLE promise_changes RENAME TO promise_changes_v51;"
+            "DROP INDEX promise_changes_promise;"
+            "DROP TRIGGER promise_changes_no_delete; DROP TRIGGER promise_changes_no_update;"
+            "DROP TRIGGER changes_promise_changes_insert; DROP TRIGGER changes_promise_changes_update;"
+            "DROP TRIGGER changes_promise_changes_delete;"
+            f"CREATE TABLE promise_changes{old}"
+            "INSERT INTO promise_changes (rowid, id, promise_id, at, change, detail, origin_kind, origin_ref, words)"
+            " SELECT rowid, id, promise_id, at, change, detail, origin_kind, origin_ref, words FROM promise_changes_v51"
+            " WHERE origin_kind NOT IN ('calendar', 'draft');"
+            "DROP TABLE promise_changes_v51;" + "".join(sync))
+
+
 UNDO = {
+    51: _undo_promise_work_log_sql(),
     50: "ALTER TABLE composition_drafts DROP COLUMN reply_to_activity_id;",
     49: """CREATE TABLE promise_alerts_old (  -- the one SMS per item when it first goes At risk (FR-PR-18, ADR 0026); never again
   kind     TEXT NOT NULL CHECK (kind IN ('promise', 'prep')),
